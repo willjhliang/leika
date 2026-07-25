@@ -1,0 +1,156 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "leika"
+dynamic = ["version"]
+description = "Lightweight, browser-based workspaces for live Python visualizations"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Will Liang", email = "willjhliang@gmail.com" }]
+requires-python = ">=3.8"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = [
+  "imageio>=2.0.0,<3.0.0",
+  "msgspec>=0.18.6,<1.0.0",
+  "numpy>=1.0.0,<3.0.0",
+  "rich>=13.3.3,<15.0.0",
+  "typing-extensions>=4.0.0",
+  "websockets>=13.1,<17.0.0",
+  "zstandard>=0.20.0,<1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/willjhliang/leika"
+Repository = "https://github.com/willjhliang/leika"
+Issues = "https://github.com/willjhliang/leika/issues"
+
+[project.optional-dependencies]
+plotly = ["plotly>=5.21,<7"]
+examples = ["plotly>=5.21,<7"]
+dev = [
+  "plotly>=5.21,<7",
+  "build>=1.2",
+  "hypothesis[numpy]>=6",
+  "nodeenv>=1.9.1,<2.0.0",
+  "playwright>=1.40.0",
+  "psutil>=5.9.5,<8.0.0",
+  "pyright>=1.1.390",
+  "pytest>=8",
+  "pytest-playwright>=0.4.0",
+  "pytest-xdist>=3.0.0",
+  "ruff>=0.9.3",
+]
+docs = [
+  "furo>=2024.8.6",
+  "sphinx>=7,<9",
+  "sphinx-copybutton>=0.5.2",
+]
+
+[project.scripts]
+leika-build-client = "leika._client_autobuild:build_client_entrypoint"
+
+[tool.hatch.version]
+path = "src/leika/__init__.py"
+
+[tool.hatch.build]
+ignore-vcs = true
+exclude = [
+  "**/__pycache__/**",
+  "src/leika/client/.nodeenv/**",
+  "src/leika/client/node_modules/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/leika",
+  "/examples",
+  "/tests",
+  "/scripts",
+  "/CONTRIBUTING.md",
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/leika"]
+artifacts = ["src/leika/client/build/**"]
+exclude = [
+  "src/leika/client/.nodeenv/**",
+  "src/leika/client/node_modules/**",
+  "src/leika/client/src/**",
+  "src/leika/client/.eslintrc.js",
+  "src/leika/client/.gitignore",
+  "src/leika/client/components.json",
+  "src/leika/client/dock_test.html",
+  "src/leika/client/index.html",
+  "src/leika/client/package.json",
+  "src/leika/client/package-lock.json",
+  "src/leika/client/postcss.config.cjs",
+  "src/leika/client/tsconfig.json",
+  "src/leika/client/vite-env.d.ts",
+  "src/leika/client/vite-plugin-compress-html.mts",
+  "src/leika/client/vite.config.mts",
+  "src/leika/client/vitest.config.ts",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+  "e2e: end-to-end browser tests that require Playwright",
+  "plotly: tests that require the optional Plotly dependency",
+]
+
+[tool.pyright]
+include = ["src", "examples"]
+exclude = [
+  "docs",
+  "src/leika/client/.nodeenv",
+  "src/leika/client/node_modules",
+  "src/leika/client/build",
+]
+pythonVersion = "3.8"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+exclude = [".nodeenv", "node_modules", "src/leika/client/build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "PLC", "PLE", "PLR", "PLW"]
+ignore = [
+  "E501",
+  "E721",
+  "E731",
+  "E741",
+  "F722",
+  "F821",
+  "PLC0414",
+  "PLC0415",
+  "PLC1901",
+  "PLR0911",
+  "PLR0912",
+  "PLR0913",
+  "PLR0915",
+  "PLR2004",
+  "PLR5501",
+  "PLW0603",
+  "PLW0642",
+  "PLW2901",
+]
