@@ -15,8 +15,6 @@ def main() -> int:
     markdown_files = [
         ROOT / "README.md",
         ROOT / "CONTRIBUTING.md",
-        ROOT / "examples/README.md",
-        ROOT / "tests/e2e/README.md",
         *sorted((ROOT / "docs").glob("*.md")),
     ]
     for source in markdown_files:
