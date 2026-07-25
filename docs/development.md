@@ -12,6 +12,14 @@ npm run build
 The Python package serves `src/leika/client/build/index.html`. Use
 `leika-build-client` or `make build-client` after changing browser source.
 
+Node is pinned in `.nvmrc`, which CI reads through `setup-node`'s
+`node-version-file`. Use that same version locally (`nvm use`, or point
+`nodeenv` at it) before running any command that rewrites
+`package-lock.json`. npm versions disagree about which optional transitive
+packages belong in a lockfile, so regenerating it on an older npm silently
+drops entries that CI's npm then rejects with a confusing
+`npm ci` "package.json and package-lock.json are not in sync" error.
+
 ## Checks
 
 ```bash
