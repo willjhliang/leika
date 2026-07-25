@@ -1,0 +1,35 @@
+name: Playwright
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-client
+      - uses: ./.github/actions/setup-e2e
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Browser tests
+        run: uv run pytest tests/e2e -n auto
+      - name: Failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.python-version }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14

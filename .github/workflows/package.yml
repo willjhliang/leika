@@ -1,0 +1,52 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-client
+      - uses: astral-sh/setup-uv@v5
+      - name: Build distributions
+        run: uv build
+      - name: Check wheel contents and size
+        run: python scripts/check_wheel.py dist/*.whl
+      - name: Base-install smoke test
+        run: |
+          python -m venv /tmp/leika-wheel-smoke
+          /tmp/leika-wheel-smoke/bin/pip install dist/*.whl
+          /tmp/leika-wheel-smoke/bin/python -c "import leika; from importlib.metadata import version; assert leika.__version__ == version('leika'), (leika.__version__, version('leika')); print('installed leika', leika.__version__)"
+      - name: Plotly-extra smoke test
+        run: |
+          python -m venv /tmp/leika-plotly-smoke
+          /tmp/leika-plotly-smoke/bin/pip install "$(realpath dist/*.whl)[plotly]"
+          /tmp/leika-plotly-smoke/bin/python -c "import leika, plotly.graph_objects as go; assert go.Figure() is not None"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  publish:
+    if: github.event_name == 'release'
+    needs: wheel
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

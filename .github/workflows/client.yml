@@ -1,0 +1,46 @@
+name: Browser client
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/leika/client/package-lock.json
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        working-directory: src/leika/client
+        run: npm ci
+      - name: Generated protocol
+        run: uv run --extra dev --python 3.12 python sync_client_server.py --check
+      - name: TypeScript
+        working-directory: src/leika/client
+        run: npm run typecheck
+      - name: ESLint
+        working-directory: src/leika/client
+        run: npm run lint
+      - name: Vitest
+        working-directory: src/leika/client
+        run: npm test
+      - name: Build
+        working-directory: src/leika/client
+        run: npm run build
+      - name: Reject 3D runtime dependencies
+        run: |
+          ! grep -Eq '"(three|@react-three/fiber|@react-three/drei)"' src/leika/client/package.json
+          test -f src/leika/client/build/index.html

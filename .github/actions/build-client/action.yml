@@ -1,0 +1,28 @@
+name: Build Leika client
+description: Restore or build the generated single-file browser client
+
+runs:
+  using: composite
+  steps:
+    - name: Restore client build
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: src/leika/client/build
+        key: leika-client-${{ runner.os }}-${{ hashFiles('src/leika/client/**') }}
+
+    - name: Set up Node.js
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: src/leika/client/package-lock.json
+
+    - name: Build client
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd src/leika/client
+        npm ci
+        npm run build
