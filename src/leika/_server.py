@@ -1,0 +1,446 @@
+from __future__ import annotations
+
+import asyncio
+import mimetypes
+import os
+import threading
+import time
+import warnings
+from collections.abc import Coroutine
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Callable, ContextManager, TypeVar
+
+import numpy as np
+
+from . import _client_autobuild, _messages, infra
+from ._gui_api import GuiApi
+from ._gui_handles import _make_uuid
+from ._notification_handle import NotificationHandle, _NotificationHandleState
+from ._panes import Panes
+from ._threadpool_exceptions import print_threadpool_errors
+
+NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
+
+
+class ClientHandle:
+    """A connected browser with its own client-local GUI."""
+
+    def __init__(self, conn: infra.WebsockClientConnection, server: Server) -> None:
+        # Private attributes.
+        self._websock_connection = conn
+        self._server = server
+
+        # Public attributes.
+        self.gui: GuiApi = GuiApi(
+            self, thread_executor=server._thread_executor, event_loop=server._event_loop
+        )
+        """Handle for interacting with the GUI."""
+        self.client_id: int = conn.client_id
+        """Unique ID for this client."""
+
+    def flush(self) -> None:
+        """Flush the outgoing message buffer. Any buffered messages will immediately be
+        sent. (by default they are windowed)"""
+        self._server._websock_server.flush_client(self.client_id)
+
+    def atomic(self) -> ContextManager[None]:
+        """Returns a context where: all outgoing messages are grouped and applied by
+        clients atomically.
+
+        This should be treated as a soft constraint that's helpful for things
+        like animations, or when we want position and orientation updates to
+        happen synchronously.
+
+        Returns:
+            Context manager.
+        """
+        return self._websock_connection.atomic()
+
+    def send_file_download(
+        self,
+        filename: str,
+        content: bytes,
+        chunk_size: int = 1024 * 1024,
+        save_immediately: bool = False,
+    ) -> None:
+        """Send a file for a client or clients to download.
+
+        Args:
+            filename: Name of the file to send. Used to infer MIME type.
+            content: Content of the file.
+            chunk_size: Number of bytes to send at a time.
+            save_immediately: Whether to save the file immediately. If `False`,
+                a link to the file will be shown as a notification. Being able to
+                right click the link and choose "Save as..." can be useful.
+        """
+        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError("chunk_size must be a positive integer.")
+
+        mime_type = mimetypes.guess_type(filename, strict=False)[0]
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+
+        parts = [
+            content[i * chunk_size : (i + 1) * chunk_size]
+            for i in range(int(np.ceil(len(content) / chunk_size)))
+        ]
+
+        uuid = _make_uuid()
+        self._websock_connection.queue_message(
+            _messages.FileTransferStartDownload(
+                save_immediately=save_immediately,
+                transfer_uuid=uuid,
+                filename=filename,
+                mime_type=mime_type,
+                part_count=len(parts),
+                size_bytes=len(content),
+            )
+        )
+        for i, part in enumerate(parts):
+            self._websock_connection.queue_message(
+                _messages.FileTransferPart(
+                    None,
+                    transfer_uuid=uuid,
+                    part_index=i,
+                    content=part,
+                )
+            )
+            self.flush()
+
+    def add_notification(
+        self,
+        title: str,
+        body: str = "",
+        *,
+        loading: bool = False,
+        with_close_button: bool = True,
+        auto_close_seconds: float | None = 5.0,
+    ) -> NotificationHandle:
+        """Add a notification to the client's interface.
+
+        This method creates a new notification that will be displayed at the
+        top left corner of the client's viewer. Notifications are useful for
+        providing alerts or status updates to users.
+
+        Args:
+            title: Title to display on the notification.
+            body: Message to display on the notification body.
+            loading: Whether the notification shows loading icon.
+            with_close_button: Whether the notification can be manually closed.
+            auto_close_seconds: Time before the notification automatically
+                closes; None if the notification does not close on its own.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+        handle = NotificationHandle(
+            _NotificationHandleState(
+                websock_interface=self._websock_connection,
+                uuid=_make_uuid(),
+                props=_messages.NotificationProps(
+                    title=title,
+                    body=body,
+                    loading=loading,
+                    with_close_button=with_close_button,
+                    auto_close_seconds=auto_close_seconds,
+                ),
+            )
+        )
+        handle._show()
+        return handle
+
+
+class Server:
+    """Run a Leika workspace and synchronize it with browser clients."""
+
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+        *,
+        workspace_id: str = "default",
+        label: str | None = None,
+        verbose: bool = True,
+    ) -> None:
+        if not workspace_id:
+            raise ValueError("workspace_id must not be empty.")
+        port_override = os.environ.get("_LEIKA_PORT_OVERRIDE")
+        if port_override is not None:
+            try:
+                port = int(port_override)
+            except ValueError:
+                warnings.warn(
+                    f"Invalid _LEIKA_PORT_OVERRIDE value {port_override!r}; using {port}.",
+                    stacklevel=2,
+                )
+
+        self.host = host
+        self.workspace_id = workspace_id
+        self.verbose = verbose
+        self._stopped = False
+        self._connected_clients: dict[int, ClientHandle] = {}
+        self._client_lock = threading.RLock()
+        self._client_connect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
+        self._client_disconnect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
+        self._thread_executor = ThreadPoolExecutor(max_workers=32)
+
+        _client_autobuild.ensure_client_is_built()
+        server = infra.WebsockServer(
+            host=host,
+            port=port,
+            message_class=_messages.Message,
+            http_server_root=Path(__file__).resolve().parent / "client" / "build",
+            verbose=verbose,
+        )
+        self._websock_server = server
+
+        @server.on_client_connect
+        async def _on_connect(conn: infra.WebsockClientConnection) -> None:
+            self._run_garbage_collector()
+            client = ClientHandle(conn, self)
+            with self._client_lock:
+                self._connected_clients[conn.client_id] = client
+                callbacks = tuple(self._client_connect_cb)
+            for callback in callbacks:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(client)
+                else:
+                    self._thread_executor.submit(callback, client).add_done_callback(
+                        print_threadpool_errors
+                    )
+
+        @server.on_client_disconnect
+        async def _on_disconnect(conn: infra.WebsockClientConnection) -> None:
+            with self._client_lock:
+                client = self._connected_clients.pop(conn.client_id, None)
+                callbacks = tuple(self._client_disconnect_cb)
+            if client is None:
+                return
+            for callback in callbacks:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(client)
+                else:
+                    self._thread_executor.submit(callback, client).add_done_callback(
+                        print_threadpool_errors
+                    )
+
+        server.start()
+        self._event_loop = server._broadcast_buffer.event_loop
+        self.port = server._port
+        self.gui = GuiApi(
+            self,
+            thread_executor=self._thread_executor,
+            event_loop=self._event_loop,
+        )
+        server.queue_message(_messages.WorkspaceConfigurationMessage(workspace_id=workspace_id))
+        self.panes = Panes(self)
+        self.gui.reset()
+        self.gui.set_panel_label(label)
+        if verbose:
+            print(f"Leika listening at {self.url}")
+
+    @property
+    def url(self) -> str:
+        display_host = "localhost" if self.host in ("0.0.0.0", "::") else self.host
+        return f"http://{display_host}:{self.port}"
+
+    @property
+    def clients(self) -> dict[int, ClientHandle]:
+        """Snapshot of the connected clients, keyed by client ID.
+
+        A copy: mutating it does not affect the server, and iterating it is
+        safe while clients connect or disconnect.
+        """
+        with self._client_lock:
+            return self._connected_clients.copy()
+
+    def __enter__(self) -> Server:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.stop()
+
+    def show(self, height: int = 600) -> Any:
+        """Display inline in IPython, otherwise open the default browser."""
+        try:
+            from IPython import get_ipython  # type: ignore[import-not-found]
+
+            if get_ipython() is not None:
+                from IPython.display import IFrame, display  # type: ignore[import-not-found]
+
+                frame = IFrame(self.url, width="100%", height=height)
+                display(frame)
+                return frame
+        except ImportError:
+            pass
+        import webbrowser
+
+        webbrowser.open(self.url)
+        return None
+
+    def _run_garbage_collector(self, force: bool = False) -> None:
+        """Purge tombstones and updates for removed persistent entities."""
+        buffer = self._websock_server._broadcast_buffer
+        with buffer.buffer_lock:
+            # Skip GC while there are messages queued but not yet processed by
+            # the window generators. Without this, we could cull messages
+            # before they reach existing clients.
+            if not force and self._websock_server._broadcast_buffer.message_event.is_set():
+                return
+
+            # First pass: collect every tombstone's entity id.
+            remove_message_ids: list[int] = []
+            removed_ids_by_type: dict[str, set[str]] = {}
+            for msg_id, message in buffer.message_from_id.items():
+                if message.lifecycle_phase == "remove":
+                    assert message.entity_type is not None and message.entity_id_field is not None
+                    remove_message_ids.append(msg_id)
+                    removed_ids_by_type.setdefault(message.entity_type, set()).add(
+                        getattr(message, message.entity_id_field)
+                    )
+
+            # Second pass: purge updates whose target entity has a tombstone.
+            if removed_ids_by_type:
+                for msg_id, message in buffer.message_from_id.items():
+                    phase = message.lifecycle_phase
+                    if phase in ("update_dict", "update_simple"):
+                        assert (
+                            message.entity_type is not None and message.entity_id_field is not None
+                        )
+                        entity_id = getattr(message, message.entity_id_field)
+                        if entity_id in removed_ids_by_type.get(message.entity_type, ()):
+                            remove_message_ids.append(msg_id)
+
+            for msg_id in remove_message_ids:
+                message = buffer.message_from_id.pop(msg_id)
+                buffer.id_from_redundancy_key.pop(message.redundancy_key(), None)
+
+    def stop(self) -> None:
+        """Stop the Leika server and callback executor."""
+        if self._stopped:
+            return
+        self._stopped = True
+        self._websock_server.stop()
+        self._thread_executor.shutdown(wait=False)
+
+    def on_client_connect(
+        self, cb: Callable[[ClientHandle], NoneOrCoroutine]
+    ) -> Callable[[ClientHandle], NoneOrCoroutine]:
+        """Attach a callback to run for newly connected clients.
+
+        The callback can be either a standard function or an async function:
+        - Standard functions (def) will be executed in a threadpool.
+        - Async functions (async def) will be executed in the event loop.
+
+        Using async functions can be useful for reducing race conditions.
+        """
+        with self._client_lock:
+            clients = self._connected_clients.copy().values()
+            self._client_connect_cb.append(cb)
+
+        # Trigger callback on any already-connected clients.
+        # If we have:
+        #
+        #     server = Server()
+        #     server.on_client_connect(...)
+        #
+        # This makes sure that the the callback is applied to any clients that
+        # connect between the two lines.
+        for client in clients:
+            if asyncio.iscoroutinefunction(cb):
+                self._event_loop.create_task(cb(client))
+            else:
+                self._thread_executor.submit(cb, client).add_done_callback(print_threadpool_errors)
+
+        return cb  # type: ignore
+
+    def on_client_disconnect(
+        self, cb: Callable[[ClientHandle], NoneOrCoroutine]
+    ) -> Callable[[ClientHandle], NoneOrCoroutine]:
+        """Attach a callback to run when clients disconnect.
+
+        The callback can be either a standard function or an async function:
+        - Standard functions (def) will be executed in a threadpool.
+        - Async functions (async def) will be executed in the event loop.
+
+        Using async functions can be useful for reducing race conditions.
+        """
+        self._client_disconnect_cb.append(cb)
+        return cb
+
+    def flush(self) -> None:
+        """Flush the outgoing message buffer. Any buffered messages will immediately be
+        sent. (by default they are windowed)"""
+        self._websock_server.flush()
+
+    def atomic(self) -> ContextManager[None]:
+        """Returns a context where: all outgoing messages are grouped and applied by
+        clients atomically.
+
+        This should be treated as a soft constraint that's helpful for things
+        like animations, or when we want position and orientation updates to
+        happen synchronously.
+
+        Returns:
+            Context manager.
+        """
+        return self._websock_server.atomic()
+
+    def send_file_download(
+        self,
+        filename: str,
+        content: bytes,
+        chunk_size: int = 1024 * 1024,
+        save_immediately: bool = False,
+    ) -> None:
+        """Send a file for a client or clients to download.
+
+        Args:
+            filename: Name of the file to send. Used to infer MIME type.
+            content: Content of the file.
+            chunk_size: Number of bytes to send at a time.
+            save_immediately: Whether to save the file immediately. If `False`,
+                a link to the file will be shown as a notification. Being able to
+                right click the link and choose "Save as..." can be useful.
+        """
+        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError("chunk_size must be a positive integer.")
+
+        for client in self.clients.values():
+            client.send_file_download(filename, content, chunk_size, save_immediately)
+
+    def add_notification(
+        self,
+        title: str,
+        body: str = "",
+        *,
+        loading: bool = False,
+        with_close_button: bool = True,
+        auto_close_seconds: float | None = 5.0,
+    ) -> NotificationHandle:
+        """Show a notification for all clients.
+
+        See :meth:`GuiApi.add_notification` for argument semantics.
+        """
+        return self.gui.add_notification(
+            title,
+            body,
+            loading=loading,
+            with_close_button=with_close_button,
+            auto_close_seconds=auto_close_seconds,
+        )
+
+    def get_event_loop(self) -> asyncio.AbstractEventLoop:
+        """Get the asyncio event loop used by the Leika background thread. This
+        can be useful for safe concurrent operations."""
+        return self._event_loop
+
+    def sleep_forever(self) -> None:
+        """Equivalent to:
+
+        while True:
+            time.sleep(3600)
+        """
+        while True:
+            time.sleep(3600)
