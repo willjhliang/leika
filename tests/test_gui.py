@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import time
+from typing import Any
+
+import pytest
+
+import leika
+
+
+def _wait_for(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert predicate()
+
+
+def test_controls_containers_and_callbacks(server: leika.Server) -> None:
+    seen: list[tuple[str, bool]] = []
+    with server.gui.add_folder("Inputs"):
+        enabled = server.gui.add_checkbox("Enabled", initial_value=True)
+        mode = server.gui.add_dropdown("Mode", options=("fast", "accurate"))
+        slider = server.gui.add_slider("Gain", min=0.0, max=2.0, step=0.01, initial_value=1.0)
+        multi = server.gui.add_multi_slider(
+            "Range", min=0.0, max=1.0, step=0.05, initial_value=(0.2, 0.8)
+        )
+
+    @enabled.on_update
+    def _(event: leika.GuiEvent[Any]) -> None:
+        seen.append((event.target.label, event.value))
+
+    enabled.value = False
+    _wait_for(lambda: bool(seen))
+    assert seen == [("Enabled", False)]
+    assert mode.value == "fast"
+    assert slider.value == 1.0
+    assert multi.value == (0.2, 0.8)
+
+    tabs = server.gui.add_tab_group()
+    first = tabs.add_tab("First")
+    with first:
+        markdown = server.gui.add_markdown("**Hello**")
+    second = tabs.add_tab("Second")
+    second.remove()
+    markdown.content = "## Updated"
+    assert markdown.content == "## Updated"
+
+
+def test_option_validation(server: leika.Server) -> None:
+    with pytest.raises(ValueError, match="at least one option"):
+        server.gui.add_dropdown("Empty", options=[])
+    with pytest.raises(ValueError, match="at least one option"):
+        server.gui.add_button_group("Empty", options=[])
+    dropdown = server.gui.add_dropdown("Valid", options=("a", "b"))
+    with pytest.raises(ValueError, match="at least one option"):
+        dropdown.options = []
+    assert dropdown.options == ("a", "b")
+
+
+def test_form_compatibility_and_submission(server: leika.Server) -> None:
+    with server.gui.add_form(submit_label="Save", label="Profile") as form:
+        name = server.gui.add_text("Name", initial_value="Ada")
+    assert form.submit.label == "Save"
+    submitted: list[str] = []
+
+    @form.on_submit
+    def _(_) -> None:
+        submitted.append(name.value)
+
+    form.submit_form()
+    _wait_for(lambda: submitted == ["Ada"])
+    name.value = "Grace"
+    form.submit_form()
+    _wait_for(lambda: submitted == ["Ada", "Grace"])
+
+    with server.gui.add_form(submit_label="Outer"):
+        with pytest.raises(ValueError, match="Nested forms"):
+            server.gui.add_form(submit_label="Inner")
+
+
+def test_commands_notifications_and_modal(server: leika.Server) -> None:
+    triggered: list[bool] = []
+    command = server.gui.add_command(
+        "Run",
+        lambda *_: triggered.append(True),
+        description="Run the action",
+        hotkey="R",
+        icon=leika.Icon.PLAY,
+    )
+    assert command.label == "Run"
+    assert command.description == "Run the action"
+    command.label = "Run now"
+    command.disabled = True
+    assert command.label == "Run now"
+    assert command.disabled is True
+
+    notification = server.gui.add_notification(
+        "Working", "Please wait", loading=True, auto_close_seconds=None
+    )
+    notification.body = "Done"
+    notification.loading = False
+    notification.auto_close_seconds = 1.0
+    notification.remove()
+
+    with server.gui.add_modal("Details") as modal:
+        server.gui.add_html("<strong>Content</strong>")
+    modal.close()
+    command.remove()
+
+
+def test_removed_visual_customization_arguments_are_rejected(
+    server: leika.Server,
+) -> None:
+    server.gui.configure_theme(
+        control_layout="floating",
+        control_width="large",
+        dark_mode=True,
+    )
+    with pytest.raises(TypeError):
+        server.gui.configure_theme(show_share_button=True)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.configure_theme(brand_color=(80, 150, 255))  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.add_button("Run", color="blue")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.add_upload_button("Upload", color="blue")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.add_progress_bar(50.0, color="blue")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
