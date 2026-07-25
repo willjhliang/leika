@@ -1,0 +1,50 @@
+.uplot .u-title {
+  font-family: var(--font-sans);
+  font-size: 0.875em;
+  font-weight: 500;
+  color: var(--foreground);
+  padding-top: 0.375em;
+  padding-bottom: 0.25em;
+}
+
+/* Legend styling */
+.uplot .u-legend {
+  font-family: var(--font-sans);
+  font-size: 0.7em;
+  padding: 0;
+  margin: -1em 0 0 0;
+}
+
+.uplot .u-legend .u-series {
+  padding: 0;
+  margin-right: 0.375em;
+}
+
+.uplot .u-legend .u-marker {
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.25em;
+}
+
+.uplot .u-legend .u-label {
+  color: var(--foreground);
+  font-weight: 450;
+}
+
+.uplot .u-legend .u-value {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  margin-left: 0.0625em;
+}
+
+/* Axis labels and values styling */
+.uplot .u-axis {
+  font-family: var(--font-sans);
+  font-size: 0.7em;
+}
+
+/* Axis text values */
+.uplot .u-axis text {
+  stroke: none;
+  fill: var(--foreground);
+}

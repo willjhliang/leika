@@ -1,0 +1,486 @@
+"use client";
+
+import { PipetteIcon } from "lucide-react";
+import * as React from "react";
+
+import {
+  colorFromRgb,
+  colorValueToHex,
+  colorWithOpacity,
+  hsvToRgb,
+  hslToRgb,
+  parseToRgba,
+  rgbToHsl,
+  rgbToHsv,
+  type HsvColor,
+  type RgbTuple,
+} from "./colorUtils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+
+type ColorFormat = "hex" | "rgb" | "css" | "hsl";
+
+const FORMATS: ColorFormat[] = ["hex", "rgb", "css", "hsl"];
+const CHECKERBOARD =
+  'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyRCgLaBCAAgXwixzAS0pgAAAABJRU5ErkJggg==") left center';
+const COLOR_POINTER_CLASS =
+  "size-4 rounded-full border-2 border-foreground shadow-[0_0_0_1px_var(--background)]";
+
+type EyeDropperConstructor = new () => {
+  open: () => Promise<{ sRGBHex: string }>;
+};
+
+function PickerSlider({
+  value,
+  max,
+  label,
+  disabled,
+  trackClassName,
+  trackStyle,
+  thumbColor,
+  onValueChange,
+  testId,
+}: {
+  value: number;
+  max: number;
+  label: string;
+  disabled: boolean;
+  trackClassName?: string;
+  trackStyle?: React.CSSProperties;
+  thumbColor: string;
+  onValueChange: (value: number) => void;
+  testId: string;
+}) {
+  const getThumbAriaLabel = React.useCallback(() => label, [label]);
+  return (
+    <Slider
+      value={[value]}
+      min={0}
+      max={max}
+      step={1}
+      disabled={disabled}
+      className="relative h-4 w-full"
+      getThumbAriaLabel={getThumbAriaLabel}
+      showIndicator={false}
+      trackClassName={cn("data-horizontal:h-3", trackClassName)}
+      trackStyle={trackStyle}
+      thumbClassName={COLOR_POINTER_CLASS}
+      thumbStyle={{ backgroundColor: thumbColor }}
+      onValueChange={(next) => {
+        const scalar = Array.isArray(next) ? next[0] : next;
+        if (scalar !== undefined) onValueChange(scalar);
+      }}
+      data-leika-color-slider={testId}
+    />
+  );
+}
+
+function OutputInput({
+  value,
+  label,
+  className,
+  disabled,
+  onValueChange,
+}: {
+  value: string | number;
+  label: string;
+  className?: string;
+  disabled: boolean;
+  onValueChange: (value: string) => boolean;
+}) {
+  const displayValue = String(value);
+  const [draft, setDraft] = React.useState(displayValue);
+  const [editing, setEditing] = React.useState(false);
+  const [invalid, setInvalid] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!editing) {
+      setDraft(displayValue);
+      setInvalid(false);
+    }
+  }, [displayValue, editing]);
+
+  return (
+    <Input
+      value={draft}
+      disabled={disabled}
+      aria-label={label}
+      aria-invalid={invalid || undefined}
+      className={cn(
+        "h-6 min-w-0 rounded-none bg-secondary px-2 py-0 text-xs font-normal leading-none shadow-none",
+        className,
+      )}
+      onFocus={() => setEditing(true)}
+      onChange={(event) => {
+        const next = event.currentTarget.value;
+        setDraft(next);
+        setInvalid(!onValueChange(next));
+      }}
+      onBlur={() => {
+        setEditing(false);
+        setDraft(displayValue);
+        setInvalid(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setDraft(displayValue);
+          setInvalid(false);
+          event.currentTarget.blur();
+        }
+      }}
+      data-leika-color-output
+    />
+  );
+}
+
+export function ColorPicker({
+  value,
+  format,
+  disabled = false,
+  selectionRef,
+  className,
+  onValueChange,
+}: {
+  value: string;
+  format: "rgb" | "rgba";
+  disabled?: boolean;
+  selectionRef?: React.MutableRefObject<HTMLDivElement | null>;
+  className?: string;
+  onValueChange: (value: string) => void;
+}) {
+  const rgba = parseToRgba(value) ?? [0, 0, 0, 255];
+  const rgb = rgba.slice(0, 3) as RgbTuple;
+  const hsv = rgbToHsv(rgb);
+  const alpha = (rgba[3] / 255) * 100;
+  const [outputFormat, setOutputFormat] = React.useState<ColorFormat>("hex");
+  const [dragging, setDragging] = React.useState(false);
+  const selectionElementRef = React.useRef<HTMLDivElement | null>(null);
+
+  const setSelectionRef = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      selectionElementRef.current = element;
+      if (selectionRef) selectionRef.current = element;
+    },
+    [selectionRef],
+  );
+
+  const updateRgb = React.useCallback(
+    (next: HsvColor) => {
+      onValueChange(colorFromRgb(hsvToRgb(next), format, value));
+    },
+    [format, onValueChange, value],
+  );
+
+  const updateSelection = React.useCallback(
+    (clientX: number, clientY: number) => {
+      const element = selectionElementRef.current;
+      if (!element || disabled) return;
+      const bounds = element.getBoundingClientRect();
+      const saturation =
+        100 * Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+      const brightness =
+        100 *
+        (1 - Math.max(0, Math.min(1, (clientY - bounds.top) / bounds.height)));
+      updateRgb({ h: hsv.h, s: saturation, v: brightness });
+    },
+    [disabled, hsv.h, updateRgb],
+  );
+
+  const eyedropper =
+    typeof window === "undefined"
+      ? undefined
+      : (
+          window as typeof window & {
+            EyeDropper?: EyeDropperConstructor;
+          }
+        ).EyeDropper;
+
+  const pickFromScreen = React.useCallback(async () => {
+    if (!eyedropper || disabled) return;
+    try {
+      const result = await new eyedropper().open();
+      const picked = parseToRgba(result.sRGBHex);
+      if (picked) {
+        onValueChange(
+          colorFromRgb(picked.slice(0, 3) as RgbTuple, format, value),
+        );
+      }
+    } catch {
+      // Closing the native eyedropper is expected and requires no UI error.
+    }
+  }, [disabled, eyedropper, format, onValueChange, value]);
+
+  const output = React.useMemo(() => {
+    const roundedRgb = rgb.map(Math.round) as RgbTuple;
+    if (outputFormat === "hex") {
+      return [colorValueToHex(value).toUpperCase()];
+    }
+    if (outputFormat === "rgb") {
+      return roundedRgb.map(String);
+    }
+    if (outputFormat === "css") {
+      return [
+        format === "rgba"
+          ? `rgba(${roundedRgb.join(", ")}, ${(rgba[3] / 255).toFixed(2)})`
+          : `rgb(${roundedRgb.join(", ")})`,
+      ];
+    }
+    return rgbToHsl(roundedRgb).map((channel) => String(Math.round(channel)));
+  }, [format, outputFormat, rgb, rgba, value]);
+  const showOpacityOutput = format === "rgba" && outputFormat !== "css";
+
+  const updateOutput = React.useCallback(
+    (index: number, draft: string): boolean => {
+      const trimmed = draft.trim();
+      if (trimmed === "") return false;
+
+      if (outputFormat === "hex") {
+        if (!/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(trimmed)) return false;
+        const parsed = parseToRgba(trimmed);
+        if (!parsed) return false;
+        onValueChange(
+          colorFromRgb(parsed.slice(0, 3) as RgbTuple, format, value),
+        );
+        return true;
+      }
+
+      if (outputFormat === "css") {
+        if (!/^rgba?\(/i.test(trimmed)) return false;
+        const parsed = parseToRgba(trimmed);
+        if (!parsed) return false;
+        const channels = parsed.slice(0, 3) as RgbTuple;
+        onValueChange(
+          format === "rgba"
+            ? `rgba(${channels.join(", ")}, ${(parsed[3] / 255).toFixed(4)})`
+            : colorFromRgb(channels, format, value),
+        );
+        return true;
+      }
+
+      const channel = Number(trimmed);
+      if (!Number.isFinite(channel)) return false;
+      if (outputFormat === "rgb") {
+        if (channel < 0 || channel > 255) return false;
+        const channels = [...rgb] as RgbTuple;
+        channels[index] = channel;
+        onValueChange(colorFromRgb(channels, format, value));
+        return true;
+      }
+
+      const max = index === 0 ? 360 : 100;
+      if (channel < 0 || channel > max) return false;
+      const channels = rgbToHsl(rgb).map(Math.round) as [
+        number,
+        number,
+        number,
+      ];
+      channels[index] = channel;
+      onValueChange(colorFromRgb(hslToRgb(channels), format, value));
+      return true;
+    },
+    [format, onValueChange, outputFormat, rgb, value],
+  );
+
+  const updateOpacityOutput = React.useCallback(
+    (draft: string): boolean => {
+      const opacity = Number(draft.trim());
+      if (draft.trim() === "" || !Number.isFinite(opacity)) return false;
+      if (opacity < 0 || opacity > 100) return false;
+      onValueChange(colorWithOpacity(value, opacity / 100));
+      return true;
+    },
+    [onValueChange, value],
+  );
+
+  return (
+    <div
+      className={cn("flex w-full flex-col gap-4", className)}
+      data-slot="color-picker"
+      data-leika-color-picker
+    >
+      <div
+        ref={setSelectionRef}
+        role="group"
+        tabIndex={disabled ? -1 : 0}
+        aria-label="Color saturation and brightness"
+        aria-disabled={disabled}
+        className="relative h-40 w-full cursor-crosshair rounded-lg outline-none ring-ring/50 focus-visible:ring-3"
+        style={{
+          background: `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
+            linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)),
+            hsl(${hsv.h}, 100%, 50%)`,
+        }}
+        onKeyDown={(event) => {
+          const amount = event.shiftKey ? 10 : 1;
+          let next = hsv;
+          if (event.key === "ArrowLeft") {
+            next = { ...hsv, s: Math.max(0, hsv.s - amount) };
+          } else if (event.key === "ArrowRight") {
+            next = { ...hsv, s: Math.min(100, hsv.s + amount) };
+          } else if (event.key === "ArrowDown") {
+            next = { ...hsv, v: Math.max(0, hsv.v - amount) };
+          } else if (event.key === "ArrowUp") {
+            next = { ...hsv, v: Math.min(100, hsv.v + amount) };
+          } else {
+            return;
+          }
+          event.preventDefault();
+          updateRgb(next);
+        }}
+        onPointerDown={(event) => {
+          if (disabled) return;
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+          updateSelection(event.clientX, event.clientY);
+        }}
+        onPointerMove={(event) => {
+          if (dragging) updateSelection(event.clientX, event.clientY);
+        }}
+        onPointerUp={(event) => {
+          setDragging(false);
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onPointerCancel={() => setDragging(false)}
+        data-leika-color-selection
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute -translate-x-1/2 -translate-y-1/2",
+            COLOR_POINTER_CLASS,
+          )}
+          style={{
+            left: `${hsv.s}%`,
+            top: `${100 - hsv.v}%`,
+          }}
+          data-leika-color-selection-thumb
+        />
+      </div>
+
+      <PickerSlider
+        value={hsv.h}
+        max={360}
+        label="Hue"
+        disabled={disabled}
+        trackClassName="bg-[linear-gradient(90deg,#FF0000,#FFFF00,#00FF00,#00FFFF,#0000FF,#FF00FF,#FF0000)]"
+        thumbColor={`hsl(${hsv.h}, 100%, 50%)`}
+        onValueChange={(hue) => updateRgb({ ...hsv, h: hue })}
+        testId="hue"
+      />
+
+      {format === "rgba" && (
+        <PickerSlider
+          value={alpha}
+          max={100}
+          label="Opacity"
+          disabled={disabled}
+          trackStyle={{
+            background: `linear-gradient(to right, rgba(${rgb.join(", ")}, 0), rgb(${rgb.join(", ")})), ${CHECKERBOARD}`,
+          }}
+          thumbColor={`rgba(${rgb.join(", ")}, ${alpha / 100})`}
+          onValueChange={(next) =>
+            onValueChange(colorWithOpacity(value, next / 100))
+          }
+          testId="alpha"
+        />
+      )}
+
+      <div className="flex min-w-0 items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          disabled={disabled || !eyedropper}
+          aria-label={
+            eyedropper
+              ? "Pick a color from the screen"
+              : "Screen color picker unavailable"
+          }
+          title={
+            eyedropper
+              ? "Pick a color from the screen"
+              : "Screen color picker is not supported by this browser"
+          }
+          className="shrink-0 text-muted-foreground"
+          onClick={pickFromScreen}
+          data-leika-color-eyedropper
+        >
+          <PipetteIcon />
+        </Button>
+
+        <Select
+          value={outputFormat}
+          onValueChange={(next) => {
+            if (next) setOutputFormat(next as ColorFormat);
+          }}
+          disabled={disabled}
+        >
+          <SelectTrigger
+            size="sm"
+            className="h-6 w-[4.5rem] shrink-0 rounded-lg px-2 text-xs font-normal leading-none data-[size=sm]:h-6"
+            aria-label="Color format"
+            data-leika-color-format
+          >
+            <SelectValue>{outputFormat.toUpperCase()}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {FORMATS.map((item) => (
+              <SelectItem key={item} value={item} className="text-xs">
+                {item.toUpperCase()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <div className="-space-x-px flex min-w-0 flex-1 items-center rounded-lg shadow-sm">
+          {output.map((channel, index) => (
+            <OutputInput
+              key={`${outputFormat}-${index}`}
+              value={channel}
+              label={`${outputFormat.toUpperCase()} color value ${index + 1}`}
+              disabled={disabled}
+              onValueChange={(next) => updateOutput(index, next)}
+              className={cn(
+                index === 0 && "rounded-l-lg",
+                index === output.length - 1 &&
+                  !showOpacityOutput &&
+                  "rounded-r-lg",
+              )}
+            />
+          ))}
+          {showOpacityOutput && (
+            <div className="relative min-w-12 flex-[0_1_3.25rem]">
+              <OutputInput
+                value={Math.round(alpha)}
+                label="Opacity percentage"
+                disabled={disabled}
+                onValueChange={updateOpacityOutput}
+                className="w-full rounded-r-lg pr-5"
+              />
+              <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs text-muted-foreground">
+                %
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

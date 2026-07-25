@@ -1,0 +1,171 @@
+// @refresh reset
+import "./index.css";
+
+import React from "react";
+import { ThemeProvider as NextThemesProvider } from "next-themes";
+
+import { CommandPalette } from "./CommandPalette";
+import ControlPanel from "./ControlPanel/ControlPanel";
+import {
+  ControlDockState,
+  ControlPanelDockSurface,
+} from "./ControlPanel/ControlPanelDock";
+import { useGuiState } from "./ControlPanel/GuiState";
+import { MessageHandler } from "./MessageHandler";
+import { LeikaModal } from "./Modal";
+import { searchParamKey } from "./SearchParamsUtils";
+import { Titlebar } from "./Titlebar";
+import {
+  ViewerContext,
+  ViewerContextContents,
+  ViewerMutable,
+} from "./ViewerContext";
+import { WebsocketMessageProducer } from "./WebsocketInterface";
+import { Toaster } from "./components/ui/toast";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { useMobileView } from "./hooks/useMediaQuery";
+import { useViewportState } from "./viewport/ViewportState";
+import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
+
+function getDefaultServerFromUrl(): string {
+  let server = window.location.href
+    .replace("http://", "ws://")
+    .replace("https://", "wss://")
+    .split("?")[0];
+  if (server.endsWith("/")) server = server.slice(0, -1);
+  return server;
+}
+
+export function Root() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const servers = searchParams.getAll(searchParamKey);
+  const initialServer = servers[0] ?? getDefaultServerFromUrl();
+  const forceDarkMode = searchParams.has("darkMode");
+
+  const mutable = React.useRef<ViewerMutable>({
+    sendMessage: (message) =>
+      console.log(
+        `Tried to send ${message.type} but websocket is not connected!`,
+      ),
+    messageQueue: [],
+  });
+  const guiState = useGuiState(initialServer);
+  const viewportState = useViewportState();
+  const viewer: ViewerContextContents = {
+    useGui: guiState.store,
+    useGuiConfig: guiState.configStore,
+    guiActions: guiState.actions,
+    useViewport: viewportState.store,
+    viewportActions: viewportState.actions,
+    mutable,
+  };
+
+  return (
+    <ViewerContext.Provider value={viewer}>
+      <ViewerContents forceDarkMode={forceDarkMode}>
+        <WebsocketMessageProducer />
+      </ViewerContents>
+    </ViewerContext.Provider>
+  );
+}
+
+function ViewerContents({
+  children,
+  forceDarkMode,
+}: {
+  children: React.ReactNode;
+  forceDarkMode: boolean;
+}) {
+  const viewer = React.useContext(ViewerContext)!;
+  const configuredDarkMode = viewer.useGui((state) => state.theme.dark_mode);
+  const darkMode = forceDarkMode || configuredDarkMode;
+  const controlLayout = viewer.useGui((state) => state.theme.control_layout);
+
+  return (
+    <NextThemesProvider
+      attribute="class"
+      forcedTheme={darkMode ? "dark" : "light"}
+      enableSystem={false}
+      disableTransitionOnChange
+    >
+      <TooltipProvider delay={500}>
+        {children}
+        <MessageHandler />
+        <LeikaModal />
+        <CommandPalette />
+        <AppLayout controlLayout={controlLayout} />
+      </TooltipProvider>
+    </NextThemesProvider>
+  );
+}
+
+function AppLayout({
+  controlLayout,
+}: {
+  controlLayout: "floating" | "collapsible" | "fixed";
+}) {
+  const mobileView = useMobileView();
+  const dockFloating = controlLayout === "floating" && !mobileView;
+  const [controlDock, setControlDock] = React.useState<ControlDockState>({
+    side: null,
+    widthPx: 320,
+    expanded: true,
+  });
+
+  React.useEffect(() => {
+    if (!dockFloating) {
+      setControlDock((previous) =>
+        previous.side === null ? previous : { ...previous, side: null },
+      );
+    }
+  }, [dockFloating]);
+
+  return (
+    <div className="relative flex size-full flex-col">
+      <Titlebar />
+      <div className="relative flex w-full flex-1 overflow-hidden">
+        <NotificationsPanel
+          dockedLeftInsetPx={
+            controlDock.side === "left" && controlDock.expanded
+              ? controlDock.widthPx
+              : null
+          }
+        />
+        <div className="relative h-full flex-1 overflow-hidden bg-background">
+          {dockFloating ? (
+            <ControlPanelDockSurface onDockStateChange={setControlDock}>
+              <ViewportWorkspace />
+            </ControlPanelDockSurface>
+          ) : (
+            <ViewportWorkspace />
+          )}
+        </div>
+        {!dockFloating && <ControlPanel control_layout={controlLayout} />}
+      </div>
+    </div>
+  );
+}
+
+function NotificationsPanel({
+  dockedLeftInsetPx,
+}: {
+  dockedLeftInsetPx: number | null;
+}) {
+  // The toast viewport defaults to the bottom-right corner. Leika keeps
+  // notifications on the LEFT, pushed clear of a left-docked control panel so
+  // they never stack underneath it. Placement is inline rather than utility
+  // classes because the inset is a live pixel measurement from the dock; the
+  // width shrinks with it so a wide docked panel can't push toasts off-screen.
+  const insetPx = dockedLeftInsetPx ?? 0;
+  return (
+    <Toaster
+      limit={10}
+      style={{
+        left: `calc(${insetPx}px + 1rem)`,
+        right: "auto",
+        marginInline: 0,
+        width: `min(24rem, calc(100vw - ${insetPx}px - 2rem))`,
+      }}
+    />
+  );
+}

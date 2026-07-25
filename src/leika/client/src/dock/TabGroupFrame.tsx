@@ -1,0 +1,325 @@
+// Renders one tab group: stock shadcn tab chrome plus mounted panel bodies.
+// Docking, dragging, resizing, and FLIP animation remain model concerns.
+
+import { MinusIcon, PlusIcon } from "lucide-react";
+import React from "react";
+
+import { CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import { ScrollArea } from "../components/ui/scroll-area";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/ui/tabs";
+import { prefersReducedMotion } from "../utils/motion";
+import { GripPill, HandleIconButton } from "./handles";
+import { useDock } from "./DockContext";
+import { PanelSpec, TabGroup } from "./types";
+
+const PanelBody = React.memo(function PanelBody({
+  panel,
+  fill,
+  maxContentHeight,
+  inheritContentPadding,
+}: {
+  panel: PanelSpec | undefined;
+  fill: boolean;
+  maxContentHeight?: number;
+  inheritContentPadding: boolean;
+}) {
+  if (panel?.fullBleed === true) {
+    return (
+      <div
+        className="w-full"
+        style={
+          fill
+            ? {
+                flexGrow: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+              }
+            : undefined
+        }
+      >
+        {panel.render()}
+      </div>
+    );
+  }
+
+  const content = inheritContentPadding ? (
+    (panel?.render() ?? null)
+  ) : (
+    <CardContent>{panel?.render() ?? null}</CardContent>
+  );
+  return (
+    <ScrollArea
+      data-dock-panel-scroll-body
+      className={
+        fill
+          ? "min-h-0 w-full flex-1"
+          : "w-full [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      }
+      style={fill ? undefined : { maxHeight: maxContentHeight }}
+    >
+      {content}
+    </ScrollArea>
+  );
+});
+
+function GripBar({
+  collapsed,
+  onToggle,
+  startDrag,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  startDrag: (
+    event: React.PointerEvent<HTMLDivElement>,
+    opts?: { onClick?: () => void; expandOnDrag?: boolean },
+  ) => void;
+}) {
+  return (
+    <CardHeader
+      data-dock-griphandle
+      className="relative flex min-h-8 shrink-0 cursor-grab flex-row items-center justify-center touch-none select-none"
+      onPointerDown={(event) => {
+        const fromButton =
+          (event.target as HTMLElement).closest("[data-dock-minimize]") !==
+          null;
+        startDrag(
+          event,
+          fromButton
+            ? { onClick: onToggle, expandOnDrag: collapsed }
+            : undefined,
+        );
+      }}
+    >
+      <GripPill />
+      <HandleIconButton
+        attrs={{ "data-dock-minimize": "true" }}
+        label={collapsed ? "Expand panel" : "Minimize panel"}
+        title={collapsed ? "Expand" : "Minimize"}
+        expanded={!collapsed}
+        onActivate={onToggle}
+        dragThrough
+      >
+        {collapsed ? <PlusIcon /> : <MinusIcon />}
+      </HandleIconButton>
+    </CardHeader>
+  );
+}
+
+export function TabGroupFrame({
+  group,
+  fill = true,
+  maxContentHeight,
+  stripDragsGroup = true,
+  inheritContentPadding = false,
+  dockAreaId,
+  dockAreaMinHeight,
+}: {
+  group: TabGroup;
+  fill?: boolean;
+  maxContentHeight?: number;
+  stripDragsGroup?: boolean;
+  /** Embedded dock areas already live inside their host surface's CardContent.
+   * Independent floating/docked groups leave this false and own CardContent. */
+  inheritContentPadding?: boolean;
+  /** When this group is a populated nested dock area, the group root is also
+   * the area's drop target. Empty areas retain their own placeholder root. */
+  dockAreaId?: string;
+  dockAreaMinHeight?: React.CSSProperties["minHeight"];
+}) {
+  const dock = useDock();
+  const { panels } = dock;
+  const dimmed = dock.draggingGroupId === group.id;
+  const collapsed = group.collapsed ?? false;
+  const unmergeable = group.panelIds.some(
+    (panelId) => panels[panelId]?.unmergeable === true,
+  );
+
+  const stripRef = React.useRef<HTMLDivElement>(null);
+  const previousLefts = React.useRef<Map<string, number>>(new Map());
+  const orderKey = group.panelIds.join("\n");
+  React.useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (strip === null) return;
+    strip.querySelectorAll<HTMLElement>("[data-dock-tab]").forEach((tab) => {
+      const id = tab.getAttribute("data-dock-tab");
+      if (id === null) return;
+      const left = tab.offsetLeft;
+      const previous = previousLefts.current.get(id);
+      previousLefts.current.set(id, left);
+      if (
+        id === dock.draggingTabId ||
+        previous === undefined ||
+        previous === left ||
+        prefersReducedMotion()
+      ) {
+        return;
+      }
+      tab.style.transition = "none";
+      tab.style.transform = `translateX(${previous - left}px)`;
+      requestAnimationFrame(() => {
+        tab.style.transition = "transform 160ms ease";
+        tab.style.transform = "";
+      });
+    });
+  }, [orderKey, dock.draggingTabId]);
+
+  const renderPanelBody = (panelId: string) => (
+    <PanelBody
+      panel={panels[panelId]}
+      fill={fill}
+      maxContentHeight={maxContentHeight}
+      inheritContentPadding={inheritContentPadding}
+    />
+  );
+  const body = renderPanelBody(group.activeId);
+  const collapsibleBody = (
+    <Collapsible open={!collapsed}>
+      <CollapsibleContent keepMounted>{body}</CollapsibleContent>
+    </Collapsible>
+  );
+  const rootClassName = "flex min-h-0 w-full min-w-0 flex-col overflow-hidden";
+  const rootStyle: React.CSSProperties = {
+    flexGrow: collapsed ? 0 : fill ? 1 : undefined,
+    flexShrink: collapsed ? 0 : fill ? 1 : undefined,
+    flexBasis: collapsed ? "auto" : fill ? 0 : undefined,
+    minHeight: dockAreaMinHeight ?? 0,
+    opacity: dimmed ? 0.4 : 1,
+    transition:
+      fill && !prefersReducedMotion()
+        ? "flex-grow 200ms ease, flex-basis 200ms ease"
+        : undefined,
+  };
+
+  if (unmergeable) {
+    const panel = panels[group.activeId];
+    const handleTestId = panel?.testId && `${panel.testId}-handle`;
+    return (
+      <div
+        data-dock-area={dockAreaId}
+        data-dock-group={group.id}
+        data-dock-collapsed={collapsed ? "true" : undefined}
+        data-testid={collapsed ? handleTestId : undefined}
+        className={`${rootClassName} gap-2`}
+        style={rootStyle}
+      >
+        <CardHeader
+          ref={stripRef}
+          data-dock-strip={group.id}
+          data-dock-header={group.id}
+          data-testid={collapsed ? undefined : handleTestId}
+          title={
+            panel?.titleNode ? undefined : (panel?.title ?? group.activeId)
+          }
+          className={`flex flex-row items-center${
+            stripDragsGroup ? " cursor-grab touch-none select-none" : ""
+          }`}
+          onPointerDown={(event) => {
+            if (stripDragsGroup) {
+              dock.startGroupDrag(event, group.id, {
+                onClick: () => dock.toggleCollapsed(group.id),
+              });
+            }
+          }}
+        >
+          {panel?.titleNode ? (
+            panel.titleNode
+          ) : (
+            <CardTitle>{panel?.title ?? group.activeId}</CardTitle>
+          )}
+        </CardHeader>
+        {fill ? body : collapsibleBody}
+      </div>
+    );
+  }
+
+  return (
+    <Tabs
+      value={group.activeId}
+      onValueChange={(panelId) => dock.activateTab(group.id, panelId)}
+      data-dock-area={dockAreaId}
+      data-dock-group={group.id}
+      data-dock-collapsed={collapsed ? "true" : undefined}
+      className={`${rootClassName} gap-0`}
+      style={rootStyle}
+    >
+      {stripDragsGroup && (
+        <GripBar
+          collapsed={collapsed}
+          onToggle={() => dock.toggleCollapsed(group.id)}
+          startDrag={(event, options) =>
+            dock.startGroupDrag(event, group.id, options)
+          }
+        />
+      )}
+      <TabsList
+        ref={stripRef}
+        variant="line"
+        data-dock-strip={group.id}
+        className="h-auto w-full flex-wrap justify-start"
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest("[data-dock-tab]")) {
+            return;
+          }
+          if (stripDragsGroup) dock.startGroupDrag(event, group.id);
+        }}
+      >
+        {group.panelIds.map((panelId) => {
+          const dragging = panelId === dock.draggingTabId;
+          const panel = panels[panelId];
+          return (
+            <TabsTrigger
+              key={panelId}
+              value={panelId}
+              data-dock-tab={panelId}
+              title={panel?.title ?? panelId}
+              className="max-w-56"
+              onPointerDown={(event) =>
+                dock.startTabDrag(event, group.id, panelId)
+              }
+              style={{
+                position: dragging ? "relative" : undefined,
+                zIndex: dragging ? 5 : undefined,
+                opacity: dragging ? 1 : undefined,
+              }}
+            >
+              {panel?.icon !== undefined && (
+                <span data-icon="inline-start">{panel.icon}</span>
+              )}
+              <span className="truncate">{panel?.title ?? panelId}</span>
+            </TabsTrigger>
+          );
+        })}
+      </TabsList>
+      {group.panelIds.map((panelId) => {
+        const panelBody = renderPanelBody(panelId);
+        return (
+          <TabsContent
+            key={panelId}
+            value={panelId}
+            keepMounted
+            className={
+              fill
+                ? "mt-2 flex min-h-0 flex-1 basis-0 flex-col overflow-hidden"
+                : "mt-2 min-h-0"
+            }
+          >
+            {fill ? (
+              panelBody
+            ) : (
+              <Collapsible open={!collapsed}>
+                <CollapsibleContent keepMounted>{panelBody}</CollapsibleContent>
+              </Collapsible>
+            )}
+          </TabsContent>
+        );
+      })}
+    </Tabs>
+  );
+}
