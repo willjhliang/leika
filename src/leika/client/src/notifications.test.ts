@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { toastOptionsFor, type NotificationProps } from "./notifications";
+import {
+  fileDownloadToastOptions,
+  toastOptionsFor,
+  type NotificationProps,
+} from "./notifications";
 
 const props = (overrides: Partial<NotificationProps> = {}): NotificationProps => ({
   title: "Export finished",
@@ -50,5 +54,32 @@ describe("toastOptionsFor", () => {
     expect(toastOptionsFor(props({ with_close_button: false })).data).toEqual({
       closeButton: false,
     });
+  });
+});
+
+describe("fileDownloadToastOptions", () => {
+  const options = () => fileDownloadToastOptions("signal.csv", "blob:abc123");
+
+  it("titles the toast with the filename", () => {
+    expect(options().title).toBe("signal.csv");
+  });
+
+  it("points the link at the blob and names the saved file", () => {
+    // The download attribute is what makes right click -> "Save as..." offer
+    // the server's filename rather than the opaque blob uuid.
+    expect(options().link).toEqual({
+      href: "blob:abc123",
+      download: "signal.csv",
+    });
+  });
+
+  it("never auto-closes, so the link outlives the default toast timeout", () => {
+    // The object URL is revoked on removal; auto-closing would break the link
+    // before the user had a chance to click it.
+    expect(options().timeout).toBe(0);
+  });
+
+  it("always offers a close button, since nothing else dismisses it", () => {
+    expect(options().data).toEqual({ closeButton: true });
   });
 });

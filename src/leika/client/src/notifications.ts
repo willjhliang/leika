@@ -59,3 +59,30 @@ export function updateNotification(
 export function dismissNotification(uuid: string): void {
   toast.close(uuid);
 }
+
+export interface FileDownloadToastOptions {
+  title: string;
+  link: { href: string; download: string };
+  timeout: number;
+  data: ToastData;
+}
+
+/** Toast options for offering a finished download as a link.
+ *
+ * Used when the server sends `save_immediately=false`: instead of saving on the
+ * user's behalf, the client surfaces a link they can click -- or right click
+ * and "Save as..." to choose a location themselves.
+ */
+export function fileDownloadToastOptions(
+  filename: string,
+  href: string,
+): FileDownloadToastOptions {
+  return {
+    title: filename,
+    link: { href, download: filename },
+    // The object URL is revoked once the toast is removed, so auto-closing
+    // would revoke the link out from under a user who hadn't clicked it yet.
+    timeout: 0,
+    data: { closeButton: true },
+  };
+}

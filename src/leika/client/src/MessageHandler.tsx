@@ -1,8 +1,10 @@
 import React, { useContext } from "react";
 
 import { applyGuiConfigUpdate } from "./ControlPanel/GuiState";
+import { toast } from "./components/ui/toast";
 import {
   dismissNotification,
+  fileDownloadToastOptions,
   showNotification,
   updateNotification,
 } from "./notifications";
@@ -223,8 +225,7 @@ function useFileDownloadHandler(): (
     const state = downloadStatesRef.current[message.transfer_uuid];
     if (state.bytesDownloaded < state.metadata.size_bytes) return;
 
-    // Every chunk has arrived: hand the assembled blob to the browser, which
-    // owns the download UI from here (its own progress/downloads list).
+    // Every chunk has arrived: assemble the blob.
     const url = URL.createObjectURL(
       new Blob(
         state.parts
@@ -233,12 +234,39 @@ function useFileDownloadHandler(): (
         { type: state.metadata.mime_type },
       ),
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = state.metadata.filename;
-    link.click();
-    link.remove();
+    const { filename, save_immediately: saveImmediately } = state.metadata;
     delete downloadStatesRef.current[message.transfer_uuid];
-    URL.revokeObjectURL(url);
+
+    if (saveImmediately) {
+      // Hand the blob straight to the browser, which owns the download UI from
+      // here (its own progress/downloads list).
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      return;
+    }
+
+    // Otherwise offer the file as a link, which the user can also right click
+    // to "Save as...". The object URL has to outlive this call, so it is
+    // revoked only once the toast is gone.
+    const options = fileDownloadToastOptions(filename, url);
+    toast.add({
+      id: message.transfer_uuid,
+      title: options.title,
+      description: (
+        <a
+          {...options.link}
+          className="font-medium underline underline-offset-4"
+        >
+          Save file
+        </a>
+      ),
+      timeout: options.timeout,
+      data: options.data,
+      onRemove: () => URL.revokeObjectURL(url),
+    });
   };
 }
