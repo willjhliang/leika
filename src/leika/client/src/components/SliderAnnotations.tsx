@@ -14,7 +14,11 @@ export function SliderAnnotations({
 }) {
   return (
     <div
-      className="relative h-5 text-xs text-muted-foreground"
+      // Decorative only. Without `pointer-events-none` this box swallows the
+      // lower half of the thumb's hit area: it sits below the slider but
+      // overlaps it, and both are positioned at `z-index: auto`, so DOM order
+      // puts it on top until Base UI raises the thumb on first interaction.
+      className="pointer-events-none relative h-5 text-xs text-muted-foreground"
       aria-hidden
       data-leika-slider-annotations
     >
@@ -29,7 +33,7 @@ export function SliderAnnotations({
         return (
           <span
             key={`${mark.value}-${index}`}
-            className="pointer-events-none absolute inset-x-0 top-0 h-5"
+            className="absolute inset-x-0 top-0 h-5"
             data-leika-slider-mark-wrapper
           >
             <Separator
