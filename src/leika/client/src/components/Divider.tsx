@@ -1,8 +1,7 @@
 import { Separator } from "@/components/ui/separator";
-import { GuiDividerMessage } from "../WebsocketMessages";
 
-function DividerComponent({ props }: GuiDividerMessage) {
-  if (!props.visible) return null;
+/** A divider carries no props beyond the ones the dispatcher already honors. */
+function DividerComponent() {
   return <Separator />;
 }
 

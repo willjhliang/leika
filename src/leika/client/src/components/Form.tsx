@@ -9,7 +9,7 @@ import { GuiSection, useContainerIsEmpty } from "./GuiSection";
  * submission semantics. */
 export default function FormComponent({
   uuid,
-  props: { label, visible, expand_by_default: expandByDefault },
+  props: { label, expand_by_default: expandByDefault },
 }: GuiFormMessage) {
   const viewer = React.useContext(ViewerContext)!;
   const guiContext = React.useContext(GuiComponentContext)!;
@@ -29,7 +29,6 @@ export default function FormComponent({
     <guiContext.GuiContainer containerUuid={uuid} unwrapped={label === null} />
   );
 
-  if (!visible) return null;
   if (label === null) {
     return (
       <form

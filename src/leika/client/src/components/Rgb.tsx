@@ -5,11 +5,11 @@ import { rgbToString, parseToRgb, rgbEqual } from "./colorUtils";
 export default function RgbComponent({
   uuid,
   value,
-  props: { label, hint, disabled, visible },
+  props: { label, hint, disabled },
 }: GuiRgbMessage) {
   return (
     <ColorInputComponent
-      {...{ uuid, value, label, hint, disabled, visible }}
+      {...{ uuid, value, label, hint, disabled }}
       format="rgb"
       toString={rgbToString}
       parse={parseToRgb}

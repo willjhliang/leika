@@ -81,7 +81,7 @@ function GuiContainer({
   if (unwrapped) return <>{children}</>;
   return (
     <div
-      className="flex w-full min-w-0 flex-col gap-3"
+      className="flex w-full min-w-0 flex-col gap-2"
       data-leika-gui-container
     >
       {children}
@@ -97,6 +97,11 @@ function GeneratedInput(props: { guiUuid: string }) {
     console.error("Tried to render non-existent component", props.guiUuid);
     return null;
   }
+  // Every GUI element carries `visible`, so it is honored once here rather
+  // than re-implemented in each component. Hiding unmounts: an element that
+  // comes back is rebuilt from the server's props, with no stale local state
+  // from before it was hidden.
+  if (!conf.props.visible) return null;
   switch (conf.type) {
     case "GuiFolderMessage":
       return <FolderComponent {...conf} />;
@@ -109,7 +114,7 @@ function GeneratedInput(props: { guiUuid: string }) {
     case "GuiHtmlMessage":
       return <HtmlComponent {...conf} />;
     case "GuiDividerMessage":
-      return <DividerComponent {...conf} />;
+      return <DividerComponent />;
     case "GuiPlotlyMessage":
       return <PlotlyComponent {...conf} />;
     case "GuiUplotMessage":

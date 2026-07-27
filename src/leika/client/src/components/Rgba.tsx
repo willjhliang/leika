@@ -5,11 +5,11 @@ import { rgbaToString, parseToRgba, rgbaEqual } from "./colorUtils";
 export default function RgbaComponent({
   uuid,
   value,
-  props: { label, hint, disabled, visible },
+  props: { label, hint, disabled },
 }: GuiRgbaMessage) {
   return (
     <ColorInputComponent
-      {...{ uuid, value, label, hint, disabled, visible }}
+      {...{ uuid, value, label, hint, disabled }}
       format="rgba"
       toString={rgbaToString}
       parse={parseToRgba}

@@ -350,11 +350,6 @@ function PlotComponent({
 }
 
 export default function UplotComponent(message: GuiUplotMessage) {
-  if (message.props.visible === false) return null;
-  return <UplotComponentInner {...message} />;
-}
-
-function UplotComponentInner(message: GuiUplotMessage) {
   const [opened, setOpened] = useState(false);
   return (
     <>

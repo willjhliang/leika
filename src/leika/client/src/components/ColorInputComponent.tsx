@@ -20,7 +20,6 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
   label,
   hint,
   disabled,
-  visible,
   format,
   toString,
   parse,
@@ -31,7 +30,6 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
   label: string;
   hint: string | null;
   disabled: boolean;
-  visible: boolean;
   format: "rgb" | "rgba";
   toString: (value: V) => string;
   parse: (value: string) => V | null;
@@ -48,7 +46,6 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
     });
   }, [equal, parse, toString, value]);
 
-  if (!visible) return null;
 
   const updateValue = (next: string) => {
     const parsed = parse(next);

@@ -11,7 +11,6 @@ export default function UploadButtonComponent({
   uuid,
   props: {
     disabled,
-    visible,
     hint,
     mime_type: mimeType,
     _icon_html: iconHtml,
@@ -24,8 +23,6 @@ export default function UploadButtonComponent({
     viewer,
     componentUuid: uuid,
   });
-
-  if (!visible) return null;
 
   const button = (
     <Button

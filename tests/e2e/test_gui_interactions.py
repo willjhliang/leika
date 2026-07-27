@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any
 
+import numpy as np
 from playwright.sync_api import Locator, Page, expect
 
 import leika
@@ -589,4 +590,47 @@ def test_command_palette_keyboard_fuzzy_search_and_close(
     expect(search).to_have_value("")
     search.press("Escape")
     expect(palette).to_have_count(0)
+    assert page_errors == []
+
+
+def test_visibility_toggles_uniformly_across_element_kinds(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """`visible` is honored the same way whatever the element is.
+
+    Each component used to check the flag itself, so honoring it was a
+    convention rather than a guarantee -- a new element that forgot the check
+    would simply ignore `visible`. It is now applied once where elements are
+    dispatched, which is what this exercises across a folder, a plain input, a
+    display element, and an image.
+    """
+    folder = leika_server.gui.add_folder("Group")
+    with folder:
+        leika_server.gui.add_text("Nested", initial_value="inside")
+    slider = leika_server.gui.add_slider("Gain", min=0.0, max=1.0, step=0.1, initial_value=0.5)
+    markdown = leika_server.gui.add_markdown("## Heading")
+    image = leika_server.gui.add_image(np.zeros((8, 12, 3), dtype=np.uint8), label="Preview")
+
+    heading = leika_page.get_by_role("heading", name="Heading")
+    preview = leika_page.locator('[data-slot="field-label"]', has_text="Preview")
+    nested = find_gui_row(leika_page, "Nested")
+    gain = find_gui_row(leika_page, "Gain")
+    for locator in (heading, preview, nested, gain):
+        expect(locator).to_be_visible(timeout=15_000)
+
+    folder.visible = False
+    slider.visible = False
+    markdown.visible = False
+    image.visible = False
+    for locator in (heading, preview, nested, gain):
+        expect(locator).to_have_count(0, timeout=5_000)
+
+    folder.visible = True
+    slider.visible = True
+    markdown.visible = True
+    image.visible = True
+    for locator in (heading, preview, nested, gain):
+        expect(locator).to_be_visible(timeout=5_000)
     assert page_errors == []

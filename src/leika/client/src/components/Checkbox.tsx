@@ -8,10 +8,9 @@ import { GuiInputRow } from "./common";
 export default function CheckboxComponent({
   uuid,
   value,
-  props: { disabled, visible, hint, label },
+  props: { disabled, hint, label },
 }: GuiCheckboxMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  if (!visible) return null;
   return (
     <GuiInputRow {...{ uuid, label, hint, disabled }}>
       <Checkbox

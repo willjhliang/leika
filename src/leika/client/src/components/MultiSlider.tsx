@@ -11,7 +11,6 @@ export default function MultiSliderComponent({
   props: {
     label,
     hint,
-    visible,
     disabled,
     min,
     max,
@@ -23,7 +22,6 @@ export default function MultiSliderComponent({
   },
 }: GuiMultiSliderMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  if (!visible) return null;
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       <MultiSlider

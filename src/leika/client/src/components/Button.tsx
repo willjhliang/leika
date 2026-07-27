@@ -8,7 +8,6 @@ import { HintTooltip } from "./common";
 export default function ButtonComponent({
   uuid,
   props: {
-    visible,
     disabled,
     label,
     hint,
@@ -56,8 +55,6 @@ export default function ButtonComponent({
     },
     [holdCallbackFreqs, messageSender, uuid],
   );
-
-  if (!visible) return null;
 
   const button = (
     <Button

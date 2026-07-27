@@ -19,7 +19,6 @@ export default function SliderComponent({
   props: {
     label,
     hint,
-    visible,
     disabled,
     min,
     max,
@@ -44,7 +43,6 @@ export default function SliderComponent({
     };
   }, [dragging]);
 
-  if (!visible) return null;
   const renderedMarks = marks === null ? defaultMarks(min, max) : marks;
 
   return (

@@ -8,10 +8,9 @@ import { GuiInputRow } from "./common";
 export default function ButtonGroupComponent({
   uuid,
   value,
-  props: { hint, label, visible, disabled, options },
+  props: { hint, label, disabled, options },
 }: GuiButtonGroupMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  if (!visible) return null;
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       <ToggleGroup

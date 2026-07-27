@@ -18,7 +18,7 @@ export default function TabGroupComponent(message: GuiTabGroupMessage) {
 
 function DockableTabGroup({
   uuid,
-  props: { _tab_container_ids: tabContainerIds, visible },
+  props: { _tab_container_ids: tabContainerIds },
 }: GuiTabGroupMessage) {
   const dock = useDock();
   const guiDock = React.useContext(GuiDockContext)!;
@@ -38,7 +38,6 @@ function DockableTabGroup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, orderKey, areaId, dock.api]);
 
-  if (!visible) return null;
   return <DockArea areaId={areaId} minHeight="2.4em" inheritContentPadding />;
 }
 
@@ -47,7 +46,6 @@ function PlainTabGroup({
     _tab_labels: tabLabels,
     _tab_icons_html: tabIconsHtml,
     _tab_container_ids: tabContainerIds,
-    visible,
   },
 }: GuiTabGroupMessage) {
   const { GuiContainer } = React.useContext(GuiComponentContext)!;
@@ -61,7 +59,7 @@ function PlainTabGroup({
     }
   }, [tabContainerIds, activeTab]);
 
-  if (!visible || activeTab === null) return null;
+  if (activeTab === null) return null;
   return (
     <Tabs
       value={activeTab}

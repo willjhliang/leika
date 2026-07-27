@@ -3,9 +3,8 @@ import { GuiProgressBarMessage } from "../WebsocketMessages";
 
 export default function ProgressBarComponent({
   value,
-  props: { animated, visible },
+  props: { animated },
 }: GuiProgressBarMessage) {
-  if (!visible) return null;
   return (
     <Progress
       className={animated ? "animate-pulse" : undefined}

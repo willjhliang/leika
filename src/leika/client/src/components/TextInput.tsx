@@ -9,10 +9,9 @@ import { GuiInputRow } from "./common";
 export default function TextInputComponent({
   uuid,
   value,
-  props: { hint, label, disabled, visible, multiline },
+  props: { hint, label, disabled, multiline },
 }: GuiTextMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  if (!visible) return null;
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       {multiline ? (

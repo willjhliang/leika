@@ -7,10 +7,9 @@ import { NumericInput, GuiInputRow } from "./common";
 export default function NumberInputComponent({
   uuid,
   value,
-  props: { visible, label, hint, disabled, precision, min, max, step },
+  props: { label, hint, disabled, precision, min, max, step },
 }: GuiNumberMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  if (!visible) return null;
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       <NumericInput

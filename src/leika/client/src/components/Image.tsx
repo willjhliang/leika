@@ -47,12 +47,7 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
 
 const XL_SIZE_PX = 880;
 
-function ImageComponent(message: GuiImageMessage) {
-  if (!message.props.visible) return null;
-  return <ImageComponentInner {...message} />;
-}
-
-function ImageComponentInner({ props }: GuiImageMessage) {
+function ImageComponent({ props }: GuiImageMessage) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageWidth, setImageWidth] = useState<number | null>(null);
   const [opened, setOpened] = useState(false);
