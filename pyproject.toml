@@ -40,7 +40,6 @@ Repository = "https://github.com/willjhliang/leika"
 Issues = "https://github.com/willjhliang/leika/issues"
 
 [project.optional-dependencies]
-plotly = ["plotly>=5.21,<7"]
 examples = ["plotly>=5.21,<7"]
 dev = [
   "plotly>=5.21,<7",

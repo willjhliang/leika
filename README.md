@@ -5,8 +5,8 @@ Leika is a lightweight canvas for interactive Python visualizations.
 ## Quickstart
 
 ```bash
-pip install leika            # Core functionality
-pip install "leika[plotly]"  # Plotly panes and GUI figures
+pip install leika              # Core functionality
+pip install "leika[examples]"  # Example demo dependencies
 ```
 
 ```python

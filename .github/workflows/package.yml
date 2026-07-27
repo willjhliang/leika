@@ -27,11 +27,11 @@ jobs:
           python -m venv /tmp/leika-wheel-smoke
           /tmp/leika-wheel-smoke/bin/pip install dist/*.whl
           /tmp/leika-wheel-smoke/bin/python -c "import leika; from importlib.metadata import version; assert leika.__version__ == version('leika'), (leika.__version__, version('leika')); print('installed leika', leika.__version__)"
-      - name: Plotly-extra smoke test
+      - name: Examples-extra smoke test
         run: |
-          python -m venv /tmp/leika-plotly-smoke
-          /tmp/leika-plotly-smoke/bin/pip install "$(realpath dist/*.whl)[plotly]"
-          /tmp/leika-plotly-smoke/bin/python -c "import leika, plotly.graph_objects as go; assert go.Figure() is not None"
+          python -m venv /tmp/leika-examples-smoke
+          /tmp/leika-examples-smoke/bin/pip install "$(realpath dist/*.whl)[examples]"
+          /tmp/leika-examples-smoke/bin/python -c "import leika, plotly.graph_objects as go; assert go.Figure() is not None"
       - uses: actions/upload-artifact@v4
         with:
           name: distributions
