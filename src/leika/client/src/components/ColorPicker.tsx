@@ -16,8 +16,17 @@ import {
   type RgbTuple,
 } from "./colorUtils";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -32,8 +41,14 @@ type ColorFormat = "hex" | "rgb" | "css" | "hsl";
 const FORMATS: ColorFormat[] = ["hex", "rgb", "css", "hsl"];
 const CHECKERBOARD =
   'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyRCgLaBCAAgXwixzAS0pgAAAABJRU5ErkJggg==") left center';
+// Matches a stock slider thumb's outline: 1px in `--input`. The block pointer
+// is a bare span, so it spells the border out; the slider thumbs already carry
+// it from the Slider base and only restate it here for the same reason.
 const COLOR_POINTER_CLASS =
-  "size-4 rounded-full border-2 border-foreground shadow-[0_0_0_1px_var(--background)]";
+  "size-4 rounded-full border border-input shadow-[0_0_0_1px_var(--background)]";
+// The footer packs the eyedropper, the format select, and the output fields
+// onto one popover line, so those controls run a step below stock form sizing.
+const FOOTER_CONTROL_CLASS = "h-6 text-xs font-normal leading-none";
 
 type EyeDropperConstructor = new () => {
   open: () => Promise<{ sRGBHex: string }>;
@@ -115,10 +130,9 @@ function OutputInput({
       disabled={disabled}
       aria-label={label}
       aria-invalid={invalid || undefined}
-      className={cn(
-        "h-6 min-w-0 rounded-none bg-secondary px-2 py-0 text-xs font-normal leading-none shadow-none",
-        className,
-      )}
+      // Corner rounding is left to the enclosing ButtonGroup, which knows
+      // which field is first and last.
+      className={cn(FOOTER_CONTROL_CLASS, "min-w-0 px-2 py-0", className)}
       onFocus={() => setEditing(true)}
       onChange={(event) => {
         const next = event.currentTarget.value;
@@ -164,8 +178,8 @@ export function ColorPicker({
 }) {
   const rgba = parseToRgba(value) ?? [0, 0, 0, 255];
   const rgb = rgba.slice(0, 3) as RgbTuple;
-  const hsv = rgbToHsv(rgb);
   const alpha = (rgba[3] / 255) * 100;
+  const hsv = rgbToHsv(rgb);
   const [outputFormat, setOutputFormat] = React.useState<ColorFormat>("hex");
   const [dragging, setDragging] = React.useState(false);
   const selectionElementRef = React.useRef<HTMLDivElement | null>(null);
@@ -318,7 +332,7 @@ export function ColorPicker({
         tabIndex={disabled ? -1 : 0}
         aria-label="Color saturation and brightness"
         aria-disabled={disabled}
-        className="relative h-40 w-full cursor-crosshair rounded-lg outline-none ring-ring/50 focus-visible:ring-3"
+        className="relative h-40 w-full cursor-crosshair rounded-lg border border-input transition-colors outline-none focus-visible:border-ring"
         style={{
           background: `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
             linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)),
@@ -434,7 +448,12 @@ export function ColorPicker({
         >
           <SelectTrigger
             size="sm"
-            className="h-6 w-[4.5rem] shrink-0 rounded-lg px-2 text-xs font-normal leading-none data-[size=sm]:h-6"
+            className={cn(
+              FOOTER_CONTROL_CLASS,
+              // `data-[size=sm]` outranks a plain height utility, so the
+              // shared height has to be restated in the same variant.
+              "w-[4.5rem] shrink-0 rounded-lg px-2 data-[size=sm]:h-6",
+            )}
             aria-label="Color format"
             data-leika-color-format
           >
@@ -449,7 +468,9 @@ export function ColorPicker({
           </SelectContent>
         </Select>
 
-        <div className="-space-x-px flex min-w-0 flex-1 items-center rounded-lg shadow-sm">
+        {/* One joined run of fields: ButtonGroup owns the shared borders, the
+            end rounding, and raising whichever field has focus. */}
+        <ButtonGroup className="relative w-full min-w-0 flex-1">
           {output.map((channel, index) => (
             <OutputInput
               key={`${outputFormat}-${index}`}
@@ -457,30 +478,113 @@ export function ColorPicker({
               label={`${outputFormat.toUpperCase()} color value ${index + 1}`}
               disabled={disabled}
               onValueChange={(next) => updateOutput(index, next)}
-              className={cn(
-                index === 0 && "rounded-l-lg",
-                index === output.length - 1 &&
-                  !showOpacityOutput &&
-                  "rounded-r-lg",
-              )}
             />
           ))}
           {showOpacityOutput && (
-            <div className="relative min-w-12 flex-[0_1_3.25rem]">
+            <>
               <OutputInput
                 value={Math.round(alpha)}
                 label="Opacity percentage"
                 disabled={disabled}
                 onValueChange={updateOpacityOutput}
-                className="w-full rounded-r-lg pr-5"
+                // Narrower than an even share, and forced past the group's
+                // own `[&>input]:flex-1`, which is the more specific rule.
+                className="min-w-12 flex-[0_1_3.25rem]! pr-5"
               />
-              <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs text-muted-foreground">
+              {/* Positioned against the group rather than a wrapper of its
+                  own, so every field stays a direct child of the group. */}
+              <span
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs text-muted-foreground"
+              >
                 %
               </span>
-            </div>
+            </>
           )}
-        </div>
+        </ButtonGroup>
       </div>
     </div>
+  );
+}
+
+/** A color swatch that opens the picker in a popover.
+ *
+ * Every color in the app is edited this way -- the GUI's RGB and RGBA inputs
+ * and the settings pane's accent alike -- so the trigger, the popover, and the
+ * focus handling live here once rather than at each call site.
+ */
+export function ColorPickerPopover({
+  id,
+  value,
+  label,
+  format,
+  disabled = false,
+  text,
+  className,
+  onValueChange,
+}: {
+  id: string;
+  /** The color the swatch shows and the picker opens on, as a CSS string. */
+  value: string;
+  /** Names the popover for assistive technology. */
+  label: string;
+  format: "rgb" | "rgba";
+  disabled?: boolean;
+  /** Trigger text, when the color itself is not what to say. */
+  text?: string;
+  className?: string;
+  onValueChange: (value: string) => void;
+}) {
+  const selectionRef = React.useRef<HTMLDivElement>(null);
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            id={id}
+            variant="outline"
+            // The swatch is centered vertically inside the 24px row, which
+            // leaves 3px above and below it. Matching that on the left squares
+            // up its inset; the text keeps the full padding on the right.
+            className={cn(
+              "w-full justify-start pl-[3px] font-normal",
+              className,
+            )}
+            disabled={disabled}
+            data-leika-color-trigger
+          />
+        }
+      >
+        <span
+          aria-hidden
+          className="size-4 shrink-0 rounded-sm"
+          style={{ backgroundColor: value }}
+        />
+        <span className="truncate">{text ?? value}</span>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-[min(20rem,calc(100vw-1rem))]"
+        initialFocus={(interactionType) =>
+          interactionType === "touch" ? true : selectionRef.current
+        }
+        data-leika-color-popover
+      >
+        <PopoverHeader className="sr-only">
+          <PopoverTitle>{label}</PopoverTitle>
+          <PopoverDescription>
+            Choose a color by saturation, brightness, hue
+            {format === "rgba" ? ", and opacity" : ""}.
+          </PopoverDescription>
+        </PopoverHeader>
+        <ColorPicker
+          value={value}
+          format={format}
+          disabled={disabled}
+          selectionRef={selectionRef}
+          onValueChange={onValueChange}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
