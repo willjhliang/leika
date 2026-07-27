@@ -284,6 +284,9 @@ class GuiApi(GuiContainer):
         self._websock_interface.register_handler(
             _messages.CommandTriggerMessage, self._handle_command_trigger
         )
+        self._websock_interface.register_handler(
+            _messages.GuiCloseModalMessage, self._handle_gui_close_modal
+        )
 
     @property
     def _child_gui_api(self) -> GuiApi:
@@ -553,6 +556,25 @@ class GuiApi(GuiContainer):
                 self._thread_executor.submit(
                     cb, CommandEvent(client, client_id, handle)
                 ).add_done_callback(print_threadpool_errors)
+
+    async def _handle_gui_close_modal(
+        self, client_id: ClientId, message: _messages.GuiCloseModalMessage
+    ) -> None:
+        """Callback for a client dismissing a modal.
+
+        Teardown runs here rather than on the client so that the contained GUI
+        components are removed exactly once, by the side that owns them. Closing
+        broadcasts the same message back, which is what actually takes the modal
+        off screen -- for every connected client, not just the one that
+        dismissed it.
+        """
+        del client_id
+        # Absent when the server closed the modal first, or when a second client
+        # dismissed it in the same instant. Either way it is already gone.
+        handle = self._modal_handle_from_uuid.get(message.uuid, None)
+        if handle is None:
+            return
+        handle.close()
 
     def _get_container_uuid(self) -> str:
         """Container that new GUI elements on this thread belong to."""

@@ -28,18 +28,23 @@ function GeneratedModal({
   conf: GuiModalMessage;
   index: number;
 }) {
+  const viewer = useContext(ViewerContext)!;
   return (
     <Dialog
       open
-      onOpenChange={() => {
-        // To make memory management easier, we should only close modals from
-        // the server.
-        // Otherwise, the client would need to communicate to the server that
-        // the modal was deleted and contained GUI elements were cleared.
+      onOpenChange={(open) => {
+        if (open) return;
+        // Dismissing asks the server to close; it is the server that owns the
+        // contained components and that takes the modal off screen, by echoing
+        // this message back to every client. Removing it here too would leave
+        // the components behind and hide the modal from this client alone.
+        viewer.mutable.current.sendMessage({
+          type: "GuiCloseModalMessage",
+          uuid: conf.uuid,
+        });
       }}
     >
       <DialogContent
-        showCloseButton={false}
         className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
         style={{ zIndex: 100 + index }}
       >
