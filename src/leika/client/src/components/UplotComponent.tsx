@@ -1,21 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2Icon } from "lucide-react";
 import UplotReact from "uplot-react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./UplotComponent.css";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { GuiUplotMessage } from "../WebsocketMessages";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useElementSize } from "../hooks/useElementSize";
-import { HintTooltip } from "./common";
+import { MediaDialog, MediaSurface } from "./MediaExpand";
 
 type UplotScale = NonNullable<uPlot.Options["scales"]>[string];
 
@@ -311,9 +303,14 @@ function PlotComponent({
   }, [xMin, xMax, plotObj]);
 
   return (
-    <div
+    <MediaSurface
+      subject="plot"
+      // uPlot draws its legend below the plot, which is where every other
+      // media element puts this button.
+      corner="top-right"
+      className="uplot-container overflow-hidden"
       ref={containerSizeRef}
-      className="uplot-container relative overflow-hidden"
+      onExpand={onExpand}
     >
       {plotOptions && (
         <UplotReact
@@ -331,21 +328,7 @@ function PlotComponent({
           data={data}
         />
       )}
-      {onExpand === undefined ? null : (
-        <HintTooltip hint="Expand plot">
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon-sm"
-            className="absolute top-2 right-2"
-            onClick={onExpand}
-            aria-label="Expand plot"
-          >
-            <Maximize2Icon />
-          </Button>
-        </HintTooltip>
-      )}
-    </div>
+    </MediaSurface>
   );
 }
 
@@ -354,14 +337,13 @@ export default function UplotComponent(message: GuiUplotMessage) {
   return (
     <>
       <PlotComponent {...message} onExpand={() => setOpened(true)} />
-      <Dialog open={opened} onOpenChange={setOpened}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-auto sm:max-w-4xl">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Expanded uPlot chart</DialogTitle>
-          </DialogHeader>
-          <PlotComponent {...message} />
-        </DialogContent>
-      </Dialog>
+      <MediaDialog
+        open={opened}
+        onOpenChange={setOpened}
+        title="Expanded uPlot chart"
+      >
+        <PlotComponent {...message} />
+      </MediaDialog>
     </>
   );
 }

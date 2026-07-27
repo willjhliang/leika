@@ -747,3 +747,45 @@ def test_plain_dropdown_list_can_open_above_the_trigger(
     )
     assert geometry == {"alignsItemWithTrigger": "true", "firstItemAboveTriggerTop": True}
     assert page_errors == []
+
+
+def test_media_elements_share_one_expand_affordance(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Images and charts expand through the same control, drawn the same way.
+
+    The three media elements each carried their own copy of this button, which
+    is how they came to disagree about its size. Only the corner is allowed to
+    differ, and only because uPlot puts its legend where the others do not.
+    """
+    leika_server.gui.add_image(np.zeros((20, 30, 3), dtype=np.uint8), label="Preview")
+    x_data = np.linspace(0.0, 1.0, 16)
+    leika_server.gui.add_uplot((x_data, x_data), ({}, {"label": "y"}), aspect=2.0)
+
+    image_button = leika_page.get_by_role("button", name="Expand image")
+    plot_button = leika_page.get_by_role("button", name="Expand plot")
+    expect(image_button).to_be_attached(timeout=15_000)
+    expect(plot_button).to_be_attached(timeout=15_000)
+
+    probe = """el => {
+        const style = getComputedStyle(el);
+        const glyph = getComputedStyle(el.querySelector('svg'));
+        return {
+            width: style.width,
+            height: style.height,
+            position: style.position,
+            glyphWidth: glyph.width,
+            glyphHeight: glyph.height,
+        };
+    }"""
+    assert image_button.evaluate(probe) == plot_button.evaluate(probe)
+
+    # Chrome, not content: hidden until the pointer (or focus) arrives.
+    assert image_button.evaluate("el => getComputedStyle(el).opacity") == "0"
+    leika_page.get_by_role("img").first.hover()
+    expect(image_button).to_be_visible()
+    image_button.click()
+    expect(leika_page.get_by_role("dialog")).to_be_visible(timeout=5_000)
+    assert page_errors == []

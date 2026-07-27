@@ -1,16 +1,8 @@
-import { Maximize2Icon } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { GuiImageMessage } from "../WebsocketMessages";
-import { HintTooltip } from "./common";
+import { MediaDialog, MediaSurface } from "./MediaExpand";
 
 const ImageWithExpand = React.memo(function ImageWithExpand({
   imageUrl,
@@ -24,23 +16,12 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
   return (
     <Field>
       {label === null ? null : <FieldLabel>{label}</FieldLabel>}
-      <div className="relative">
-        <img src={imageUrl} className="block h-auto max-w-full" />
-        {onExpand === undefined ? null : (
-          <HintTooltip hint="Expand image">
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon-sm"
-              className="absolute right-2 bottom-2"
-              onClick={onExpand}
-              aria-label="Expand image"
-            >
-              <Maximize2Icon />
-            </Button>
-          </HintTooltip>
-        )}
-      </div>
+      <MediaSurface subject="image" onExpand={onExpand}>
+        {/* `w-full` rather than `max-w-full`: a GUI image spans the panel,
+            upscaling a narrow one instead of stranding it against the left
+            edge of a row that is wider than it. */}
+        <img src={imageUrl} className="block h-auto w-full rounded-lg" />
+      </MediaSurface>
     </Field>
   );
 });
@@ -76,17 +57,18 @@ function ImageComponent({ props }: GuiImageMessage) {
         label={props.label}
         onExpand={() => setOpened(true)}
       />
-      <Dialog open={opened} onOpenChange={setOpened}>
-        <DialogContent
-          className="max-h-[calc(100dvh-2rem)] overflow-auto sm:max-w-none"
-          style={{ width: dialogWidth }}
-        >
-          <DialogHeader>
-            <DialogTitle>{props.label ?? "Image"}</DialogTitle>
-          </DialogHeader>
-          <img src={imageUrl} className="mx-auto block h-auto max-w-full" />
-        </DialogContent>
-      </Dialog>
+      <MediaDialog
+        open={opened}
+        onOpenChange={setOpened}
+        title={props.label ?? "Image"}
+        showTitle
+        width={dialogWidth}
+      >
+        <img
+          src={imageUrl}
+          className="mx-auto block h-auto w-full rounded-lg"
+        />
+      </MediaDialog>
     </>
   );
 }

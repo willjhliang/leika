@@ -1,44 +1,20 @@
-import { Maximize2Icon } from "lucide-react";
 import React from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { GuiPlotlyMessage } from "../WebsocketMessages";
-import { HintTooltip } from "./common";
-
-function useElementWidth() {
-  const [node, setNode] = React.useState<HTMLDivElement | null>(null);
-  const [width, setWidth] = React.useState(0);
-  const ref = React.useCallback((element: HTMLDivElement | null) => {
-    setNode(element);
-  }, []);
-  React.useLayoutEffect(() => {
-    if (node === null) return;
-    const update = () => setWidth(node.getBoundingClientRect().width);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [node]);
-  return { ref, width };
-}
+import { useElementSize } from "../hooks/useElementSize";
+import { MediaDialog, MediaSurface } from "./MediaExpand";
 
 const PlotWithAspect = React.memo(function PlotWithAspect({
   jsonStr,
-  aspectRatio,
+  aspect,
   onExpand,
 }: {
   jsonStr: string;
-  aspectRatio: number;
+  /** Width divided by height, read the same way as `GuiUplotProps.aspect`. */
+  aspect: number;
   onExpand?: () => void;
 }) {
-  const { ref, width } = useElementWidth();
+  const { ref, width } = useElementSize();
   const plotRef = React.useRef<HTMLDivElement>(null);
   const plotJson = React.useMemo(() => {
     const parsed = JSON.parse(jsonStr);
@@ -52,10 +28,10 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
     Plotly.react(
       plotRef.current!,
       plotJson.data,
-      { ...plotJson.layout, width, height: width / aspectRatio },
+      { ...plotJson.layout, width, height: width / aspect },
       plotJson.config,
     );
-  }, [plotJson, width, aspectRatio]);
+  }, [plotJson, width, aspect]);
 
   React.useEffect(() => {
     const node = plotRef.current;
@@ -68,32 +44,18 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
   }, []);
 
   return (
-    <div ref={ref} className="relative overflow-hidden">
+    <MediaSurface
+      subject="plot"
+      className="overflow-hidden"
+      ref={ref}
+      onExpand={onExpand}
+    >
       <div ref={plotRef} />
-      {onExpand === undefined ? null : (
-        <HintTooltip hint="Expand plot">
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon-sm"
-            className="absolute right-2 bottom-2"
-            onClick={onExpand}
-            aria-label="Expand plot"
-          >
-            <Maximize2Icon />
-          </Button>
-        </HintTooltip>
-      )}
-    </div>
+    </MediaSurface>
   );
 });
 
-export default function PlotlyComponent(message: GuiPlotlyMessage) {
-  if (!message.props.visible) return null;
-  return <PlotlyComponentInner {...message} />;
-}
-
-function PlotlyComponentInner({
+export default function PlotlyComponent({
   props: { _plotly_json_str: plotlyJsonString, aspect },
 }: GuiPlotlyMessage) {
   const [opened, setOpened] = React.useState(false);
@@ -101,17 +63,16 @@ function PlotlyComponentInner({
     <>
       <PlotWithAspect
         jsonStr={plotlyJsonString}
-        aspectRatio={aspect}
+        aspect={aspect}
         onExpand={() => setOpened(true)}
       />
-      <Dialog open={opened} onOpenChange={setOpened}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-auto sm:max-w-4xl">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Expanded Plotly plot</DialogTitle>
-          </DialogHeader>
-          <PlotWithAspect jsonStr={plotlyJsonString} aspectRatio={aspect} />
-        </DialogContent>
-      </Dialog>
+      <MediaDialog
+        open={opened}
+        onOpenChange={setOpened}
+        title="Expanded Plotly plot"
+      >
+        <PlotWithAspect jsonStr={plotlyJsonString} aspect={aspect} />
+      </MediaDialog>
     </>
   );
 }

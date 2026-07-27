@@ -150,6 +150,16 @@ def test_removed_visual_customization_arguments_are_rejected(
         server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
 
 
+def test_gui_images_always_span_the_panel(server: leika.Server) -> None:
+    """A GUI image has one width -- the panel's -- so there is no knob for it."""
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+
+    handle = server.gui.add_image(frame, label="Preview")
+    assert not hasattr(handle, "fit_width")
+    with pytest.raises(TypeError):
+        server.gui.add_image(frame, fit_width=False)  # type: ignore[call-arg]
+
+
 def test_containers_mirror_every_container_scoped_add_method() -> None:
     """``folder.add_thing(...)`` exists because ``GuiApi.add_thing`` does.
 
