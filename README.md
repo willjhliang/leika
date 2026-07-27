@@ -44,6 +44,8 @@ when you want the browser to restore a layout after a Python restart.
 
 ## Learn More
 
+- [Documentation](https://willjhliang.github.io/leika/): guides and the full
+  API reference.
 - [Architecture](docs/architecture.md): transport, layout ownership, and
   update flow.
 - [Examples](docs/examples.md): runnable demos from the repository.
