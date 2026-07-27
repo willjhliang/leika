@@ -46,11 +46,12 @@ when you want the browser to restore a layout after a Python restart.
 
 - [Documentation](https://willjhliang.github.io/leika/): guides and the full
   API reference.
-- [Architecture](docs/architecture.md): transport, layout ownership, and
-  update flow.
-- [Examples](docs/examples.md): runnable demos from the repository.
-- [Development](docs/development.md): local checks, browser builds, and
-  packaging.
+- [Architecture](https://willjhliang.github.io/leika/architecture.html):
+  transport, layout ownership, and update flow.
+- [Examples](https://willjhliang.github.io/leika/examples.html): runnable demos
+  from the repository.
+- [Development](https://willjhliang.github.io/leika/development.html): local
+  checks, browser builds, and packaging.
 
 Note that Leika's sole function is relaying formed visualizations and does not
 replace software like `matplotlib` or `plotly`.
