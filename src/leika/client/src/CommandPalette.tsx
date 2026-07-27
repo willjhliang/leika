@@ -2,9 +2,11 @@ import {
   Command,
   CommandDialog,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
+  CommandShortcut,
 } from "./components/ui/command";
 import Fuse, { FuseResult, IFuseOptions } from "fuse.js";
 import React, {
@@ -29,7 +31,8 @@ import { isMac } from "./utils/platform";
 type CommandAction = {
   id: string;
   label: string;
-  description?: string;
+  /** Display form of the command's hotkey, if it has one. */
+  shortcut?: string;
   disabled?: boolean;
   onClick?: () => void;
   iconHtml?: string;
@@ -83,25 +86,19 @@ function useCommandActions(
     () =>
       Object.values(commands).map((command) => {
         const hotkey = command.props.hotkey;
-        const modifier = command.props.modifier;
-        const formatted = hotkey ? formatHotkey(hotkey, modifier) : null;
-        const desc = command.props.description;
-        const description =
-          desc && formatted
-            ? `${desc}  (${formatted})`
-            : desc
-              ? desc
-              : formatted
-                ? formatted
-                : undefined;
         const disabled = command.props.disabled;
         return {
           id: command.uuid,
           label: command.props.label,
-          description,
+          // The hotkey rides in its own slot rather than being appended to the
+          // label, which is what CommandShortcut is for.
+          shortcut: hotkey
+            ? formatHotkey(hotkey, command.props.modifier)
+            : undefined,
           disabled,
           onClick: disabled ? undefined : () => onTrigger(command.uuid),
           iconHtml: command.props._icon_html ?? undefined,
+          // Descriptions are no longer shown, but they stay searchable.
           keywords: command.props.description
             ? [command.props.description]
             : undefined,
@@ -112,7 +109,7 @@ function useCommandActions(
 }
 
 const FUSE_OPTIONS: IFuseOptions<CommandAction> = {
-  keys: ["label", "description", "keywords"],
+  keys: ["label", "keywords"],
   threshold: 0.4,
   ignoreLocation: true,
 };
@@ -255,12 +252,12 @@ export function CommandPalette() {
           onValueChange={setQuery}
         />
         <CommandList id="leika-command-list" data-leika-command-list>
-          {visibleActions.length === 0 ? (
-            <CommandEmpty>
-              No matching commands...
-            </CommandEmpty>
-          ) : (
-            visibleActions.map((action) => (
+          <CommandEmpty>No matching commands...</CommandEmpty>
+          {/* Every command sits in one unlabelled group: the group is what
+              insets the items from the popup's edges, so it is structural
+              rather than decorative even with a single flat list. */}
+          <CommandGroup>
+            {visibleActions.map((action) => (
               <CommandItem
                 key={action.id}
                 id={"leika-command-" + action.id}
@@ -280,17 +277,13 @@ export function CommandPalette() {
                     dangerouslySetInnerHTML={{ __html: action.iconHtml }}
                   />
                 ) : null}
-                <span className="min-w-0 flex-1">
-                  <span className="block">{action.label}</span>
-                  {action.description ? (
-                    <span className="block text-xs text-muted-foreground">
-                      {action.description}
-                    </span>
-                  ) : null}
-                </span>
+                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                {action.shortcut ? (
+                  <CommandShortcut>{action.shortcut}</CommandShortcut>
+                ) : null}
               </CommandItem>
-            ))
-          )}
+            ))}
+          </CommandGroup>
         </CommandList>
       </Command>
     </CommandDialog>
