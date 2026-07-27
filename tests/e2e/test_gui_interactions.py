@@ -21,7 +21,9 @@ def test_core_controls_render_and_update(
     leika_server.gui.add_markdown("## Controls")
     checkbox = leika_server.gui.add_checkbox("Enabled", initial_value=True)
     text = leika_server.gui.add_text("Name", initial_value="Leika")
-    dropdown = leika_server.gui.add_dropdown("Mode", options=("Fast", "Accurate"))
+    # Searchable, so this covers the filtering path; the plain default has its
+    # own test below.
+    dropdown = leika_server.gui.add_dropdown("Mode", options=("Fast", "Accurate"), searchable=True)
     leika_server.gui.add_button("Run")
 
     enabled = find_gui_row(leika_page, "Enabled").get_by_role("checkbox")
@@ -436,7 +438,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     action_locator = find_gui_row(leika_page, "Styled actions").get_by_role("button", name="A")
     text_input_locator = find_gui_row(leika_page, "Styled text").get_by_role("textbox")
     dropdown_locator = find_gui_row(leika_page, "Styled dropdown").locator(
-        '[data-slot="combobox-trigger"]'
+        '[data-slot="select-trigger"]'
     )
     color_locator = find_gui_row(leika_page, "Styled color").locator("[data-leika-color-trigger]")
     action_group = find_gui_row(leika_page, "Styled actions").locator('[data-slot="toggle-group"]')
@@ -671,4 +673,77 @@ def test_charts_read_aspect_the_same_way(
     # reading (which would give 0.5 for one of them) cannot pass.
     assert ratio(plotly_plot) == pytest.approx(2.0, rel=0.15)
     assert ratio(uplot_plot) == pytest.approx(2.0, rel=0.35)
+    assert page_errors == []
+
+
+def test_dropdown_defaults_to_a_plain_select_with_no_search_box(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Without `searchable`, the dropdown is a Select rather than a Combobox.
+
+    The two differ in more than a filter box: the Select opens with the current
+    option under the cursor, so part of the list can sit above the trigger,
+    while the Combobox anchors its whole list below.
+    """
+    dropdown = leika_server.gui.add_dropdown("Mode", options=("Fast", "Accurate", "Exact"))
+
+    row = find_gui_row(leika_page, "Mode")
+    trigger = row.locator('[data-slot="select-trigger"]')
+    expect(trigger).to_be_visible(timeout=5_000)
+    expect(trigger).to_contain_text("Fast")
+    expect(row.locator('[data-slot="combobox-trigger"]')).to_have_count(0)
+
+    trigger.click()
+    expect(leika_page.locator('[data-slot="select-content"]')).to_be_visible(timeout=5_000)
+    # The filter box is the whole point of `searchable`; it must be absent here.
+    expect(leika_page.get_by_role("combobox", name="Search options")).to_have_count(0)
+
+    leika_page.get_by_role("option", name="Exact", exact=True).click()
+    deadline = time.monotonic() + 2.0
+    while dropdown.value != "Exact" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert dropdown.value == "Exact"
+    expect(trigger).to_contain_text("Exact")
+
+    # Server-side assignment drives the trigger too, not just user clicks.
+    dropdown.value = "Accurate"
+    expect(trigger).to_contain_text("Accurate", timeout=5_000)
+    assert page_errors == []
+
+
+def test_plain_dropdown_list_can_open_above_the_trigger(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The Select aligns the active option with the trigger.
+
+    That is what distinguishes it from the Combobox: with a later option
+    selected, the earlier ones have to render above the trigger rather than the
+    whole list hanging below it.
+    """
+    options = tuple(f"Option {index}" for index in range(1, 9))
+    leika_server.gui.add_dropdown("Many", options=options, initial_value="Option 6")
+
+    trigger = find_gui_row(leika_page, "Many").locator('[data-slot="select-trigger"]')
+    expect(trigger).to_be_visible(timeout=5_000)
+    trigger.click()
+    popup = leika_page.locator('[data-slot="select-content"]')
+    expect(popup).to_be_visible(timeout=5_000)
+
+    geometry = popup.evaluate(
+        """el => {
+            const trigger = document.querySelector('[data-slot="select-trigger"]');
+            const first = el.querySelector('[data-slot="select-item"]');
+            return {
+                alignsItemWithTrigger: el.dataset.alignTrigger,
+                firstItemAboveTriggerTop:
+                    first.getBoundingClientRect().top
+                    < trigger.getBoundingClientRect().top,
+            };
+        }"""
+    )
+    assert geometry == {"alignsItemWithTrigger": "true", "firstItemAboveTriggerTop": True}
     assert page_errors == []

@@ -547,6 +547,7 @@ export interface GuiDropdownMessage {
     visible: boolean;
     disabled: boolean;
     options: string[];
+    searchable: boolean;
   };
 }
 /** GuiButtonGroupMessage(uuid: 'str', value: 'str', container_uuid: 'str', props: 'GuiButtonGroupProps')

@@ -779,6 +779,8 @@ class GuiDropdownProps(GuiBaseProps):
     # This will actually be manually overridden for better types.
     options: Tuple[str, ...]
     """Tuple of options for the dropdown."""
+    searchable: bool
+    """Whether the open dropdown offers a search box to filter the options."""
 
 
 @dataclasses.dataclass

@@ -1800,6 +1800,7 @@ class GuiApi(GuiContainer):
         initial_value: TLiteralString | None = None,
         disabled: bool = False,
         visible: bool = True,
+        searchable: bool = False,
         hint: str | None = None,
         order: float | None = None,
     ) -> GuiDropdownHandle[TLiteralString]: ...
@@ -1813,6 +1814,7 @@ class GuiApi(GuiContainer):
         initial_value: TString | None = None,
         disabled: bool = False,
         visible: bool = True,
+        searchable: bool = False,
         hint: str | None = None,
         order: float | None = None,
     ) -> GuiDropdownHandle[TString]: ...
@@ -1825,6 +1827,7 @@ class GuiApi(GuiContainer):
         initial_value: TLiteralString | TString | None = None,
         disabled: bool = False,
         visible: bool = True,
+        searchable: bool = False,
         hint: str | None = None,
         order: float | None = None,
     ) -> GuiDropdownHandle[Any]:  # Output type is specified in overloads.
@@ -1836,6 +1839,10 @@ class GuiApi(GuiContainer):
             initial_value: Initial value of the dropdown.
             disabled: Whether the dropdown is disabled.
             visible: Whether the dropdown is visible.
+            searchable: Whether the open dropdown offers a search box to filter
+                the options. Off by default, which keeps the selected option
+                under the cursor when the list opens; turn it on for lists too
+                long to scan by eye.
             hint: Optional hint to display on hover.
             order: Optional ordering, smallest values will be displayed first.
 
@@ -1870,6 +1877,7 @@ class GuiApi(GuiContainer):
                         options=options_tuple,
                         disabled=disabled,
                         visible=visible,
+                        searchable=searchable,
                     ),
                 ),
             ),

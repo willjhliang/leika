@@ -114,6 +114,14 @@
     @apply h-6;
   }
 
+  /* The select trigger picks its height through a `data-size` variant, which
+     ties with the rule above on specificity and wins on order. Matching the
+     attribute settles it, so a plain dropdown is the same height as every
+     other control in the row. */
+  & [data-slot="select-trigger"][data-size] {
+    @apply h-6;
+  }
+
   & [data-slot="input"] {
     @apply py-0;
   }
