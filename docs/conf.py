@@ -64,7 +64,7 @@ intersphinx_mapping = {
 }
 
 html_theme = "furo"
-html_title = f"Leika {release}"
+html_title = project
 html_static_path = ["_static"]
 
 
