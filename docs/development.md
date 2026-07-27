@@ -34,6 +34,23 @@ make package
 Run the first four before opening a change; add `make test-e2e` for
 browser-facing changes and `make package` for packaging changes.
 
+## Documentation
+
+```bash
+python -m pip install -e ".[docs]"
+make docs
+```
+
+Sphinx renders `docs/` into `docs/_build/html`. The narrative pages are
+Markdown through MyST so they stay readable on GitHub; the API reference under
+`docs/api/` is reStructuredText driven by autodoc, so public docstrings are the
+only source for it. `make docs` builds with `-W`, which turns warnings such as
+a broken cross-reference into failures, and CI publishes `main` to GitHub Pages
+through `.github/workflows/docs.yml`.
+
+Adding a public class or method to `leika` means adding it to the matching page
+in `docs/api/`; autodoc will not discover it otherwise.
+
 Unit tests must work without Plotly unless marked `plotly`. Package tests build
 the wheel from a clean client artifact, require the browser bundle to be
 present, reject files that do not belong in a release wheel, and enforce a

@@ -1,4 +1,4 @@
-.PHONY: help install test test-e2e lint typecheck client-test build-client package
+.PHONY: help install test test-e2e lint typecheck client-test build-client docs package
 
 help: ## Show available development commands
 	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -25,6 +25,9 @@ client-test: ## Type-check, lint, and unit-test the browser client
 
 build-client: ## Build the single-file browser client
 	cd src/leika/client && npm ci && npm run build
+
+docs: ## Build the HTML documentation into docs/_build/html
+	sphinx-build -b html -W --keep-going docs docs/_build/html
 
 package: ## Build distributions and enforce the wheel-size ceiling
 	python -m build

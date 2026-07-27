@@ -36,6 +36,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/willjhliang/leika"
+Documentation = "https://willjhliang.github.io/leika/"
 Repository = "https://github.com/willjhliang/leika"
 Issues = "https://github.com/willjhliang/leika/issues"
 
@@ -56,6 +57,7 @@ dev = [
 ]
 docs = [
   "furo>=2024.8.6",
+  "myst-parser>=3,<5",
   "sphinx>=7,<9",
   "sphinx-copybutton>=0.5.2",
 ]
