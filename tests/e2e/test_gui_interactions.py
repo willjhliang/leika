@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 import numpy as np
+import pytest
 from playwright.sync_api import Locator, Page, expect
 
 import leika
@@ -633,4 +634,41 @@ def test_visibility_toggles_uniformly_across_element_kinds(
     image.visible = True
     for locator in (heading, preview, nested, gain):
         expect(locator).to_be_visible(timeout=5_000)
+    assert page_errors == []
+
+
+@pytest.mark.plotly
+def test_charts_read_aspect_the_same_way(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """`aspect` is width over height for both chart kinds.
+
+    They used to disagree -- Plotly multiplied the width by it while uPlot
+    divided -- so the same number produced a landscape chart in one and a
+    portrait one in the other, and no docstring could be right about both.
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    figure = go.Figure(data=[go.Scatter(x=[0, 1, 2], y=[0, 1, 0])])
+    figure.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0})
+    leika_server.gui.add_plotly(figure, aspect=2.0, config={"staticPlot": True})
+    x_data = np.linspace(0.0, 1.0, 16)
+    leika_server.gui.add_uplot((x_data, x_data), ({}, {"label": "y"}), aspect=2.0)
+
+    plotly_plot = leika_page.locator(".js-plotly-plot")
+    uplot_plot = leika_page.locator(".uplot-container .uplot")
+    expect(plotly_plot).to_be_visible(timeout=15_000)
+    expect(uplot_plot).to_be_visible(timeout=15_000)
+
+    def ratio(locator: Locator) -> float:
+        bounds = locator.bounding_box()
+        assert bounds is not None
+        assert bounds["height"] > 0
+        return bounds["width"] / bounds["height"]
+
+    # Both wider than tall, and close enough to each other that a flipped
+    # reading (which would give 0.5 for one of them) cannot pass.
+    assert ratio(plotly_plot) == pytest.approx(2.0, rel=0.15)
+    assert ratio(uplot_plot) == pytest.approx(2.0, rel=0.35)
     assert page_errors == []

@@ -53,11 +53,6 @@ function ImageComponent({ props }: GuiImageMessage) {
   const [opened, setOpened] = useState(false);
 
   useEffect(() => {
-    if (props._data === null) {
-      setImageUrl(null);
-      setImageWidth(null);
-      return;
-    }
     const nextUrl = URL.createObjectURL(
       new Blob([props._data], { type: `image/${props._format}` }),
     );

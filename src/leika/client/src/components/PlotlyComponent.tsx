@@ -29,16 +29,7 @@ function useElementWidth() {
   return { ref, width };
 }
 
-function PlotWithAspect(props: {
-  jsonStr: string;
-  aspectRatio: number;
-  onExpand?: () => void;
-}) {
-  if (props.jsonStr === "") return null;
-  return <PlotWithAspectInner {...props} />;
-}
-
-const PlotWithAspectInner = React.memo(function PlotWithAspectInner({
+const PlotWithAspect = React.memo(function PlotWithAspect({
   jsonStr,
   aspectRatio,
   onExpand,
@@ -61,7 +52,7 @@ const PlotWithAspectInner = React.memo(function PlotWithAspectInner({
     Plotly.react(
       plotRef.current!,
       plotJson.data,
-      { ...plotJson.layout, width, height: width * aspectRatio },
+      { ...plotJson.layout, width, height: width / aspectRatio },
       plotJson.config,
     );
   }, [plotJson, width, aspectRatio]);

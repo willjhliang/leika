@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import numpy as np
 import pytest
 
 import leika
@@ -176,3 +177,31 @@ def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) 
     assert root._impl.parent_container_id == "root"
     # Nothing left behind for this thread once every block has unwound.
     assert server.gui._container_stack_from_thread_id == {}
+
+
+def test_media_elements_are_created_from_their_content(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No create-then-backfill: an image or plot arrives complete.
+
+    The create message used to carry a placeholder that a property assignment
+    immediately replaced, so every element cost a second message -- for images,
+    a second copy of the encoded bytes.
+    """
+    plotly = pytest.importorskip("plotly.graph_objects")
+    sent: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", sent.append)
+
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    server.gui.add_image(frame, label="Frame")
+    image_messages = [m for m in sent if type(m).__name__.startswith("GuiImage")]
+    assert len(image_messages) == 1
+    assert image_messages[0].props._data
+    assert image_messages[0].props._format == "jpeg"
+
+    sent.clear()
+    server.gui.add_plotly(plotly.Figure(), aspect=2.0)
+    plotly_messages = [m for m in sent if type(m).__name__.startswith("GuiPlotly")]
+    assert len(plotly_messages) == 1
+    assert plotly_messages[0].props.aspect == 2.0
+    assert plotly_messages[0].props._plotly_json_str.startswith("{")

@@ -1210,16 +1210,21 @@ class GuiUplotHandle(_GuiHandle[None], GuiUplotProps):
 class GuiImageHandle(_GuiHandle[None], GuiImageProps):
     """Handle for updating and removing images."""
 
+    _user_format: Literal["auto", "jpeg", "png"]
+    """The format the caller asked for, which ``_format`` resolves 'auto' from.
+    Kept so a later re-encode makes the same choice as the first one."""
+
     def __init__(
         self,
         _impl: _GuiHandleState,
         _image: np.ndarray,
         _jpeg_quality: int | None,
+        _user_format: Literal["auto", "jpeg", "png"] = "auto",
     ):
         super().__init__(impl=_impl)
         self._image = _image
         self._jpeg_quality = _jpeg_quality
-        self._user_format: Literal["auto", "jpeg", "png"] = "auto"  # Default if not set.
+        self._user_format = _user_format
 
     @property
     def image(self) -> np.ndarray:

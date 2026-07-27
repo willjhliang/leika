@@ -295,7 +295,7 @@ export interface GuiImageMessage {
   props: {
     order: number;
     label: string | null;
-    _data: Uint8Array<ArrayBuffer> | null;
+    _data: Uint8Array<ArrayBuffer>;
     _format: "jpeg" | "png";
     visible: boolean;
   };

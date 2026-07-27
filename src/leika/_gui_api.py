@@ -70,11 +70,13 @@ from ._gui_handles import (
     _GuiHandleState,
     _GuiInputHandle,
     _make_uuid,
+    _plotly_json_with_config,
     install_container_add_methods,
     not_container_scoped,
 )
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
+from ._image_encoding import encode_image_binary
 from ._messages import FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import NotificationHandle, _NotificationHandleState
 from ._threadpool_exceptions import print_threadpool_errors
@@ -1086,17 +1088,12 @@ class GuiApi(GuiContainer):
         Returns:
             Handle for manipulating the image element.
         """
-        # Resolve format if auto.
-        if format == "auto":
-            resolved_format = "png" if image.shape[2] == 4 else "jpeg"
-        else:
-            resolved_format = format
-
+        resolved_format, data = encode_image_binary(image, format, jpeg_quality=jpeg_quality)
         message = _messages.GuiImageMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiImageProps(
-                _data=None,  # Sent in prop update later.
+                _data=data,
                 label=label,
                 _format=resolved_format,
                 order=_apply_default_order(order),
@@ -1105,7 +1102,7 @@ class GuiApi(GuiContainer):
         )
         self._websock_interface.queue_message(message)
 
-        handle = GuiImageHandle(
+        return GuiImageHandle(
             _GuiHandleState(
                 message.uuid,
                 self,
@@ -1115,10 +1112,8 @@ class GuiApi(GuiContainer):
             ),
             _image=image,
             _jpeg_quality=jpeg_quality,
+            _user_format=format,
         )
-        handle._user_format = format
-        handle.image = image
-        return handle
 
     def _ensure_plotly_js_sent(self) -> None:
         """Send plotly.min.js to clients, once. Plotly figures cannot be
@@ -1171,7 +1166,9 @@ class GuiApi(GuiContainer):
                 display options like ``{"displayModeBar": False}``. Values
                 must be JSON-serializable. See
                 https://plotly.com/javascript/configuration-options/
-            aspect: Aspect ratio of the plot in the control panel (width/height).
+            aspect: Width-to-height ratio for the plot in the control panel.
+                1.0 creates a square plot, values > 1.0 create wider plots.
+                Read the same way as :meth:`add_uplot`'s ``aspect``.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
@@ -1184,20 +1181,19 @@ class GuiApi(GuiContainer):
         self._ensure_plotly_js_sent()
 
         # After plotly.min.js has been sent, we can send the plotly figure.
-        # Empty string for `plotly_json_str` is a signal to the client to render nothing.
         message = _messages.GuiPlotlyMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiPlotlyProps(
                 order=_apply_default_order(order),
-                _plotly_json_str="",
-                aspect=1.0,
+                _plotly_json_str=_plotly_json_with_config(figure, config),
+                aspect=aspect,
                 visible=visible,
             ),
         )
         self._websock_interface.queue_message(message)
 
-        handle = GuiPlotlyHandle(
+        return GuiPlotlyHandle(
             _GuiHandleState(
                 message.uuid,
                 self,
@@ -1208,11 +1204,6 @@ class GuiApi(GuiContainer):
             _figure=figure,
             _config=config,
         )
-
-        # Set the plotly handle properties.
-        handle.figure = figure
-        handle.aspect = aspect
-        return handle
 
     def add_uplot(
         self,

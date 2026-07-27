@@ -460,7 +460,8 @@ class GuiPlotlyProps:
     _plotly_json_str: str
     """(Private) JSON string representation of the Plotly figure."""
     aspect: float
-    """Aspect ratio of the plot."""
+    """Width-to-height ratio for the plot display (width/height). 1.0 = square, >1.0 =
+    wider. Matches :class:`GuiUplotProps`'s field of the same name."""
     visible: bool
     """Visibility state of the plot."""
 
@@ -529,8 +530,9 @@ class GuiImageProps:
     """Order value for arranging GUI elements. """
     label: Optional[str]
     """Label text for the image."""
-    _data: Optional[bytes]
-    """Binary data of the image."""
+    _data: bytes
+    """(Private) Encoded image bytes, in ``_format``. Always present: an image
+    element is created from the image it shows."""
     _format: Literal["jpeg", "png"]
     """Format of the provided image ('jpeg' or 'png')."""
     visible: bool
