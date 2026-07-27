@@ -40,7 +40,7 @@ function Toast({ className, ...props }: ToastPrimitive.Root.Props) {
     <ToastPrimitive.Root
       data-slot="toast"
       className={cn(
-        "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-2xl border bg-popover text-popover-foreground shadow-lg will-change-transform outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-2xl border bg-popover text-popover-foreground shadow-lg will-change-transform outline-none select-none focus-visible:border-ring",
         "[--gap:0.75rem] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] [--peek:0.75rem] [--scale:calc(max(0,1-(var(--toast-index)*0.1)))] [--shrink:calc(1-var(--scale))]",
         "h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))] [transition:transform_500ms_cubic-bezier(0.22,1,0.36,1),opacity_500ms,height_150ms]",
         "after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
@@ -125,7 +125,10 @@ function ToastClose({
       aria-label="Close toast"
       render={render}
       className={cn(
-        "relative shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-foreground",
+        // Pinned to the corner rather than sitting in the row, so it lands in
+        // the same place as the dialog's close button. `after` widens the hit
+        // area to the toast's edge without moving the icon.
+        "absolute top-2 right-2 text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-foreground",
         className
       )}
       {...props}
@@ -187,19 +190,24 @@ function ToastIcon({ type }: { type: string | undefined }) {
 function ToastList() {
   const { toasts } = ToastPrimitive.useToastManager<ToastData>()
 
-  return toasts.map((toastItem) => (
-    <Toast key={toastItem.id} toast={toastItem}>
-      <ToastContent>
-        <ToastIcon type={toastItem.type} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <ToastTitle />
-          <ToastDescription />
-        </div>
-        <ToastAction />
-        {toastItem.data?.closeButton !== false && <ToastClose />}
-      </ToastContent>
-    </Toast>
-  ))
+  return toasts.map((toastItem) => {
+    const closeable = toastItem.data?.closeButton !== false
+    return (
+      <Toast key={toastItem.id} toast={toastItem}>
+        {/* The close button is out of flow, so the row is padded back from the
+            corner it occupies -- otherwise a long title would run under it. */}
+        <ToastContent className={closeable ? "pr-10" : undefined}>
+          <ToastIcon type={toastItem.type} />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <ToastTitle />
+            <ToastDescription />
+          </div>
+          <ToastAction />
+          {closeable && <ToastClose />}
+        </ToastContent>
+      </Toast>
+    )
+  })
 }
 
 function Toaster({

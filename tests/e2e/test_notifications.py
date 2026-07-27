@@ -90,6 +90,43 @@ def test_close_button_is_shown_only_when_requested(
     assert page_errors == []
 
 
+def test_close_button_sits_in_the_top_right_corner(
+    leika_server: leika.Server, notify_page: Page, page_errors: list[str]
+) -> None:
+    """Positioned like a dialog's close button rather than inline in the row."""
+    leika_server.gui.add_notification(
+        "A title long enough to fill the row and reach the corner",
+        "Body copy that wraps onto a second line so the toast is tall.",
+        with_close_button=True,
+        auto_close_seconds=None,
+    )
+    toast = toasts(notify_page)
+    expect(toast).to_have_count(1, timeout=5_000)
+
+    close = toast.locator('[data-slot="toast-close"]')
+    # Layout offsets, so an in-flight enter animation cannot skew them.
+    box = close.evaluate(
+        """el => {
+            const host = el.closest('[data-slot="toast"]');
+            const style = getComputedStyle(el);
+            return {
+                position: style.position,
+                top: style.top,
+                right: style.right,
+                overlapsText: [...host.querySelectorAll(
+                    '[data-slot="toast-title"], [data-slot="toast-description"]'
+                )].some((text) => {
+                    const a = text.getBoundingClientRect();
+                    const b = el.getBoundingClientRect();
+                    return a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+                }),
+            };
+        }"""
+    )
+    assert box == {"position": "absolute", "top": "8px", "right": "8px", "overlapsText": False}
+    assert page_errors == []
+
+
 def test_loading_notification_shows_a_spinner(
     leika_server: leika.Server, notify_page: Page, page_errors: list[str]
 ) -> None:
