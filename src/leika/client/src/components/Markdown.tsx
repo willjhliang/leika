@@ -1,6 +1,6 @@
 import { ErrorBoundary } from "react-error-boundary";
 
-import Markdown from "../Markdown";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { GuiMarkdownMessage } from "../WebsocketMessages";
 
 export default function MarkdownComponent({
@@ -10,7 +10,7 @@ export default function MarkdownComponent({
     <ErrorBoundary
       fallback={<p className="text-center">Markdown failed to render</p>}
     >
-      <Markdown>{markdown}</Markdown>
+      <MarkdownRenderer>{markdown}</MarkdownRenderer>
     </ErrorBoundary>
   );
 }

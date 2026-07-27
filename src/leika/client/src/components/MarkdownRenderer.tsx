@@ -13,7 +13,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "./components/ui/table";
+} from "@/components/ui/table";
 import { visit } from "unist-util-visit";
 import { Transformer } from "unified";
 import { Root } from "hast";
@@ -164,7 +164,7 @@ async function parseMarkdown(markdown: string) {
  * NOTE: Only run on markdown you trust.
  * It might be worth looking into sandboxing all markdown so that it can't run JS.
  */
-export default function Markdown(props: { children?: string }) {
+export function MarkdownRenderer(props: { children?: string }) {
   const [child, setChild] = useState<ReactNode>(null);
 
   useEffect(() => {
