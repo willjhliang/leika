@@ -310,3 +310,49 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     expect(output.first).to_have_value("#030405")
     expect(output.nth(1)).to_have_value("78")
     assert page_errors == []
+
+
+def test_hue_survives_greyscale_and_the_far_right(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Hue is picker state, not something the color can carry back.
+
+    A grey has no hue to recover and hue 360 is the same red as hue 0, so a
+    slider reading its position off the RGB it produced was dead on greys and
+    threw its thumb to the far left at the far right.
+    """
+    color = leika_server.gui.add_rgb("Accent", initial_value=(38, 38, 38))
+    picker = _open_color_picker(leika_page, "Accent")
+    hue = picker.get_by_role("slider", name="Hue")
+    selection = picker.locator("[data-leika-color-selection]")
+
+    # Grey: every hue is the same color, and the slider still has to move.
+    expect(hue).to_have_attribute("aria-valuenow", "0")
+    hue.focus()
+    for _ in range(5):
+        hue.press("ArrowRight")
+    expect(hue).to_have_attribute("aria-valuenow", "5")
+    assert color.value == (38, 38, 38)
+
+    # Saturating from there keeps the hue that was chosen on the grey.
+    selection_bounds = selection.bounding_box()
+    assert selection_bounds is not None
+    selection.click(position={"x": selection_bounds["width"] - 8, "y": 8})
+    _wait_for_value(lambda: color.value[0] > color.value[2])
+    expect(hue).to_have_attribute("aria-valuenow", "5")
+
+    # The far right stays at the far right rather than wrapping to 0.
+    hue.press("End")
+    expect(hue).to_have_attribute("aria-valuenow", "360")
+    thumb = picker.locator('[data-leika-color-slider="hue"] [data-slot="slider-thumb"]')
+    track = picker.locator('[data-leika-color-slider="hue"] [data-slot="slider-track"]')
+    thumb_box = thumb.bounding_box()
+    track_box = track.bounding_box()
+    assert thumb_box is not None and track_box is not None
+    assert thumb_box["x"] > track_box["x"] + track_box["width"] / 2
+
+    # And it is still the red that hue 0 would have given.
+    _wait_for_value(lambda: color.value[0] > 200 and color.value[1] < 40)
+    assert page_errors == []

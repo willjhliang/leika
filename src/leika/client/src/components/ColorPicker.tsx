@@ -10,6 +10,7 @@ import {
   hsvToRgb,
   hslToRgb,
   parseToRgba,
+  rgbEqual,
   rgbToHsl,
   rgbToHsv,
   type HsvColor,
@@ -179,7 +180,20 @@ export function ColorPicker({
   const rgba = parseToRgba(value) ?? [0, 0, 0, 255];
   const rgb = rgba.slice(0, 3) as RgbTuple;
   const alpha = (rgba[3] / 255) * 100;
-  const hsv = rgbToHsv(rgb);
+  const [draftHsv, setDraftHsv] = React.useState<HsvColor>(() => rgbToHsv(rgb));
+  // Where the hue and saturation controls sit cannot be recovered from the
+  // color they produced, so the picker remembers them rather than deriving
+  // them fresh each render:
+  //
+  //   - every hue maps to the same greyscale RGB once saturation is 0, and to
+  //     black once brightness is 0, so a derived hue snaps back to 0 and the
+  //     slider looks dead until something else adds color;
+  //   - hue 360 and hue 0 are the same red, so dragging to the far right
+  //     derived 0 and threw the thumb to the far left.
+  //
+  // The draft is only overruled when the incoming color is one it does not
+  // produce -- an edit from the output fields, the eyedropper, or the server.
+  const hsv = rgbEqual(hsvToRgb(draftHsv), rgb) ? draftHsv : rgbToHsv(rgb);
   const [outputFormat, setOutputFormat] = React.useState<ColorFormat>("hex");
   const [dragging, setDragging] = React.useState(false);
   const selectionElementRef = React.useRef<HTMLDivElement | null>(null);
@@ -194,6 +208,7 @@ export function ColorPicker({
 
   const updateRgb = React.useCallback(
     (next: HsvColor) => {
+      setDraftHsv(next);
       onValueChange(colorFromRgb(hsvToRgb(next), format, value));
     },
     [format, onValueChange, value],
