@@ -79,7 +79,7 @@ function PlainTabGroup({
             {tabIconsHtml[index] === null ? null : (
               <span
                 data-icon="inline-start"
-                className="size-4 [&_svg]:size-full"
+                className="size-3.5 [&_svg]:size-full"
                 dangerouslySetInnerHTML={{ __html: tabIconsHtml[index]! }}
               />
             )}

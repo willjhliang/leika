@@ -166,7 +166,7 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
             icon:
               iconHtml == null ? undefined : (
                 <div
-                  className="relative size-4 [&_svg]:absolute [&_svg]:top-1/2 [&_svg]:w-4 [&_svg]:-translate-y-1/2"
+                  className="relative size-3.5 [&_svg]:absolute [&_svg]:top-1/2 [&_svg]:w-3.5 [&_svg]:-translate-y-1/2"
                   dangerouslySetInnerHTML={{ __html: iconHtml }}
                 />
               ),

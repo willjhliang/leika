@@ -8,6 +8,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { guiLabelClassName } from "./guiLabelStyles";
 import { finiteNumberOrNull } from "./numberInputUtils";
 
 /** Keep the tooltip tree mounted while it is disabled so pointer gestures on
@@ -66,20 +68,22 @@ export function GuiInputRow({
   }
 
   const content = (
-    <FieldContent className="gui-row-controls min-w-0 font-normal leading-tight">
-      {children}
-    </FieldContent>
+    <FieldContent className="gui-row-controls min-w-0">{children}</FieldContent>
   );
   return (
     <Field
       orientation="horizontal"
+      // A GUI row is a fixed label column next to its controls, both centered.
+      // The `has-` half restates the alignment because Field's horizontal
+      // variant top-aligns any row that holds a FieldContent, which is the
+      // stacked-description layout rather than this one.
       className="grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center has-[>[data-slot=field-content]]:items-center"
       {...fieldState}
       data-leika-gui-row
     >
       <FieldLabel
         htmlFor={uuid}
-        className="w-full min-w-0 truncate text-muted-foreground font-normal leading-tight"
+        className={cn("w-full min-w-0 truncate", guiLabelClassName)}
         title={label}
       >
         {label}

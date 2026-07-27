@@ -8,6 +8,16 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
+  /* Both weights run a step lighter than the Tailwind defaults: Geist is a
+     variable face over 100-900, so these are real axis positions rather than
+     synthesized ones. Redefined here rather than swapping the utilities at
+     each call site so vendored components follow along too. */
+  --font-weight-normal: 300;
+  --font-weight-medium: 400;
+  /* The two sizes the UI actually uses, each a pixel down from stock. Their
+     line heights are unitless ratios, so they follow without being restated. */
+  --text-xs: 0.6875rem; /* 11px */
+  --text-sm: 0.8125rem; /* 13px */
   --leading-tight: 1;
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -93,14 +103,17 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background font-normal text-foreground;
   }
 }
 
 /* Generated GUI rows pack many controls into a narrow panel, so the controls
    they hold run one step tighter than the default form sizing. Defined as a
-   utility (not a component class) so it outranks each control's own height. */
+   utility (not a component class) so it outranks each control's own height,
+   and it covers the row itself as well as its controls so callers do not have
+   to restate the typography. */
 @utility gui-row-controls {
+  &,
   & [data-slot] {
     @apply font-normal leading-tight;
   }

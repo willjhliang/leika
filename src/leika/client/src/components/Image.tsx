@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { GuiImageMessage } from "../WebsocketMessages";
 import { MediaDialog, MediaSurface } from "./MediaExpand";
+import { guiLabelClassName } from "./guiLabelStyles";
 
 const ImageWithExpand = React.memo(function ImageWithExpand({
   imageUrl,
@@ -15,7 +16,9 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
 }) {
   return (
     <Field>
-      {label === null ? null : <FieldLabel>{label}</FieldLabel>}
+      {label === null ? null : (
+        <FieldLabel className={guiLabelClassName}>{label}</FieldLabel>
+      )}
       <MediaSurface subject="image" onExpand={onExpand}>
         {/* `w-full` rather than `max-w-full`: a GUI image spans the panel,
             upscaling a narrow one instead of stranding it against the left

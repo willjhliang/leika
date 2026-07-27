@@ -409,6 +409,10 @@ def test_controls_use_semantic_tokens_and_compact_density(
             variable,
         )
 
+    # The UI runs Geist a step lighter than the Tailwind defaults, so resolve
+    # the body weight rather than pinning the test to a number.
+    body_font_weight = leika_page.evaluate("() => getComputedStyle(document.body).fontWeight")
+
     primary = resolved_background("--primary")
     muted = resolved_background("--muted")
     muted_foreground = resolved_background("--muted-foreground")
@@ -513,7 +517,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     assert 23.5 <= row_heights[0] <= 24.5
 
     for field_text in (field_label, action, text_input, dropdown_trigger, color_trigger):
-        assert field_text["fontWeight"] == "400"
+        assert field_text["fontWeight"] == body_font_weight
         assert abs(field_text["lineHeight"] - field_text["fontSize"]) <= 0.25
 
     # Nova's controls stay dense and use modest, non-capsule rounding.
@@ -792,4 +796,38 @@ def test_media_elements_share_one_expand_affordance(
     expect(image_button).to_be_visible()
     image_button.click()
     expect(leika_page.get_by_role("dialog")).to_be_visible(timeout=5_000)
+    assert page_errors == []
+
+
+def test_gui_image_label_is_styled_like_every_other_label(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """An image's label stacks above it instead of sitting in the label column.
+
+    That is a layout difference, not a typographic one: it still names a
+    control, so it has to read as a label rather than as a heading. Stock
+    `Label` is medium-weight foreground, so the styling has to be applied
+    deliberately -- this compares it against a row label rather than pinning
+    literal values, which would just restate the CSS.
+    """
+    leika_server.gui.add_slider("Threshold", min=0.0, max=1.0, step=0.1, initial_value=0.5)
+    leika_server.gui.add_image(np.zeros((20, 30, 3), dtype=np.uint8), label="Preview")
+
+    probe = """el => {
+        const style = getComputedStyle(el);
+        return {
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            color: style.color,
+            lineHeight: style.lineHeight,
+        };
+    }"""
+    row_label = find_gui_row(leika_page, "Threshold").locator('[data-slot="field-label"]')
+    expect(row_label).to_be_visible(timeout=5_000)
+    image_label = leika_page.locator('[data-slot="field-label"]', has_text="Preview")
+    expect(image_label).to_be_visible(timeout=5_000)
+
+    assert image_label.evaluate(probe) == row_label.evaluate(probe)
     assert page_errors == []
