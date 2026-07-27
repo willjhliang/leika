@@ -48,11 +48,18 @@ export function GuiSection({
       data-leika-section={kind}
     >
       <AccordionItem value={uuid} disabled={isEmpty}>
-        <AccordionTrigger data-leika-section-trigger title={triggerTitle}>
+        {/* Header and contents both run a step tighter than the stock 2.5:
+            sections stack many rows deep in a narrow panel, so their padding
+            keeps the same rhythm as the controls they hold. */}
+        <AccordionTrigger
+          data-leika-section-trigger
+          title={triggerTitle}
+          className="py-2"
+        >
           {label}
           {triggerSuffix}
         </AccordionTrigger>
-        <AccordionContent data-leika-section-contents>
+        <AccordionContent data-leika-section-contents className="pb-2">
           {children}
         </AccordionContent>
       </AccordionItem>

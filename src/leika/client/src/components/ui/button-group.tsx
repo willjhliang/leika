@@ -10,10 +10,15 @@ const buttonGroupVariants = cva(
   {
     variants: {
       orientation: {
+        // Joined edges overlap by a pixel rather than dropping one side's
+        // border: an item with no border of its own cannot show focus on that
+        // edge, so the shared divider stayed light whenever the item to its
+        // right was the one focused. Same total width either way, and the
+        // `*:focus-visible:z-10` above puts the focused item's border on top.
         horizontal:
-          "*:data-slot:rounded-r-none [&>[data-slot]:not(:has(~[data-slot]))]:rounded-r-lg! [&>[data-slot]~[data-slot]]:rounded-l-none [&>[data-slot]~[data-slot]]:border-l-0",
+          "*:data-slot:rounded-r-none [&>[data-slot]:not(:has(~[data-slot]))]:rounded-r-lg! [&>[data-slot]~[data-slot]]:-ml-px [&>[data-slot]~[data-slot]]:rounded-l-none",
         vertical:
-          "flex-col *:data-slot:rounded-b-none [&>[data-slot]:not(:has(~[data-slot]))]:rounded-b-lg! [&>[data-slot]~[data-slot]]:rounded-t-none [&>[data-slot]~[data-slot]]:border-t-0",
+          "flex-col *:data-slot:rounded-b-none [&>[data-slot]:not(:has(~[data-slot]))]:rounded-b-lg! [&>[data-slot]~[data-slot]]:-mt-px [&>[data-slot]~[data-slot]]:rounded-t-none",
       },
     },
     defaultVariants: {

@@ -415,6 +415,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     border = resolved_background("--border")
     card = resolved_background("--card")
     ring = resolved_background("--ring")
+    input_border = resolved_background("--input")
 
     slider_row = find_gui_row(leika_page, "Styled slider")
     field_label = style(slider_row.locator('[data-slot="field-label"]'))
@@ -422,7 +423,6 @@ def test_controls_use_semantic_tokens_and_compact_density(
     slider_role = slider.get_by_role("slider")
     slider_thumb_locator = slider.locator('[data-slot="slider-thumb"]')
     slider_track_locator = slider.locator('[data-slot="slider-track"]')
-    slider_role.focus()
     slider_thumb = style(slider_thumb_locator)
     slider_track = style(slider_track_locator)
     slider_mark = style(slider_row.locator("[data-leika-slider-mark]").first)
@@ -430,7 +430,6 @@ def test_controls_use_semantic_tokens_and_compact_density(
 
     range_slider = find_gui_row(leika_page, "Styled range").locator('[data-leika-slider="multi"]')
     range_thumb_locator = range_slider.locator('[data-slot="slider-thumb"]').first
-    range_slider.get_by_role("slider").first.focus()
     range_thumb = style(range_thumb_locator)
     range_fill = style(range_slider.locator('[data-slot="slider-range"]'))
 
@@ -541,7 +540,12 @@ def test_controls_use_semantic_tokens_and_compact_density(
     assert range_fill["background"] == primary
     assert action["background"] == muted
     assert floating_panel["background"] == card
-    assert slider_thumb["borderColor"] == ring
+    # The thumb carries the app-wide focus treatment: a resting outline in
+    # --input that switches to --ring when the range input inside it takes
+    # focus. `to_have_css` polls, which settles the color transition.
+    assert slider_thumb["borderColor"] == input_border
+    slider_role.focus()
+    expect(slider_thumb_locator).to_have_css("border-color", ring)
     assert page_errors == []
 
 
