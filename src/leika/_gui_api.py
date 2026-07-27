@@ -70,6 +70,8 @@ from ._gui_handles import (
     _GuiHandleState,
     _GuiInputHandle,
     _make_uuid,
+    install_container_add_methods,
+    not_container_scoped,
 )
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
@@ -214,11 +216,17 @@ class GuiApi(GuiContainer):
     Used by both our global server object, for sharing the same GUI elements
     with all clients, and by individual client handles."""
 
-    _target_container_from_thread_id: dict[int, str]
-    """ID of container to put GUI elements into. Per-instance (NOT a shared
-    class attribute) -- otherwise a thread inside a ``with some_gui.add_folder()``
-    block would leak that container target into a *different* GuiApi instance
-    (e.g. server.gui vs a client.gui) and raise KeyError on the foreign uuid."""
+    _container_stack_from_thread_id: dict[int, list[str]]
+    """Containers each thread is currently inside, innermost last; new GUI
+    elements go into the innermost one. A stack rather than a single ID so that
+    nested ``with`` blocks -- including a container entered twice -- unwind to
+    exactly where they started.
+
+    Keyed by thread so concurrent builders do not see each other's target, and
+    per-instance (NOT a shared class attribute) so a thread inside a ``with
+    some_gui.add_folder()`` block cannot leak that target into a *different*
+    GuiApi instance (e.g. server.gui vs a client.gui) and raise KeyError on the
+    foreign uuid."""
 
     def __init__(
         self,
@@ -230,7 +238,7 @@ class GuiApi(GuiContainer):
 
         self._owner = owner
         """Entity that owns this API."""
-        self._target_container_from_thread_id = {}
+        self._container_stack_from_thread_id = {}
         self._thread_executor = thread_executor
         self._event_loop = event_loop
 
@@ -545,12 +553,26 @@ class GuiApi(GuiContainer):
                 ).add_done_callback(print_threadpool_errors)
 
     def _get_container_uuid(self) -> str:
-        """Get container ID associated with the current thread."""
-        return self._target_container_from_thread_id.get(threading.get_ident(), "root")
+        """Container that new GUI elements on this thread belong to."""
+        stack = self._container_stack_from_thread_id.get(threading.get_ident())
+        return stack[-1] if stack else "root"
 
-    def _set_container_uuid(self, container_uuid: str) -> None:
-        """Set container ID associated with the current thread."""
-        self._target_container_from_thread_id[threading.get_ident()] = container_uuid
+    def _push_container_uuid(self, container_uuid: str) -> None:
+        """Direct new GUI elements on this thread into ``container_uuid``."""
+        self._container_stack_from_thread_id.setdefault(threading.get_ident(), []).append(
+            container_uuid
+        )
+
+    def _pop_container_uuid(self) -> None:
+        """Undo the matching :meth:`_push_container_uuid`.
+
+        The thread's entry is dropped once it is empty, so a pool thread that
+        finishes a build leaves nothing behind."""
+        thread_id = threading.get_ident()
+        stack = self._container_stack_from_thread_id[thread_id]
+        stack.pop()
+        if not stack:
+            del self._container_stack_from_thread_id[thread_id]
 
     def reset(self) -> None:
         """Reset the GUI."""
@@ -598,6 +620,7 @@ class GuiApi(GuiContainer):
             ),
         )
 
+    @not_container_scoped
     def add_notification(
         self,
         title: str,
@@ -633,6 +656,7 @@ class GuiApi(GuiContainer):
         handle._show()
         return handle
 
+    @not_container_scoped
     def add_command(
         self,
         label: str,
@@ -2192,3 +2216,6 @@ class GuiApi(GuiContainer):
             handle_state.sync_cb = sync_other_clients
 
         return handle_state
+
+
+install_container_add_methods(GuiApi)

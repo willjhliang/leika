@@ -128,3 +128,51 @@ def test_removed_visual_customization_arguments_are_rejected(
         server.gui.add_progress_bar(50.0, color="blue")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
+
+
+def test_containers_mirror_every_container_scoped_add_method() -> None:
+    """``folder.add_thing(...)`` exists because ``GuiApi.add_thing`` does.
+
+    The mirror is derived, so this guards the two ways it can go wrong: an
+    element that never reaches containers, and a non-container ``add_*`` (a
+    notification, a command) that gets mirrored anyway and promises a
+    containment it cannot honor.
+    """
+    from leika._gui_api import GuiApi
+    from leika._gui_handles import GuiContainer
+
+    api_methods = {name for name in dir(GuiApi) if name.startswith("add_")}
+    opted_out = {
+        name
+        for name in api_methods
+        if getattr(getattr(GuiApi, name), "_leika_container_scoped", True) is False
+    }
+    mirrored = {name for name in dir(GuiContainer) if name.startswith("add_")}
+
+    assert opted_out == {"add_notification", "add_command"}
+    assert mirrored == api_methods - opted_out
+
+
+def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) -> None:
+    """Entering the same container twice must not lose the outer target.
+
+    Each container used to remember a single restore ID, so a re-entered
+    ``with`` block overwrote it and the outer exit had nothing to go back to.
+    """
+    outer = server.gui.add_folder("Outer")
+    with outer:
+        inner = server.gui.add_folder("Inner")
+        with outer:
+            with inner:
+                deep = server.gui.add_text("Deep", initial_value="")
+            shallow = server.gui.add_text("Shallow", initial_value="")
+        # Back inside `outer`, not stranded in `inner`.
+        sibling = server.gui.add_text("Sibling", initial_value="")
+    root = server.gui.add_text("Root", initial_value="")
+
+    assert deep._impl.parent_container_id == inner.id
+    assert shallow._impl.parent_container_id == outer.id
+    assert sibling._impl.parent_container_id == outer.id
+    assert root._impl.parent_container_id == "root"
+    # Nothing left behind for this thread once every block has unwound.
+    assert server.gui._container_stack_from_thread_id == {}

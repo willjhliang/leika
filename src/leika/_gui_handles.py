@@ -121,55 +121,72 @@ class GuiContainer:
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}.")
 
-    def _add_child(self, method: str, *args: Any, **kwargs: Any) -> Any:
+    def __enter__(self) -> Self:
         self._check_container_active()
+        self._child_gui_api._push_container_uuid(self._child_container_id)
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        del args
+        self._child_gui_api._pop_container_uuid()
+
+    def _add_child(self, method: str, *args: Any, **kwargs: Any) -> Any:
         gui_api = self._child_gui_api
-        restore = gui_api._get_container_uuid()
-        gui_api._set_container_uuid(self._child_container_id)
-        try:
+        with self:
             return getattr(gui_api, method)(*args, **kwargs)
-        finally:
-            gui_api._set_container_uuid(restore)
 
 
-def _install_container_add_method(method: str) -> None:
+_CONTAINER_SCOPED_ATTR = "_leika_container_scoped"
+
+TCallable = TypeVar("TCallable", bound=Callable[..., Any])
+
+
+def not_container_scoped(method: TCallable) -> TCallable:
+    """Mark a ``GuiApi.add_*`` that does not create a child of the current
+    container, and so is not mirrored onto :class:`GuiContainer`.
+
+    Notifications and commands are addressed to the client, not placed in the
+    GUI tree, so ``folder.add_notification(...)`` would promise a containment
+    that does not exist."""
+
+    setattr(method, _CONTAINER_SCOPED_ATTR, False)
+    return method
+
+
+def _container_add_method(method: str) -> Callable[..., Any]:
+    """Build the ``GuiContainer`` forwarder for one ``GuiApi.add_*``.
+
+    A factory rather than a closure written inline, so ``method`` is captured
+    per call instead of leaking into the forwarder's own signature as a
+    keyword a caller could pass."""
+
     def add(self: GuiContainer, *args: Any, **kwargs: Any) -> Any:
         return self._add_child(method, *args, **kwargs)
 
     add.__name__ = method
     add.__qualname__ = f"GuiContainer.{method}"
     add.__doc__ = f"Add a child via :meth:`GuiApi.{method}`."
-    setattr(GuiContainer, method, add)
+    return add
 
 
-for _container_add_method in (
-    "add_button",
-    "add_upload_button",
-    "add_button_group",
-    "add_checkbox",
-    "add_text",
-    "add_number",
-    "add_vector2",
-    "add_vector3",
-    "add_dropdown",
-    "add_progress_bar",
-    "add_slider",
-    "add_multi_slider",
-    "add_rgb",
-    "add_rgba",
-    "add_markdown",
-    "add_html",
-    "add_divider",
-    "add_image",
-    "add_plotly",
-    "add_uplot",
-    "add_folder",
-    "add_form",
-    "add_modal",
-    "add_tab_group",
-):
-    _install_container_add_method(_container_add_method)
-del _container_add_method
+def install_container_add_methods(gui_api_type: type) -> None:
+    """Mirror ``GuiApi``'s container-scoped ``add_*`` onto
+    :class:`GuiContainer`.
+
+    Derived from ``GuiApi`` rather than listed by hand, so a newly added
+    element is reachable as ``folder.add_thing(...)`` the moment it exists on
+    the API; the exceptions opt out at their definition with
+    :func:`not_container_scoped`. Called from ``_gui_api`` once ``GuiApi`` is
+    defined, since this module is imported on the way there and cannot name it
+    at import time.
+    """
+
+    for method in dir(gui_api_type):
+        if not method.startswith("add_") or hasattr(GuiContainer, method):
+            continue
+        if not getattr(getattr(gui_api_type, method), _CONTAINER_SCOPED_ATTR, True):
+            continue
+        setattr(GuiContainer, method, _container_add_method(method))
 
 
 @dataclasses.dataclass
@@ -208,9 +225,9 @@ class _GuiButtonHandleState(_GuiHandleState[bool]):
     """Mapping from frequency (Hz) to list of callbacks to call when button is held."""
 
 
-# Not exported for now because some GUI handles don't currently inhert from
-# `_GuiHandle`: notably `GuiModalHandle` and `GuiTabHandle`. These would fail
-# isinstance checks, which would be confusing!
+# Not exported: some GUI handles do not inherit from `_GuiHandle` -- notably
+# `GuiModalHandle` and `GuiTabHandle`, which are containers rather than
+# elements. Exporting it would invite isinstance checks that those fail.
 class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
     def __init__(self, impl: _GuiHandleState[T]) -> None:
         super().__init__(impl=impl)
@@ -797,7 +814,7 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
         # Remove tabs first. Each tab.remove() writes back to this group's
         # tab-list props (_tab_labels / _tab_icons_html / _tab_container_ids), so
         # we must NOT mark the group removed until afterwards -- otherwise the
-        # removed-handle guard in props_setattr raises on those writes, leaving
+        # removed-handle guard in AssignablePropsBase raises on those writes, leaving
         # the group half-removed (still in its parent's _children with
         # removed=True). A subsequent gui.reset() then spins forever, since its
         # `while root._children: child.remove()` loop hits that group whose
@@ -819,7 +836,6 @@ class GuiTabHandle(GuiContainer):
     _id: str  # Used as container ID of children.
     _label: str
     _icon: IconName | None
-    _container_id_restore: str | None = None
     _children: dict[str, SupportsRemoveProtocol] = dataclasses.field(default_factory=dict)
     removed: bool = False
 
@@ -854,17 +870,6 @@ class GuiTabHandle(GuiContainer):
         icons_list = list(self._parent._tab_icons_html)
         icons_list[tab_index] = None if icon is None else svg_from_icon(icon)
         self._parent._tab_icons_html = tuple(icons_list)
-
-    def __enter__(self) -> GuiTabHandle:
-        self._container_id_restore = self._parent._impl.gui_api._get_container_uuid()
-        self._parent._impl.gui_api._set_container_uuid(self._id)
-        return self
-
-    def __exit__(self, *args) -> None:
-        del args
-        assert self._container_id_restore is not None
-        self._parent._impl.gui_api._set_container_uuid(self._container_id_restore)
-        self._container_id_restore = None
 
     def __post_init__(self) -> None:
         self._parent._impl.gui_api._container_handle_from_uuid[self._id] = self
@@ -930,17 +935,6 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
     def _check_container_active(self) -> None:
         if self._impl.removed:
             raise RuntimeError("Cannot add GUI components to a removed folder.")
-
-    def __enter__(self) -> Self:
-        self._container_id_restore = self._impl.gui_api._get_container_uuid()
-        self._impl.gui_api._set_container_uuid(self._impl.uuid)
-        return self
-
-    def __exit__(self, *args) -> None:
-        del args
-        assert self._container_id_restore is not None
-        self._impl.gui_api._set_container_uuid(self._container_id_restore)
-        self._container_id_restore = None
 
     def remove(self) -> None:
         """Permanently remove this folder and all contained GUI elements from the
@@ -1055,7 +1049,6 @@ class GuiModalHandle(GuiContainer):
 
     _gui_api: GuiApi
     _uuid: str  # Used as container ID of children.
-    _container_uuid_restore: str | None = None
     _children: dict[str, SupportsRemoveProtocol] = dataclasses.field(default_factory=dict)
     closed: bool = False
 
@@ -1075,17 +1068,6 @@ class GuiModalHandle(GuiContainer):
     def id(self) -> str:
         """Stable identifier for this modal container."""
         return self._uuid
-
-    def __enter__(self) -> GuiModalHandle:
-        self._container_uuid_restore = self._gui_api._get_container_uuid()
-        self._gui_api._set_container_uuid(self._uuid)
-        return self
-
-    def __exit__(self, *args) -> None:
-        del args
-        assert self._container_uuid_restore is not None
-        self._gui_api._set_container_uuid(self._container_uuid_restore)
-        self._container_uuid_restore = None
 
     def __post_init__(self) -> None:
         self._gui_api._container_handle_from_uuid[self._uuid] = self

@@ -88,79 +88,73 @@ class AssignablePropsBase(Generic[TImpl]):
         Subclasses can override to enforce cross-field invariants (e.g. keeping
         an array's dtype in sync with another field). No-op by default."""
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_impl":
+            return object.__setattr__(self, name, value)
 
-def props_setattr(self, name: str, value: Any) -> None:
-    if name == "_impl":
-        return object.__setattr__(self, name, value)
+        prop = getattr(self.__class__, name, None)
+        prop_setter = prop.fset if isinstance(prop, property) and prop.fset is not None else None
+        is_prop_hint = name in self._prop_hints
 
-    prop = getattr(self.__class__, name, None)
-    prop_setter = prop.fset if isinstance(prop, property) and prop.fset is not None else None
-    is_prop_hint = name in self._prop_hints
+        # Reject property writes after the handle has been removed. This prevents
+        # stale update messages from being queued against a no-longer-registered
+        # entity, which would otherwise re-introduce it on the client (ghost
+        # entity) because the client blindly processes incoming updates. Guard
+        # both the @property.setter path (e.g. `value` on GUI input handles) and
+        # the _prop_hints path (generic props forwarded to _queue_update).
+        if (prop_setter is not None or is_prop_hint) and self._impl.removed:
+            raise RuntimeError(f"Cannot assign to {name!r} on a removed {type(self).__name__}.")
 
-    # Reject property writes after the handle has been removed. This prevents
-    # stale update messages from being queued against a no-longer-registered
-    # entity, which would otherwise re-introduce it on the client (ghost
-    # entity) because the client blindly processes incoming updates. Guard
-    # both the @property.setter path (e.g. `value` on GUI input handles) and
-    # the _prop_hints path (generic props forwarded to _queue_update).
-    if (prop_setter is not None or is_prop_hint) and self._impl.removed:
-        raise RuntimeError(f"Cannot assign to {name!r} on a removed {type(self).__name__}.")
+        if prop_setter is not None:
+            prop_setter(self, value)
+            return
 
-    if prop_setter is not None:
-        prop_setter(self, value)
-        return
+        # Try to handle as a props field.
+        if is_prop_hint:
+            # Handle type casting (arrays, tuples of arrays, etc.).
+            value = self._cast_value_recursive(self._prop_hints[name], value, name)
+            current_value = getattr(self._impl.props, name)
 
-    # Try to handle as a props field.
-    if is_prop_hint:
-        # Handle type casting (arrays, tuples of arrays, etc.).
-        value = self._cast_value_recursive(self._prop_hints[name], value, name)
-        current_value = getattr(self._impl.props, name)
-
-        # Skip update if value hasn't changed.
-        try:
-            hash(current_value)
-            if current_value == value:
-                return
-        except (TypeError, ValueError):
-            pass
-
-        # Update the value based on type.
-        if isinstance(value, np.ndarray):
-            if hasattr(current_value, "dtype"):
-                # Ensure consistent dtype.
-                if value.dtype != current_value.dtype:
-                    value = value.astype(current_value.dtype)
-                if np.array_equal(current_value, value):
+            # Skip update if value hasn't changed.
+            try:
+                hash(current_value)
+                if current_value == value:
                     return
+            except (TypeError, ValueError):
+                pass
 
-            # In-place update for same shape arrays.
-            if hasattr(current_value, "shape") and value.shape == current_value.shape:
-                current_value[:] = value
+            # Update the value based on type.
+            if isinstance(value, np.ndarray):
+                if hasattr(current_value, "dtype"):
+                    # Ensure consistent dtype.
+                    if value.dtype != current_value.dtype:
+                        value = value.astype(current_value.dtype)
+                    if np.array_equal(current_value, value):
+                        return
+
+                # In-place update for same shape arrays.
+                if hasattr(current_value, "shape") and value.shape == current_value.shape:
+                    current_value[:] = value
+                else:
+                    setattr(self._impl.props, name, value.copy())
+                # Queue a private snapshot for the wire. It must alias NEITHER the
+                # caller's ``value`` (which the caller may mutate after assignment,
+                # e.g. an animation loop reusing one buffer) NOR the server's stored
+                # array (which a later same-shape update mutates in place, possibly
+                # while the event-loop thread is still serializing this message).
+                queued: Any = value.copy()
             else:
-                setattr(self._impl.props, name, value.copy())
-            # Queue a private snapshot for the wire. It must alias NEITHER the
-            # caller's ``value`` (which the caller may mutate after assignment,
-            # e.g. an animation loop reusing one buffer) NOR the server's stored
-            # array (which a later same-shape update mutates in place, possibly
-            # while the event-loop thread is still serializing this message).
-            queued: Any = value.copy()
+                # Non-array properties (immutable / already a fresh cast).
+                setattr(self._impl.props, name, value)
+                queued = value
         else:
-            # Non-array properties (immutable / already a fresh cast).
-            setattr(self._impl.props, name, value)
-            queued = value
-    else:
-        return object.__setattr__(self, name, value)
+            return object.__setattr__(self, name, value)
 
-    self._queue_update(name, queued)
-    self._on_prop_assigned(name)
+        self._queue_update(name, queued)
+        self._on_prop_assigned(name)
 
-
-def props_getattr(self, name: str) -> Any:
-    if name in self._prop_hints:
-        return getattr(self._impl.props, name)
-    else:
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-
-
-AssignablePropsBase.__setattr__ = props_setattr  # type: ignore
-AssignablePropsBase.__getattr__ = props_getattr  # type: ignore
+    def __getattr__(self, name: str) -> Any:
+        if name in self._prop_hints:
+            return getattr(self._impl.props, name)
+        else:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
