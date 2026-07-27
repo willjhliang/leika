@@ -823,7 +823,9 @@ class ViewportImageProps:
     _format: Literal["jpeg", "png"]
     title: str
     visible: bool
-    fit: Literal["contain", "cover", "fill"]
+    fit: Optional[Literal["fit", "fill", "stretch"]]
+    """How the image is sized in its pane. None defers to the viewer's own
+    "Image fit" setting, which is where an app that has no opinion leaves it."""
 
 
 @dataclasses.dataclass

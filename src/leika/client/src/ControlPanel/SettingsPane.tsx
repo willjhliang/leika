@@ -2,12 +2,21 @@ import { RotateCcwIcon, SettingsIcon } from "lucide-react";
 import * as React from "react";
 
 import { commandPalette } from "../CommandPaletteController";
+import { ImageFit } from "../ClientSettings";
 import { ViewerContext } from "../ViewerContext";
 import { ColorPickerPopover } from "../components/ColorPicker";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Label } from "../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { cn } from "@/lib/utils";
 import { settingsPanel, useSettingsPanelOpen } from "./SettingsPanelController";
@@ -86,6 +95,53 @@ function AccentColorRow() {
   );
 }
 
+/** How an image pane sizes itself, for panes whose app left it open. The same
+ * three names Python's `fit` takes, capitalized. */
+const IMAGE_FIT_LABELS: Record<ImageFit, string> = {
+  fit: "Fit",
+  fill: "Fill",
+  stretch: "Stretch",
+};
+
+const IMAGE_FIT_ITEMS = (Object.keys(IMAGE_FIT_LABELS) as ImageFit[]).map(
+  (value) => ({ value, label: IMAGE_FIT_LABELS[value] }),
+);
+
+function ImageFitRow() {
+  const viewer = React.useContext(ViewerContext)!;
+  const imageFit = viewer.useSettings((state) => state.imageFit);
+  const { setImageFit } = viewer.settingsActions;
+
+  return (
+    <SettingsRow htmlFor="leika-settings-image-fit" label="Image fit">
+      <div className="gui-row-controls flex min-w-0 items-center">
+        <Select
+          items={IMAGE_FIT_ITEMS}
+          value={imageFit}
+          onValueChange={(next) => next !== null && setImageFit(next)}
+        >
+          <SelectTrigger
+            id="leika-settings-image-fit"
+            className="w-full"
+            data-leika-settings-image-fit
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {IMAGE_FIT_ITEMS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+    </SettingsRow>
+  );
+}
+
 /** Display preferences, revealed at the top of the control panel.
  *
  * It reads as part of the panel rather than a layer over it, unfolding on the
@@ -148,6 +204,7 @@ export function SettingsSection() {
             />
           </SettingsRow>
           <AccentColorRow />
+          <ImageFitRow />
           <Button
             variant="outline"
             className="h-7 w-full"

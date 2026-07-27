@@ -2,7 +2,7 @@
 
 Install the optional dependency and run from the repository root::
 
-    python -m pip install -e ".[plotly]"
+    python -m pip install -e ".[examples]"
     python examples/showcase.py
 """
 
@@ -11,16 +11,70 @@ from __future__ import annotations
 import io
 import time
 from collections import deque
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
 
 import leika
 
+# Plotly's built-in named templates. Long enough to be a chore to scan by eye,
+# which is the case `searchable=True` exists for; the short `Detail region`
+# dropdown below is the plain default.
+PLOTLY_TEMPLATES = (
+    "plotly",
+    "plotly_white",
+    "plotly_dark",
+    "ggplot2",
+    "seaborn",
+    "simple_white",
+    "presentation",
+    "xgridoff",
+    "ygridoff",
+    "gridon",
+    "none",
+)
+
+# uPlot ships no equivalent, so the showcase names its own line styles. Each
+# maps to the series options uPlot already understands; the first is what the
+# chart starts with.
+UPLOT_THEMES: dict[str, dict[str, Any]] = {
+    "Slate": {"stroke": "#c4c4c4", "width": 2},
+    "Ember": {"stroke": "#f97316", "width": 2, "fill": "rgba(249,115,22,0.15)"},
+    "Ocean": {"stroke": "#38bdf8", "width": 2, "fill": "rgba(56,189,248,0.15)"},
+    "Meadow": {"stroke": "#4ade80", "width": 2, "fill": "rgba(74,222,128,0.15)"},
+    "Orchid": {"stroke": "#c084fc", "width": 2, "fill": "rgba(192,132,252,0.15)"},
+    "Sunbeam": {"stroke": "#facc15", "width": 2, "fill": "rgba(250,204,21,0.15)"},
+    "Rose": {"stroke": "#fb7185", "width": 2, "fill": "rgba(251,113,133,0.15)"},
+    "Hairline": {"stroke": "#c4c4c4", "width": 1},
+    "Dashed": {"stroke": "#c4c4c4", "width": 2, "dash": (6.0, 4.0)},
+}
+
+
+def uplot_series(theme: str) -> tuple[Any, ...]:
+    """uPlot's series tuple: the x series, then the styled signal."""
+
+    return ({}, {"label": "signal", **UPLOT_THEMES[theme]})
+
+
+# Where the detail pane looks. Three named crops of the field, which is short
+# enough that a plain dropdown beats a search box.
+DETAIL_REGIONS: dict[str, tuple[slice, slice]] = {
+    "Center": (slice(70, 230), slice(120, 360)),
+    "Top left": (slice(0, 160), slice(0, 240)),
+    "Bottom right": (slice(140, 300), slice(240, 480)),
+}
+
+
 HEIGHT = 300
 WIDTH = 480
 Y, X = np.mgrid[-1.0 : 1.0 : complex(HEIGHT), -1.5 : 1.5 : complex(WIDTH)]
+
+# Coarse grid for the 3D surface pane: kept small because every update ships
+# the whole z matrix to the browser.
+SURFACE_AXIS = np.linspace(-2.0, 2.0, 40)
+SURFACE_X, SURFACE_Y = np.meshgrid(SURFACE_AXIS, SURFACE_AXIS)
+SURFACE_RADIUS = np.sqrt(SURFACE_X**2 + SURFACE_Y**2)
 
 
 def render_field(
@@ -75,20 +129,43 @@ def make_plot() -> go.Figure:
         )
     )
     figure.update_layout(
-        margin={"l": 42, "r": 18, "t": 38, "b": 34},
-        title="Live signal",
+        # No in-figure title: the pane and the GUI row already name this plot,
+        # so the top margin only has to clear the highest tick label.
+        margin={"l": 42, "r": 18, "t": 10, "b": 34},
         showlegend=False,
         uirevision="leika-showcase",
     )
     return figure
 
 
-def main() -> None:
-    server = leika.Server(workspace_id="showcase-v1")
-    server.gui.configure_theme(
-        control_layout="floating",
-        dark_mode=True,
+def surface_height(phase: float, frequency: float) -> np.ndarray:
+    """Radial ripple that shares the image panes' phase and frequency."""
+
+    return np.sin(frequency * 2.0 * SURFACE_RADIUS - phase) * np.exp(-0.35 * SURFACE_RADIUS)
+
+
+def make_surface() -> go.Figure:
+    figure = go.Figure(
+        go.Surface(
+            x=SURFACE_AXIS,
+            y=SURFACE_AXIS,
+            z=surface_height(0.0, 1.2),
+            colorscale="Blues",
+            showscale=False,
+        )
     )
+    figure.update_layout(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        # Keeps the camera where the user dragged it across live updates.
+        uirevision="leika-showcase-surface",
+        scene={"zaxis": {"range": [-1.1, 1.1]}},
+    )
+    return figure
+
+
+def main() -> None:
+    server = leika.Server(workspace_id="showcase-v1", label="Leika showcase")
+    server.gui.configure_theme(control_layout="floating")
 
     initial = render_field(0.0, 1.2, "Ocean", (0.0, 0.0), (20, 90, 210, 45))
     grid = server.panes.add_grid(columns=2)
@@ -96,15 +173,17 @@ def main() -> None:
         initial,
         pane_id="field",
         title="Live NumPy field",
-        fit="cover",
+        fit="fill",
         image_format="jpeg",
         jpeg_quality=82,
     )
     detail_pane = grid.add_image(
-        initial[70:230, 120:360],
+        initial[DETAIL_REGIONS["Center"]],
         pane_id="detail",
         title="Detail view",
-        fit="contain",
+        # No `fit`: this pane follows whatever the viewer picked under
+        # Settings. The field pane above pins its own, so the two show the
+        # override and the default side by side.
         image_format="png",
     )
     plot_figure = make_plot()
@@ -112,6 +191,13 @@ def main() -> None:
         plot_figure,
         pane_id="signal",
         title="Interactive Plotly",
+        config={"displayModeBar": False, "responsive": True},
+    )
+    surface_figure = make_surface()
+    surface_pane = grid.add_plotly(
+        surface_figure,
+        pane_id="surface",
+        title="3D surface",
         config={"displayModeBar": False, "responsive": True},
     )
 
@@ -141,42 +227,47 @@ def main() -> None:
 
     with server.gui.add_folder("Image appearance"):
         palette = server.gui.add_button_group("Palette", options=("Ocean", "Magma", "Viridis"))
-        fit = server.gui.add_dropdown(
-            "Fit", options=("cover", "contain", "fill"), initial_value="cover"
+        # Three options, so no search box: the plain dropdown opens with the
+        # current one already under the cursor.
+        region = server.gui.add_dropdown(
+            "Detail region", options=tuple(DETAIL_REGIONS), initial_value="Center"
         )
         with server.gui.add_folder("Color adjustments"):
             offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
             tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
             plot_color = server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
-        server.gui.add_divider()
         gui_preview = server.gui.add_image(
-            initial[::4, ::4], label="GUI image preview", format="jpeg", jpeg_quality=75
-        )
-
-    with server.gui.add_folder("Pane visibility", expand_by_default=False):
-        show_field = server.gui.add_checkbox("Live field", initial_value=True)
-        show_detail = server.gui.add_checkbox("Detail", initial_value=True)
-        show_plot = server.gui.add_checkbox("Plotly", initial_value=True)
-        detail_title = server.gui.add_text("Detail title", initial_value="Detail view")
-
-    with server.gui.add_folder("Panel theme", expand_by_default=False):
-        dark_mode = server.gui.add_checkbox("Dark mode", initial_value=True)
-        panel_layout = server.gui.add_dropdown(
-            "Layout", options=("floating", "fixed", "collapsible")
+            initial[::4, ::4],
+            format="jpeg",
+            jpeg_quality=75,
         )
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
+        # The other half of the pair: a list this long earns a search box.
+        plotly_theme = server.gui.add_dropdown(
+            "Plotly theme",
+            options=PLOTLY_TEMPLATES,
+            searchable=True,
+            hint="Type to filter Plotly's built-in templates.",
+        )
         gui_plot = server.gui.add_plotly(
             plot_figure,
-            aspect=1.6,
+            # Twice as wide as it is tall, matching the uPlot below.
+            aspect=2.0,
             config={"displayModeBar": False, "staticPlot": True},
+        )
+        server.gui.add_divider()
+        uplot_theme = server.gui.add_dropdown(
+            "uPlot theme",
+            options=tuple(UPLOT_THEMES),
+            searchable=True,
+            hint="Type to filter the named line styles.",
         )
         x_data = np.linspace(0.0, 6.0, 120)
         uplot = server.gui.add_uplot(
             (x_data, np.sin(x_data)),
-            ({}, {"label": "signal", "stroke": "#c4c4c4", "width": 2}),
-            title="Fast uPlot preview",
+            uplot_series(uplot_theme.value),
             aspect=2.0,
         )
 
@@ -188,9 +279,6 @@ def main() -> None:
         )
         download = server.gui.add_button("Download signal CSV", icon=leika.Icon.DOWNLOAD)
 
-    with server.gui.add_form(submit_label="Apply", label="Rename main pane") as form:
-        title_input = server.gui.add_text("Title", initial_value="Live NumPy field")
-
     state: dict[str, Any] = {
         "phase": 0.0,
         "start": time.monotonic(),
@@ -198,18 +286,19 @@ def main() -> None:
     history_t: deque[float] = deque(maxlen=240)
     history_y: deque[float] = deque(maxlen=240)
 
-    def apply_theme(_: Any = None) -> None:
-        server.gui.configure_theme(
-            control_layout=cast(Any, panel_layout.value),
-            dark_mode=dark_mode.value,
-        )
-
-    for control in (panel_layout, dark_mode):
-        control.on_update(apply_theme)
-
-    @fit.on_update
+    @plotly_theme.on_update
     def _(_) -> None:
-        field_pane.fit = cast(Any, fit.value)
+        # The live loop keeps pushing this same figure, so the template sticks
+        # without being reapplied on every frame.
+        plot_figure.update_layout(template=plotly_theme.value)
+        plot_pane.update(plot_figure)
+        gui_plot.figure = plot_figure
+
+    @uplot_theme.on_update
+    def _(_) -> None:
+        # Only the series styling changes; the loop keeps writing `data`, which
+        # is a separate prop and so is left alone here.
+        uplot.series = uplot_series(uplot_theme.value)
 
     @plot_color.on_update
     def _(_) -> None:
@@ -220,22 +309,6 @@ def main() -> None:
         )
         plot_pane.update(plot_figure)
         gui_plot.figure = plot_figure
-
-    @show_field.on_update
-    def _(_) -> None:
-        field_pane.visible = show_field.value
-
-    @show_detail.on_update
-    def _(_) -> None:
-        detail_pane.visible = show_detail.value
-
-    @show_plot.on_update
-    def _(_) -> None:
-        plot_pane.visible = show_plot.value
-
-    @detail_title.on_update
-    def _(_) -> None:
-        detail_pane.title = detail_title.value or "Detail view"
 
     @reset.on_click
     def _(_) -> None:
@@ -284,10 +357,6 @@ def main() -> None:
             buffer.getvalue().encode(),
         )
 
-    @form.on_submit
-    def _(_) -> None:
-        field_pane.title = title_input.value.strip() or "Live NumPy field"
-
     pause_command = server.gui.add_command(
         "Pause animation",
         description="Toggle live image and chart updates",
@@ -334,7 +403,8 @@ def main() -> None:
                 )
                 with server.atomic():
                     field_pane.update(frame)
-                    detail_pane.update(frame[70:230, 120:360])
+                    rows, columns = DETAIL_REGIONS[region.value]
+                    detail_pane.update(frame[rows, columns])
                     gui_preview.image = frame[::4, ::4]
 
             if now - last_plot >= 0.2:
@@ -346,6 +416,8 @@ def main() -> None:
                 data_x = np.asarray(history_t, dtype=np.float64)
                 data_y = np.asarray(history_y, dtype=np.float64)
                 uplot.data = (data_x, data_y)
+                surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
+                surface_pane.update(surface_figure)
                 last_plot = now
 
             time.sleep(1.0 / 30.0)

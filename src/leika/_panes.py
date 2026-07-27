@@ -24,7 +24,10 @@ if TYPE_CHECKING:
     from ._server import Server
 
 
-ImageFit: TypeAlias = Literal["contain", "cover", "fill"]
+# Named the way this control usually is, rather than after the CSS keywords the
+# browser ends up applying: "fill" here means filling the pane (CSS `cover`),
+# and stretching is spelled out.
+ImageFit: TypeAlias = Literal["fit", "fill", "stretch"]
 Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
 PaneId = NewType("PaneId", str)
 
@@ -222,13 +225,14 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
         return self._impl.requested_format
 
     @property
-    def fit(self) -> ImageFit:
-        """How the image is sized within its pane."""
+    def fit(self) -> ImageFit | None:
+        """How the image is sized within its pane, or None to follow the
+        viewer's own "Image fit" setting."""
 
         return self._impl.props.fit
 
     @fit.setter
-    def fit(self, value: ImageFit) -> None:
+    def fit(self, value: ImageFit | None) -> None:
         self._check_not_removed()
         value = _validate_fit(value)
         with self._impl.api._lock:
@@ -325,7 +329,7 @@ class PaneGroup:
         title: str = "Image",
         image_format: Literal["auto", "png", "jpeg"] = "auto",
         jpeg_quality: int = 85,
-        fit: ImageFit = "contain",
+        fit: ImageFit | None = None,
         visible: bool = True,
     ) -> ImagePaneHandle:
         """Add an image pane to the group. Accepts the same arguments as
@@ -428,7 +432,7 @@ class PaneGrid:
         title: str = "Image",
         image_format: Literal["auto", "png", "jpeg"] = "auto",
         jpeg_quality: int = 85,
-        fit: ImageFit = "contain",
+        fit: ImageFit | None = None,
         visible: bool = True,
     ) -> ImagePaneHandle:
         """Add an image pane to the grid's next cell. Accepts the same
@@ -564,7 +568,7 @@ class Panes:
         title: str = "Image",
         image_format: Literal["auto", "png", "jpeg"] = "auto",
         jpeg_quality: int = 85,
-        fit: ImageFit = "contain",
+        fit: ImageFit | None = None,
         visible: bool = True,
         placement: Placement = "right",
         relative_to: str | None = None,
@@ -584,7 +588,8 @@ class Panes:
             image_format: Transport encoding. "auto" chooses PNG for RGBA and JPEG
                 for RGB.
             jpeg_quality: JPEG encoder quality from 0 to 100.
-            fit: Image sizing policy within the pane.
+            fit: Image sizing policy within the pane. By default the viewer's
+                own "Image fit" setting decides; pass a value to override it.
             visible: Initial visibility.
             placement: Initial split edge relative to relative_to.
             relative_to: Visible pane used for initial placement.
@@ -614,7 +619,7 @@ class Panes:
         title: str,
         image_format: Literal["auto", "png", "jpeg"],
         jpeg_quality: int | None,
-        fit: ImageFit,
+        fit: ImageFit | None,
         visible: bool,
         placement: Placement,
         relative_to: str | None,
@@ -858,10 +863,10 @@ class Panes:
         return PaneGrid(self, columns, "right", relative_to)
 
 
-def _validate_fit(value: object) -> ImageFit:
-    if value not in ("contain", "cover", "fill"):
-        raise ValueError("fit must be 'contain', 'cover', or 'fill'.")
-    return cast(ImageFit, value)
+def _validate_fit(value: object) -> ImageFit | None:
+    if value is not None and value not in ("fit", "fill", "stretch"):
+        raise ValueError("fit must be 'fit', 'fill', 'stretch', or None.")
+    return cast("ImageFit | None", value)
 
 
 def _validate_image(image: np.ndarray) -> np.ndarray:

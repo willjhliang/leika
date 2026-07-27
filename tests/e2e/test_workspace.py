@@ -36,7 +36,7 @@ def test_image_panes_tile_resize_persist_and_update(
     expect(leika_page.locator('[data-viewport-pane-content="left"] > img')).to_have_count(1)
     old_source = image.get_attribute("src")
     left.title = "Updated left"
-    left.fit = "cover"
+    left.fit = "fill"
     left.update(np.full((24, 32, 3), 127, dtype=np.uint8))
     expect(leika_page.locator('[data-viewport-pane-title="left"]')).to_have_text("Updated left")
     expect(image).to_have_css("object-fit", "cover")

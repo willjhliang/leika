@@ -342,7 +342,7 @@ def test_a_scheme_choice_survives_a_reload(
         arg=was_dark,
     )
 
-    stored = leika_page.evaluate("() => localStorage.getItem('leika.settings.v1')")
+    stored = leika_page.evaluate("() => localStorage.getItem('leika.settings.v2')")
     assert stored is not None
     assert '"darkMode":' in stored
 
@@ -444,6 +444,46 @@ def test_accent_color_repaints_the_controls_that_use_it(
     pane.locator("[data-leika-settings-accent-reset]").click()
     expect(swatch).to_contain_text("Default")
     expect(checkbox).to_have_css("background-color", stock_fill)
+    assert page_errors == []
+
+
+def test_image_fit_applies_to_panes_that_did_not_ask_for_one(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The setting is a default, not an override: a pane Python gave a `fit`
+    keeps it, and only the ones left open follow the viewer."""
+    row = leika_server.panes.add_row()
+    row.add_image(np.zeros((24, 32, 3), dtype=np.uint8), pane_id="free", title="Free")
+    pinned_handle = row.add_image(
+        np.full((24, 32, 3), 255, dtype=np.uint8),
+        pane_id="pinned",
+        title="Pinned",
+        fit="fill",
+    )
+    free = leika_page.locator('[data-viewport-pane-content="free"] img')
+    pinned = leika_page.locator('[data-viewport-pane-content="pinned"] img')
+    expect(free).to_be_visible(timeout=5_000)
+
+    # The default setting is Fit, which the browser applies as `contain`.
+    expect(free).to_have_css("object-fit", "contain")
+    expect(pinned).to_have_css("object-fit", "cover")
+
+    pane = open_settings(leika_page)
+    pane.locator("[data-leika-settings-image-fit]").click()
+    # The menu says Stretch; CSS calls that one `fill`.
+    leika_page.get_by_role("option", name="Stretch", exact=True).click()
+
+    expect(free).to_have_css("object-fit", "fill")
+    expect(pinned).to_have_css("object-fit", "cover")
+
+    # Python can hand a pinned pane back to the viewer at any time.
+    pinned_handle.fit = None
+    expect(pinned).to_have_css("object-fit", "fill")
+
+    stored = leika_page.evaluate("() => localStorage.getItem('leika.settings.v2')")
+    assert '"imageFit":"stretch"' in stored
     assert page_errors == []
 
 

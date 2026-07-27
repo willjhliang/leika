@@ -20,7 +20,7 @@ image = server.panes.add_image(
     np.zeros((360, 640, 3), dtype=np.uint8),
     pane_id="camera",
     title="Live image",
-    fit="cover",
+    fit="fill",
 )
 gain = server.gui.add_slider(
     "Gain", min=0.0, max=2.0, step=0.01, initial_value=1.0

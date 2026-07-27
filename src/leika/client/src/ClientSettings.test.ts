@@ -56,6 +56,7 @@ describe("readClientSettings", () => {
       darkMode: null,
       showPaneTitles: false,
       accentColor: null,
+      imageFit: "fit",
     });
     expect(readClientSettings(null)).toEqual(defaultClientSettings());
   });
@@ -66,11 +67,13 @@ describe("readClientSettings", () => {
       darkMode: true,
       showPaneTitles: true,
       accentColor: "rgb(10, 20, 30)",
+      imageFit: "fill",
     });
     expect(readClientSettings(storage)).toEqual({
       darkMode: true,
       showPaneTitles: true,
       accentColor: "rgb(10, 20, 30)",
+      imageFit: "fill",
     });
   });
 
@@ -81,6 +84,7 @@ describe("readClientSettings", () => {
       darkMode: null,
       showPaneTitles: true,
       accentColor: null,
+      imageFit: "fit",
     });
   });
 
@@ -100,7 +104,17 @@ describe("readClientSettings", () => {
       darkMode: true,
       showPaneTitles: false,
       accentColor: null,
+      imageFit: "fit",
     });
+  });
+
+  it("drops an image fit that is not one of the three", () => {
+    const storage = new MemoryStorage();
+    // "contain" was v1's vocabulary, and is not one of these three.
+    stored(storage, { imageFit: "contain" as never });
+    expect(readClientSettings(storage).imageFit).toBe("fit");
+    stored(storage, { imageFit: "stretch" });
+    expect(readClientSettings(storage).imageFit).toBe("stretch");
   });
 
   it("falls back when the payload is not an object or not JSON", () => {
@@ -128,11 +142,13 @@ describe("useClientSettings", () => {
     actions.setDarkMode(true);
     actions.setShowPaneTitles(true);
     actions.setAccentColor("rgb(255, 0, 0)");
+    actions.setImageFit("fill");
 
     expect(getState()).toEqual({
       darkMode: true,
       showPaneTitles: true,
       accentColor: "rgb(255, 0, 0)",
+      imageFit: "fill",
     });
     expect(storage.values.size).toBe(1);
     expect(

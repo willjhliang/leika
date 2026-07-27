@@ -5,6 +5,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
 
+import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
 import { ViewerContext } from "../ViewerContext";
 import { motionExceedsThreshold } from "../dragUtils";
 import { prefersReducedMotion } from "../utils/motion";
@@ -1243,6 +1244,11 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
 }
 
 function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
+  const viewer = React.useContext(ViewerContext)!;
+  // An app that named a fit meant it; one that did not leaves the choice to
+  // whoever is looking at the image.
+  const preferredFit = viewer.useSettings((state) => state.imageFit);
+  const fit = IMAGE_FIT_OBJECT_FIT[pane.props.fit ?? preferredFit];
   const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
   React.useEffect(() => {
     if (pane.props._data === null) {
@@ -1284,7 +1290,7 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
         display: "block",
         width: "100%",
         height: "100%",
-        objectFit: pane.props.fit,
+        objectFit: fit,
         userSelect: "none",
         background: "#000",
       }}

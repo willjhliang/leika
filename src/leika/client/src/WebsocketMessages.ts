@@ -715,7 +715,7 @@ export interface ViewportImageMessage {
     _format: "jpeg" | "png";
     title: string;
     visible: boolean;
-    fit: "contain" | "cover" | "fill";
+    fit: "fit" | "fill" | "stretch" | null;
   };
 }
 /** Create a native Plotly pane in the pane workspace.

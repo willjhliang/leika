@@ -36,7 +36,8 @@ function createViewportHarness(storage: ViewportLayoutStorage | null = null): {
     return null;
   }
   renderToStaticMarkup(React.createElement(Harness));
-  if (viewport === undefined) throw new Error("Viewport harness did not render");
+  if (viewport === undefined)
+    throw new Error("Viewport harness did not render");
   return { actions: viewport.actions, getState: viewport.store.get };
 }
 
@@ -51,7 +52,7 @@ function imageDeclaration(
       _format: "png",
       title: paneId,
       visible: true,
-      fit: "contain",
+      fit: "fit",
     },
     placement: "right",
     relative_to: VIEWPORT_ROOT_PANE_ID,
@@ -98,12 +99,12 @@ describe("useViewportState hidden root lifecycle", () => {
     const { actions, getState } = createViewportHarness();
     actions.addImagePane(imageDeclaration("image"));
     const layout = getState().layout;
-    actions.updatePane("image", { title: "updated", fit: "cover" });
+    actions.updatePane("image", { title: "updated", fit: "fill" });
     const pane = getState().panes.image;
     expect(pane?.kind === "image" ? pane.props.title : undefined).toBe(
       "updated",
     );
-    expect(pane?.kind === "image" ? pane.props.fit : undefined).toBe("cover");
+    expect(pane?.kind === "image" ? pane.props.fit : undefined).toBe("fill");
     expect(getState().layout).toBe(layout);
   });
 

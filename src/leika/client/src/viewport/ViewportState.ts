@@ -1,5 +1,6 @@
 import React from "react";
 
+import { ImageFit } from "../ClientSettings";
 import { createStore, Store } from "../store";
 import {
   VIEWPORT_ROOT_PANE_ID,
@@ -15,7 +16,6 @@ import {
   sameViewportLayout,
 } from "./layoutModel";
 
-export type ViewportImageFit = "contain" | "cover" | "fill";
 export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
 export interface ViewportImageProps {
@@ -23,7 +23,8 @@ export interface ViewportImageProps {
   _format: "jpeg" | "png";
   title: string;
   visible: boolean;
-  fit: ViewportImageFit;
+  /** `null` defers to the viewer's own "Image fit" setting. */
+  fit: ImageFit | null;
 }
 
 export interface ViewportPlotlyProps {
@@ -309,7 +310,9 @@ export function useViewportState(
         persistenceServerRef.current = serverUrl;
         storageKeyRef.current = null;
         authoritativePaneIdsRef.current = null;
-        store.set(initialState(initialLayout(), store.get().interactionEpoch + 1));
+        store.set(
+          initialState(initialLayout(), store.get().interactionEpoch + 1),
+        );
       },
 
       setPersistenceWorkspace: (workspaceId) => {

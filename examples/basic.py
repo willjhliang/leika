@@ -31,7 +31,7 @@ def main() -> None:
             render(0.0, gain.value),
             pane_id="live-image",
             title="Live NumPy image",
-            fit="cover",
+            fit="fill",
             image_format="jpeg",
             jpeg_quality=85,
         )

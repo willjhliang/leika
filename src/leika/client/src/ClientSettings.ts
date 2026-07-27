@@ -3,6 +3,24 @@ import React from "react";
 import { parseToRgb } from "./components/colorUtils";
 import { Store, createStore } from "./store";
 
+/** How an image is sized inside the box it is given, named the way this
+ * control usually is. Kept in step with `ImageFit` on the Python side, which
+ * is what arrives on a pane's `fit`. */
+export type ImageFit = "fit" | "fill" | "stretch";
+
+/** The CSS keyword each one applies. The two vocabularies disagree on "fill":
+ * CSS means stretching by it, so filling the box is CSS `cover`. */
+export const IMAGE_FIT_OBJECT_FIT: Record<
+  ImageFit,
+  "contain" | "cover" | "fill"
+> = {
+  fit: "contain",
+  fill: "cover",
+  stretch: "fill",
+};
+
+const IMAGE_FITS = Object.keys(IMAGE_FIT_OBJECT_FIT) as ImageFit[];
+
 /** Display preferences owned by the browser rather than by the Python app.
  *
  * These are the viewer's own choices, so they outrank what the server asked
@@ -15,12 +33,15 @@ export interface ClientSettings {
   showPaneTitles: boolean;
   /** CSS color replacing the theme's near-black accent, or `null` for stock. */
   accentColor: string | null;
+  /** How image panes size themselves when Python did not say. */
+  imageFit: ImageFit;
 }
 
 export interface ClientSettingsActions {
   setDarkMode: (darkMode: boolean) => void;
   setShowPaneTitles: (showPaneTitles: boolean) => void;
   setAccentColor: (accentColor: string | null) => void;
+  setImageFit: (imageFit: ImageFit) => void;
 }
 
 export interface ClientSettingsStorage {
@@ -30,11 +51,23 @@ export interface ClientSettingsStorage {
 
 /** Unlike a dock layout, these say nothing about one app, so the key carries
  * neither the server URL nor the workspace: one browser, one set of
- * preferences. */
-export const CLIENT_SETTINGS_STORAGE_KEY = "leika.settings.v1";
+ * preferences.
+ *
+ * v2 retires v1's image-fit vocabulary, which was the CSS keywords. Reading a
+ * v1 payload under the new names would have silently turned a saved "fill"
+ * from filling the pane into stretching it, so the whole key is retired
+ * instead -- the other three preferences are cheap to set again. */
+export const CLIENT_SETTINGS_STORAGE_KEY = "leika.settings.v2";
 
 export function defaultClientSettings(): ClientSettings {
-  return { darkMode: null, showPaneTitles: false, accentColor: null };
+  // Fitting shows the whole image, which is the safe default for data: it
+  // crops nothing and distorts nothing.
+  return {
+    darkMode: null,
+    showPaneTitles: false,
+    accentColor: null,
+    imageFit: "fit",
+  };
 }
 
 function browserStorage(): ClientSettingsStorage | null {
@@ -83,6 +116,9 @@ export function readClientSettings(
       parseToRgb(stored.accentColor) !== null
         ? stored.accentColor
         : defaults.accentColor,
+    imageFit: IMAGE_FITS.includes(stored.imageFit as ImageFit)
+      ? (stored.imageFit as ImageFit)
+      : defaults.imageFit,
   };
 }
 
@@ -116,6 +152,7 @@ export function useClientSettings(
       setDarkMode: (darkMode) => update({ darkMode }),
       setShowPaneTitles: (showPaneTitles) => update({ showPaneTitles }),
       setAccentColor: (accentColor) => update({ accentColor }),
+      setImageFit: (imageFit) => update({ imageFit }),
     };
   }, [storage, store]);
 
