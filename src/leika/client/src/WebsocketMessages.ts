@@ -790,7 +790,6 @@ export interface ThemeConfigurationMessage {
     } | null;
   } | null;
   control_layout: "floating" | "collapsible" | "fixed";
-  control_width: "small" | "medium" | "large";
   dark_mode: boolean | "auto";
 }
 /** Signal that a file is about to be sent.

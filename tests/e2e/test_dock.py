@@ -48,9 +48,7 @@ def dock_page(
 ) -> Page:
     """The floating control panel plus a two-tab GUI group inside its area."""
     del page_errors  # Registers the pageerror listener; tests assert on it.
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="small", dark_mode=True
-    )
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Alpha"):
         leika_server.gui.add_markdown("Alpha body")

@@ -907,7 +907,6 @@ class ThemeConfigurationMessage(Message):
 
     titlebar_content: Optional[theme.TitlebarConfig]
     control_layout: Literal["floating", "collapsible", "fixed"]
-    control_width: Literal["small", "medium", "large"]
     dark_mode: Union[bool, Literal["auto"]]
     """``True``/``False`` pin the scheme; ``"auto"`` defers to the browser's
     ``prefers-color-scheme``."""

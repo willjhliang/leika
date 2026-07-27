@@ -133,11 +133,12 @@ def test_removed_visual_customization_arguments_are_rejected(
 ) -> None:
     server.gui.configure_theme(
         control_layout="floating",
-        control_width="large",
         dark_mode=True,
     )
     with pytest.raises(TypeError):
         server.gui.configure_theme(show_share_button=True)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        server.gui.configure_theme(control_width="large")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         server.gui.configure_theme(brand_color=(80, 150, 255))  # type: ignore[call-arg]
     with pytest.raises(TypeError):

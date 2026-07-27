@@ -621,7 +621,6 @@ class GuiApi(GuiContainer):
         *,
         titlebar_content: theme.TitlebarConfig | None = None,
         control_layout: Literal["floating", "collapsible", "fixed"] = "floating",
-        control_width: Literal["small", "medium", "large"] = "medium",
         dark_mode: bool | Literal["auto"] = "auto",
     ) -> None:
         """Configures the visual appearance of the Leika front-end.
@@ -630,8 +629,6 @@ class GuiApi(GuiContainer):
             titlebar_content: Optional configuration for the title bar.
             control_layout: The layout of control elements, options are "floating",
                             "collapsible", or "fixed".
-            control_width: The width of control elements, options are "small",
-                           "medium", or "large".
             dark_mode: ``True`` or ``False`` to pin the scheme for every client.
                        The default, ``"auto"``, follows each browser's own
                        ``prefers-color-scheme`` and tracks it if the viewer
@@ -642,7 +639,6 @@ class GuiApi(GuiContainer):
             _messages.ThemeConfigurationMessage(
                 titlebar_content=titlebar_content,
                 control_layout=control_layout,
-                control_width=control_width,
                 dark_mode=dark_mode,
             ),
         )

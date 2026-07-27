@@ -87,7 +87,6 @@ def main() -> None:
     server = leika.Server(workspace_id="showcase-v1")
     server.gui.configure_theme(
         control_layout="floating",
-        control_width="large",
         dark_mode=True,
     )
 
@@ -165,7 +164,6 @@ def main() -> None:
         panel_layout = server.gui.add_dropdown(
             "Layout", options=("floating", "fixed", "collapsible")
         )
-        panel_width = server.gui.add_dropdown("Width", options=("large", "medium", "small"))
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
@@ -203,11 +201,10 @@ def main() -> None:
     def apply_theme(_: Any = None) -> None:
         server.gui.configure_theme(
             control_layout=cast(Any, panel_layout.value),
-            control_width=cast(Any, panel_width.value),
             dark_mode=dark_mode.value,
         )
 
-    for control in (panel_layout, panel_width, dark_mode):
+    for control in (panel_layout, dark_mode):
         control.on_update(apply_theme)
 
     @fit.on_update

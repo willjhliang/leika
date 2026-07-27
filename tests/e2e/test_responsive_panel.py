@@ -18,17 +18,14 @@ def _assert_inside_viewport(page: Page) -> None:
     assert bounds["y"] + bounds["height"] <= viewport["height"] + 0.5
 
 
-def test_initial_large_hover_panel_preserves_right_inset(
+def test_initial_hover_panel_preserves_right_inset(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
 ) -> None:
-    # Match the showcase: the theme is configured before the browser connects,
-    # so the client first mounts its default-width panel and then receives the
-    # persisted large-width theme message.
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="large", dark_mode=True
-    )
+    # The panel width is a constant, so the width the client mounts with is the
+    # width it keeps once the theme message arrives -- no resize on connect.
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     leika_server.gui.add_text("Ready", initial_value="yes")
     leika_server.gui.add_command("Open command palette", lambda: None)
 
@@ -40,7 +37,7 @@ def test_initial_large_hover_panel_preserves_right_inset(
 
     panel = page.get_by_test_id("control-panel")
     expect(panel).to_be_visible(timeout=5_000)
-    expect(panel).to_have_css("width", "384px")
+    expect(panel).to_have_css("width", "320px")
     bounds = panel.bounding_box()
     viewport = page.viewport_size
     assert bounds is not None and viewport is not None
@@ -61,9 +58,7 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="large", dark_mode=True
-    )
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Nested tab"):
         leika_server.gui.add_text("Nested content", initial_value="ready")
@@ -106,9 +101,7 @@ def test_dockable_tabs_keep_inactive_panel_dom_mounted(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="large", dark_mode=True
-    )
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("First mount"):
         leika_server.gui.add_html("<span data-tab-mount-sentinel>original</span>")
@@ -141,7 +134,7 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="fixed", control_width="large", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="fixed", dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     tab_labels = (
         "Overview dashboard",
@@ -195,14 +188,12 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     assert page_errors == []
 
 
-def test_large_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
+def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="large", dark_mode=True
-    )
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     with leika_server.gui.add_folder("First folder"):
         leika_server.gui.add_slider(
             "Spacing slider", min=0.0, max=1.0, step=0.01, initial_value=0.5
@@ -309,7 +300,6 @@ def test_tall_sidebar_scrolls_internally_and_stays_inside_viewport(
 ) -> None:
     leika_server.gui.configure_theme(
         control_layout=control_layout,
-        control_width="large",
         dark_mode=True,
     )
     for index in range(60):
@@ -375,9 +365,7 @@ def test_nested_sections_expand_and_collapse(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(
-        control_layout="floating", control_width="large", dark_mode=True
-    )
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     with leika_server.gui.add_folder("Outer section"):
         leika_server.gui.add_text("Outer input", initial_value="outer")
         with leika_server.gui.add_folder("Inner section"):

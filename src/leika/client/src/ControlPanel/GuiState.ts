@@ -62,7 +62,6 @@ const cleanGuiState: GuiState = {
     type: "ThemeConfigurationMessage",
     titlebar_content: null,
     control_layout: "floating",
-    control_width: "medium",
     // Matches the server's default, so the scheme does not change under the
     // viewer when the first theme message arrives.
     dark_mode: "auto",

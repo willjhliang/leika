@@ -1,17 +1,10 @@
-/** Control panel width presets, keyed by the server's `control_width` theme
- * setting. One source of truth for both representations: the em width used by
- * the sidebar / bottom-sheet layouts, and the px width used by the dock
- * layout (em x the panel's 16px font size). */
-export const CONTROL_WIDTH_EM: Record<string, number> = {
-  small: 16,
-  medium: 20,
-  large: 24,
-};
+/** The control panel's width, in the panel's own 16px font size.
+ *
+ * One source of truth for the two representations the layouts need: a CSS
+ * length for the sidebar and bottom-sheet layouts, and a pixel count for the
+ * dock layout, which computes its geometry in numbers. */
+const CONTROL_WIDTH_EM = 20;
 
-export function controlWidthEm(name: string): string {
-  return `${CONTROL_WIDTH_EM[name] ?? 20}em`;
-}
+export const CONTROL_WIDTH_CSS = `${CONTROL_WIDTH_EM}em`;
 
-export function controlWidthPx(name: string): number {
-  return (CONTROL_WIDTH_EM[name] ?? 20) * 16;
-}
+export const CONTROL_WIDTH_PX = CONTROL_WIDTH_EM * 16;

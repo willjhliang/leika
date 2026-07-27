@@ -21,7 +21,7 @@ import { commandPalette } from "../CommandPaletteController";
 import { isMac } from "../utils/platform";
 import React from "react";
 import BottomPanel from "./BottomPanel";
-import { controlWidthEm } from "./controlWidth";
+import { CONTROL_WIDTH_CSS } from "./controlWidth";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { useMobileView } from "../hooks/useMediaQuery";
 import SidebarPanel from "./SidebarPanel";
@@ -106,17 +106,11 @@ export default function ControlPanel(props: {
   control_layout: ThemeConfigurationMessage["control_layout"];
 }) {
   const mobileView = useMobileView();
-  const viewer = React.useContext(ViewerContext)!;
   const [showSettings, setShowSettings] = React.useState(false);
   const toggle = React.useCallback(
     () => setShowSettings((current) => !current),
     [],
   );
-
-  const controlWidthString = viewer.useGui(
-    (state) => state.theme.control_width,
-  );
-  const controlWidth = controlWidthEm(controlWidthString);
 
   const generatedServerToggleButton = (
     <SettingsToggleIcon showSettings={showSettings} onToggle={toggle} />
@@ -148,7 +142,7 @@ export default function ControlPanel(props: {
     /* Sidebar view. */
     return (
       <SidebarPanel
-        width={controlWidth}
+        width={CONTROL_WIDTH_CSS}
         collapsible={props.control_layout === "collapsible"}
       >
         <SidebarPanel.Handle>

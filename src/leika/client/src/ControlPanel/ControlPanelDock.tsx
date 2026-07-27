@@ -21,7 +21,7 @@ import {
 } from "./ControlPanel";
 import GeneratedGuiContainer from "./Generated";
 import { GuiDockContext } from "./GuiDockContext";
-import { controlWidthPx } from "./controlWidth";
+import { CONTROL_WIDTH_PX } from "./controlWidth";
 
 // Memoized so a torn-out tab's whole GUI tree doesn't re-render every time
 // unrelated dock state changes (it only depends on its container uuid).
@@ -57,10 +57,6 @@ export function ControlPanelDockSurface({
   onDockStateChange?: (state: ControlDockState) => void;
 }) {
   const viewer = React.useContext(ViewerContext)!;
-  const controlWidthString = viewer.useGui(
-    (state) => state.theme.control_width,
-  );
-  const widthPx = controlWidthPx(controlWidthString);
   const [showSettings, setShowSettings] = React.useState(false);
   const toggle = React.useCallback(
     () => setShowSettings((current) => !current),
@@ -123,10 +119,7 @@ export function ControlPanelDockSurface({
     <GuiDockContext.Provider value={guiDockValue}>
       <DockManager initialLayout={initialLayout} panels={panels}>
         {children}
-        <ControlPanelDockSync
-          widthPx={widthPx}
-          onDockStateChange={onDockStateChange}
-        />
+        <ControlPanelDockSync onDockStateChange={onDockStateChange} />
       </DockManager>
     </GuiDockContext.Provider>
   );
@@ -231,17 +224,15 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
 }
 
 /** Non-rendering sync node inside the DockManager:
- * - applies server-driven control_width changes to the floating window;
+ * - places the floating window on mount;
  * - reports the panel's dock side/width/minimized state up to App (for the
  *   notifications offset).
  *
  * Test ids are NOT applied here: the panel spec declares `testId` and the dock
  * library renders it (plus `-handle` / `-resize-*`) itself. */
 function ControlPanelDockSync({
-  widthPx,
   onDockStateChange,
 }: {
-  widthPx: number;
   onDockStateChange?: (state: ControlDockState) => void;
 }) {
   const dock = useDock();
@@ -252,7 +243,6 @@ function ControlPanelDockSync({
 
   // Narrow containers (small browser windows, split screens): shrink the
   // panel to fit with its padding rather than spilling past the right edge.
-  // Shared by the initial placement and later server-driven width changes.
   const fitToContainer = React.useCallback((width: number) => {
     const containerW =
       markerRef.current?.closest("[data-dock-root]")?.getBoundingClientRect()
@@ -267,7 +257,7 @@ function ControlPanelDockSync({
   // Runs once on mount (addFloatingPanel no-ops if the panel is already
   // placed, so a StrictMode double-run is harmless).
   React.useLayoutEffect(() => {
-    const { containerW, width } = fitToContainer(widthPx);
+    const { containerW, width } = fitToContainer(CONTROL_WIDTH_PX);
     dock.api.apply(
       (layout) =>
         ops.addFloatingPanel(
@@ -278,7 +268,8 @@ function ControlPanelDockSync({
           width,
         ).layout,
     );
-    // Initial placement only; later width changes are applied below.
+    // Initial placement only; the panel width is a constant, and the user is
+    // free to resize the window afterwards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -298,35 +289,7 @@ function ControlPanelDockSync({
   const dockedWidth =
     location?.kind === "docked"
       ? metrics.reservedWidth[location.edge]
-      : widthPx;
-
-  // Server-driven width change: resize the floating window. A docked panel
-  // keeps its region width; the prop width only seeds it.
-  const appliedWidth = React.useRef(widthPx);
-  React.useEffect(() => {
-    if (appliedWidth.current === widthPx) return;
-    appliedWidth.current = widthPx;
-    // Same narrow-container clamp as the initial placement, resizing from the
-    // nearer horizontal edge: a panel the user moved to the left half keeps
-    // its left edge, while the initial top-right panel (and any other
-    // right-nearer placement) keeps its right edge instead of growing
-    // off-screen.
-    const { containerW, width } = fitToContainer(widthPx);
-    dock.api.apply((layout) => {
-      const gid = ops.findPanelGroup(layout, CONTROL_PANEL_ID);
-      const loc = gid === null ? null : ops.findGroupLocation(layout, gid);
-      if (loc?.kind !== "floating") return layout;
-      const win = layout.floating.find(
-        (candidate) => candidate.id === loc.windowId,
-      );
-      if (win === undefined) return layout;
-      const x =
-        win.x + win.width / 2 > containerW / 2
-          ? win.x + win.width - width
-          : undefined;
-      return ops.resizeWindow(layout, loc.windowId, width, x);
-    });
-  }, [widthPx, dock.api, fitToContainer]);
+      : CONTROL_WIDTH_PX;
 
   // Report dock state up to App (notifications offset).
   React.useEffect(() => {
