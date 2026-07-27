@@ -843,6 +843,7 @@ function ViewportPaneHost({
 }) {
   const viewer = React.useContext(ViewerContext)!;
   const pane = viewer.useViewport((state) => state.panes[paneId]);
+  const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const [isHovered, setIsHovered] = React.useState(false);
   // Keyboard users can focus the header without hovering; keep it visible.
   const [isFocused, setIsFocused] = React.useState(false);
@@ -931,7 +932,7 @@ function ViewportPaneHost({
             // A drag still hides it whatever the setting says: the header is
             // the thing being dragged, and the drag preview stands in for it.
             opacity:
-              (isHovered || isFocused) && !isDragging ? 1 : 0,
+              (showPaneTitles || isHovered || isFocused) && !isDragging ? 1 : 0,
             transition: motionEnabled ? "opacity 250ms ease-in-out" : undefined,
             cursor: isDragging ? "grabbing" : "grab",
             touchAction: "none",

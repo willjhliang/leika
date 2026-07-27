@@ -1,5 +1,6 @@
 import React from "react";
 
+import { useClientSettings } from "./ClientSettings";
 import { UseGui } from "./ControlPanel/GuiState";
 import { Message } from "./WebsocketMessages";
 import { useViewportState } from "./viewport/ViewportState";
@@ -17,6 +18,8 @@ export type ViewerContextContents = {
   guiActions: UseGui["actions"];
   useViewport: ReturnType<typeof useViewportState>["store"];
   viewportActions: ReturnType<typeof useViewportState>["actions"];
+  useSettings: ReturnType<typeof useClientSettings>["store"];
+  settingsActions: ReturnType<typeof useClientSettings>["actions"];
   mutable: React.MutableRefObject<ViewerMutable>;
 };
 

@@ -17,6 +17,8 @@ import { ControlPanelContents, PanelHeader } from "./ControlPanel";
 import { useShowGenerated } from "./useShowGenerated";
 import GeneratedGuiContainer from "./Generated";
 import { GuiDockContext } from "./GuiDockContext";
+import { SettingsButton } from "./SettingsPane";
+import { useSettingsPanelOpen } from "./SettingsPanelController";
 import { CONTROL_WIDTH_PX } from "./controlWidth";
 
 // Memoized so a torn-out tab's whole GUI tree doesn't re-render every time
@@ -66,7 +68,9 @@ export function ControlPanelDockSurface({
   // The body keeps itself mounted at zero height when there is no GUI, so the
   // frame has to be told; otherwise its header/body gap hangs below a lone
   // "Connecting..." header.
-  const hasBody = useShowGenerated();
+  const showGenerated = useShowGenerated();
+  const settingsOpen = useSettingsPanelOpen();
+  const hasBody = showGenerated || settingsOpen;
   const controlPanelSpec: PanelRegistry = React.useMemo(
     () => ({
       [CONTROL_PANEL_ID]: {
@@ -74,7 +78,7 @@ export function ControlPanelDockSurface({
         title: "Control panel",
         unmergeable: true,
         testId: CONTROL_PANEL_TESTID,
-        titleNode: <PanelHeader />,
+        titleNode: <PanelHeader actions={<SettingsButton />} />,
         render: () => <ControlPanelContents />,
         bodyIsEmpty: !hasBody,
       },

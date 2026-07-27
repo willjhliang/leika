@@ -15,6 +15,8 @@ import {
   colorAlpha,
   colorFromHex,
   colorWithOpacity,
+  relativeLuminance,
+  accentForeground,
 } from "./colorUtils";
 
 describe("rgbToString / rgbaToString", () => {
@@ -144,5 +146,71 @@ describe("picker color conversions", () => {
     expect(colorFromRgb([18, 52, 86], "rgb", "rgb(1, 2, 3)")).toBe(
       "rgb(18, 52, 86)",
     );
+  });
+});
+
+describe("relativeLuminance", () => {
+  it("spans the full range from black to white", () => {
+    expect(relativeLuminance([0, 0, 0])).toBe(0);
+    expect(relativeLuminance([255, 255, 255])).toBeCloseTo(1, 6);
+    expect(relativeLuminance([128, 128, 128])).toBeCloseTo(0.2158, 3);
+  });
+
+  it("weights green above red above blue", () => {
+    expect(relativeLuminance([0, 255, 0])).toBeGreaterThan(
+      relativeLuminance([255, 0, 0]),
+    );
+    expect(relativeLuminance([255, 0, 0])).toBeGreaterThan(
+      relativeLuminance([0, 0, 255]),
+    );
+  });
+
+  it("clamps channels outside the byte range", () => {
+    expect(relativeLuminance([300, 300, 300])).toBe(
+      relativeLuminance([255, 255, 255]),
+    );
+    expect(relativeLuminance([-5, -5, -5])).toBe(relativeLuminance([0, 0, 0]));
+  });
+});
+
+describe("accentForeground", () => {
+  const LIGHT = "oklch(0.985 0 0)";
+  const DARK = "oklch(0.205 0 0)";
+
+  it("prints dark on pale accents and light on deep ones", () => {
+    expect(accentForeground("rgb(255, 255, 255)")).toBe(DARK);
+    expect(accentForeground("rgb(255, 255, 0)")).toBe(DARK);
+    expect(accentForeground("rgb(0, 0, 0)")).toBe(LIGHT);
+    expect(accentForeground("rgb(0, 0, 255)")).toBe(LIGHT);
+    // The theme's own near-black accent, which is what the picker opens on.
+    expect(accentForeground("rgb(38, 38, 38)")).toBe(LIGHT);
+  });
+
+  it("keeps light text on saturated mid-tones", () => {
+    // These sit between the equal-contrast crossover and the threshold, which
+    // is the whole point of putting the threshold above the crossover.
+    for (const midtone of [
+      "rgb(52, 120, 246)", // #3478F6, a strong blue
+      "rgb(217, 72, 15)", // #D9480F, a strong orange
+      "rgb(13, 148, 136)", // #0D9488, a strong teal
+    ]) {
+      expect(relativeLuminance(parseToRgb(midtone)!)).toBeGreaterThan(0.179);
+      expect(accentForeground(midtone)).toBe(LIGHT);
+    }
+  });
+
+  it("flips once an accent is genuinely light", () => {
+    expect(accentForeground("rgb(255, 243, 176)")).toBe(DARK); // pale yellow
+    expect(accentForeground("rgb(190, 190, 190)")).toBe(DARK); // light grey
+    expect(accentForeground("rgb(120, 120, 120)")).toBe(LIGHT); // mid grey
+  });
+
+  it("accepts hex as well as rgb()", () => {
+    expect(accentForeground("#ffffff")).toBe(DARK);
+    expect(accentForeground("#000")).toBe(LIGHT);
+  });
+
+  it("falls back to the light foreground for an unparseable accent", () => {
+    expect(accentForeground("not-a-color")).toBe(LIGHT);
   });
 });

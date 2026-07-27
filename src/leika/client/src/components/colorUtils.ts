@@ -264,6 +264,48 @@ export function hslToRgb(hsl: [number, number, number]): RgbTuple {
   ) as RgbTuple;
 }
 
+/** WCAG relative luminance of RGB channels, in [0, 1]. */
+export function relativeLuminance(rgb: RgbTuple): number {
+  const [red, green, blue] = rgb.map((channel) => {
+    const normalized = Math.max(0, Math.min(255, channel)) / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : Math.pow((normalized + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** The two neutrals `--primary-foreground` takes in `index.css`: the light
+ * theme prints near-white on its near-black accent, and the dark theme prints
+ * near-black on its near-white one. */
+const LIGHT_ON_ACCENT = "oklch(0.985 0 0)";
+const DARK_ON_ACCENT = "oklch(0.205 0 0)";
+
+/** Luminance above which an accent is pale enough to print dark text on.
+ *
+ * Pure contrast crosses over at 0.179, where white and black score equally.
+ * Picking the winner there flips to dark text on saturated mid-tones -- a
+ * strong blue or orange -- which every convention prints white on, and which
+ * looks like a bug rather than a choice. This sits well above the crossover so
+ * only genuinely light accents take dark text. Between 0.179 and here, white
+ * gives up some contrast: still past the 3:1 that WCAG asks of a UI component
+ * or large text, but short of the 4.5:1 for body copy. Nothing typed at body
+ * size uses this pair -- it fills checkboxes, slider ranges, and buttons. */
+const DARK_TEXT_ABOVE = 0.4;
+
+/** Pick the readable `--primary-foreground` for an accent color.
+ *
+ * The stock foregrounds assume an accent at one end of the lightness range, so
+ * a user-chosen mid-tone or pale accent would otherwise print near-white text
+ * on a near-white fill. */
+export function accentForeground(accent: string): string {
+  const rgb = parseToRgb(accent);
+  if (rgb === null) return LIGHT_ON_ACCENT;
+  return relativeLuminance(rgb) > DARK_TEXT_ABOVE
+    ? DARK_ON_ACCENT
+    : LIGHT_ON_ACCENT;
+}
+
 // Check if two RGB tuples are equal.
 // Input: RGB values in [0, 255].
 export function rgbEqual(a: RgbTuple, b: RgbTuple): boolean {

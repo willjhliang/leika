@@ -4,6 +4,7 @@ import "./index.css";
 import React from "react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 
+import { useClientSettings } from "./ClientSettings";
 import { CommandPalette } from "./CommandPalette";
 import ControlPanel from "./ControlPanel/ControlPanel";
 import {
@@ -23,6 +24,7 @@ import {
 import { WebsocketMessageProducer } from "./WebsocketInterface";
 import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { useAccentColor } from "./hooks/useAccentColor";
 import { useMobileView, usePrefersDarkMode } from "./hooks/useMediaQuery";
 import { useViewportState } from "./viewport/ViewportState";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
@@ -50,12 +52,15 @@ export function Root() {
   });
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();
+  const settingsState = useClientSettings();
   const viewer: ViewerContextContents = {
     useGui: guiState.store,
     useGuiConfig: guiState.configStore,
     guiActions: guiState.actions,
     useViewport: viewportState.store,
     viewportActions: viewportState.actions,
+    useSettings: settingsState.store,
+    settingsActions: settingsState.actions,
     mutable,
   };
 
@@ -72,12 +77,18 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
   const viewer = React.useContext(ViewerContext)!;
   const configuredDarkMode = viewer.useGui((state) => state.theme.dark_mode);
   const prefersDarkMode = usePrefersDarkMode();
+  const chosenDarkMode = viewer.useSettings((state) => state.darkMode);
   // "auto" is the default the server sends, and what the store holds before it
   // connects, so the OS preference decides unless an app opts out of it. Two
   // viewers of the same app can legitimately land on different schemes.
+  //
+  // A viewer who has worked the settings switch outranks both: the app's
+  // choice is a default, and the reader's is a decision.
   const darkMode =
-    configuredDarkMode === "auto" ? prefersDarkMode : configuredDarkMode;
+    chosenDarkMode ??
+    (configuredDarkMode === "auto" ? prefersDarkMode : configuredDarkMode);
   const controlLayout = viewer.useGui((state) => state.theme.control_layout);
+  useAccentColor(viewer.useSettings((state) => state.accentColor));
 
   return (
     // The scheme is resolved above rather than handed to `enableSystem`, so

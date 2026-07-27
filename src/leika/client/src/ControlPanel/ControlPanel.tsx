@@ -8,6 +8,8 @@ import BottomPanel from "./BottomPanel";
 import { CONTROL_WIDTH_CSS } from "./controlWidth";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { useMobileView } from "../hooks/useMediaQuery";
+import { SettingsButton, SettingsSection } from "./SettingsPane";
+import { useSettingsPanelOpen } from "./SettingsPanelController";
 import SidebarPanel from "./SidebarPanel";
 import { useShowGenerated } from "./useShowGenerated";
 
@@ -20,12 +22,16 @@ const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
  * (bottom sheet, sidebar, and the dock-library floating panel). */
 export function ControlPanelContents() {
   const showGenerated = useShowGenerated();
+  const settingsOpen = useSettingsPanelOpen();
   return (
     /*For intrinsic-size transitions, this `keepMounted` is necessary to prevent
     some intermittent problems with the initial GUI height being set to 0 when
     we're under high CPU load.*/
-    <Collapsible open={showGenerated}>
+    <Collapsible open={showGenerated || settingsOpen}>
       <CollapsibleContent keepMounted>
+        {/* Above the app's own controls, under the gear that opens it. An app
+            with no GUI at all still has a body once this is open. */}
+        <SettingsSection />
         <MemoizedGeneratedGuiContainer containerUuid={ROOT_CONTAINER_ID} />
       </CollapsibleContent>
     </Collapsible>
@@ -42,10 +48,12 @@ export default function ControlPanel(props: {
   // on the docking surface (see ControlPanelDock.tsx). This component covers
   // the mobile bottom sheet and the sidebar layouts.
   if (mobileView) {
-    /* Mobile layout. */
+    /* Mobile layout. The whole handle is the collapse button, so the gear
+       cannot sit inside the header the way it does elsewhere; it goes beside
+       it instead. */
     return (
       <BottomPanel>
-        <BottomPanel.Handle>
+        <BottomPanel.Handle actions={<SettingsButton />}>
           <PanelHeader />
         </BottomPanel.Handle>
         <BottomPanel.Contents>{panelContents}</BottomPanel.Contents>
@@ -59,7 +67,7 @@ export default function ControlPanel(props: {
         collapsible={props.control_layout === "collapsible"}
       >
         <SidebarPanel.Handle>
-          <PanelHeader />
+          <PanelHeader actions={<SettingsButton />} />
         </SidebarPanel.Handle>
         <SidebarPanel.Contents>{panelContents}</SidebarPanel.Contents>
       </SidebarPanel>
