@@ -206,7 +206,15 @@ export function TabGroupFrame({
         data-dock-group={group.id}
         data-dock-collapsed={collapsed ? "true" : undefined}
         data-testid={collapsed ? handleTestId : undefined}
-        className={`${rootClassName} gap-2`}
+        // The gap separates the header from the body, so it goes with the
+        // body: a collapsed panel keeps its zero-height body as a flex item,
+        // and the gap would otherwise hang below the header as whitespace the
+        // card's own padding does not balance. A panel reporting an empty body
+        // is the same picture -- header alone in the card -- and needs the same
+        // treatment, which is how a disconnected control panel renders.
+        className={`${rootClassName}${
+          collapsed || panel?.bodyIsEmpty === true ? "" : " gap-2"
+        }`}
         style={rootStyle}
       >
         <CardHeader

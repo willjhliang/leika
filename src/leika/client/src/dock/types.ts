@@ -83,6 +83,13 @@ export interface PanelSpec {
   /** Renders the panel body. A function (not a node) so each group can keep
    * inactive tabs mounted without storing React nodes in the layout model. */
   render: () => React.ReactNode;
+  /** When true, `render` currently produces nothing with height, so the frame
+   * drops the gap between header and body. A body that stays mounted at zero
+   * height -- to keep an intrinsic-size transition measurable, say -- is still
+   * a flex item, and the gap would hang below the header as bare whitespace.
+   * The panel has to say so: the frame cannot tell a zero-height body from one
+   * that has simply not laid out yet. */
+  bodyIsEmpty?: boolean;
   /** When true, this panel may be minimized but never merged into another
    * group's tab strip (and nothing can be merged into it). Its label is shown
    * as a full-width header rather than a tab. An unmergeable panel always lives

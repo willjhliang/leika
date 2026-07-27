@@ -25,7 +25,7 @@ export default function BottomPanel({
     <BottomPanelContext.Provider value={{ expanded }}>
       <Card
         className={cn(
-          "fixed right-0 bottom-0 z-10 w-full max-w-80 gap-0",
+          "fixed right-0 bottom-0 z-10 w-full max-w-80 gap-0 shadow-md",
           expanded && "h-[60vh]",
         )}
       >
@@ -45,6 +45,8 @@ BottomPanel.Handle = function BottomPanelHandle({
   actions,
 }: {
   children: string | React.ReactNode;
+  /** Controls of their own, placed beside the trigger rather than inside it:
+   * the whole handle is one button here, and a button cannot hold another. */
   actions?: React.ReactNode;
 }) {
   const panelContext = React.useContext(BottomPanelContext)!;
@@ -84,14 +86,4 @@ BottomPanel.Contents = function BottomPanelContents({
       </ScrollArea>
     </CollapsibleContent>
   );
-};
-
-/** Hides contents when panel is collapsed. */
-BottomPanel.HideWhenCollapsed = function BottomPanelHideWhenCollapsed({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const expanded = React.useContext(BottomPanelContext)?.expanded ?? true;
-  return expanded ? children : null;
 };

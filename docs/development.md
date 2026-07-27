@@ -85,6 +85,12 @@ together. Keep to this single component framework, and let Leika's domain
 components compose the generated shadcn primitives directly rather than through
 a wrapper layer.
 
+One file in `components/ui` is vendored rather than generated: `status.tsx`
+comes from the separate shadcn.io collection and has no `shadcn add` path, so
+refreshing it means copying from upstream again. Record any further vendored
+component in `src/leika/_licenses/shadcn-io-PROVENANCE.md`; that notice is on
+`scripts/check_wheel.py`'s required list, so the wheel must ship it.
+
 ## Generated protocol
 
 Run `python sync_client_server.py` after changing message dataclasses or the

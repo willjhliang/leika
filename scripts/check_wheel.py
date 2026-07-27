@@ -13,6 +13,7 @@ MIN_LICENSE_BYTES = 500
 REQUIRED_NOTICES = (
     "leika/_licenses/shadcn-ui-LICENSE.md",
     "leika/_licenses/shadcn-ui-PROVENANCE.md",
+    "leika/_licenses/shadcn-io-PROVENANCE.md",
     "leika/_licenses/base-ui-LICENSE.txt",
     "leika/_licenses/geist-OFL.txt",
     "leika/_licenses/lucide-LICENSE.txt",

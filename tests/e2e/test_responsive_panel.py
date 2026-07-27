@@ -43,13 +43,11 @@ def test_initial_hover_panel_preserves_right_inset(
     assert bounds is not None and viewport is not None
     assert abs(viewport["width"] - bounds["x"] - bounds["width"] - 15.0) <= 0.5
 
-    settings_button = page.get_by_role("button", name="Connection settings")
-    commands_button = page.get_by_role("button", name="Commands")
-    expect(settings_button).to_be_visible()
-    expect(commands_button).to_be_visible()
-    settings_button.click()
-    expect(page.get_by_role("button", name="Return to GUI")).to_be_visible()
-    expect(page.get_by_text("Server URL", exact=True)).to_be_visible()
+    # The handle carries the connection status alone: no action buttons, and
+    # no connection settings view behind them.
+    expect(page.get_by_role("button", name="Commands")).to_have_count(0)
+    expect(page.get_by_role("button", name="Connection settings")).to_have_count(0)
+    expect(page.get_by_text("Server URL", exact=True)).to_have_count(0)
     assert page_errors == []
 
 
@@ -450,4 +448,45 @@ def test_nested_sections_expand_and_collapse(
     page.keyboard.press("Enter")
     expect(form_trigger).to_have_attribute("aria-expanded", "true")
     expect(form_contents).to_be_visible()
+    assert page_errors == []
+
+
+def test_empty_panel_body_leaves_no_gap_under_the_header(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """A panel with nothing to show is just its header inside the card.
+
+    The body stays mounted at zero height so its intrinsic-size transition can
+    be measured, which leaves it a flex item -- and the frame's header/body gap
+    hanging below a lone "Connecting..." or "Inactive" header, unbalanced by
+    the card's padding. The gap belongs to the body, so it goes when the body
+    has nothing in it.
+    """
+    leika_server.gui.configure_theme(control_layout="floating")
+    page.goto(leika_server.url)
+    page.wait_for_selector('[data-testid="control-panel"]', timeout=15_000)
+
+    frame = page.locator("[data-dock-group]").filter(
+        has=page.get_by_test_id("control-panel-handle")
+    )
+    measure = """el => {
+        const header = el.querySelector('[data-dock-header]');
+        return {
+            rowGap: getComputedStyle(el).rowGap,
+            // The frame is exactly its header when nothing follows it.
+            trailingSpace: Math.round(
+                el.getBoundingClientRect().bottom
+                - header.getBoundingClientRect().bottom
+            ),
+        };
+    }"""
+    expect(frame).to_be_visible(timeout=5_000)
+    assert frame.evaluate(measure) == {"rowGap": "normal", "trailingSpace": 0}
+
+    # A populated body earns the gap back: it now has something to separate.
+    leika_server.gui.add_text("Ready", initial_value="yes")
+    expect(page.get_by_text("Ready")).to_be_visible(timeout=5_000)
+    assert frame.evaluate(measure)["rowGap"] == "8px"
     assert page_errors == []

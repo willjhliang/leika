@@ -25,7 +25,7 @@ def test_metadata_is_leika_and_base_is_lightweight() -> None:
     dependencies = metadata.split("dependencies = [", 1)[1].split("]", 1)[0]
     for forbidden in ("plotly", "matplotlib", "trimesh", "requests", "torch"):
         assert forbidden not in dependencies.lower()
-    assert re.search(r"plotly\s*=\s*\[", metadata)
+    assert re.search(r"examples\s*=\s*\[[^\]]*plotly", metadata)
 
 
 def test_client_ui_is_configured_for_shadcn() -> None:
@@ -77,6 +77,7 @@ def test_browser_client_licenses_ship_with_the_package() -> None:
     for name in (
         "shadcn-ui-LICENSE.md",
         "shadcn-ui-PROVENANCE.md",
+        "shadcn-io-PROVENANCE.md",
         "base-ui-LICENSE.txt",
         "geist-OFL.txt",
         "lucide-LICENSE.txt",

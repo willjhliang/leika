@@ -13,12 +13,8 @@ import { DockMetricsContext, useDock } from "../dock/DockContext";
 import { DockManager } from "../dock/DockManager";
 import * as ops from "../dock/layoutOps";
 import { PanelRegistry, emptyLayout } from "../dock/types";
-import {
-  CommandsButton,
-  ConnectionStatus,
-  ControlPanelContents,
-  SettingsToggleIcon,
-} from "./ControlPanel";
+import { ControlPanelContents, PanelHeader } from "./ControlPanel";
+import { useShowGenerated } from "./useShowGenerated";
 import GeneratedGuiContainer from "./Generated";
 import { GuiDockContext } from "./GuiDockContext";
 import { CONTROL_WIDTH_PX } from "./controlWidth";
@@ -57,11 +53,6 @@ export function ControlPanelDockSurface({
   onDockStateChange?: (state: ControlDockState) => void;
 }) {
   const viewer = React.useContext(ViewerContext)!;
-  const [showSettings, setShowSettings] = React.useState(false);
-  const toggle = React.useCallback(
-    () => setShowSettings((current) => !current),
-    [],
-  );
 
   // GUI tab groups rendered inside the dock surface register here (via
   // GuiDockContext); the registry hook owns the lifetime of their tabs' panel
@@ -72,6 +63,10 @@ export function ControlPanelDockSurface({
     [registerTabGroup],
   );
 
+  // The body keeps itself mounted at zero height when there is no GUI, so the
+  // frame has to be told; otherwise its header/body gap hangs below a lone
+  // "Connecting..." header.
+  const hasBody = useShowGenerated();
   const controlPanelSpec: PanelRegistry = React.useMemo(
     () => ({
       [CONTROL_PANEL_ID]: {
@@ -79,29 +74,12 @@ export function ControlPanelDockSurface({
         title: "Control panel",
         unmergeable: true,
         testId: CONTROL_PANEL_TESTID,
-        titleNode: (
-          <>
-            <ConnectionStatus />
-            {/* Action icons: stop pointerdown so pressing them neither starts
-            a panel drag nor registers as a minimize click on the header. */}
-            <div
-              className="flex items-center"
-              onPointerDown={(event: React.PointerEvent<HTMLDivElement>) =>
-                event.stopPropagation()
-              }
-            >
-              <CommandsButton />
-              <SettingsToggleIcon
-                showSettings={showSettings}
-                onToggle={toggle}
-              />
-            </div>
-          </>
-        ),
-        render: () => <ControlPanelContents showSettings={showSettings} />,
+        titleNode: <PanelHeader />,
+        render: () => <ControlPanelContents />,
+        bodyIsEmpty: !hasBody,
       },
     }),
-    [showSettings, toggle],
+    [hasBody],
   );
   const panels: PanelRegistry = React.useMemo(
     () => ({ ...guiPanels, ...controlPanelSpec }),
