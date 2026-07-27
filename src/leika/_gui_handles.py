@@ -1270,12 +1270,14 @@ class CommandEvent:
 
     Passed as input to callback functions.
 
-    ``client`` and ``client_id`` are typed Optional for parity with
-    :class:`GuiEvent` (which can fire server-side) and to leave room for a
-    future programmatic ``handle.trigger()`` path. In practice, every command
-    trigger today originates from a real client -- the dispatcher drops the
-    event if the client can't be resolved, so callbacks only see non-None
-    values."""
+    Every command trigger originates from a browser client, so ``client`` and
+    ``client_id`` are always populated when a callback runs, despite being
+    typed as Optional."""
+
+    # Optional for parity with GuiEvent, which can fire server-side, and to
+    # leave room for a future programmatic handle.trigger() path. The
+    # dispatcher drops the event when the client can't be resolved, so
+    # callbacks never observe None today.
 
     client: ClientHandle | None
     """Client that triggered this command."""

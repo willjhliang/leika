@@ -5,12 +5,10 @@ from typing import NewType
 IconName = NewType("IconName", str)
 """Name of an icon. Should be generated via `leika.Icon.*`."""
 
+# Not an enum.Enum subclass: importing an enum with thousands of names can cost
+# hundreds of milliseconds at import time.
 class Icon:
-    """'Enum' class for referencing Lucide icons.
-
-    We don't subclass enum.Enum for performance reasons -- importing an enum with
-    thousands of names can result in import times in the hundreds of milliseconds.
-    """
+    """'Enum' class for referencing Lucide icons."""
 
     A_ARROW_DOWN: IconName = IconName("a-arrow-down")
     A_ARROW_UP: IconName = IconName("a-arrow-up")

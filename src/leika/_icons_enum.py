@@ -14,11 +14,10 @@ class _IconStringConverter(type):
             raise AttributeError()
 
 
+# Not an enum.Enum subclass: importing an enum with thousands of names can cost
+# hundreds of milliseconds at import time.
 class Icon(metaclass=_IconStringConverter):
     """'Enum' class for referencing Lucide icons.
-
-    We don't subclass enum.Enum for performance reasons -- importing an enum with
-    thousands of names can result in import times in the hundreds of milliseconds.
 
     Attributes:
         A_ARROW_DOWN (IconName): The :code:`a-arrow-down` icon.

@@ -66,3 +66,26 @@ intersphinx_mapping = {
 html_theme = "furo"
 html_title = f"Leika {release}"
 html_static_path = ["_static"]
+
+
+def _drop_icon_attribute_list(app, what, name, obj, options, lines):
+    """Strip the generated ``Attributes:`` block from ``leika.Icon``.
+
+    ``_icons_enum.py`` documents every Lucide icon as a docstring attribute.
+    Rendering all ~2000 of them cost a 1.3 MB page and put 1998 ``Icon.*``
+    entries into the global and search indices, burying the rest of the API.
+    ``docs/api/icons.rst`` points at lucide.dev instead.
+    """
+    if name != "leika.Icon":
+        return
+    for index, line in enumerate(lines):
+        if line.strip() == "Attributes:":
+            del lines[index:]
+            break
+
+
+def setup(app):
+    # Run ahead of napoleon, which connects to this event at the default
+    # priority of 500 and would otherwise have already expanded the block into
+    # individual attribute directives.
+    app.connect("autodoc-process-docstring", _drop_icon_attribute_list, priority=400)
