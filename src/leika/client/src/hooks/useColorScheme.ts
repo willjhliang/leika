@@ -2,8 +2,9 @@ import { useSyncExternalStore } from "react";
 
 /** The resolved color scheme, read from the `dark` class that the theme
  * provider puts on the document root. That class is the single source of
- * truth: it already folds together the server-configured theme, the
- * `?darkMode` URL override, and embedded-workspace configuration. */
+ * truth: it already folds together the server-configured theme, the OS
+ * preference that theme defers to under `"auto"`, and embedded-workspace
+ * configuration. */
 function getColorScheme(): "light" | "dark" {
   if (typeof document === "undefined") return "light";
   return document.documentElement.classList.contains("dark") ? "dark" : "light";

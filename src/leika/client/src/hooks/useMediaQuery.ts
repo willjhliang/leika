@@ -24,3 +24,10 @@ export const MOBILE_MEDIA_QUERY = "(max-width: 36em)";
 export function useMobileView(): boolean {
   return useMediaQuery(MOBILE_MEDIA_QUERY);
 }
+
+/** The OS-level preference behind the theme's `dark_mode: "auto"`. */
+export const DARK_SCHEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
+
+export function usePrefersDarkMode(): boolean {
+  return useMediaQuery(DARK_SCHEME_MEDIA_QUERY);
+}

@@ -50,8 +50,8 @@ python -m playwright install chromium
 ```
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
-multi-slider cancellation, the color picker, notifications, multi-client
-updates, image/Plotly pane lifecycle, resizing and persistence, and responsive
+multi-slider cancellation, the color picker, notifications, light/dark
+theming, multi-client updates, image/Plotly pane lifecycle, resizing and persistence, and responsive
 floating/mobile control panels.
 
 `test_dock.py` covers the docking surface's pointer gestures. The dock's layout

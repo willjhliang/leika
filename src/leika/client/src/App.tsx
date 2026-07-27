@@ -23,7 +23,7 @@ import {
 import { WebsocketMessageProducer } from "./WebsocketInterface";
 import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { useMobileView } from "./hooks/useMediaQuery";
+import { useMobileView, usePrefersDarkMode } from "./hooks/useMediaQuery";
 import { useViewportState } from "./viewport/ViewportState";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
@@ -40,7 +40,6 @@ export function Root() {
   const searchParams = new URLSearchParams(window.location.search);
   const servers = searchParams.getAll(searchParamKey);
   const initialServer = servers[0] ?? getDefaultServerFromUrl();
-  const forceDarkMode = searchParams.has("darkMode");
 
   const mutable = React.useRef<ViewerMutable>({
     sendMessage: (message) =>
@@ -62,26 +61,28 @@ export function Root() {
 
   return (
     <ViewerContext.Provider value={viewer}>
-      <ViewerContents forceDarkMode={forceDarkMode}>
+      <ViewerContents>
         <WebsocketMessageProducer />
       </ViewerContents>
     </ViewerContext.Provider>
   );
 }
 
-function ViewerContents({
-  children,
-  forceDarkMode,
-}: {
-  children: React.ReactNode;
-  forceDarkMode: boolean;
-}) {
+function ViewerContents({ children }: { children: React.ReactNode }) {
   const viewer = React.useContext(ViewerContext)!;
   const configuredDarkMode = viewer.useGui((state) => state.theme.dark_mode);
-  const darkMode = forceDarkMode || configuredDarkMode;
+  const prefersDarkMode = usePrefersDarkMode();
+  // "auto" is the default the server sends, and what the store holds before it
+  // connects, so the OS preference decides unless an app opts out of it. Two
+  // viewers of the same app can legitimately land on different schemes.
+  const darkMode =
+    configuredDarkMode === "auto" ? prefersDarkMode : configuredDarkMode;
   const controlLayout = viewer.useGui((state) => state.theme.control_layout);
 
   return (
+    // The scheme is resolved above rather than handed to `enableSystem`, so
+    // the class on `<html>` stays the single source of truth -- next-themes
+    // never gets to override it from its own localStorage.
     <NextThemesProvider
       attribute="class"
       forcedTheme={darkMode ? "dark" : "light"}

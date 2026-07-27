@@ -11,6 +11,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { Button } from "../components/ui/button";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { usePrefersDarkMode } from "../hooks/useMediaQuery";
 import { DockArea } from "./DockArea";
 import { useDock } from "./DockContext";
 import { DockManager } from "./DockManager";
@@ -183,9 +184,8 @@ function LayoutInjector() {
 }
 
 function Playground() {
-  // Match the main page: presence of ?darkMode flips to dark.
-  const darkMode =
-    new URLSearchParams(window.location.search).get("darkMode") !== null;
+  // Match the main page: with no server to configure a theme, the OS decides.
+  const darkMode = usePrefersDarkMode();
   React.useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
     document.documentElement.classList.toggle("light", !darkMode);

@@ -109,6 +109,25 @@ def test_commands_notifications_and_modal(server: leika.Server) -> None:
     command.remove()
 
 
+def test_theme_defaults_to_following_the_browser_color_scheme(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An app has to ask for a scheme; otherwise the viewer's OS decides.
+
+    The wire value matters as much as the default: ``"auto"`` is what tells the
+    client to read ``prefers-color-scheme`` rather than pin a scheme, so a
+    bool sent in its place would silently override every viewer.
+    """
+    sent: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", sent.append)
+
+    server.gui.configure_theme()
+    server.gui.configure_theme(dark_mode=True)
+    server.gui.configure_theme(dark_mode=False)
+
+    assert [message.dark_mode for message in sent] == ["auto", True, False]
+
+
 def test_removed_visual_customization_arguments_are_rejected(
     server: leika.Server,
 ) -> None:

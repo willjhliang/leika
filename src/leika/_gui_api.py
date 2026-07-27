@@ -600,7 +600,7 @@ class GuiApi(GuiContainer):
         titlebar_content: theme.TitlebarConfig | None = None,
         control_layout: Literal["floating", "collapsible", "fixed"] = "floating",
         control_width: Literal["small", "medium", "large"] = "medium",
-        dark_mode: bool = False,
+        dark_mode: bool | Literal["auto"] = "auto",
     ) -> None:
         """Configures the visual appearance of the Leika front-end.
 
@@ -610,7 +610,10 @@ class GuiApi(GuiContainer):
                             "collapsible", or "fixed".
             control_width: The width of control elements, options are "small",
                            "medium", or "large".
-            dark_mode: A boolean indicating if dark mode should be enabled.
+            dark_mode: ``True`` or ``False`` to pin the scheme for every client.
+                       The default, ``"auto"``, follows each browser's own
+                       ``prefers-color-scheme`` and tracks it if the viewer
+                       changes their OS setting mid-session.
         """
 
         self._websock_interface.queue_message(

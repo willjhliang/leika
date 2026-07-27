@@ -63,7 +63,9 @@ const cleanGuiState: GuiState = {
     titlebar_content: null,
     control_layout: "floating",
     control_width: "medium",
-    dark_mode: false,
+    // Matches the server's default, so the scheme does not change under the
+    // viewer when the first theme message arrives.
+    dark_mode: "auto",
   },
   label: "",
   server: "ws://localhost:8080", // Currently this will always be overridden.
