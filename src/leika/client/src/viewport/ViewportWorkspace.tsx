@@ -41,6 +41,10 @@ import {
 
 const PANE_BORDER_SIZE_PX = 1;
 const DIVIDER_HIT_SIZE_PX = 24;
+/** One pixel, which cannot straddle a grid line: it comes out of the pane
+ * after the line rather than being split across both. Centring it instead
+ * would put it on a half pixel, which renders as a blurred pair of columns --
+ * worse than the slight asymmetry. */
 const DIVIDER_LINE_SIZE_PX = 1;
 const DRAG_INDICATOR_MAX_WIDTH_EM = 16;
 
@@ -144,16 +148,31 @@ function dragIndicatorTop(clientY: number): string {
   return `clamp(8px, ${clientY + 12}px, calc(100vh - 2.4em - 8px))`;
 }
 
+/** Where a grid line falls on screen, snapped to a whole pixel.
+ *
+ * `cellSize` is rarely integral, so raw `line * cellSize` puts pane edges and
+ * divider lines on fractions of a pixel, which the compositor renders as a
+ * blurred pair of columns. Every edge goes through here, so two panes that
+ * share a grid line still land on the exact same pixel -- no seam, no
+ * overlap. */
+function gridLinePx(line: number, cellSize: number): number {
+  return Math.round(line * cellSize);
+}
+
 function panePositionStyle(
   rect: GridRect,
   cellSize: number,
 ): React.CSSProperties {
+  const left = gridLinePx(rect.x, cellSize);
+  const top = gridLinePx(rect.y, cellSize);
   return {
     position: "absolute",
-    left: rect.x * cellSize,
-    top: rect.y * cellSize,
-    width: rect.width * cellSize,
-    height: rect.height * cellSize,
+    left,
+    top,
+    // Sized from the far edge rather than the span, so rounding cannot open a
+    // gap between neighbours.
+    width: gridLinePx(rect.x + rect.width, cellSize) - left,
+    height: gridLinePx(rect.y + rect.height, cellSize) - top,
     visibility: cellSize > 0 ? "visible" : "hidden",
   };
 }
@@ -839,9 +858,13 @@ function ViewportPaneHost({
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
       className={cn(
-        "isolate min-h-0 min-w-0 overflow-hidden",
-        (hideChrome || isHiddenRootHost) &&
-          "gap-0 rounded-none bg-background py-0 ring-0",
+        // Panes tile the canvas edge to edge, so they get neither rounding nor
+        // a ring: Card's ring is drawn OUTSIDE its box, which put every pane's
+        // outline a pixel into its neighbour instead of on its own edge, and
+        // rounded corners let the canvas show through at each junction. The
+        // divider owns the seam line; the canvas owns the colour behind it.
+        "isolate min-h-0 min-w-0 overflow-hidden rounded-none ring-0",
+        (hideChrome || isHiddenRootHost) && "gap-0 bg-background py-0",
       )}
       style={{
         ...(isHiddenRootHost
@@ -897,11 +920,18 @@ function ViewportPaneHost({
           onPointerUp={onHeaderPointerUp}
           onPointerCancel={onHeaderPointerCancel}
           onLostPointerCapture={onHeaderLostPointerCapture}
-          className="absolute z-20 max-w-[calc(100%-0.5rem)]"
+          // The header tucks into the pane's top-left corner and overlaps both
+          // edges, so three of its corners sit on the seam. Only the one over
+          // the pane's own interior is rounded; the size-sm radius is repeated
+          // rather than inherited, since `rounded-none` clears it first.
+          className="absolute z-20 max-w-[calc(100%-0.5rem)] rounded-none rounded-br-[min(var(--radius-md),12px)]"
           style={{
             left: -PANE_BORDER_SIZE_PX,
             top: -PANE_BORDER_SIZE_PX,
-            opacity: (isHovered || isFocused) && !isDragging ? 1 : 0,
+            // A drag still hides it whatever the setting says: the header is
+            // the thing being dragged, and the drag preview stands in for it.
+            opacity:
+              (isHovered || isFocused) && !isDragging ? 1 : 0,
             transition: motionEnabled ? "opacity 250ms ease-in-out" : undefined,
             cursor: isDragging ? "grabbing" : "grab",
             touchAction: "none",
@@ -959,6 +989,17 @@ function ViewportDivider({
       divider.childMinimums[index + 1] +
       GRID_EPSILON,
   );
+  const lineStyle: React.CSSProperties = {
+    position: "absolute",
+    // On the grid line, not centred in the hit area: the hit area is an even
+    // 24px, so centring a 1px line inside it lands on a half pixel.
+    left: vertical ? DIVIDER_HIT_SIZE_PX / 2 : 0,
+    top: vertical ? 0 : DIVIDER_HIT_SIZE_PX / 2,
+    width: vertical ? DIVIDER_LINE_SIZE_PX : "100%",
+    height: vertical ? "100%" : DIVIDER_LINE_SIZE_PX,
+    pointerEvents: "none",
+  };
+
   return (
     <Button
       type="button"
@@ -984,37 +1025,54 @@ function ViewportDivider({
       onPointerCancel={onPointerCancel}
       onLostPointerCapture={onLostPointerCapture}
       onKeyDown={(event) => onKeyDown(event, divider)}
+      // An invisible 24px grab strip. It drops Button's transparent border,
+      // because the line inside is positioned against the PADDING box and that
+      // 1px border offset it from the grid line and trimmed both ends. The
+      // ghost variant's hover fill is dropped too: hovering recolours the
+      // divider itself rather than painting a band the width of the strip.
+      //
+      // Crossing dividers overlap by a pixel, and the one painted last wins.
+      // Raising the active one keeps its highlight unbroken along its whole
+      // length instead of notched wherever another divider crosses it. The
+      // z-index lives here rather than in `style` so the hover variant can
+      // reach it; inline styles would outrank it.
+      className="group/divider z-30 border-0 hover:z-40 hover:bg-transparent focus-visible:z-40 dark:hover:bg-transparent"
       style={{
         position: "absolute",
-        zIndex: 30,
         left: vertical
-          ? divider.coordinate * cellSize - DIVIDER_HIT_SIZE_PX / 2
-          : divider.nodeRect.x * cellSize,
+          ? gridLinePx(divider.coordinate, cellSize) - DIVIDER_HIT_SIZE_PX / 2
+          : gridLinePx(divider.nodeRect.x, cellSize),
         top: vertical
-          ? divider.nodeRect.y * cellSize
-          : divider.coordinate * cellSize - DIVIDER_HIT_SIZE_PX / 2,
+          ? gridLinePx(divider.nodeRect.y, cellSize)
+          : gridLinePx(divider.coordinate, cellSize) - DIVIDER_HIT_SIZE_PX / 2,
         width: vertical
           ? DIVIDER_HIT_SIZE_PX
-          : divider.nodeRect.width * cellSize,
+          : gridLinePx(divider.nodeRect.x + divider.nodeRect.width, cellSize) -
+            gridLinePx(divider.nodeRect.x, cellSize),
         height: vertical
-          ? divider.nodeRect.height * cellSize
+          ? gridLinePx(divider.nodeRect.y + divider.nodeRect.height, cellSize) -
+            gridLinePx(divider.nodeRect.y, cellSize)
           : DIVIDER_HIT_SIZE_PX,
         cursor: vertical ? "col-resize" : "row-resize",
         touchAction: "none",
         transition: geometryTransition,
       }}
     >
+      {/* Backdrop and line share one rect: the line's tokens are translucent
+          in dark mode, so without an opaque layer beneath it the divider would
+          tint whatever pane content sits behind it and read as a different
+          colour over every pane. Two elements rather than stacking the token
+          as a background image over a background colour, because only
+          background-COLOR can transition. */}
+      <span aria-hidden="true" className="bg-background" style={lineStyle} />
       <Separator
         aria-hidden="true"
         orientation={vertical ? "vertical" : "horizontal"}
-        style={{
-          position: "absolute",
-          left: vertical ? (DIVIDER_HIT_SIZE_PX - DIVIDER_LINE_SIZE_PX) / 2 : 0,
-          top: vertical ? 0 : (DIVIDER_HIT_SIZE_PX - DIVIDER_LINE_SIZE_PX) / 2,
-          width: vertical ? DIVIDER_LINE_SIZE_PX : "100%",
-          height: vertical ? "100%" : DIVIDER_LINE_SIZE_PX,
-          pointerEvents: "none",
-        }}
+        // The same two tokens an input's border uses: `--input` at rest,
+        // `--ring` once the divider is hovered or focused. Keyboard resizing
+        // needs the focus half, since the strip itself draws nothing.
+        className="bg-input transition-colors group-hover/divider:bg-ring group-focus-visible/divider:bg-ring"
+        style={lineStyle}
       />
     </Button>
   );
@@ -1173,7 +1231,7 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
             alignItems: "center",
             justifyContent: "center",
             color: "var(--muted-foreground)",
-            fontSize: "0.8rem",
+            fontSize: "var(--text-sm)",
           }}
         >
           Plotly failed to load.
@@ -1208,7 +1266,7 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
           justifyContent: "center",
           background: "#000",
           color: "#888",
-          fontSize: "0.8rem",
+          fontSize: "var(--text-sm)",
         }}
       >
         No image

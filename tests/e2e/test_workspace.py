@@ -69,6 +69,48 @@ def test_image_panes_tile_resize_persist_and_update(
     assert page_errors == []
 
 
+def test_pane_header_rounds_only_the_corner_over_the_pane(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The label tucks into the pane's top-left corner, overlapping both edges.
+
+    Three of its corners therefore sit on the seam between panes, where a
+    radius would show the canvas through a notch. Only the fourth, which sits
+    over the pane's own interior, should be rounded.
+    """
+    row = leika_server.panes.add_row()
+    row.add_image(np.zeros((24, 32, 3), dtype=np.uint8), pane_id="left", title="Left")
+    expect(leika_page.locator('[data-viewport-pane="left"]')).to_be_visible(timeout=5_000)
+
+    header = leika_page.locator('[data-viewport-pane-header="left"]')
+    geometry = header.evaluate(
+        """el => {
+            const style = getComputedStyle(el);
+            const pane = el.closest('[data-viewport-pane]').getBoundingClientRect();
+            const self = el.getBoundingClientRect();
+            return {
+                topLeft: style.borderTopLeftRadius,
+                topRight: style.borderTopRightRadius,
+                bottomLeft: style.borderBottomLeftRadius,
+                roundedBottomRight: parseFloat(style.borderBottomRightRadius) > 0,
+                // Negative offsets are what put the other three corners on the
+                // seam in the first place.
+                overlapsPaneEdges: self.left <= pane.left && self.top <= pane.top,
+            };
+        }"""
+    )
+    assert geometry == {
+        "topLeft": "0px",
+        "topRight": "0px",
+        "bottomLeft": "0px",
+        "roundedBottomRight": True,
+        "overlapsPaneEdges": True,
+    }
+    assert page_errors == []
+
+
 @pytest.mark.plotly
 def test_plotly_pane_updates_without_remount(
     leika_server: leika.Server,
