@@ -436,7 +436,10 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       data-floating-window={win.id}
       data-testid={testId}
       data-dock-side="none"
-      className="box-border"
+      // Floating windows hover over the viewport, so they get a drop shadow to
+      // lift them off it. Docked and split cards stay flat -- they tile the
+      // surface rather than sitting on top of it.
+      className="box-border shadow-md"
       onPointerDownCapture={() => onFront(win.id)}
       style={{
         position: "absolute",

@@ -19,6 +19,14 @@
   --text-xs: 0.6875rem; /* 11px */
   --text-sm: 0.8125rem; /* 13px */
   --leading-tight: 1;
+  /* Hovering surfaces are lifted with an even glow rather than a cast shadow:
+     no offset and no spread, so all four sides read alike and the surface
+     looks raised instead of lit from above. Stock Tailwind pushes these down
+     by 2-4px and pulls the sides in with a negative spread. One shadow colour
+     serves both themes, so light and dark lift identically. */
+  --shadow-sm: 0 0 4px var(--shadow-color);
+  --shadow-md: 0 0 8px var(--shadow-color);
+  --shadow-lg: 0 0 16px var(--shadow-color);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
@@ -69,6 +77,9 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.25rem;
+  /* Deliberately NOT redefined under `.dark`: the same shadow in both themes
+     is the point. */
+  --shadow-color: oklch(0 0 0 / 0.16);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-border: oklch(0.922 0 0);
