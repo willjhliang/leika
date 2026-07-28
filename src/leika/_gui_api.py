@@ -124,6 +124,22 @@ def _compute_step(x: float | None) -> float:  # type: ignore
     return 1 if x is None else 10 ** (-_compute_precision_digits(x))
 
 
+def _validate_button_color(color: str) -> None:
+    """Reject anything but the two button roles.
+
+    ``color`` once took arbitrary names like ``"blue"`` and was removed on
+    purpose; it is back as a choice between two roles, not a palette. This is
+    what keeps that distinction at runtime, where the ``Literal`` annotation
+    alone would let ``"blue"`` through and quietly draw a primary. Shared by
+    ``add_button`` and ``add_upload_button`` so the two can't diverge.
+    """
+    if color not in ("primary", "secondary"):
+        raise ValueError(
+            f"Button color must be 'primary' or 'secondary', not {color!r}. Buttons take"
+            " a role rather than a color; the accent itself is a viewer setting."
+        )
+
+
 def _build_slider_marks(
     marks: tuple[float | tuple[float, str], ...] | None,
 ) -> tuple[GuiSliderMark, ...] | None:
@@ -1362,6 +1378,7 @@ class GuiApi(GuiContainer):
         self,
         label: str,
         *,
+        color: Literal["primary", "secondary"] = "primary",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1373,6 +1390,9 @@ class GuiApi(GuiContainer):
 
         Args:
             label: Label to display on the button.
+            color: Colorway for the button. ``"primary"`` fills with the accent,
+                which is what a panel's main action wants; ``"secondary"``
+                outlines instead, for the ones that sit beside it.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1383,6 +1403,8 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
+        _validate_button_color(color)
+
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -1390,6 +1412,7 @@ class GuiApi(GuiContainer):
             order=order,
             label=label,
             hint=hint,
+            color=color,
             _icon_html=None if icon is None else svg_from_icon(icon),
             _hold_callback_freqs=(),
             disabled=disabled,
@@ -1425,6 +1448,7 @@ class GuiApi(GuiContainer):
         self,
         label: str,
         *,
+        color: Literal["primary", "secondary"] = "primary",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1437,6 +1461,9 @@ class GuiApi(GuiContainer):
 
         Args:
             label: Label to display on the button.
+            color: Colorway for the button. ``"primary"`` fills with the accent,
+                which is what a panel's main action wants; ``"secondary"``
+                outlines instead, for the ones that sit beside it.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1447,6 +1474,8 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
+
+        _validate_button_color(color)
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
@@ -1463,6 +1492,7 @@ class GuiApi(GuiContainer):
                         order=order,
                         label=label,
                         hint=hint,
+                        color=color,
                         mime_type=mime_type,
                         _icon_html=None if icon is None else svg_from_icon(icon),
                     ),

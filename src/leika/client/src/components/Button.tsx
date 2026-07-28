@@ -11,6 +11,7 @@ export default function ButtonComponent({
     disabled,
     label,
     hint,
+    color,
     _icon_html: iconHtml,
     _hold_callback_freqs: holdCallbackFreqs,
   },
@@ -59,8 +60,13 @@ export default function ButtonComponent({
   const button = (
     <Button
       id={uuid}
+      // "secondary" is the settings pane's own outlined button rather than the
+      // stock `secondary` variant, which is a second FILLED tone -- the point of
+      // the pairing is one button that carries the accent and one that does not.
+      variant={color === "secondary" ? "outline" : "default"}
       className="w-full"
       data-leika-button
+      data-leika-button-color={color}
       onClick={() =>
         messageSender({
           type: "GuiUpdateMessage",

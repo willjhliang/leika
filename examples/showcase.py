@@ -288,12 +288,20 @@ def main() -> None:
         )
 
     with tabs.add_tab("Actions", icon=leika.Icon.BOLT):
+        # The two that show off the panel lead, filled; the two that move a file
+        # follow, outlined. `color` is which of the two roles a button takes,
+        # not a palette.
         notify = server.gui.add_button("Show notification")
         open_modal = server.gui.add_button("Open modal")
         upload = server.gui.add_upload_button(
-            "Inspect a file", mime_type="image/*,.txt,.json", icon=leika.Icon.UPLOAD
+            "Inspect a file",
+            mime_type="image/*,.txt,.json",
+            icon=leika.Icon.UPLOAD,
+            color="secondary",
         )
-        download = server.gui.add_button("Download signal CSV", icon=leika.Icon.DOWNLOAD)
+        download = server.gui.add_button(
+            "Download signal CSV", icon=leika.Icon.DOWNLOAD, color="secondary"
+        )
 
     state: dict[str, Any] = {
         "phase": 0.0,

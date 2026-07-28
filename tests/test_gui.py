@@ -141,10 +141,14 @@ def test_removed_visual_customization_arguments_are_rejected(
         server.gui.configure_theme(control_width="large")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         server.gui.configure_theme(brand_color=(80, 150, 255))  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.add_button("Run", color="blue")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.add_upload_button("Upload", color="blue")  # type: ignore[call-arg]
+    # Both buttons took `color` back, but as a role rather than a palette: the
+    # two names they accept are all they accept, and an actual color still
+    # fails. The other three below never regained it.
+    for add_a_button in (server.gui.add_button, server.gui.add_upload_button):
+        add_a_button("Run", color="primary")
+        add_a_button("Run", color="secondary")
+        with pytest.raises(ValueError):
+            add_a_button("Run", color="blue")  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         server.gui.add_progress_bar(50.0, color="blue")  # type: ignore[call-arg]
     with pytest.raises(TypeError):

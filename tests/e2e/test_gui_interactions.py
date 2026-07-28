@@ -860,3 +860,33 @@ def test_the_slider_number_box_is_opt_in(
     plain.show_value = True
     expect(plain_row.get_by_label("Trail value")).to_have_value("0.5", timeout=5_000)
     assert page_errors == []
+
+
+def test_button_colorways_are_a_filled_and_an_outlined_role(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Two roles, not two palettes: one carries the accent, one does not."""
+    primary = leika_server.gui.add_button("Run")
+    leika_server.gui.add_button("Cancel", color="secondary")
+
+    run = leika_page.locator('[data-leika-button][data-leika-button-color="primary"]')
+    cancel = leika_page.locator('[data-leika-button][data-leika-button-color="secondary"]')
+    expect(run).to_be_visible(timeout=5_000)
+    expect(cancel).to_be_visible(timeout=5_000)
+
+    # The filled one paints its background; the outlined one draws a border and
+    # leaves the surface behind it alone.
+    run_fill = run.evaluate("e => getComputedStyle(e).backgroundColor")
+    cancel_fill = cancel.evaluate("e => getComputedStyle(e).backgroundColor")
+    assert run_fill != cancel_fill, (run_fill, cancel_fill)
+    assert cancel.evaluate("e => parseFloat(getComputedStyle(e).borderTopWidth)") >= 1
+
+    # The default is the filled one, and the role is a live prop.
+    assert primary.color == "primary"
+    primary.color = "secondary"
+    expect(
+        leika_page.locator('[data-leika-button][data-leika-button-color="secondary"]')
+    ).to_have_count(2, timeout=5_000)
+    assert page_errors == []

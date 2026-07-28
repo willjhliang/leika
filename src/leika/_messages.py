@@ -585,6 +585,8 @@ class GuiCloseModalMessage(
 
 @dataclasses.dataclass
 class GuiButtonProps(GuiBaseProps):
+    color: Literal["primary", "secondary"]
+    """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
     """(Private) HTML string for the icon to be displayed on the button."""
     _hold_callback_freqs: Tuple[float, ...]
@@ -611,6 +613,8 @@ class GuiButtonHoldMessage(Message):
 
 @dataclasses.dataclass
 class GuiUploadButtonProps(GuiBaseProps):
+    color: Literal["primary", "secondary"]
+    """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
     """(Private) HTML string for the icon to be displayed on the upload button."""
     mime_type: str

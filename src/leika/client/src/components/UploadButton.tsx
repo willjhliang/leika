@@ -12,6 +12,7 @@ export default function UploadButtonComponent({
   props: {
     disabled,
     hint,
+    color,
     mime_type: mimeType,
     _icon_html: iconHtml,
     label,
@@ -27,7 +28,10 @@ export default function UploadButtonComponent({
   const button = (
     <Button
       id={uuid}
+      // The same two roles the plain button takes, resolved the same way.
+      variant={color === "secondary" ? "outline" : "default"}
       className="w-full"
+      data-leika-button-color={color}
       onClick={() => {
         if (fileUploadRef.current === null) return;
         fileUploadRef.current.value = "";

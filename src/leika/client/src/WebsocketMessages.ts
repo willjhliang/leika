@@ -331,6 +331,7 @@ export interface GuiButtonMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
+    color: "primary" | "secondary";
     _icon_html: string | null;
     _hold_callback_freqs: number[];
   };
@@ -349,6 +350,7 @@ export interface GuiUploadButtonMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
+    color: "primary" | "secondary";
     _icon_html: string | null;
     mime_type: string;
   };
