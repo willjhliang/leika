@@ -76,6 +76,9 @@ export function ControlPanelDockSurface({
   const settingsOpen = useSettingsPanelOpen();
   const controlsShown = useControlsShown();
   const hasBody = (hasGenerated && controlsShown) || settingsOpen;
+  // Double-clicking the handle sends the panel home; the sync node inside the
+  // DockManager is what knows where that is, so the spec calls through a ref.
+  const resetLayoutRef = React.useRef<() => void>(() => {});
   const controlPanelSpec: PanelRegistry = React.useMemo(
     () => ({
       [CONTROL_PANEL_ID]: {
@@ -86,6 +89,7 @@ export function ControlPanelDockSurface({
         titleNode: <PanelHeader actions={<SettingsButton />} />,
         render: () => <ControlPanelContents />,
         bodyIsEmpty: !hasBody,
+        onResetLayout: () => resetLayoutRef.current(),
         // The handle owns ONE thing: whether the app's controls are shown. It
         // does not fold the panel -- folding is what happens when nothing is
         // left to show, and the gear's section is not the handle's to close.
@@ -115,7 +119,10 @@ export function ControlPanelDockSurface({
     <GuiDockContext.Provider value={guiDockValue}>
       <DockManager initialLayout={initialLayout} panels={panels}>
         {children}
-        <ControlPanelDockSync onDockStateChange={onDockStateChange} />
+        <ControlPanelDockSync
+          onDockStateChange={onDockStateChange}
+          resetLayoutRef={resetLayoutRef}
+        />
       </DockManager>
     </GuiDockContext.Provider>
   );
@@ -228,8 +235,12 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
  * library renders it (plus `-handle` / `-resize-*`) itself. */
 function ControlPanelDockSync({
   onDockStateChange,
+  resetLayoutRef,
 }: {
   onDockStateChange?: (state: ControlDockState) => void;
+  /** Filled in here and called from the panel spec, which is built OUTSIDE the
+   * DockManager and so cannot reach `useDock` itself. */
+  resetLayoutRef: React.MutableRefObject<() => void>;
 }) {
   const dock = useDock();
   const metrics = React.useContext(DockMetricsContext);
@@ -249,20 +260,24 @@ function ControlPanelDockSync({
     };
   }, []);
 
+  /** The panel's home: top-right corner, at the panel's one width. */
+  const defaultRect = React.useCallback(() => {
+    const { containerW, width } = fitToContainer(CONTROL_WIDTH_PX);
+    return {
+      x: Math.max(PANEL_PAD_PX, containerW - width - PANEL_PAD_PX),
+      y: PANEL_PAD_PX,
+      width,
+    };
+  }, [fitToContainer]);
+
   // Initial placement: top-right corner.
   // Runs once on mount (addFloatingPanel no-ops if the panel is already
   // placed, so a StrictMode double-run is harmless).
   React.useLayoutEffect(() => {
-    const { containerW, width } = fitToContainer(CONTROL_WIDTH_PX);
+    const { x, y, width } = defaultRect();
     dock.api.apply(
       (layout) =>
-        ops.addFloatingPanel(
-          layout,
-          CONTROL_PANEL_ID,
-          Math.max(PANEL_PAD_PX, containerW - width - PANEL_PAD_PX),
-          PANEL_PAD_PX,
-          width,
-        ).layout,
+        ops.addFloatingPanel(layout, CONTROL_PANEL_ID, x, y, width).layout,
     );
     // Initial placement only; the panel width is a constant, and the user is
     // free to resize the window afterwards.
@@ -287,6 +302,21 @@ function ControlPanelDockSync({
     if (collapsed !== bodyVisible) return;
     dock.toggleCollapsed(groupId);
   }, [bodyVisible, dock]);
+
+  // What a double-click on the handle restores. `floatGroup` rather than a
+  // move-and-resize because it is the one op that covers every place the panel
+  // can have got to: floating and moved, stacked into another window, or docked
+  // to an edge. It detaches from wherever that is and remakes the window at the
+  // rect above, dropping any height the user dragged so it auto-sizes again.
+  React.useEffect(() => {
+    resetLayoutRef.current = () =>
+      dock.api.apply((layout) => {
+        const groupId = ops.findPanelGroup(layout, CONTROL_PANEL_ID);
+        if (groupId === null) return layout;
+        const { x, y, width } = defaultRect();
+        return ops.floatGroup(layout, groupId, x, y, width).layout;
+      });
+  }, [dock.api, defaultRect, resetLayoutRef]);
 
   // Where is the control panel now?
   const controlGroupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);

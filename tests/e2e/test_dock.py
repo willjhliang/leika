@@ -482,3 +482,46 @@ def test_minimize_all_collapses_a_floating_stack_and_restores_it(
     expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(0)
     assert bounds(stacked)["height"] == pytest.approx(expanded_height, abs=2.0)
     assert page_errors == []
+
+
+def test_double_clicking_the_handle_sends_the_panel_home(dock_page: Page) -> None:
+    """Single-click collapses; twice in quick succession restores the panel's
+    default size and position.
+
+    Floating only, and not by choice: collapsing a DOCKED panel turns its
+    header into a 36px vertical strip, so the second click of the pair has no
+    header left under the cursor to land on. The gesture is wired for any panel
+    that names a home -- it is the docked geometry that makes it unreachable.
+    """
+    page = dock_page
+    home = bounds(control_panel(page))
+
+    drag(page, center(control_handle(page)), CANVAS, (320.0, 400.0))
+    moved = bounds(control_panel(page))
+    assert (moved["x"], moved["y"]) != (home["x"], home["y"])
+
+    handle = center(control_handle(page))
+    page.mouse.click(*handle)
+    page.mouse.click(*handle)
+
+    restored = bounds(control_panel(page))
+    assert abs(restored["x"] - home["x"]) < 1.0, (restored, home)
+    assert abs(restored["y"] - home["y"]) < 1.0, (restored, home)
+    assert abs(restored["width"] - home["width"]) < 1.0, (restored, home)
+    # The pair is a toggle and its undo, so it lands expanded as it started.
+    assert page.locator("[data-dock-collapsed]").count() == 0
+
+
+def test_a_lone_click_on_the_handle_still_only_collapses(dock_page: Page) -> None:
+    """The reset must not fire on a single click -- including the first click of
+    a freshly loaded page, where a zero-initialized timestamp once read as the
+    tail of a double-click."""
+    page = dock_page
+    home = bounds(control_panel(page))
+    drag(page, center(control_handle(page)), CANVAS, (320.0, 400.0))
+    moved = bounds(control_panel(page))
+
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+    still = bounds(control_panel(page))
+    assert abs(still["x"] - moved["x"]) < 1.0, (still, moved, home)

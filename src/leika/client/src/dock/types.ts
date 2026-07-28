@@ -48,6 +48,11 @@ export const SPLIT_DIVIDER_PX = 7;
  * before the user resizes it. */
 export const DEFAULT_REGION_PX = 300;
 
+/** How close two handle clicks must fall to count as a double-click. Matches
+ * the interval desktop environments use, which is what a viewer's hands are
+ * already tuned to. */
+export const DOUBLE_CLICK_MS = 400;
+
 /** Clamp `v` into [lo, hi]. Shared by every place a size/position is bounded
  * (resize gestures, width reconciliation, hint geometry). */
 export const clamp = (v: number, lo: number, hi: number): number =>
@@ -95,6 +100,15 @@ export interface PanelSpec {
    * as a full-width header rather than a tab. An unmergeable panel always lives
    * alone in its group. */
   unmergeable?: boolean;
+  /** Put this panel back at the size and position its owner calls home.
+   *
+   * Fired by a DOUBLE-click on the panel's drag handle, the gesture a titlebar
+   * usually carries. The panel supplies it because only its owner knows what
+   * "default" means -- the dock remembers geometry, never the intent behind it,
+   * and a window's creation rect is not a default for one the user tore out.
+   * Omitted, a double-click is just the two collapse toggles it is made of.
+   */
+  onResetLayout?: () => void;
   /** Take a single click on the handle before the default collapse toggle.
    *
    * Return true to say the click has been dealt with and the group must NOT

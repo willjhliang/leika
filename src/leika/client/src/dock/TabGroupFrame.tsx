@@ -16,7 +16,7 @@ import {
 import { prefersReducedMotion } from "../utils/motion";
 import { GripPill, HandleIconButton } from "./handles";
 import { toggleGroupVisibility, useDock } from "./DockContext";
-import { PanelSpec, TabGroup } from "./types";
+import { DOUBLE_CLICK_MS, PanelSpec, TabGroup } from "./types";
 
 const PanelBody = React.memo(function PanelBody({
   panel,
@@ -170,11 +170,25 @@ export function TabGroupFrame({
     });
   }, [orderKey, dock.draggingTabId]);
 
-  // Every click gives the panel first refusal: one that owns its own sections
-  // decides what "show me less of this" means, and only a panel with no
-  // opinion is folded by the group's own flag.
+  // A handle click toggles collapse; two in quick succession put the panel back
+  // where it belongs. The first click still toggles immediately -- deferring it
+  // to watch for a second would put the double-click delay on every collapse --
+  // so the pair is a toggle and its undo, landing on the state it started from
+  // with the panel restored. `onResetLayout` is the panel's own; a panel that
+  // has no notion of home leaves the pair as the two toggles it is made of.
+  // Negative infinity, not 0: `performance.now()` counts from page load, so a
+  // zero would make the first click of the first half-second read as the
+  // second half of a double-click.
+  const lastHandleClick = React.useRef(Number.NEGATIVE_INFINITY);
   const handleClick = () => {
+    const now = performance.now();
+    const isDouble = now - lastHandleClick.current < DOUBLE_CLICK_MS;
+    lastHandleClick.current = isDouble ? Number.NEGATIVE_INFINITY : now;
+    // Every click does the panel's own thing, or folds the group when the panel
+    // has no opinion. The second click of a pair therefore UNDOES the first --
+    // a toggle and its undo -- leaving the reset as the only lasting effect.
     if (!toggleGroupVisibility(dock, group.id)) dock.toggleCollapsed(group.id);
+    if (isDouble) panels[group.activeId]?.onResetLayout?.();
   };
 
   const renderPanelBody = (panelId: string) => (
