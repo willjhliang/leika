@@ -541,3 +541,31 @@ def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
         pane_box,
     )
     assert page_errors == []
+
+
+def test_the_footer_names_the_version_and_links_to_the_source(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The version is baked into the client at build time, so this also catches a
+    build made from a `VersionInfo.ts` that Python has since moved past."""
+    about = open_settings(leika_page).locator("[data-leika-settings-about]")
+    expect(about.locator("[data-leika-settings-version]")).to_have_text(
+        f"Leika v{leika.__version__}"
+    )
+    expect(about).to_have_text(f"Leika v{leika.__version__}. Source code on GitHub")
+
+    source = about.locator("[data-leika-settings-source]")
+    expect(source).to_have_attribute("href", "https://github.com/willjhliang/leika")
+    # An external destination out of an app that holds live state, so it opens
+    # beside the workspace rather than navigating away from it.
+    expect(source).to_have_attribute("target", "_blank")
+
+    # One line: the sentence fits the panel at its default width, so the footer
+    # is no taller than the single line of text inside it.
+    footer = about.bounding_box()
+    link = source.bounding_box()
+    assert footer is not None and link is not None
+    assert footer["height"] < link["height"] * 2, (footer, link)
+    assert page_errors == []

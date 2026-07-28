@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { commandPalette } from "../CommandPaletteController";
 import { ImageFit } from "../ClientSettings";
+import { LEIKA_VERSION } from "../VersionInfo";
 import { ViewerContext } from "../ViewerContext";
 import { ColorRow } from "../components/ColorPicker";
 import { guiLabelClassName } from "../components/guiLabelStyles";
@@ -131,6 +132,39 @@ function ImageFitRow() {
   );
 }
 
+const REPOSITORY_URL = "https://github.com/willjhliang/leika";
+
+/** The footer of the browser's own controls: what a viewer would be asked to
+ * quote in a bug report, and where to take it.
+ *
+ * The version is the client's, baked in at build time, which is the one worth
+ * printing: the server refuses a client whose version differs from its own, so
+ * a client that is connected at all agrees with Python.
+ *
+ * Selectable, so it can be copied into a report rather than retyped. */
+function AboutRow() {
+  return (
+    // A sentence rather than a row of parts, so it stays on one line by being
+    // short enough to need no arranging.
+    <div
+      className="pt-0.5 text-center text-xs text-muted-foreground select-text"
+      data-leika-settings-about
+    >
+      <span data-leika-settings-version>Leika v{LEIKA_VERSION}</span>. Source
+      code on{" "}
+      <a
+        href={REPOSITORY_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2 hover:text-foreground"
+        data-leika-settings-source
+      >
+        GitHub
+      </a>
+    </div>
+  );
+}
+
 /** Display preferences, revealed at the top of the control panel.
  *
  * It reads as part of the panel rather than a layer over it, unfolding on the
@@ -203,6 +237,7 @@ export function SettingsSection() {
           >
             Open command palette
           </Button>
+          <AboutRow />
         </div>
       </CollapsibleContent>
     </Collapsible>
