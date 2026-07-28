@@ -22,9 +22,6 @@ export interface GuiState {
   };
   modals: GuiModalMessage[];
   guiOrderFromUuid: { [id: string]: number };
-  /** Set of form UUIDs that currently have unsaved changes. Updated by
-   * GuiFormDirtyMessage (adds) and GuiFormSubmitMessage (removes). */
-  dirtyFormUuids: { [uuid: string]: true | undefined };
   uploadsInProgress: {
     [uuid: string]: {
       uploadedBytes: number;
@@ -59,8 +56,6 @@ export interface GuiActions {
       | GuiState["uploadsInProgress"][string]
     ) & { componentId: string },
   ) => void;
-  setFormDirty: (uuid: string) => void;
-  clearFormDirty: (uuid: string) => void;
   addCommand: (command: RegisterCommandMessage) => void;
   updateCommand: (uuid: string, updates: { [key: string]: any }) => void;
   removeCommand: (uuid: string) => void;
@@ -82,7 +77,6 @@ const cleanGuiState: GuiState = {
   guiUuidSetFromContainerUuid: { root: {} },
   modals: [],
   guiOrderFromUuid: {},
-  dirtyFormUuids: {},
   uploadsInProgress: {},
   commands: {},
 };
@@ -184,8 +178,6 @@ export function useGuiState(initialServer: string) {
         const state = store.get();
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { [id]: _2, ...remainingOrders } = state.guiOrderFromUuid;
-        const dirtyFormUuids = { ...state.dirtyFormUuids };
-        delete dirtyFormUuids[id];
         const containerUuid = guiConfig.container_uuid;
         const containerSet = {
           ...state.guiUuidSetFromContainerUuid[containerUuid],
@@ -201,7 +193,6 @@ export function useGuiState(initialServer: string) {
         }
         store.set({
           guiOrderFromUuid: remainingOrders,
-          dirtyFormUuids,
           guiUuidSetFromContainerUuid: newContainerMap,
         });
         configStore.set({ [id]: undefined });
@@ -214,7 +205,6 @@ export function useGuiState(initialServer: string) {
             cleanGuiState.guiUuidSetFromContainerUuid,
           modals: cleanGuiState.modals,
           guiOrderFromUuid: cleanGuiState.guiOrderFromUuid,
-          dirtyFormUuids: cleanGuiState.dirtyFormUuids,
           uploadsInProgress: cleanGuiState.uploadsInProgress,
           commands: cleanGuiState.commands,
         });
@@ -231,18 +221,6 @@ export function useGuiState(initialServer: string) {
               ...rest,
             },
           },
-        });
-      },
-      setFormDirty: (uuid) => {
-        store.set((state) => ({
-          dirtyFormUuids: { ...state.dirtyFormUuids, [uuid]: true },
-        }));
-      },
-      clearFormDirty: (uuid) => {
-        store.set((state) => {
-          const next = { ...state.dirtyFormUuids };
-          delete next[uuid];
-          return { dirtyFormUuids: next };
         });
       },
       addCommand: (command) => {

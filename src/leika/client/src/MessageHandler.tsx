@@ -68,12 +68,6 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
       case "GuiRemoveMessage":
         viewer.guiActions.removeGui(message.uuid);
         return;
-      case "GuiFormSubmitMessage":
-        viewer.guiActions.clearFormDirty(message.uuid);
-        return;
-      case "GuiFormDirtyMessage":
-        viewer.guiActions.setFormDirty(message.uuid);
-        return;
       case "RegisterCommandMessage":
         viewer.guiActions.addCommand(message);
         return;

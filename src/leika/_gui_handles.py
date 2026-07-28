@@ -40,7 +40,6 @@ from ._messages import (
     GuiDividerProps,
     GuiDropdownProps,
     GuiFolderProps,
-    GuiFormSubmitMessage,
     GuiHtmlProps,
     GuiImageProps,
     GuiMarkdownProps,
@@ -996,9 +995,6 @@ class GuiFormHandle(GuiFolderHandle):
     Register one or both depending on whether you want live or commit
     semantics.
 
-    The form's client-side dirty indicator highlights when any descendant
-    input has been edited since the last submit.
-
     Forms cannot be nested. Calling :meth:`GuiApi.add_form` inside an
     existing form's context will raise :class:`ValueError`, because nested
     ``<form>`` elements are invalid HTML on the client.
@@ -1072,9 +1068,9 @@ class GuiFormHandle(GuiFolderHandle):
     def submit_form(self) -> None:
         """Programmatically submit this form.
 
-        Fires all registered ``on_submit`` callbacks and broadcasts a
-        :class:`GuiFormSubmitMessage` to all clients so their dirty indicators
-        are cleared.
+        Fires all registered ``on_submit`` callbacks. The clients are not told:
+        a submit reads values they already sent, and leaves nothing on screen
+        for them to redraw.
         """
         gui_api = self._impl.gui_api
         # Fire on_submit callbacks. Server-initiated submits have no client.
@@ -1082,8 +1078,6 @@ class GuiFormHandle(GuiFolderHandle):
             cb_out = cb(GuiEvent(client_id=None, client=None, target=self))
             if isinstance(cb_out, Coroutine):
                 gui_api._event_loop.create_task(cb_out)
-        # Broadcast to clients so they reset dirty state.
-        gui_api._websock_interface.queue_message(GuiFormSubmitMessage(uuid=self._impl.uuid))
 
 
 @dataclasses.dataclass

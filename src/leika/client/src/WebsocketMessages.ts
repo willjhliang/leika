@@ -18,8 +18,8 @@ export interface GuiFolderMessage {
 /** A form is a folder whose children's values can be committed together.
  *
  * Reuses ``GuiFolderProps`` because the visual shape is identical to a
- * folder; the form-specific behavior (``on_submit`` callbacks, dirty
- * indicator, Cmd/Ctrl+Enter) is keyed off the message type alone.
+ * folder; the form-specific behavior (``on_submit`` callbacks, submit on
+ * Enter) is keyed off the message type alone.
  *
  * (automatically generated)
  */
@@ -683,32 +683,18 @@ export interface RemoveNotificationMessage {
 export interface ResetGuiMessage {
   type: "ResetGuiMessage";
 }
-/** Bidirectional form submit signal.
+/** Form submit signal, sent client->server.
  *
- * - Sent client->server when the user presses Cmd/Ctrl+Enter inside a form.
- * The server fires the form's ``on_submit`` callbacks and broadcasts this
- * message to all clients.
- * - Sent server->client (broadcast) after any submit (client-initiated or
- * via Python ``form.submit()``). Clients clear their dirty indicator on
- * receipt.
+ * Sent when the user submits a form -- its submit button, or Enter in a
+ * single-line text input inside it. The server fires the form's
+ * ``on_submit`` callbacks. Nothing goes back: a submit changes no state the
+ * other clients are showing, since the values themselves were reported as
+ * they were typed.
  *
  * (automatically generated)
  */
 export interface GuiFormSubmitMessage {
   type: "GuiFormSubmitMessage";
-  uuid: string;
-}
-/** Bidirectional form dirty signal.
- *
- * - Sent client->server when any input inside the form first changes since
- * the last submit. The server broadcasts this to all other clients.
- * - Sent server->client (broadcast) to propagate dirty state. Clients show
- * a dirty indicator on the form header on receipt.
- *
- * (automatically generated)
- */
-export interface GuiFormDirtyMessage {
-  type: "GuiFormDirtyMessage";
   uuid: string;
 }
 /** GuiModalMessage(order: 'float', uuid: 'str', title: 'str')
@@ -1038,7 +1024,6 @@ export type Message =
   | RemoveNotificationMessage
   | ResetGuiMessage
   | GuiFormSubmitMessage
-  | GuiFormDirtyMessage
   | GuiModalMessage
   | GuiCloseModalMessage
   | GuiButtonHoldMessage

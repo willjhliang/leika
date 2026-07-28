@@ -334,8 +334,8 @@ def main() -> None:
         # A form, for the one case the panel's live semantics are wrong: a note
         # is worth reading once it is finished, not at every keystroke on the
         # way there. A form does not take the live updates away -- each field
-        # still reports every edit, and the header marks itself dirty until the
-        # next submit -- it adds the commit that `on_submit` reads them on.
+        # still reports every edit -- it adds the commit that `on_submit` reads
+        # them on.
         with server.gui.add_form("Log it", label="Annotation") as annotation:
             # Enter in a single-line text input submits the form, so this row
             # doubles as the fast path: type a title, press Enter.

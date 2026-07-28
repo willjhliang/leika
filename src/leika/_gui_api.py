@@ -353,9 +353,6 @@ class GuiApi(GuiContainer):
             _messages.GuiFormSubmitMessage, self._handle_gui_form_submit
         )
         self._websock_interface.register_handler(
-            _messages.GuiFormDirtyMessage, self._handle_gui_form_dirty
-        )
-        self._websock_interface.register_handler(
             _messages.FileTransferStartUpload, self._handle_file_transfer_start
         )
         self._websock_interface.register_handler(
@@ -483,10 +480,11 @@ class GuiApi(GuiContainer):
     async def _handle_gui_form_submit(
         self, client_id: ClientId, message: _messages.GuiFormSubmitMessage
     ) -> None:
-        """Callback for client-initiated form submits (Cmd/Ctrl+Enter).
+        """Callback for client-initiated form submits.
 
-        Fires the form's on_submit callbacks and broadcasts the message back
-        to all clients so they reset their dirty indicators.
+        Fires the form's on_submit callbacks. Nothing is sent back: the values
+        reached the server as they were typed, so a submit leaves the other
+        clients with nothing to redraw.
         """
         handle = self._container_handle_from_uuid.get(message.uuid, None)
         if not isinstance(handle, GuiFormHandle):
@@ -503,16 +501,6 @@ class GuiApi(GuiContainer):
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
                 ).add_done_callback(print_threadpool_errors)
-
-        # Broadcast to clients so they clear their dirty indicators.
-        self._websock_interface.queue_message(_messages.GuiFormSubmitMessage(uuid=message.uuid))
-
-    async def _handle_gui_form_dirty(
-        self, client_id: ClientId, message: _messages.GuiFormDirtyMessage
-    ) -> None:
-        """Broadcast form dirty signal to all other clients."""
-        message.excluded_self_client = client_id
-        self._websock_interface.queue_message(message)
 
     def _handle_file_transfer_start(
         self, client_id: ClientId, message: _messages.FileTransferStartUpload
