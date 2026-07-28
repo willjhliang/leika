@@ -4,6 +4,7 @@
 // DockManager applies a transform during an active drag for smoothness.
 
 import React from "react";
+import { cn } from "@/lib/utils";
 import { Card } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
 import { useDock } from "./DockContext";
@@ -38,6 +39,40 @@ const MULTI_GROUP_BODY_CAP_PX = 320;
 const FALLBACK_BODY_CAP_PX = 600;
 const OWNED_BODY_VIEWPORT_SELECTOR =
   '[data-dock-panel-scroll-body] > [data-slot="scroll-area-viewport"]';
+
+/** How a `peekWhenCollapsed` window renders once it is collapsed AND the
+ * pointer has left it: the card and everything in it gone, bar the panel's
+ * `data-dock-peek` element.
+ *
+ * The peek element is dimmed rather than left at full strength -- alone on the
+ * canvas it marks where the panel went rather than asking to be read -- and it
+ * comes back up to full as the card arrives behind it.
+ *
+ * Faded, the card is click-through, so the canvas underneath stays reachable
+ * and the peek element is the only target the window still offers. That is
+ * what makes coming BACK a matter of finding the badge rather than waving at
+ * the empty rectangle around it.
+ *
+ * `focus-within` says the same thing in the keyboard's terms, and stays in CSS
+ * because the pointer state cannot see it: tabbing to the gear must not leave
+ * a focus ring on something invisible. */
+const FADED_CLASSES = [
+  "pointer-events-none bg-transparent shadow-none ring-0",
+  "[&_[data-dock-peek]]:pointer-events-auto [&_[data-dock-peek]]:opacity-60",
+  "[&_[data-dock-peek-fade]]:opacity-0",
+  "focus-within:pointer-events-auto focus-within:bg-card focus-within:shadow-md focus-within:ring-1",
+  "focus-within:[&_[data-dock-peek]]:opacity-100 focus-within:[&_[data-dock-peek-fade]]:opacity-100",
+].join(" ");
+
+/** The fade itself, on the window whenever it can peek -- so the card fades
+ * back IN as well as out, rather than snapping back the moment it is entered. */
+const PEEK_TRANSITION_CLASSES = [
+  "transition-[background-color,box-shadow] duration-200",
+  "[&_[data-dock-peek]]:transition-opacity [&_[data-dock-peek]]:duration-200",
+  "[&_[data-dock-peek-fade]]:transition-opacity [&_[data-dock-peek-fade]]:duration-200",
+  "motion-reduce:transition-none [&_[data-dock-peek]]:motion-reduce:transition-none",
+  "[&_[data-dock-peek-fade]]:motion-reduce:transition-none",
+].join(" ");
 
 /** Return only the ScrollArea viewports owned by this floating window's
  * top-level groups. Nested DockAreas have their own group ids and must not be
@@ -95,6 +130,25 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   const collapsed = win.stack.every(
     (id) => dock.groups[id]?.collapsed === true,
   );
+  // Every panel in the stack has to want this: one that does not would be
+  // faded out along with the window it happens to share.
+  const peek =
+    collapsed &&
+    win.stack.every((id) => {
+      const group = dock.groups[id];
+      return (
+        group !== undefined &&
+        dock.panels[group.activeId]?.peekWhenCollapsed === true
+      );
+    });
+  // Pointer state rather than `:hover`, because the two are not the same thing
+  // here. Faded, the card is click-through, so a pointer resting over it is
+  // NOT hovering it -- under `:hover` the card would vanish from under the
+  // cursor the instant a click collapsed it, taking the second click of a
+  // double-click with it. Entering is still `:hover`'s job in effect (the peek
+  // element is the only thing left to enter); leaving is what this tracks.
+  const [pointerInside, setPointerInside] = React.useState(false);
+  const faded = peek && !pointerInside;
   const fixedHeight = win.height !== undefined && !collapsed;
   const [autoBodyMaxHeight, setAutoBodyMaxHeight] = React.useState<
     number | undefined
@@ -436,11 +490,21 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       data-floating-window={win.id}
       data-testid={testId}
       data-dock-side="none"
+      data-dock-peeking={faded ? "true" : undefined}
       // Floating windows hover over the viewport, so they get a drop shadow to
       // lift them off it. Docked and split cards stay flat -- they tile the
       // surface rather than sitting on top of it.
-      className="box-border shadow-md"
+      className={cn(
+        "box-border shadow-md",
+        peek && PEEK_TRANSITION_CLASSES,
+        faded && FADED_CLASSES,
+      )}
       onPointerDownCapture={() => onFront(win.id)}
+      // Enter fires for the peek element too: entering a descendant from
+      // outside is entering the card. That is the way back in once the card
+      // itself has stopped taking the pointer.
+      onPointerEnter={() => setPointerInside(true)}
+      onPointerLeave={() => setPointerInside(false)}
       style={{
         position: "absolute",
         ...horizontalPosition,

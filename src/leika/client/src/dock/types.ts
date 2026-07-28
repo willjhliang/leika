@@ -116,6 +116,24 @@ export interface PanelSpec {
    * rest arrives -- collapsing instead would throw away what the click was
    * asking for. Anything else falls through to the toggle. */
   onHandleClick?: () => boolean;
+  /** Collapsed, fade this window away once the pointer leaves it.
+   *
+   * A panel that is nothing but a header when collapsed still paints a card
+   * the full width of its window across the canvas -- a lot of opaque surface
+   * for a bar with nothing in it. Opted in, the card and its header fade out
+   * behind the pointer, leaving whatever the panel marked `data-dock-peek`
+   * sitting on the canvas alone: hovering that one thing brings the rest back.
+   *
+   * Faded, the window is also CLICK-THROUGH, so the canvas underneath stays
+   * reachable and the peek element is the only target the window still offers
+   * -- which is what makes "hover to bring it back" mean the peek element
+   * rather than the invisible rectangle around it. It fades on LEAVING rather
+   * than on losing hover, so the click that collapsed the panel does not pull
+   * the header out from under the pointer that is still on it.
+   *
+   * Floating windows only; a docked panel collapses to a strip in the region's
+   * own column, which is already the small thing this would make it. */
+  peekWhenCollapsed?: boolean;
   /** Optional stable `data-testid` for the element this panel renders into.
    *
    * The library's own attributes (`data-dock-leaf`, `data-floating-window`,

@@ -99,6 +99,10 @@ export function ControlPanelDockSurface({
           controlsSection.toggle();
           return true;
         },
+        // Folded away, this panel is a 320px bar of empty card sitting over the
+        // visualization. Let it go, and leave the connection badge behind as
+        // the thing to hover to get it back.
+        peekWhenCollapsed: true,
       },
     }),
     [hasBody],

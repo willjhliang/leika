@@ -12,6 +12,8 @@ groups are ordinary dockable panels inside its nested area.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
@@ -525,3 +527,85 @@ def test_a_lone_click_on_the_handle_still_only_collapses(dock_page: Page) -> Non
     expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
     still = bounds(control_panel(page))
     assert abs(still["x"] - moved["x"]) < 1.0, (still, moved, home)
+
+
+def _draws_a_shadow(box_shadow: str) -> bool:
+    """Whether a computed `box-shadow` puts anything on screen.
+
+    `shadow-none` computes to the layers the card's shadow and ring utilities
+    declare, all of them at zero offset, spread, and blur -- so the string is
+    never the literal "none" and has to be read for lengths instead.
+    """
+    return any(length != "0px" for length in re.findall(r"-?[\d.]+px", box_shadow))
+
+
+def _peek_state(page: Page) -> dict[str, str]:
+    """What the collapsed panel is currently painting, read off the live styles."""
+    return page.evaluate(
+        """() => {
+            const card = document.querySelector('[data-testid="control-panel"]');
+            const badge = card.querySelector('[data-dock-peek]');
+            const gear = card.querySelector('[data-dock-peek-fade] [data-leika-settings-trigger]');
+            const cardStyle = getComputedStyle(card);
+            return {
+                background: cardStyle.backgroundColor,
+                shadow: cardStyle.boxShadow,
+                pointerEvents: cardStyle.pointerEvents,
+                badge: getComputedStyle(badge).opacity,
+                gear: getComputedStyle(gear.closest('[data-dock-peek-fade]')).opacity,
+            };
+        }"""
+    )
+
+
+def test_a_collapsed_panel_fades_down_to_its_status_badge(dock_page: Page) -> None:
+    """Folded away, the panel leaves the connection badge on the canvas and
+    nothing else: no card behind it, and nothing of it in the way of a click.
+    The badge is the one thing left to aim at, and hovering it brings the panel
+    back."""
+    page = dock_page
+    card = bounds(control_panel(page))
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+
+    # The click that collapsed it does not also take the header away: the
+    # pointer is still on it, and it fades only once the pointer leaves. (Under
+    # a plain :hover the click-through card would stop counting as hovered the
+    # moment it faded, so the second click of a double-click would land on the
+    # canvas.)
+    assert _draws_a_shadow(_peek_state(page)["shadow"]), _peek_state(page)
+
+    page.mouse.move(*CANVAS)
+
+    badge = control_panel(page).locator("[data-dock-peek]")
+    expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
+    faded = _peek_state(page)
+    assert not _draws_a_shadow(faded["shadow"]), faded
+    assert faded["gear"] == "0", faded
+    # Still there to aim at, but dimmed: a marker of where the panel went.
+    assert 0.0 < float(faded["badge"]) < 1.0, faded
+    expect(badge).to_be_visible()
+
+    # Click-through: a point on the card clear of the badge hits the canvas.
+    over_card = (card["x"] + 24.0, card["y"] + card["height"] / 2)
+    assert (
+        page.evaluate(
+            "([x, y]) => document.elementFromPoint(x, y).closest('[data-testid=\"control-panel\"]') !== null",
+            list(over_card),
+        )
+        is False
+    )
+
+    # Hovering the badge -- and only the badge -- brings the whole header back.
+    badge.hover()
+    expect(control_panel(page)).not_to_have_css(
+        "background-color", "rgba(0, 0, 0, 0)", timeout=5_000
+    )
+    restored = _peek_state(page)
+    assert restored["gear"] == "1", restored
+    assert restored["badge"] == "1", restored
+    assert _draws_a_shadow(restored["shadow"]), restored
+
+    # And leaving it fades the panel back down.
+    page.mouse.move(*CANVAS)
+    expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)

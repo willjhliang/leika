@@ -107,17 +107,29 @@ export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
   const { status, text } = CONNECTION_STATUS[websocketState];
 
   return (
+    // Collapsed, the floating panel fades down to the one thing worth leaving
+    // on the canvas: the connection badge. The title and the gear go with the
+    // card (`data-dock-peek-fade`); the badge stays and is what the pointer
+    // comes back to (`data-dock-peek`). Inert in every other chrome -- the
+    // sidebar and the bottom sheet have no such state to be in.
     <div className="flex min-w-0 flex-1 items-center gap-2">
       {/* The title is whatever the server passed as its panel label, so it is
           empty until one is set. Typed like a GUI row's field label, so the
           panel reads with one voice from its header down. */}
-      <span className="min-w-0 flex-1 truncate text-sm font-normal text-muted-foreground leading-tight">
+      <span
+        className="min-w-0 flex-1 truncate text-sm font-normal text-muted-foreground leading-tight"
+        data-dock-peek-fade
+      >
         {label}
       </span>
-      {actions}
+      {actions !== undefined && (
+        <span className="inline-flex" data-dock-peek-fade>
+          {actions}
+        </span>
+      )}
       {/* The badge keeps the Badge base's `shrink-0`, so a long title
           truncates rather than squeezing the status. */}
-      <Status status={status}>
+      <Status status={status} data-dock-peek>
         <StatusIndicator />
         <StatusLabel>{text}</StatusLabel>
       </Status>
