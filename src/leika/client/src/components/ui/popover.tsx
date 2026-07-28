@@ -19,11 +19,12 @@ function PopoverContent({
   alignOffset = 0,
   side = "bottom",
   sideOffset = 4,
+  anchor,
   ...props
 }: PopoverPrimitive.Popup.Props &
   Pick<
     PopoverPrimitive.Positioner.Props,
-    "align" | "alignOffset" | "side" | "sideOffset"
+    "align" | "alignOffset" | "side" | "sideOffset" | "anchor"
   >) {
   return (
     <PopoverPrimitive.Portal>
@@ -32,6 +33,10 @@ function PopoverContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        // Defaults to the trigger. Worth overriding wherever the trigger
+        // changes size with state, since the popup follows the edge it aligns
+        // to and would slide when the trigger resized under it.
+        anchor={anchor}
         className="isolate z-50"
       >
         <PopoverPrimitive.Popup

@@ -441,7 +441,7 @@ def test_accent_color_repaints_the_controls_that_use_it(
     assert css_variable(leika_page, "--primary-foreground") == "oklch(0.985 0 0)"
 
     leika_page.keyboard.press("Escape")
-    pane.locator("[data-leika-settings-accent-reset]").click()
+    pane.locator("[data-leika-color-reset]").click()
     expect(swatch).to_contain_text("Default")
     expect(checkbox).to_have_css("background-color", stock_fill)
     assert page_errors == []
@@ -507,4 +507,37 @@ def test_the_command_palette_button_opens_the_palette(
     palette = leika_page.locator("[data-leika-command-palette]")
     expect(palette).to_be_visible(timeout=5_000)
     expect(palette).to_contain_text("Reset view")
+    assert page_errors == []
+
+
+def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The dock lets the panel down to 220px, which is inside the width where
+    the trigger and the button stop fitting side by side. The trigger gives way
+    instead of pushing the button off the panel."""
+    pane = open_settings(leika_page)
+    leika_page.get_by_test_id("control-panel").evaluate("el => (el.style.width = '220px')")
+
+    accent = leika_page.locator("#leika-settings-accent")
+    accent.click()
+    picker = leika_page.locator("[data-leika-color-popover]:visible")
+    expect(picker).to_be_visible(timeout=5_000)
+    selection = picker.locator("[data-leika-color-selection]")
+    bounds = selection.bounding_box()
+    assert bounds is not None
+    selection.click(position={"x": bounds["width"] - 12, "y": 12})
+    selection.press("Escape")
+
+    reset = leika_page.locator("[data-leika-color-reset]")
+    expect(reset).to_be_visible(timeout=5_000)
+    reset_box = reset.bounding_box()
+    pane_box = pane.bounding_box()
+    assert reset_box is not None and pane_box is not None
+    assert reset_box["x"] + reset_box["width"] <= pane_box["x"] + pane_box["width"] + 0.5, (
+        reset_box,
+        pane_box,
+    )
     assert page_errors == []

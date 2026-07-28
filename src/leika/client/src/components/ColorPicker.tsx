@@ -1,6 +1,6 @@
 "use client";
 
-import { PipetteIcon } from "lucide-react";
+import { PipetteIcon, RotateCcwIcon } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -543,11 +543,11 @@ export function ColorPicker({
 
 /** A color swatch that opens the picker in a popover.
  *
- * Every color in the app is edited this way -- the GUI's RGB and RGBA inputs
- * and the settings pane's accent alike -- so the trigger, the popover, and the
- * focus handling live here once rather than at each call site.
+ * Not exported: `ColorRow` below is how a color is placed, and a swatch put
+ * anywhere on its own would be one more copy of the geometry that row spent
+ * two rounds of bugs getting right.
  */
-export function ColorPickerPopover({
+function ColorPickerPopover({
   id,
   value,
   label,
@@ -555,6 +555,7 @@ export function ColorPickerPopover({
   disabled = false,
   text,
   className,
+  anchor,
   onValueChange,
 }: {
   id: string;
@@ -567,6 +568,10 @@ export function ColorPickerPopover({
   /** Trigger text, when the color itself is not what to say. */
   text?: string;
   className?: string;
+  /** What the popover aligns to, when the trigger is not the stable edge --
+   * a row that reveals a reset button shrinks its trigger, and the popover
+   * would slide across with it. */
+  anchor?: React.ComponentProps<typeof PopoverContent>["anchor"];
   onValueChange: (value: string) => void;
 }) {
   const selectionRef = React.useRef<HTMLDivElement>(null);
@@ -598,6 +603,7 @@ export function ColorPickerPopover({
       </PopoverTrigger>
       <PopoverContent
         align="end"
+        anchor={anchor}
         className="w-[min(20rem,calc(100vw-1rem))]"
         initialFocus={(interactionType) =>
           interactionType === "touch" ? true : selectionRef.current
@@ -620,5 +626,83 @@ export function ColorPickerPopover({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** A color as it sits in a row: the swatch, and the reset beside it.
+ *
+ * The one place this geometry lives. Both callers -- the GUI's RGB and RGBA
+ * inputs, and the settings pane's accent -- differ in what they store and what
+ * "reset" restores, but not in how the two controls share a row, and holding
+ * that in one component is what keeps them from drifting apart:
+ *
+ *   - the swatch takes the whole row until there is something to undo, so an
+ *     untouched row looks as it did before the button existed;
+ *   - the trigger's own `w-full` would claim the row and push the button off
+ *     the end of a panel dragged narrow, so it takes basis zero and truncates
+ *     instead;
+ *   - the popover aligns to the ROW, since the trigger shortens when the button
+ *     appears and a popover anchored to it would slide across by its width.
+ */
+export function ColorRow({
+  id,
+  value,
+  label,
+  format,
+  text,
+  disabled = false,
+  className,
+  onReset,
+  onValueChange,
+}: {
+  id: string;
+  value: string;
+  label: string;
+  format: "rgb" | "rgba";
+  /** Trigger text, when the color itself is not what to say. */
+  text?: string;
+  disabled?: boolean;
+  /** Extra classes for the row itself, not the controls in it. */
+  className?: string;
+  /** What to undo to, or null when there is nothing to undo. */
+  onReset: (() => void) | null;
+  onValueChange: (value: string) => void;
+}) {
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  return (
+    <div
+      ref={rowRef}
+      className={cn("flex min-w-0 items-center gap-1", className)}
+    >
+      <ColorPickerPopover
+        id={id}
+        value={value}
+        label={label}
+        format={format}
+        text={text}
+        disabled={disabled}
+        className="min-w-0 flex-1"
+        anchor={rowRef}
+        onValueChange={onValueChange}
+      />
+      {onReset === null ? null : (
+        // Typed like the eyedropper in the popover below it: the same outlined
+        // icon button, so the two reads as one kind of control wherever a color
+        // is being edited.
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          className="shrink-0 text-muted-foreground"
+          aria-label={`Reset ${label}`}
+          title={`Reset ${label}`}
+          disabled={disabled}
+          onClick={onReset}
+          data-leika-color-reset
+        >
+          <RotateCcwIcon />
+        </Button>
+      )}
+    </div>
   );
 }

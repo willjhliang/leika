@@ -359,6 +359,97 @@ def test_hue_survives_greyscale_and_the_far_right(
     assert page_errors == []
 
 
+def test_the_reset_button_appears_only_once_the_row_has_been_edited(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    color = leika_server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
+    trigger = _color_trigger(leika_page, "Plot line")
+    row = find_gui_row(leika_page, "Plot line")
+    reset = row.locator("[data-leika-color-reset]")
+    expect(trigger).to_be_visible()
+    expect(reset).to_have_count(0)
+    untouched_width = trigger.bounding_box()
+
+    # Through the block rather than the hue slider: the initial value is a grey,
+    # which every hue maps to alike.
+    picker = _open_color_picker(leika_page, "Plot line")
+    selection = picker.locator("[data-leika-color-selection]")
+    bounds = selection.bounding_box()
+    assert bounds is not None and untouched_width is not None
+    selection.click(position={"x": bounds["width"] - 12, "y": 12})
+    _wait_for_value(lambda: color.value != (196, 196, 196))
+    selection.press("Escape")
+
+    expect(reset).to_have_count(1)
+    edited_width = trigger.bounding_box()
+    assert edited_width is not None
+    assert edited_width["width"] < untouched_width["width"]
+
+    reset.click()
+    _wait_for_value(lambda: color.value == (196, 196, 196))
+    expect(reset).to_have_count(0)
+    restored = trigger.bounding_box()
+    assert restored is not None
+    assert restored["width"] == untouched_width["width"]
+    assert page_errors == []
+
+
+def _settled_box(locator: Locator) -> dict[str, float]:
+    """The element's box once it stops moving.
+
+    The popover opens on a zoom-and-fade, so a box read the moment it becomes
+    visible is a frame of that animation and lands a fraction of a pixel off.
+    """
+    previous: dict[str, float] | None = None
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        box = locator.bounding_box()
+        assert box is not None
+        if previous is not None and abs(box["x"] - previous["x"]) < 0.01:
+            return box
+        previous = box
+        time.sleep(0.05)
+    raise AssertionError("the popover never settled")
+
+
+def test_the_popover_holds_its_place_when_the_reset_button_appears(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """It aligns to the row, not the trigger, which the button shortens."""
+    color = leika_server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
+
+    def popover_origin() -> tuple[float, float]:
+        picker = _open_color_picker(leika_page, "Plot line")
+        box = _settled_box(picker)
+        picker.locator("[data-leika-color-selection]").press("Escape")
+        expect(picker).to_be_hidden()
+        return box["x"], box["y"]
+
+    unedited = popover_origin()
+
+    picker = _open_color_picker(leika_page, "Plot line")
+    selection = picker.locator("[data-leika-color-selection]")
+    bounds = selection.bounding_box()
+    assert bounds is not None
+    selection.click(position={"x": bounds["width"] - 12, "y": 12})
+    _wait_for_value(lambda: color.value != (196, 196, 196))
+    selection.press("Escape")
+    expect(find_gui_row(leika_page, "Plot line").locator("[data-leika-color-reset]")).to_have_count(
+        1
+    )
+
+    # Anchored to the trigger, this moved by the button's whole width plus the
+    # gap, so a pixel of tolerance is nowhere near what the bug looked like.
+    edited = popover_origin()
+    assert abs(edited[0] - unedited[0]) < 1.0, (unedited, edited)
+    assert abs(edited[1] - unedited[1]) < 1.0, (unedited, edited)
+    assert page_errors == []
+
+
 def _edge_scanlines(selection: Locator) -> dict[str, float]:
     """Mean brightness of each outermost edge of the block, read off the pixels.
 

@@ -1,10 +1,10 @@
-import { RotateCcwIcon, SettingsIcon } from "lucide-react";
+import { SettingsIcon } from "lucide-react";
 import * as React from "react";
 
 import { commandPalette } from "../CommandPaletteController";
 import { ImageFit } from "../ClientSettings";
 import { ViewerContext } from "../ViewerContext";
-import { ColorPickerPopover } from "../components/ColorPicker";
+import { ColorRow } from "../components/ColorPicker";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
@@ -65,32 +65,21 @@ function AccentColorRow() {
   const viewer = React.useContext(ViewerContext)!;
   const accentColor = viewer.useSettings((state) => state.accentColor);
   const { setAccentColor } = viewer.settingsActions;
-
   return (
     <SettingsRow htmlFor="leika-settings-accent" label="Accent color">
-      <div className="gui-row-controls flex min-w-0 items-center gap-1">
-        <ColorPickerPopover
-          id="leika-settings-accent"
-          label="Accent color"
-          format="rgb"
-          // Unset, the swatch shows the accent the theme is already using and
-          // says so, rather than naming a color nobody chose.
-          value={accentColor ?? DEFAULT_ACCENT}
-          text={accentColor ?? "Default"}
-          onValueChange={setAccentColor}
-        />
-        {accentColor === null ? null : (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Reset accent color"
-            onClick={() => setAccentColor(null)}
-            data-leika-settings-accent-reset
-          >
-            <RotateCcwIcon />
-          </Button>
-        )}
-      </div>
+      <ColorRow
+        id="leika-settings-accent"
+        label="Accent color"
+        format="rgb"
+        // Unset, the swatch shows the accent the theme is already using and
+        // says so, rather than naming a color nobody chose.
+        value={accentColor ?? DEFAULT_ACCENT}
+        text={accentColor ?? "Default"}
+        className="gui-row-controls"
+        // Undo means no accent at all, which is what puts the theme's back.
+        onReset={accentColor === null ? null : () => setAccentColor(null)}
+        onValueChange={setAccentColor}
+      />
     </SettingsRow>
   );
 }
