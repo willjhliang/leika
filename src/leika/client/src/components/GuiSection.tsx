@@ -59,7 +59,14 @@ export function GuiSection({
           {label}
           {triggerSuffix}
         </AccordionTrigger>
-        <AccordionContent data-leika-section-contents className="pb-2">
+        {/* The top padding is not rhythm, it is clearance. A panel that
+            animates its own height has to clip, and a slider's thumb is drawn
+            4px above the 4px track it is centred on -- so a slider as the first
+            row sat flush against that clip and lost the top of its circle.
+            Stock `pt-0` is what put it there. The 4px here is exactly that
+            overhang, so the thumb lands on the clip edge rather than inside
+            it: enough to draw the whole circle, with nothing to spare. */}
+        <AccordionContent data-leika-section-contents className="pt-1 pb-2">
           {children}
         </AccordionContent>
       </AccordionItem>
