@@ -42,6 +42,15 @@ export interface GuiActions {
   addModal: (config: GuiModalMessage) => void;
   removeModal: (id: string) => void;
   updateGuiProps: (id: string, updates: { [key: string]: any }) => void;
+  /** Move components within their containers.
+   *
+   * Ordering lives in a map of its own -- containers sort on it, while the
+   * per-component configs sit in a separate store so that one component's
+   * update re-renders one component. An `order` that arrives after the
+   * component was created therefore has to be written HERE as well, or the
+   * element keeps the place it was created in: this is how a form's submit
+   * button reaches the bottom of the form it was created at the top of. */
+  reorderGui: (orderFromUuid: { [uuid: string]: number }) => void;
   removeGui: (id: string) => void;
   resetGui: () => void;
   updateUploadState: (
@@ -282,6 +291,20 @@ export function useGuiState(initialServer: string) {
         if (newConfig !== config) {
           configStore.set({ [id]: newConfig });
         }
+      },
+      reorderGui: (orderFromUuid) => {
+        store.set((state) => {
+          const changed = Object.entries(orderFromUuid).filter(
+            ([uuid, order]) => state.guiOrderFromUuid[uuid] !== order,
+          );
+          if (changed.length === 0) return state;
+          return {
+            guiOrderFromUuid: {
+              ...state.guiOrderFromUuid,
+              ...Object.fromEntries(changed),
+            },
+          };
+        });
       },
     };
 

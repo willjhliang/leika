@@ -1022,6 +1022,24 @@ class GuiFormHandle(GuiFolderHandle):
         self._submit_cb: list[Callable[[GuiEvent[GuiFormHandle]], None | Coroutine]] = []
         self.submit: GuiButtonHandle
 
+    def __exit__(self, *args: Any) -> None:
+        super().__exit__(*args)
+        # Keep the submit button at the bottom, where a form's submit belongs.
+        #
+        # It is created with the form, which is necessarily BEFORE the fields
+        # the caller adds inside it -- so it holds the smallest order number in
+        # the form and would otherwise render above everything it submits. Its
+        # number is re-stamped here instead, once everything added inside has
+        # taken one. Children added through `form.add_text(...)` rather than the
+        # context manager arrive one exit at a time, and each of them moves the
+        # button along again.
+        button = getattr(self, "submit", None)
+        if button is not None:
+            # Runtime import to break the circular edge with `_gui_api`.
+            from ._gui_api import _apply_default_order
+
+            button.order = _apply_default_order(None)
+
     def on_submit(
         self,
         func: Callable[[GuiEvent[GuiFormHandle]], NoneOrCoroutine],

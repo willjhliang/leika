@@ -104,6 +104,58 @@ def test_button_and_upload_hints_and_visibility(
     assert page_errors == []
 
 
+def test_a_forms_submit_button_renders_below_its_fields(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """A form's submit belongs at the bottom, and it is created at the top.
+
+    It has to exist before the `with` body that fills the form runs, so it
+    holds the form's smallest order number and the server moves it after the
+    fact. That has to land on the client that watched the form being built as
+    well as on one that arrives to find it finished -- two different paths, an
+    update and a replay.
+    """
+    with leika_server.gui.add_form(submit_text="Save", label="Profile") as form:
+        leika_server.gui.add_text("Name", initial_value="Ada")
+        leika_server.gui.add_checkbox("Subscribe", initial_value=False)
+
+    def assert_submit_is_last(page: Page) -> None:
+        """Every row of the form sits above the submit button."""
+        save = page.get_by_role("button", name="Save", exact=True)
+        expect(save).to_be_visible(timeout=5_000)
+        button = save.bounding_box()
+        assert button is not None
+        rows = page.locator("form", has=save).locator("[data-leika-gui-row]")
+        for index in range(rows.count()):
+            row = rows.nth(index)
+            # The button's own row is the one it is allowed to be level with.
+            if row.get_by_role("button", name="Save", exact=True).count():
+                continue
+            box = row.bounding_box()
+            assert box is not None
+            assert box["y"] + box["height"] <= button["y"] + 0.5, (index, box, button)
+
+    # The client that was already connected, and saw the move as an update.
+    assert_submit_is_last(leika_page)
+
+    # A client that arrives afterwards, and is replayed the finished form.
+    leika_page.reload()
+    leika_page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+    assert_submit_is_last(leika_page)
+
+    # And a field added to a form the client has already drawn, which is the
+    # case that has nothing to do with what order the messages went out in: the
+    # button is on screen, in a place the client has to be told to move it from.
+    form.add_text("Nickname", initial_value="")
+    expect(find_gui_row(leika_page, "Nickname")).to_be_visible(timeout=5_000)
+    assert_submit_is_last(leika_page)
+    assert page_errors == []
+
+
 def test_a_button_group_reports_every_press_and_marks_none_of_them(
     leika_server: leika.Server,
     leika_page: Page,

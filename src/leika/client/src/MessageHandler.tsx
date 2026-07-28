@@ -145,6 +145,7 @@ export function MessageHandler() {
 
       if (guiUpdates.size === 0) return;
       const configUpdates: Record<string, GuiComponentMessage | undefined> = {};
+      const orderUpdates: Record<string, number> = {};
       for (const [uuid, updates] of guiUpdates) {
         const current = viewer.useGuiConfig.get(uuid);
         if (current === undefined) {
@@ -153,9 +154,17 @@ export function MessageHandler() {
         }
         const updated = applyGuiConfigUpdate(current, updates);
         if (updated !== current) configUpdates[uuid] = updated;
+        // Where the element sits among its siblings is the container's to
+        // know, not the element's -- see reorderGui.
+        if (typeof updates.order === "number") {
+          orderUpdates[uuid] = updates.order;
+        }
       }
       if (Object.keys(configUpdates).length > 0) {
         viewer.useGuiConfig.set(configUpdates);
+      }
+      if (Object.keys(orderUpdates).length > 0) {
+        viewer.guiActions.reorderGui(orderUpdates);
       }
     };
 

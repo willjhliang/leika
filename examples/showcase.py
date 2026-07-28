@@ -330,6 +330,22 @@ def main() -> None:
         download = server.gui.add_button(
             "Download signal CSV", icon=leika.Icon.DOWNLOAD, color="secondary"
         )
+        server.gui.add_divider()
+        # A form, for the one case the panel's live semantics are wrong: a note
+        # is worth reading once it is finished, not at every keystroke on the
+        # way there. A form does not take the live updates away -- each field
+        # still reports every edit, and the header marks itself dirty until the
+        # next submit -- it adds the commit that `on_submit` reads them on.
+        with server.gui.add_form("Log it", label="Annotation") as annotation:
+            # Enter in a single-line text input submits the form, so this row
+            # doubles as the fast path: type a title, press Enter.
+            note_title = server.gui.add_text("Title", "Interesting spike")
+            note_body = server.gui.add_text("Note", "", multiline=True)
+            # One at a time, so a note always carries exactly one level.
+            note_level = server.gui.add_toggle(
+                ("Info", "Warning"), label="Level", color="secondary"
+            )
+        log = server.gui.add_markdown("_Nothing logged yet._")
 
     state: dict[str, Any] = {
         "phase": 0.0,
@@ -409,6 +425,28 @@ def main() -> None:
         step = 0.1 if event.target.value == "Right" else -0.1
         x, y = offset.value
         offset.value = (round(x + step, 2), y)
+
+    # The last few submissions, newest first: enough to show the form doing
+    # something, few enough that the tab does not start scrolling.
+    entries: deque[str] = deque(maxlen=3)
+
+    @annotation.on_submit
+    def _(_) -> None:
+        title = note_title.value.strip() or "Untitled"
+        body = note_body.value.strip()
+        # Stamped at the submit, which is the point of the form: the note is
+        # anchored to the moment it was filed, not the moment typing started.
+        at = time.monotonic() - state["start"]
+        entries.appendleft(
+            f"- `t={at:5.1f}s` **{title}** ({note_level.value[0]})"
+            + (f" -- {body}" if body else "")
+        )
+        log.content = "\n".join(entries)
+        # Assigning a value pushes it to every client, so the form empties
+        # itself for the next note.
+        note_title.value = ""
+        note_body.value = ""
+        server.gui.add_notification("Annotation logged", title, auto_close_seconds=2.0)
 
     @upload.on_upload
     def _(event: leika.GuiEvent[Any]) -> None:

@@ -84,6 +84,20 @@ def test_form_compatibility_and_submission(server: leika.Server) -> None:
             server.gui.add_form(submit_text="Inner")
 
 
+def test_form_submit_button_stays_below_the_fields(server: leika.Server) -> None:
+    """The submit button is created with the form -- before any of the fields it
+    submits -- so its order has to be re-stamped or it renders above them."""
+    with server.gui.add_form(submit_text="Save") as form:
+        first = server.gui.add_text("Name", initial_value="Ada")
+        last = server.gui.add_checkbox("Subscribe", initial_value=False)
+    assert form.submit.order > last.order > first.order
+
+    # Children added through the container's own methods arrive one at a time,
+    # each after the button was last moved. Every one of them moves it again.
+    added = form.add_text("Nickname", initial_value="")
+    assert form.submit.order > added.order > last.order
+
+
 def test_commands_notifications_and_modal(server: leika.Server) -> None:
     triggered: list[bool] = []
     command = server.gui.add_command(
