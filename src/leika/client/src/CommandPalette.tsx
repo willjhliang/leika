@@ -253,10 +253,14 @@ export function CommandPalette() {
         />
         <CommandList id="leika-command-list" data-leika-command-list>
           <CommandEmpty>No matching commands...</CommandEmpty>
-          {/* Every command sits in one unlabelled group: the group is what
-              insets the items from the popup's edges, so it is structural
-              rather than decorative even with a single flat list. */}
-          <CommandGroup>
+          {/* Every command sits in one group: the group is what insets the
+              items from the popup's edges, so it is structural rather than
+              decorative even with a single flat list. Its heading is what puts
+              air between the search box and the first row -- the box and the
+              group otherwise contribute 4px between them -- and it is the same
+              heading a multi-group palette would use, so one list and many
+              read alike. */}
+          <CommandGroup heading="Commands">
             {visibleActions.map((action) => (
               <CommandItem
                 key={action.id}
