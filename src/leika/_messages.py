@@ -729,6 +729,47 @@ class GuiRgbaMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiToggleProps(GuiBaseProps):
+    text: str
+    """Text on the toggle's own face; see `GuiButtonProps.text`."""
+    color: Literal["primary", "secondary"]
+    """Colorway for the toggle. The same two roles a button takes, and the ON
+    state is that button's own pressed appearance."""
+    _icon_html: Optional[str]
+    """(Private) HTML string for the icon to be displayed on the toggle."""
+
+
+@dataclasses.dataclass
+class GuiToggleMessage(_CreateGuiComponentMessage):
+    value: bool
+    container_uuid: str
+    props: GuiToggleProps
+
+
+@dataclasses.dataclass
+class GuiToggleGroupProps(GuiBaseProps):
+    color: Literal["primary", "secondary"]
+    """Colorway for every toggle in the group; see `GuiToggleProps.color`."""
+    options: Tuple[str, ...]
+    """Tuple of toggles in the group."""
+    multiple: bool
+    """Whether more than one option may be on at a time. False makes the group
+    a choice between its options, where turning one on turns the rest off."""
+    _merge: Tuple[bool, ...]
+    """(Private) One flag per gap between toggles; see
+    `GuiButtonGroupProps._merge`."""
+
+
+@dataclasses.dataclass
+class GuiToggleGroupMessage(_CreateGuiComponentMessage):
+    value: Tuple[str, ...]
+    """The options currently on, in the order they were declared. Holds at most
+    one unless the group is `multiple`."""
+    container_uuid: str
+    props: GuiToggleGroupProps
+
+
+@dataclasses.dataclass
 class GuiCheckboxProps(GuiBaseProps):
     pass
 

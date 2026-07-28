@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -1043,4 +1045,120 @@ def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
     assert parted == [4.0, 4.0], parted
     assert mixed == [-1.0, 4.0], mixed
     assert gaps("Toggles", "toggle") == mixed, (gaps("Toggles", "toggle"), mixed)
+    assert page_errors == []
+
+
+def test_a_toggle_wears_the_button_pressed_look_in_both_themes(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Off, a toggle is its button at rest; on, it is that button under the
+    pointer. Asserted as an EQUALITY against the live button rather than as a
+    difference: the dark outlined colorway once had no pressed value of its own
+    and rendered ON exactly like OFF, which "they differ" would not have caught.
+
+    Both roles, both themes, and no 1px nudge -- an on toggle must sit level
+    with its neighbours.
+    """
+    # No label may be a substring of another: rows are found by label text.
+    toggle = leika_server.gui.add_toggle("Face", label="Filled toggle")
+    leika_server.gui.add_button("Face", label="Filled button")
+    outlined = leika_server.gui.add_toggle("Face", label="Thin toggle", color="secondary")
+    leika_server.gui.add_button("Face", label="Thin button", color="secondary")
+
+    def control(row: str, kind: str) -> Locator:
+        return find_gui_row(leika_page, row).locator(f"[data-leika-{kind}]")
+
+    def settled_background(locator: Locator, *, hover: bool) -> str:
+        """The element's background once it stops moving.
+
+        These transition their colour, so the frame right after a hover is
+        still the old one. Normalized across `oklab`/`oklch` notation, which
+        the browser picks per state and which coincide for the greys this
+        theme is built from.
+        """
+        leika_page.mouse.move(0, 0)
+        if hover:
+            locator.hover()
+        previous = None
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            current = locator.evaluate("e => getComputedStyle(e).backgroundColor")
+            if current == previous:
+                return re.sub(r"^okl(ab|ch)", "okl", current)
+            previous = current
+            time.sleep(0.05)
+        raise AssertionError("the colour never settled")
+
+    expect(control("Filled toggle", "toggle")).to_be_visible(timeout=5_000)
+    for dark in (False, True):
+        leika_server.gui.configure_theme(dark_mode=dark)
+        expect(leika_page.locator("html")).to_have_class(
+            re.compile(r"\bdark\b") if dark else re.compile(r"^(?!.*\bdark\b).*$")
+        )
+        for toggle_row, button_row, handle in (
+            ("Filled toggle", "Filled button", toggle),
+            ("Thin toggle", "Thin button", outlined),
+        ):
+            toggle_control = control(toggle_row, "toggle")
+            button = control(button_row, "button")
+            where = (toggle_row, "dark" if dark else "light")
+
+            handle.value = False
+            expect(toggle_control).to_have_attribute("aria-pressed", "false", timeout=5_000)
+            assert settled_background(toggle_control, hover=False) == settled_background(
+                button, hover=False
+            ), where
+
+            handle.value = True
+            expect(toggle_control).to_have_attribute("aria-pressed", "true", timeout=5_000)
+            assert settled_background(toggle_control, hover=False) == settled_background(
+                button, hover=True
+            ), where
+            assert toggle_control.evaluate("e => getComputedStyle(e).transform") in (
+                "none",
+                "matrix(1, 0, 0, 1, 0, 0)",
+            ), where
+
+    # And the browser drives it, not only Python.
+    control("Filled toggle", "toggle").click()
+    deadline = time.monotonic() + 2.0
+    while toggle.value is not False and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert toggle.value is False
+    assert page_errors == []
+
+
+def test_a_toggle_row_holds_one_or_many(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The default row is a choice between its options; `multiple` lets them
+    all be on at once. Either way the value is the tuple of what is on."""
+    one = leika_server.gui.add_toggle(("Bold", "Italic"), label="One", initial_value="Bold")
+    many = leika_server.gui.add_toggle(("Grid", "Axes"), label="Many", multiple=True)
+
+    one_row = find_gui_row(leika_page, "One").locator("[data-leika-toggle]")
+    many_row = find_gui_row(leika_page, "Many").locator("[data-leika-toggle]")
+    expect(one_row.first).to_have_attribute("aria-pressed", "true", timeout=5_000)
+
+    def wait_for(read: Callable[[], tuple[str, ...]], expected: tuple[str, ...]) -> None:
+        deadline = time.monotonic() + 2.0
+        while read() != expected and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert read() == expected
+
+    # Turning one on turns the other off.
+    one_row.nth(1).click()
+    wait_for(lambda: one.value, ("Italic",))
+    expect(one_row.first).to_have_attribute("aria-pressed", "false")
+
+    # Where several may be on, they accumulate -- and stay in declaration order
+    # however they were clicked.
+    many_row.nth(1).click()
+    wait_for(lambda: many.value, ("Axes",))
+    many_row.nth(0).click()
+    wait_for(lambda: many.value, ("Grid", "Axes"))
     assert page_errors == []

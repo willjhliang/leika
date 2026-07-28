@@ -54,6 +54,8 @@ from ._messages import (
     GuiSliderProps,
     GuiTabGroupProps,
     GuiTextProps,
+    GuiToggleGroupProps,
+    GuiToggleProps,
     GuiUpdateMessage,
     GuiUploadButtonProps,
     GuiUplotProps,
@@ -392,6 +394,29 @@ class GuiInputHandle(_GuiInputHandle[T], Generic[T]):
             self._impl.update_cb.clear()
         else:
             self._impl.update_cb = [cb for cb in self._impl.update_cb if cb != callback]
+
+
+class GuiToggleHandle(GuiInputHandle[bool], GuiToggleProps):
+    """Handle for a toggle: a button that stays pressed.
+
+    .. attribute:: value
+       :type: bool
+
+       Whether the toggle is on. Synchronized automatically when assigned.
+    """
+
+
+class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps):
+    """Handle for a row of toggles.
+
+    .. attribute:: value
+       :type: tuple[str, ...]
+
+       The options currently on, in the order they were declared. A tuple in
+       both modes, so reading a group does not depend on how it was
+       configured: with ``multiple=False`` it simply never holds more than one.
+       Assigning turns exactly those options on and the rest off.
+    """
 
 
 class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):

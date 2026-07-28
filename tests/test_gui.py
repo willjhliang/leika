@@ -244,3 +244,30 @@ def test_media_elements_are_created_from_their_content(
     assert len(plotly_messages) == 1
     assert plotly_messages[0].props.aspect == 2.0
     assert plotly_messages[0].props._plotly_json_str.startswith("{")
+
+
+def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
+    """A toggle is a bool; a row of them is the tuple of options that are on."""
+    single = server.gui.add_toggle("Bookmark", initial_value=True)
+    assert single.value is True
+
+    row = server.gui.add_toggle(("Bold", "Italic"), initial_value="Italic")
+    assert row.value == ("Italic",)
+    # A tuple in both modes, and always in declaration order rather than the
+    # order the caller named them in.
+    many = server.gui.add_toggle(
+        ("Bold", "Italic", "Under"), multiple=True, initial_value=("Under", "Bold")
+    )
+    assert many.value == ("Bold", "Under")
+    assert server.gui.add_toggle(("Bold", "Italic")).value == ()
+
+    with pytest.raises(ValueError, match="not among the options"):
+        server.gui.add_toggle(("Bold", "Italic"), initial_value="Underline")
+    with pytest.raises(ValueError, match="one at a time"):
+        server.gui.add_toggle(("Bold", "Italic"), initial_value=("Bold", "Italic"))
+    with pytest.raises(ValueError, match="an option or a sequence"):
+        server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="is a bool"):
+        server.gui.add_toggle("Bookmark", initial_value="on")  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="at least one option"):
+        server.gui.add_toggle([])

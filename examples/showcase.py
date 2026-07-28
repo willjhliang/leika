@@ -242,18 +242,35 @@ def main() -> None:
         reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW)
 
     with server.gui.add_folder("Image appearance"):
-        # Labelled, so it sits in the controls column beside its name -- the
-        # three options still fit. Unlabelled it would take the whole row.
-        palette = server.gui.add_button(("Ocean", "Magma", "Viridis"), label="Palette")
+        # Toggles rather than buttons: the palette is a state the image is in,
+        # not an action, so the row shows which one is on. One at a time (the
+        # default), merged (also the default), and outlined -- a row this long
+        # in the accent would be the loudest thing in the panel.
+        palette = server.gui.add_toggle(
+            ("Ocean", "Magma", "Viridis"),
+            label="Palette",
+            color="secondary",
+            initial_value="Ocean",
+        )
         # Three options, so no search box: the plain dropdown opens with the
         # current one already under the cursor.
         region = server.gui.add_dropdown(
             "Detail region", options=tuple(DETAIL_REGIONS), initial_value="Center"
         )
+        # Buttons this time, because a nudge happens and is over. Parted, since
+        # the two are opposite moves rather than one control with two ends.
+        nudge = server.gui.add_button(
+            ("Left", "Right"), label="Nudge", color="secondary", merge=False
+        )
+        # A toggle with no label takes the row, exactly as a button does.
+        pin = server.gui.add_toggle("Pin the detail view", color="secondary")
         with server.gui.add_folder("Color adjustments"):
             offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
             tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
             plot_color = server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
+            # A single button with a label: it gives up the full width and
+            # takes the controls column, at the height every other row is.
+            revert = server.gui.add_button("Revert", label="Colors", color="secondary")
         gui_preview = server.gui.add_image(
             initial[::4, ::4],
             format="jpeg",
@@ -268,6 +285,15 @@ def main() -> None:
             options=PLOTLY_TEMPLATES,
             searchable=True,
             hint="Type to filter Plotly's built-in templates.",
+        )
+        # Toggles rather than buttons: these two stay where they are put, and
+        # both can be on at once, so the row is `multiple`.
+        plot_overlays = server.gui.add_toggle(
+            ("Grid", "Zero line"),
+            label="Overlays",
+            multiple=True,
+            initial_value="Grid",
+            color="secondary",
         )
         gui_plot = server.gui.add_plotly(
             plot_figure,
@@ -290,11 +316,11 @@ def main() -> None:
         )
 
     with tabs.add_tab("Actions", icon=leika.Icon.BOLT):
-        # The two that show off the panel lead, filled; the two that move a file
-        # follow, outlined. `color` is which of the two roles a button takes,
-        # not a palette.
-        notify = server.gui.add_button("Show notification")
-        open_modal = server.gui.add_button("Open modal")
+        # The two that show off the panel lead, filled and merged into one
+        # block: neighbours in a row are joined unless told otherwise, and the
+        # value says which face was pressed. The two that move a file follow,
+        # outlined and each on its own row.
+        panel_actions = server.gui.add_button(("Notify", "Open modal"))
         upload = server.gui.add_upload_button(
             "Inspect a file",
             mime_type="image/*,.txt,.json",
@@ -306,6 +332,7 @@ def main() -> None:
         )
 
     state: dict[str, Any] = {
+        "palette": "Ocean",
         "phase": 0.0,
         "start": time.monotonic(),
     }
@@ -317,6 +344,14 @@ def main() -> None:
         # The live loop keeps pushing this same figure, so the template sticks
         # without being reapplied on every frame.
         plot_figure.update_layout(template=plotly_theme.value)
+        plot_pane.update(plot_figure)
+        gui_plot.figure = plot_figure
+
+    @plot_overlays.on_update
+    def _(_) -> None:
+        overlays = plot_overlays.value
+        plot_figure.update_xaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
+        plot_figure.update_yaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
         plot_pane.update(plot_figure)
         gui_plot.figure = plot_figure
 
@@ -346,21 +381,46 @@ def main() -> None:
             "Timeline reset", "Image and chart history were cleared.", auto_close_seconds=2.0
         )
 
-    @notify.on_click
-    def _(_) -> None:
-        server.gui.add_notification(
-            "Leika is live",
-            f"{len(server.clients)} browser client(s) connected.",
-            auto_close_seconds=2.5,
-        )
-
-    @open_modal.on_click
-    def _(_) -> None:
+    @panel_actions.on_click
+    def _(event: leika.GuiEvent[Any]) -> None:
+        # One handler for the row: `value` is the face that was pressed, and a
+        # second press of the same one arrives again rather than being
+        # swallowed as an unchanged value.
+        if event.target.value == "Notify":
+            server.gui.add_notification(
+                "Leika is live",
+                f"{len(server.clients)} browser client(s) connected.",
+                auto_close_seconds=2.5,
+            )
+            return
         with server.gui.add_modal("Python-created modal"):
             server.gui.add_markdown(
                 "This modal is populated through the same GUI API as the hover panel."
             )
             server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.65)
+
+    @palette.on_update
+    def _(_) -> None:
+        # A row that holds one at a time can still hold none: the toggle that is
+        # on can be turned off. The image cannot do without a palette, so the
+        # last one goes straight back on, which is how a required choice
+        # behaves.
+        if len(palette.value) == 0:
+            palette.value = (state["palette"],)
+        else:
+            state["palette"] = palette.value[0]
+
+    @revert.on_click
+    def _(_) -> None:
+        offset.value = (0.0, 0.0)
+        tint.value = (20, 90, 210, 45)
+        plot_color.value = (196, 196, 196)
+
+    @nudge.on_click
+    def _(event: leika.GuiEvent[Any]) -> None:
+        step = 0.1 if event.target.value == "Right" else -0.1
+        x, y = offset.value
+        offset.value = (round(x + step, 2), y)
 
     @upload.on_upload
     def _(event: leika.GuiEvent[Any]) -> None:
@@ -423,14 +483,15 @@ def main() -> None:
                 frame = render_field(
                     state["phase"],
                     float(frequency.value),
-                    palette.value,
+                    state["palette"],
                     offset.value,
                     tint.value,
                 )
                 with server.atomic():
                     field_pane.update(frame)
-                    rows, columns = DETAIL_REGIONS[region.value]
-                    detail_pane.update(frame[rows, columns])
+                    if not pin.value:
+                        rows, columns = DETAIL_REGIONS[region.value]
+                        detail_pane.update(frame[rows, columns])
                     gui_preview.image = frame[::4, ::4]
 
             if now - last_plot >= 0.2:

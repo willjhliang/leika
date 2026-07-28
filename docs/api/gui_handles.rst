@@ -37,6 +37,12 @@ Inputs
 .. autoclass:: GuiButtonGroupHandle
    :members:
 
+.. autoclass:: GuiToggleHandle
+   :members:
+
+.. autoclass:: GuiToggleGroupHandle
+   :members:
+
 .. autoclass:: GuiUploadButtonHandle
    :members:
 

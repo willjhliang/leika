@@ -459,6 +459,47 @@ export interface GuiRgbaMessage {
     disabled: boolean;
   };
 }
+/** GuiToggleMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiToggleProps')
+ *
+ * (automatically generated)
+ */
+export interface GuiToggleMessage {
+  type: "GuiToggleMessage";
+  uuid: string;
+  value: boolean;
+  container_uuid: string;
+  props: {
+    order: number;
+    label: string | null;
+    hint: string | null;
+    visible: boolean;
+    disabled: boolean;
+    text: string;
+    color: "primary" | "secondary";
+    _icon_html: string | null;
+  };
+}
+/** GuiToggleGroupMessage(uuid: 'str', value: 'Tuple[str, ...]', container_uuid: 'str', props: 'GuiToggleGroupProps')
+ *
+ * (automatically generated)
+ */
+export interface GuiToggleGroupMessage {
+  type: "GuiToggleGroupMessage";
+  uuid: string;
+  value: string[];
+  container_uuid: string;
+  props: {
+    order: number;
+    label: string | null;
+    hint: string | null;
+    visible: boolean;
+    disabled: boolean;
+    color: "primary" | "secondary";
+    options: string[];
+    multiple: boolean;
+    _merge: boolean[];
+  };
+}
 /** GuiCheckboxMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiCheckboxProps')
  *
  * (automatically generated)
@@ -981,6 +1022,8 @@ export type Message =
   | GuiNumberMessage
   | GuiRgbMessage
   | GuiRgbaMessage
+  | GuiToggleMessage
+  | GuiToggleGroupMessage
   | GuiCheckboxMessage
   | GuiVector2Message
   | GuiVector3Message
@@ -1033,6 +1076,8 @@ export type GuiComponentMessage =
   | GuiNumberMessage
   | GuiRgbMessage
   | GuiRgbaMessage
+  | GuiToggleMessage
+  | GuiToggleGroupMessage
   | GuiCheckboxMessage
   | GuiVector2Message
   | GuiVector3Message
@@ -1057,6 +1102,8 @@ const typeSetGuiComponentMessage = new Set([
   "GuiNumberMessage",
   "GuiRgbMessage",
   "GuiRgbaMessage",
+  "GuiToggleMessage",
+  "GuiToggleGroupMessage",
   "GuiCheckboxMessage",
   "GuiVector2Message",
   "GuiVector3Message",

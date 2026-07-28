@@ -51,6 +51,7 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_slider": (("Slider", 0.0, 1.0, 0.1, 0.5), {}),
     "add_tab_group": ((), {}),
     "add_text": (("Text", "value"), {}),
+    "add_toggle": (("Toggle",), {}),
     "add_upload_button": (("Upload",), {}),
     "add_uplot": (
         (

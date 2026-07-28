@@ -58,6 +58,8 @@ from ._gui_handles import (
     GuiTabGroupHandle,
     GuiTabHandle,
     GuiTextHandle,
+    GuiToggleGroupHandle,
+    GuiToggleHandle,
     GuiUploadButtonHandle,
     GuiUplotHandle,
     GuiVector2Handle,
@@ -138,6 +140,40 @@ def _validate_button_color(color: str) -> None:
             f"Button color must be 'primary' or 'secondary', not {color!r}. Buttons take"
             " a role rather than a color; the accent itself is a viewer setting."
         )
+
+
+def _initial_toggles(
+    options: tuple[str, ...],
+    initial_value: bool | str | Sequence[str] | None,
+    *,
+    multiple: bool,
+) -> tuple[str, ...]:
+    """Which options a row of toggles starts on, as a tuple in every case.
+
+    Accepts the shapes a caller reaches for -- nothing, one option's text, or
+    a sequence of them -- and rejects an option that is not in the row, which
+    would otherwise start a group in a state the user cannot click their way
+    back to.
+    """
+    if initial_value is None:
+        return ()
+    if isinstance(initial_value, bool):
+        raise ValueError(
+            "A row of toggles starts on the options named, so initial_value= is"
+            f" an option or a sequence of them; got {initial_value!r}."
+        )
+    wanted = (initial_value,) if isinstance(initial_value, str) else tuple(initial_value)
+    unknown = [option for option in wanted if option not in options]
+    if len(unknown) > 0:
+        raise ValueError(f"initial_value={unknown!r} is not among the options {options!r}.")
+    if not multiple and len(wanted) > 1:
+        raise ValueError(
+            f"initial_value={wanted!r} turns on {len(wanted)} options, but this row"
+            " holds one at a time. Pass multiple=True to allow several."
+        )
+    # Declaration order, not the order they were named: the value reads the
+    # same way the row does.
+    return tuple(option for option in options if option in wanted)
 
 
 def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
@@ -1490,8 +1526,7 @@ class GuiApi(GuiContainer):
         _validate_button_color(color)
         if isinstance(text, str) and not isinstance(merge, bool):
             raise ValueError(
-                "merge= is about the gaps between buttons in a row; a single button"
-                " has none."
+                "merge= is about the gaps between buttons in a row; a single button has none."
             )
         if not isinstance(text, str):
             if icon is not None:
@@ -1652,6 +1687,159 @@ class GuiApi(GuiContainer):
                 ),
                 is_button=True,
             ),
+        )
+
+    @overload
+    def add_toggle(
+        self,
+        text: str,
+        *,
+        initial_value: bool = False,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: IconName | None = None,
+        order: float | None = None,
+    ) -> GuiToggleHandle: ...
+
+    @overload
+    def add_toggle(
+        self,
+        text: list[str] | tuple[str, ...],
+        *,
+        initial_value: str | Sequence[str] | None = None,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        multiple: bool = False,
+        merge: bool | Sequence[bool] = True,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: None = None,
+        order: float | None = None,
+    ) -> GuiToggleGroupHandle: ...
+
+    def add_toggle(
+        self,
+        text: str | list[str] | tuple[str, ...],
+        *,
+        initial_value: bool | str | Sequence[str] | None = None,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        multiple: bool = False,
+        merge: bool | Sequence[bool] = True,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: IconName | None = None,
+        order: float | None = None,
+    ) -> GuiToggleHandle | GuiToggleGroupHandle:
+        """Add a toggle, or a row of them, to the GUI.
+
+        A toggle is a button that stays pressed: same faces, same colorways,
+        same label rule and heights as :meth:`add_button`, but it holds its
+        state instead of firing and returning to rest. On, it takes the
+        appearance that button has under the pointer at the moment of a click.
+
+        Passing a string gives one toggle, whose value is whether it is on.
+        Passing a sequence gives a row of them, whose value is the tuple of
+        options currently on -- a tuple in both modes, so reading a group does
+        not depend on how it was configured.
+
+        Args:
+            text: Text on the toggle's face. A sequence gives a row with one
+                toggle per entry.
+            initial_value: What starts on: a bool for a single toggle, and for
+                a row either one option's text or a sequence of them. Left
+                unset, everything starts off.
+            label: Optional label for the row; see :meth:`add_button`.
+            color: Colorway; see :meth:`add_button`.
+            multiple: Whether more than one option in a row may be on at once.
+                Off by default, which makes the row a choice between its
+                options: turning one on turns the others off.
+            merge: Whether neighbouring toggles are joined or parted; see
+                :meth:`add_button`.
+            disabled: Whether the toggle is disabled.
+            visible: Whether the toggle is visible.
+            hint: Optional hint to display on hover.
+            icon: Optional icon to display on the toggle. Single toggles only,
+                for the reason :meth:`add_button` gives.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+
+        _validate_button_color(color)
+        if isinstance(text, str):
+            if not isinstance(merge, bool):
+                raise ValueError(
+                    "merge= is about the gaps between toggles in a row; a single toggle has none."
+                )
+            if initial_value is not None and not isinstance(initial_value, bool):
+                raise ValueError(
+                    "A single toggle is on or off, so initial_value= is a bool;"
+                    f" got {initial_value!r}."
+                )
+            uuid = _make_uuid()
+            order = _apply_default_order(order)
+            return GuiToggleHandle(
+                self._create_gui_input(
+                    initial_value is True,
+                    message=_messages.GuiToggleMessage(
+                        value=initial_value is True,
+                        uuid=uuid,
+                        container_uuid=self._get_container_uuid(),
+                        props=_messages.GuiToggleProps(
+                            order=order,
+                            label=label,
+                            text=text,
+                            hint=hint,
+                            color=color,
+                            disabled=disabled,
+                            visible=visible,
+                            _icon_html=None if icon is None else svg_from_icon(icon),
+                        ),
+                    ),
+                )
+            )
+
+        if icon is not None:
+            raise ValueError(
+                "icon= is for a single toggle; a row has one face per option and"
+                " nowhere to say which of them the icon belongs to."
+            )
+        options = tuple(text)
+        if len(options) == 0:
+            raise ValueError(
+                "add_toggle() needs at least one option: an empty sequence would draw"
+                " a row with nothing in it."
+            )
+        value = _initial_toggles(options, initial_value, multiple=multiple)
+        uuid = _make_uuid()
+        order = _apply_default_order(order)
+        return GuiToggleGroupHandle(
+            self._create_gui_input(
+                value,
+                message=_messages.GuiToggleGroupMessage(
+                    value=value,
+                    uuid=uuid,
+                    container_uuid=self._get_container_uuid(),
+                    props=_messages.GuiToggleGroupProps(
+                        order=order,
+                        label=label,
+                        hint=hint,
+                        color=color,
+                        options=options,
+                        multiple=multiple,
+                        _merge=_merge_flags(len(options), merge),
+                        disabled=disabled,
+                        visible=visible,
+                    ),
+                ),
+            )
         )
 
     def add_checkbox(

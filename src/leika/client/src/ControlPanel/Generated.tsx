@@ -15,6 +15,8 @@ import DropdownComponent from "../components/Dropdown";
 import RgbComponent from "../components/Rgb";
 import RgbaComponent from "../components/Rgba";
 import ButtonGroupComponent from "../components/ButtonGroup";
+import ToggleComponent from "../components/Toggle";
+import ToggleGroupComponent from "../components/ToggleGroup";
 import MarkdownComponent from "../components/Markdown";
 import PlotlyComponent from "../components/PlotlyComponent";
 import UplotComponent from "../components/UplotComponent";
@@ -147,6 +149,10 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <RgbaComponent {...conf} />;
     case "GuiButtonGroupMessage":
       return <ButtonGroupComponent {...conf} />;
+    case "GuiToggleMessage":
+      return <ToggleComponent {...conf} />;
+    case "GuiToggleGroupMessage":
+      return <ToggleGroupComponent {...conf} />;
     case "GuiProgressBarMessage":
       return <ProgressBarComponent {...conf} />;
     default:

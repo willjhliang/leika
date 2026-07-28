@@ -25,6 +25,8 @@ from ._gui_handles import GuiSliderHandle as GuiSliderHandle
 from ._gui_handles import GuiTabGroupHandle as GuiTabGroupHandle
 from ._gui_handles import GuiTabHandle as GuiTabHandle
 from ._gui_handles import GuiTextHandle as GuiTextHandle
+from ._gui_handles import GuiToggleGroupHandle as GuiToggleGroupHandle
+from ._gui_handles import GuiToggleHandle as GuiToggleHandle
 from ._gui_handles import GuiUploadButtonHandle as GuiUploadButtonHandle
 from ._gui_handles import GuiUplotHandle as GuiUplotHandle
 from ._gui_handles import GuiVector2Handle as GuiVector2Handle
