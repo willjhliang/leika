@@ -814,6 +814,9 @@ class GuiButtonGroupProps(GuiBaseProps):
     are buttons, so none of them is ever the selected one."""
     options: Tuple[str, ...]
     """Tuple of buttons for the button group."""
+    _merge: Tuple[bool, ...]
+    """(Private) One flag per gap between buttons: True joins that pair into
+    one block, False parts them. Always ``len(options) - 1`` long."""
 
 
 @dataclasses.dataclass

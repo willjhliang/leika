@@ -1007,3 +1007,40 @@ def test_a_labelled_button_is_the_height_of_every_other_row_control(
     for control in (solo, lone_option):
         assert height(control) == pytest.approx(32.0, abs=0.5)
     assert page_errors == []
+
+
+def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """`merge` is about the gaps between buttons: joined, neighbours share an
+    edge and read as one block; parted, each stands on its own. A sequence
+    answers one gap at a time, so a row can do both."""
+    leika_server.gui.add_button(("A", "B", "C"), label="Joined")
+    leika_server.gui.add_button(("A", "B", "C"), label="Parted", merge=False)
+    leika_server.gui.add_button(("A", "B", "C"), label="Mixed", merge=(True, False))
+    # A toggle row is the same control with a state that sticks, so its gaps
+    # have to be the same too -- the buttons once lost a pixel of theirs to the
+    # stock group's border overlap, which has no edge to overlap between runs.
+    leika_server.gui.add_toggle(("A", "B", "C"), label="Toggles", merge=(True, False))
+
+    def gaps(row_label: str, kind: str = "button") -> list[float]:
+        """Horizontal space between each pair of neighbouring controls."""
+        items = find_gui_row(leika_page, row_label).locator(f"[data-leika-{kind}]")
+        expect(items).to_have_count(3, timeout=5_000)
+        boxes = [items.nth(index).bounding_box() for index in range(3)]
+        assert all(box is not None for box in boxes)
+        return [
+            boxes[index + 1]["x"] - (boxes[index]["x"] + boxes[index]["width"])  # type: ignore[index]
+            for index in range(2)
+        ]
+
+    # Joined neighbours share an edge -- they overlap by the one pixel of
+    # border between them -- and parted ones stand the panel's own 4px apart.
+    joined, parted, mixed = gaps("Joined"), gaps("Parted"), gaps("Mixed")
+    assert joined == [-1.0, -1.0], joined
+    assert parted == [4.0, 4.0], parted
+    assert mixed == [-1.0, 4.0], mixed
+    assert gaps("Toggles", "toggle") == mixed, (gaps("Toggles", "toggle"), mixed)
+    assert page_errors == []

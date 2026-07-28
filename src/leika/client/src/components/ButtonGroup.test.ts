@@ -8,6 +8,7 @@ import ButtonGroupComponent from "./ButtonGroup";
 function renderButtonGroup(
   disabled = false,
   color: "primary" | "secondary" = "primary",
+  merge: boolean[] = [false, false],
 ): string {
   const message: GuiButtonGroupMessage = {
     type: "GuiButtonGroupMessage",
@@ -22,6 +23,7 @@ function renderButtonGroup(
       disabled,
       color,
       options: ["Ocean", "Magma", "Viridis"],
+      _merge: merge,
     },
   };
   return renderToStaticMarkup(
@@ -58,6 +60,30 @@ describe("ButtonGroupComponent", () => {
       expect(new Set(classes).size).toBe(1);
     }
     expect(primary).not.toEqual(secondary);
+  });
+
+  it("makes one run per stretch of merged buttons", () => {
+    // The row's own group plus one nested group per run.
+    const groups = (markup: string) =>
+      (markup.match(/data-slot="button-group"/g) ?? []).length - 1;
+    expect(groups(renderButtonGroup(false, "secondary", [true, true]))).toBe(1);
+    expect(groups(renderButtonGroup(false, "secondary", [false, false]))).toBe(
+      3,
+    );
+    expect(groups(renderButtonGroup(false, "secondary", [true, false]))).toBe(
+      2,
+    );
+  });
+
+  it("divides merged filled buttons, and leaves outlined ones to their borders", () => {
+    const filled = renderButtonGroup(false, "primary", [true, true]);
+    const outlined = renderButtonGroup(false, "secondary", [true, true]);
+    expect(filled.match(/data-slot="button-group-separator"/g)).toHaveLength(2);
+    expect(outlined).not.toContain("button-group-separator");
+    // Parted buttons have a gap doing the dividing, so no hairline either.
+    expect(renderButtonGroup(false, "primary", [false, false])).not.toContain(
+      "button-group-separator",
+    );
   });
 
   it("disables every option from the root", () => {

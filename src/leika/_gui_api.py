@@ -140,6 +140,28 @@ def _validate_button_color(color: str) -> None:
         )
 
 
+def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
+    """One flag per GAP between buttons: True joins the pair, False parts them.
+
+    A single bool answers for every gap at once, which is the common case; a
+    sequence answers each in turn, so a row can join some pairs and part
+    others. Normalized here rather than in the client so the wire carries one
+    shape, and so a mismatched length is a Python error with a Python
+    traceback rather than a row that quietly renders wrong.
+    """
+    gaps = max(0, count - 1)
+    if isinstance(merge, bool):
+        return (merge,) * gaps
+    flags = tuple(bool(flag) for flag in merge)
+    if len(flags) != gaps:
+        raise ValueError(
+            f"merge= takes one flag per gap between buttons: {gaps} for {count}"
+            f" button(s), but got {len(flags)}. Pass a single bool to answer for"
+            " every gap at once."
+        )
+    return flags
+
+
 def _build_slider_marks(
     marks: tuple[float | tuple[float, str], ...] | None,
 ) -> tuple[GuiSliderMark, ...] | None:
@@ -1387,6 +1409,7 @@ class GuiApi(GuiContainer):
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
+        merge: bool | Sequence[bool] = True,
         icon: IconName | None = None,
         order: float | None = None,
     ) -> GuiButtonHandle: ...
@@ -1404,6 +1427,7 @@ class GuiApi(GuiContainer):
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
+        merge: bool | Sequence[bool] = True,
         icon: None = None,
         order: float | None = None,
     ) -> GuiButtonGroupHandle: ...
@@ -1417,6 +1441,7 @@ class GuiApi(GuiContainer):
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
+        merge: bool | Sequence[bool] = True,
         icon: IconName | None = None,
         order: float | None = None,
     ) -> GuiButtonHandle | GuiButtonGroupHandle:
@@ -1444,6 +1469,12 @@ class GuiApi(GuiContainer):
                 a panel's main action wants; ``"secondary"`` outlines instead,
                 for the ones that sit beside it. It applies to every option in
                 a row alike, exactly as if each were its own button.
+            merge: Whether neighbouring buttons in a row are joined into one
+                block, sharing an edge, or parted by a gap. A single bool
+                answers for the whole row; a sequence answers one gap at a
+                time, so ``merge=(True, False)`` joins the first two buttons
+                and parts the third from them. Ignored for a single button,
+                which has no neighbours.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1457,6 +1488,11 @@ class GuiApi(GuiContainer):
         """
 
         _validate_button_color(color)
+        if isinstance(text, str) and not isinstance(merge, bool):
+            raise ValueError(
+                "merge= is about the gaps between buttons in a row; a single button"
+                " has none."
+            )
         if not isinstance(text, str):
             if icon is not None:
                 raise ValueError(
@@ -1467,6 +1503,7 @@ class GuiApi(GuiContainer):
                 text,
                 label=label,
                 color=color,
+                merge=merge,
                 disabled=disabled,
                 visible=visible,
                 hint=hint,
@@ -1580,6 +1617,7 @@ class GuiApi(GuiContainer):
         *,
         label: str | None,
         color: Literal["primary", "secondary"],
+        merge: bool | Sequence[bool],
         disabled: bool,
         visible: bool,
         hint: str | None,
@@ -1607,6 +1645,7 @@ class GuiApi(GuiContainer):
                         hint=hint,
                         color=color,
                         options=tuple(options),
+                        _merge=_merge_flags(len(options), merge),
                         disabled=disabled,
                         visible=visible,
                     ),

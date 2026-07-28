@@ -572,6 +572,7 @@ export interface GuiButtonGroupMessage {
     disabled: boolean;
     color: "primary" | "secondary";
     options: string[];
+    _merge: boolean[];
   };
 }
 /** Sent server->client to remove a GUI element.
