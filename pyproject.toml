@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "leika"
 dynamic = ["version"]
-description = "Lightweight, browser-based workspaces for live Python visualizations"
+description = "A lightweight canvas for interactive Python visualizations."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Will Liang", email = "willjhliang@gmail.com" }]

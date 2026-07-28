@@ -2,7 +2,7 @@
 
 Leika is a lightweight canvas for interactive Python visualizations.
 
-<img width="1512" height="861" alt="Screenshot 2026-07-27 at 2 33 51 PM" src="https://github.com/user-attachments/assets/7ca2ffec-db3e-4341-834d-393a1e4572e7" />
+![A Leika workspace open in the browser](https://github.com/user-attachments/assets/7ca2ffec-db3e-4341-834d-393a1e4572e7)
 
 ## Quickstart
 
