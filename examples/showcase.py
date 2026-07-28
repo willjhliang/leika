@@ -244,7 +244,7 @@ def main() -> None:
     with server.gui.add_folder("Image appearance"):
         # Labelled, so it sits in the controls column beside its name -- the
         # three options still fit. Unlabelled it would take the whole row.
-        palette = server.gui.add_button_group(("Ocean", "Magma", "Viridis"), label="Palette")
+        palette = server.gui.add_button(("Ocean", "Magma", "Viridis"), label="Palette")
         # Three options, so no search box: the plain dropdown opens with the
         # current one already under the cursor.
         region = server.gui.add_dropdown(

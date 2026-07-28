@@ -1377,6 +1377,7 @@ class GuiApi(GuiContainer):
             ),
         )
 
+    @overload
     def add_button(
         self,
         text: str,
@@ -1388,23 +1389,67 @@ class GuiApi(GuiContainer):
         hint: str | None = None,
         icon: IconName | None = None,
         order: float | None = None,
-    ) -> GuiButtonHandle:
-        """Add a button to the GUI. The value of this input is set to `True` every time
-        it is clicked; to detect clicks, we can manually set it back to `False`.
+    ) -> GuiButtonHandle: ...
+
+    @overload
+    def add_button(
+        # A list or a tuple rather than `Sequence[str]`, which `str` satisfies:
+        # the two overloads would then overlap on every single button and a
+        # type checker could not tell which handle it was getting.
+        self,
+        text: list[str] | tuple[str, ...],
+        *,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: None = None,
+        order: float | None = None,
+    ) -> GuiButtonGroupHandle: ...
+
+    def add_button(
+        self,
+        text: str | Sequence[str],
+        *,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: IconName | None = None,
+        order: float | None = None,
+    ) -> GuiButtonHandle | GuiButtonGroupHandle:
+        """Add a button, or a group of them, to the GUI.
+
+        One face or several: passing a string gives a single button, whose
+        value is set to ``True`` every time it is clicked (set it back to
+        ``False`` to detect the next click), and passing a sequence of strings
+        gives a row of them, whose value is the option last pressed.
+
+        A row of them is buttons, not a choice between them: nothing stays
+        pressed, and pressing the same option twice fires the callback twice.
+        Read ``value`` to see which was pressed. They are one method because
+        they are one control with one option or many -- same label rule, same
+        colorways, same height.
 
         Args:
-            text: Text to display on the button itself.
+            text: Text on the button's face. A sequence gives a group with one
+                button per entry, and its value starts on the first.
             label: Optional label for the row. Left unset, the button takes the
                 whole width of the panel, which is what a button that says what
                 it does needs; given one, the label takes the left column and
                 the button sits beside it, like every other labelled control.
-            color: Colorway for the button. ``"primary"`` fills with the accent,
-                which is what a panel's main action wants; ``"secondary"``
-                outlines instead, for the ones that sit beside it.
+            color: Colorway. ``"primary"`` fills with the accent, which is what
+                a panel's main action wants; ``"secondary"`` outlines instead,
+                for the ones that sit beside it. It applies to every option in
+                a row alike, exactly as if each were its own button.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
-            icon: Optional icon to display on the button.
+            icon: Optional icon to display on the button. Single buttons only:
+                a group has one face per option and no room to say which of
+                them an icon belongs to.
             order: Optional ordering, smallest values will be displayed first.
 
         Returns:
@@ -1412,6 +1457,21 @@ class GuiApi(GuiContainer):
         """
 
         _validate_button_color(color)
+        if not isinstance(text, str):
+            if icon is not None:
+                raise ValueError(
+                    "icon= is for a single button; a group of buttons has one face per"
+                    " option and nowhere to say which of them the icon belongs to."
+                )
+            return self._add_button_group(
+                text,
+                label=label,
+                color=color,
+                disabled=disabled,
+                visible=visible,
+                hint=hint,
+                order=order,
+            )
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
@@ -1514,34 +1574,23 @@ class GuiApi(GuiContainer):
             _icon=icon,
         )
 
-    def add_button_group(
+    def _add_button_group(
         self,
         options: Sequence[str],
         *,
-        label: str | None = None,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
+        label: str | None,
+        color: Literal["primary", "secondary"],
+        disabled: bool,
+        visible: bool,
+        hint: str | None,
+        order: float | None,
     ) -> GuiButtonGroupHandle:
-        """Add a button group to the GUI.
-
-        Args:
-            options: Sequence of options to display as buttons.
-            label: Optional label for the row. Left unset, the group takes the
-                whole width of the panel and divides it between its options;
-                given one, the label takes the left column and the group sits
-                beside it, like every other labelled control.
-            disabled: Whether the button group is disabled.
-            visible: Whether the button group is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
+        """The many-faced half of :meth:`add_button`."""
         if len(options) == 0:
-            raise ValueError("add_button_group requires at least one option.")
+            raise ValueError(
+                "add_button() needs at least one option: an empty sequence would draw"
+                " a group with nothing in it."
+            )
         value = options[0]
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -1556,6 +1605,7 @@ class GuiApi(GuiContainer):
                         order=order,
                         label=label,
                         hint=hint,
+                        color=color,
                         options=tuple(options),
                         disabled=disabled,
                         visible=visible,

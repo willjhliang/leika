@@ -570,6 +570,7 @@ export interface GuiButtonGroupMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
+    color: "primary" | "secondary";
     options: string[];
   };
 }

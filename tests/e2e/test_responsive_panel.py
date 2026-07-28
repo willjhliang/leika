@@ -143,14 +143,14 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     for index, label in enumerate(tab_labels):
         with tabs.add_tab(label):
             leika_server.gui.add_markdown(f"Panel content {index + 1}")
-    leika_server.gui.add_button_group(
-        label="Many modes",
-        options=(
+    leika_server.gui.add_button(
+        (
             "Interactive preview",
             "Publication quality",
             "Diagnostic overlay",
             "Presentation mode",
         ),
+        label="Many modes",
     )
 
     page.set_viewport_size({"width": 320, "height": 700})
@@ -170,7 +170,7 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     expect(page.get_by_text("Panel content 4", exact=True)).to_be_visible()
 
     group = page.locator(
-        '[data-slot="toggle-group"]', has=page.get_by_role("button", name="Interactive preview")
+        "[data-leika-button-group]", has=page.get_by_role("button", name="Interactive preview")
     )
     expect(group).to_be_visible()
     group_metrics = group.evaluate(
@@ -180,7 +180,6 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     last_option = group.get_by_role("button", name="Presentation mode", exact=True)
     last_option.scroll_into_view_if_needed()
     last_option.click()
-    expect(last_option).to_have_attribute("aria-pressed", "true")
 
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     assert page_errors == []

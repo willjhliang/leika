@@ -102,19 +102,22 @@ def test_button_and_upload_hints_and_visibility(
     assert page_errors == []
 
 
-def test_button_group_updates_optimistically_and_repeats_selected_action(
+def test_a_button_group_reports_every_press_and_marks_none_of_them(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    handle = leika_server.gui.add_button_group(("One", "Two", "Three"), label="Render mode")
+    """A row of buttons, not a choice between them. Each press is reported --
+    including a repeat of the one just pressed, which a selection control would
+    swallow as a no-op -- and nothing in the row is left looking pressed."""
+    handle = leika_server.gui.add_button(("One", "Two", "Three"), label="Render mode")
     clicks: list[str] = []
     handle.on_click(lambda event: clicks.append(event.target.value))
 
     row = find_gui_row(leika_page, "Render mode")
     one = row.get_by_role("button", name="One", exact=True)
     two = row.get_by_role("button", name="Two", exact=True)
-    expect(one).to_have_attribute("aria-pressed", "true", timeout=5_000)
+    expect(one).to_be_visible(timeout=5_000)
 
     two.click()
     deadline = time.monotonic() + 2.0
@@ -122,15 +125,18 @@ def test_button_group_updates_optimistically_and_repeats_selected_action(
         time.sleep(0.01)
     assert handle.value == "Two"
     assert clicks == ["Two"]
-    expect(two).to_have_attribute("aria-pressed", "true")
-    expect(one).to_have_attribute("aria-pressed", "false")
 
+    # The same option again: two presses, not one press and a no-op.
     two.click()
     deadline = time.monotonic() + 2.0
     while len(clicks) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert clicks == ["Two", "Two"]
-    expect(two).to_have_attribute("aria-pressed", "true")
+
+    # And none of it shows on screen: no option is on.
+    for option in (one, two):
+        assert option.get_attribute("aria-pressed") is None
+        assert option.get_attribute("data-state") is None
     assert page_errors == []
 
 
@@ -368,7 +374,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     leika_server.gui.add_multi_slider(
         "Styled range", min=0.0, max=1.0, step=0.1, initial_value=(0.2, 0.8)
     )
-    leika_server.gui.add_button_group(("A", "B", "C"), label="Styled actions")
+    leika_server.gui.add_button(("A", "B", "C"), label="Styled actions")
     leika_server.gui.add_checkbox("Styled checkbox", initial_value=True)
     leika_server.gui.add_text("Styled text", initial_value="compact")
     leika_server.gui.add_dropdown("Styled dropdown", options=("First", "Second"))
@@ -444,10 +450,9 @@ def test_controls_use_semantic_tokens_and_compact_density(
         '[data-slot="select-trigger"]'
     )
     color_locator = find_gui_row(leika_page, "Styled color").locator("[data-leika-color-trigger]")
-    action_group = find_gui_row(leika_page, "Styled actions").locator('[data-slot="toggle-group"]')
+    action_group = find_gui_row(leika_page, "Styled actions").locator("[data-leika-button-group]")
     expect(action_group).to_have_attribute("aria-label", "Styled actions")
-    expect(action_group).to_have_attribute("data-spacing", "0")
-    action_items = action_group.locator('[data-slot="toggle-group-item"]')
+    action_items = action_group.locator('[data-slot="button"]')
     expect(action_items).to_have_count(3)
     group_metrics = action_group.evaluate(
         """element => ({
@@ -473,7 +478,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     expect(checkbox_locator).to_be_visible()
     expect(checkbox_locator).to_have_attribute("data-slot", "checkbox")
     expect(action_locator).to_be_visible()
-    expect(action_locator).to_have_attribute("data-slot", "toggle-group-item")
+    expect(action_locator).to_have_attribute("data-slot", "button")
     expect(text_input_locator).to_be_visible()
     expect(text_input_locator).to_have_attribute("data-slot", "input")
 
@@ -542,7 +547,9 @@ def test_controls_use_semantic_tokens_and_compact_density(
     assert slider_mark["background"] == border
     assert checkbox["background"] == primary
     assert range_fill["background"] == primary
-    assert action["background"] == muted
+    # A group's selected option carries the accent, the way a filled button
+    # does: `color` is one setting across both, and it defaults to primary.
+    assert action["background"] == primary
     assert floating_panel["background"] == card
     # The thumb carries the app-wide focus treatment: a resting outline in
     # --input that switches to --ring when the range input inside it takes
@@ -902,8 +909,8 @@ def test_a_label_is_what_takes_a_button_out_of_the_full_row(
     control sits beside it, like every other row in the panel."""
     leika_server.gui.add_button("Run")
     leika_server.gui.add_button("Stop", label="Playback")
-    leika_server.gui.add_button_group(("A", "B", "C"))
-    leika_server.gui.add_button_group(("X", "Y", "Z"), label="Channel")
+    leika_server.gui.add_button(("A", "B", "C"))
+    leika_server.gui.add_button(("X", "Y", "Z"), label="Channel")
 
     plain_button = leika_page.get_by_role("button", name="Run", exact=True)
     labelled_button = leika_page.get_by_role("button", name="Stop", exact=True)
@@ -929,4 +936,74 @@ def test_a_label_is_what_takes_a_button_out_of_the_full_row(
     narrow_option = leika_page.get_by_role("button", name="X", exact=True).bounding_box()
     assert wide_option is not None and narrow_option is not None
     assert wide_option["width"] > narrow_option["width"]
+    assert page_errors == []
+
+
+def test_a_group_takes_the_same_colorways_as_a_single_button(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """One `color` setting across both faces of `add_button`. A group is a row
+    of buttons, so the colorway is what a button's is: it applies to every
+    option alike, exactly as if each were its own `add_button`."""
+    group = leika_server.gui.add_button(("A", "B"), label="Filled")
+    leika_server.gui.add_button(("C", "D"), label="Marked", color="secondary")
+
+    filled = find_gui_row(leika_page, "Filled").locator('[data-slot="button"]')
+    marked = find_gui_row(leika_page, "Marked").locator('[data-slot="button"]')
+    expect(filled.first).to_be_visible(timeout=5_000)
+
+    def fill(option: Locator) -> str:
+        return option.evaluate("e => getComputedStyle(e).backgroundColor")
+
+    # Every option in a group shares its colorway -- none of them is picked out
+    # -- and the two colorways differ.
+    assert fill(filled.nth(0)) == fill(filled.nth(1))
+    assert fill(marked.nth(0)) == fill(marked.nth(1))
+    assert fill(filled.nth(0)) != fill(marked.nth(0))
+
+    # And it is a live prop, as it is on a single button.
+    assert group.color == "primary"
+    group.color = "secondary"
+    expect(
+        find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="secondary"]')
+    ).to_have_count(1, timeout=5_000)
+    # The fill is a transition, so this polls rather than reading one frame of
+    # it: settled, the two groups are the same control in the same role.
+    expect(filled.nth(0)).to_have_css("background-color", fill(marked.nth(0)), timeout=5_000)
+    assert page_errors == []
+
+
+def test_a_labelled_button_is_the_height_of_every_other_row_control(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """24px beside a label, 32px filling the row. A button used to stay at its
+    standalone height in both, which made its row taller than the panel's."""
+    leika_server.gui.add_text("Text", initial_value="x")
+    leika_server.gui.add_button("Face", label="Row")
+    leika_server.gui.add_button(("A", "B"), label="Group")
+    leika_server.gui.add_button("Solo")
+    leika_server.gui.add_button(("C", "D"))
+
+    def height(locator: Locator) -> float:
+        box = locator.bounding_box()
+        assert box is not None
+        return box["height"]
+
+    solo = leika_page.get_by_role("button", name="Solo", exact=True)
+    expect(solo).to_be_visible(timeout=5_000)
+
+    row_input = find_gui_row(leika_page, "Text").get_by_role("textbox")
+    labelled_button = find_gui_row(leika_page, "Row").get_by_role("button", name="Face")
+    labelled_option = find_gui_row(leika_page, "Group").locator('[data-slot="button"]').first
+    for control in (labelled_button, labelled_option):
+        assert height(control) == pytest.approx(height(row_input), abs=0.5)
+        assert height(control) == pytest.approx(24.0, abs=0.5)
+
+    lone_option = leika_page.get_by_role("button", name="C", exact=True)
+    for control in (solo, lone_option):
+        assert height(control) == pytest.approx(32.0, abs=0.5)
     assert page_errors == []

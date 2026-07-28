@@ -158,8 +158,13 @@
     @apply font-normal leading-tight;
   }
 
-  & :is(
+  /* One height for every control that shares a row with a label: 24px, the
+     row's own minimum. A button left at its standalone 32px was the odd one
+     out, and made the row it sat in taller than the rest of the panel. */
+  &
+    :is(
       [data-slot="input"],
+      [data-slot="button"],
       [data-slot="combobox-trigger"],
       [data-slot="popover-trigger"],
       [data-slot="toggle-group-item"]

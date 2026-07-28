@@ -808,6 +808,10 @@ class GuiDropdownMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiButtonGroupProps(GuiBaseProps):
+    color: Literal["primary", "secondary"]
+    """Colorway for every option in the group: filled with the accent, or
+    outlined. The same two roles a single button takes, applied alike -- these
+    are buttons, so none of them is ever the selected one."""
     options: Tuple[str, ...]
     """Tuple of buttons for the button group."""
 

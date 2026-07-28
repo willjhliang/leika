@@ -51,7 +51,7 @@ def test_option_validation(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_dropdown("Empty", options=[])
     with pytest.raises(ValueError, match="at least one option"):
-        server.gui.add_button_group([], label="Empty")
+        server.gui.add_button([], label="Empty")
     dropdown = server.gui.add_dropdown("Valid", options=("a", "b"))
     with pytest.raises(ValueError, match="at least one option"):
         dropdown.options = []

@@ -33,7 +33,6 @@ def test_direct_container_syntax_and_exported_aliases(server: leika.Server) -> N
 # happens to use.
 _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_button": (("Button",), {}),
-    "add_button_group": ((("a", "b"),), {}),
     "add_checkbox": (("Checkbox", True), {}),
     "add_divider": ((), {}),
     "add_dropdown": (("Dropdown", ("a", "b")), {}),
