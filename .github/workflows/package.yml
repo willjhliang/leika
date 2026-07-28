@@ -20,6 +20,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Build distributions
         run: uv build
+      - name: Check release tag matches the packaged version
+        if: github.event_name == 'release'
+        run: python scripts/check_release_tag.py "${{ github.event.release.tag_name }}" dist/*.whl
       - name: Check wheel contents and size
         run: python scripts/check_wheel.py dist/*.whl
       - name: Base-install smoke test

@@ -56,6 +56,25 @@ the wheel from a clean client artifact, require the browser bundle to be
 present, reject files that do not belong in a release wheel, and enforce a
 5,000,000-byte ceiling.
 
+## Releases
+
+Bump `__version__` in `src/leika/__init__.py`, rerun `python
+sync_client_server.py`, then tag and publish a GitHub release:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+gh release create vX.Y.Z --title "vX.Y.Z"
+```
+
+Publishing the release runs `.github/workflows/package.yml`, which builds the
+browser client and the distributions, checks the tag against the packaged
+version, validates wheel contents and size, smoke-tests a base install and the
+`examples` extra, and only then uploads to PyPI through Trusted Publishing.
+
+PyPI releases are immutable. A version number cannot be reused even after a
+release is deleted, so a mistake means moving to the next patch version.
+
 ## Browser tests
 
 The Playwright suite runs against the built single-file client, so build it and
