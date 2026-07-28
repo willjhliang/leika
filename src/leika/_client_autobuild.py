@@ -50,8 +50,15 @@ def _check_leika_dev_running() -> bool:
     return False
 
 
-def ensure_client_is_built() -> None:
-    """Ensure that the client is built or already running."""
+def ensure_client_is_built(*, ignore_dev_server: bool = False) -> None:
+    """Ensure that the client is built or already running.
+
+    Args:
+        ignore_dev_server: Build a stale client even while `npm run dev` is
+            running. For callers that are served the BUILD rather than the dev
+            server -- the end-to-end tests -- for which the usual skip means
+            silently running against whatever was built last.
+    """
 
     # For non-editable installs, just verify the build exists.
     # Skip timestamp checks and dev server detection.
@@ -68,7 +75,7 @@ def ensure_client_is_built() -> None:
 
     # Do we need to re-trigger a build?
     build = False
-    if _check_leika_dev_running():
+    if _check_leika_dev_running() and not ignore_dev_server:
         # Don't run build if dev server is already running.
         import rich
 

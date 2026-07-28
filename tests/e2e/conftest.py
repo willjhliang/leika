@@ -22,7 +22,17 @@ def browser_context_args(browser_context_args: dict) -> dict:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _skip_client_autobuild() -> None:
+def _build_client_once() -> None:
+    """Build the client once for the session, then stop each server rechecking.
+
+    These tests are served `client/build`, never the dev server, so a stale
+    build silently tests old code -- and the build is skipped exactly when it
+    is most likely to be stale, since `ensure_client_is_built` steps aside
+    while `npm run dev` holds the sources. Build here, ignoring that, and
+    no-op the per-server check so the ~90 servers this suite starts do not
+    each pay for it.
+    """
+    leika._client_autobuild.ensure_client_is_built(ignore_dev_server=True)
     leika._client_autobuild.ensure_client_is_built = lambda: None
 
 
