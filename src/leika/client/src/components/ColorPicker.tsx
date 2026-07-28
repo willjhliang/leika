@@ -5,6 +5,7 @@ import * as React from "react";
 
 import {
   colorDisplayString,
+  colorFromHex,
   colorFromRgb,
   colorValueToHex,
   colorWithOpacity,
@@ -240,7 +241,7 @@ export function ColorPicker({
         ).EyeDropper;
 
   const pickFromScreen = React.useCallback(async () => {
-    if (!eyedropper || disabled) return;
+    if (disabled || !eyedropper) return;
     try {
       const result = await new eyedropper().open();
       const picked = parseToRgba(result.sRGBHex);
@@ -451,27 +452,50 @@ export function ColorPicker({
       )}
 
       <div className="flex min-w-0 items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-xs"
-          disabled={disabled || !eyedropper}
-          aria-label={
-            eyedropper
-              ? "Pick a color from the screen"
-              : "Screen color picker unavailable"
-          }
-          title={
-            eyedropper
-              ? "Pick a color from the screen"
-              : "Screen color picker is not supported by this browser"
-          }
-          className="shrink-0 text-muted-foreground"
-          onClick={pickFromScreen}
-          data-leika-color-eyedropper
-        >
-          <PipetteIcon />
-        </Button>
+        {/* Without `EyeDropper` the pick goes through the platform's own color
+            panel -- on macOS the one carrying the magnifier that samples the
+            screen, the same job by the only route WebKit leaves open. The input
+            is laid OVER the button at full size rather than clicked from
+            script: a real click on a real color input is what opens that panel,
+            where a synthetic click on a zero-sized one does nothing in WebKit.
+            The button underneath is then decoration, so it stops taking focus
+            and the input carries the naming. */}
+        <span className="relative inline-flex shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            disabled={disabled}
+            aria-hidden={!eyedropper}
+            tabIndex={eyedropper ? undefined : -1}
+            aria-label={eyedropper ? "Pick a color from the screen" : undefined}
+            title={eyedropper ? "Pick a color from the screen" : undefined}
+            className="text-muted-foreground"
+            onClick={eyedropper ? pickFromScreen : undefined}
+            data-leika-color-eyedropper
+          >
+            <PipetteIcon />
+          </Button>
+          {eyedropper ? null : (
+            <input
+              type="color"
+              disabled={disabled}
+              aria-label="Pick a color with the system color picker"
+              title="Pick a color with the system color picker, which on macOS can sample the screen"
+              // `inset-0` alone leaves it 44px wide and overhanging the select
+              // beside it: WebKit gives a color input an intrinsic minimum
+              // width, which only `min-w-0` and `appearance-none` give up.
+              className="absolute inset-0 size-full min-h-0 min-w-0 cursor-pointer appearance-none border-0 p-0 opacity-0"
+              value={colorValueToHex(value)}
+              onChange={(event) =>
+                onValueChange(
+                  colorFromHex(event.currentTarget.value, format, value),
+                )
+              }
+              data-leika-color-native
+            />
+          )}
+        </span>
 
         <Select
           value={outputFormat}
