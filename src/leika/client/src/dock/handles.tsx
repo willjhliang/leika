@@ -7,6 +7,7 @@ import { MinusIcon, PlusIcon } from "lucide-react";
 import React from "react";
 import { Button } from "../components/ui/button";
 import { Separator } from "../components/ui/separator";
+import { CARD_INSET_TOP_BAR } from "./cardInset";
 
 /** Centered grip line drawn inside every drag handle (grip bars, stack
  * handles, the vertical minimized strip). */
@@ -73,7 +74,10 @@ export function HandleIconButton({
         ...(placement ?? {
           position: "absolute",
           right: 0,
-          top: 0,
+          // The bar's CONTENT band, which is not its padding box once the bar
+          // has taken on a card inset (see CARD_INSET_TOP_BAR) -- and absolute
+          // insets are measured from the padding box.
+          top: "var(--handle-inset-top, 0px)",
           bottom: 0,
           width: "1.7em",
         }),
@@ -99,6 +103,7 @@ export function StackHandleBar({
   collapsed = false,
   onToggle,
   narrow = false,
+  insetTop = false,
 }: {
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
   attrs: Record<string, string>;
@@ -108,12 +113,18 @@ export function StackHandleBar({
   /** The bar sits on a minimized STRIP (~36px wide): there is no room for the
    * centered pill next to the button, so the button alone fills the bar. */
   narrow?: boolean;
+  /** The bar sits against the top of a card that has given up its `py` for it:
+   * take that inset as padding, so the band above the bar drags too (see
+   * CARD_INSET_TOP in cardInset). */
+  insetTop?: boolean;
 }) {
   return (
     <div
       {...attrs}
       onPointerDown={onPointerDown}
-      className="relative flex min-h-8 shrink-0 cursor-grab items-center justify-center touch-none"
+      className={`relative flex min-h-8 shrink-0 cursor-grab items-center justify-center touch-none${
+        insetTop ? ` ${CARD_INSET_TOP_BAR}` : ""
+      }`}
     >
       {!narrow && <GripPill width="3em" opacity={0.6} />}
       {onToggle !== undefined && (

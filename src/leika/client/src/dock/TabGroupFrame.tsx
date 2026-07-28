@@ -14,6 +14,12 @@ import {
   TabsTrigger,
 } from "../components/ui/tabs";
 import { prefersReducedMotion } from "../utils/motion";
+import {
+  CARD_INSET_BOTTOM,
+  CARD_INSET_BOTTOM_OVERLAP,
+  CARD_INSET_TOP,
+  CARD_INSET_TOP_BAR,
+} from "./cardInset";
 import { GripPill, HandleIconButton } from "./handles";
 import { toggleGroupVisibility, useDock } from "./DockContext";
 import { DOUBLE_CLICK_MS, PanelSpec, TabGroup } from "./types";
@@ -73,6 +79,7 @@ function GripBar({
   collapsed,
   onToggle,
   startDrag,
+  insetTop,
 }: {
   collapsed: boolean;
   onToggle: () => void;
@@ -80,11 +87,14 @@ function GripBar({
     event: React.PointerEvent<HTMLDivElement>,
     opts?: { onClick?: () => void; expandOnDrag?: boolean },
   ) => void;
+  insetTop: boolean;
 }) {
   return (
     <CardHeader
       data-dock-griphandle
-      className="relative flex min-h-8 shrink-0 cursor-grab flex-row items-center justify-center touch-none select-none"
+      className={`relative flex min-h-8 shrink-0 cursor-grab flex-row items-center justify-center touch-none select-none${
+        insetTop ? ` ${CARD_INSET_TOP_BAR}` : ""
+      }`}
       onPointerDown={(event) => {
         const fromButton =
           (event.target as HTMLElement).closest("[data-dock-minimize]") !==
@@ -118,6 +128,8 @@ export function TabGroupFrame({
   maxContentHeight,
   stripDragsGroup = true,
   inheritContentPadding = false,
+  insetTop = false,
+  insetBottom = false,
   dockAreaId,
   dockAreaMinHeight,
 }: {
@@ -128,6 +140,11 @@ export function TabGroupFrame({
   /** Embedded dock areas already live inside their host surface's CardContent.
    * Independent floating/docked groups leave this false and own CardContent. */
   inheritContentPadding?: boolean;
+  /** Set by the frame's host when this frame sits against the top / bottom edge
+   * of a card that has given up its `py` for it -- see CARD_INSET_TOP. A stack
+   * hands them to its first and last member; a lone frame gets both. */
+  insetTop?: boolean;
+  insetBottom?: boolean;
   /** When this group is a populated nested dock area, the group root is also
    * the area's drop target. Empty areas retain their own placeholder root. */
   dockAreaId?: string;
@@ -221,20 +238,27 @@ export function TabGroupFrame({
   if (unmergeable) {
     const panel = panels[group.activeId];
     const handleTestId = panel?.testId && `${panel.testId}-handle`;
+    // The gap separating the header from the body is the header's, not the
+    // root's: a press in it is a press on the title bar, and the header can
+    // only be pressed where the header IS. A collapsed panel has no body to be
+    // separated from -- nor does one reporting an empty body, which is how a
+    // disconnected control panel renders -- so there the header runs on to the
+    // bottom of the card instead, and the gap would otherwise hang below it as
+    // whitespace the card's own padding does not balance.
+    const headerIsLast = collapsed || panel?.bodyIsEmpty === true;
+    const headerBottom = headerIsLast
+      ? insetBottom
+        ? ` ${CARD_INSET_BOTTOM_OVERLAP}`
+        : ""
+      : " pb-2";
     return (
       <div
         data-dock-area={dockAreaId}
         data-dock-group={group.id}
         data-dock-collapsed={collapsed ? "true" : undefined}
         data-testid={collapsed ? handleTestId : undefined}
-        // The gap separates the header from the body, so it goes with the
-        // body: a collapsed panel keeps its zero-height body as a flex item,
-        // and the gap would otherwise hang below the header as whitespace the
-        // card's own padding does not balance. A panel reporting an empty body
-        // is the same picture -- header alone in the card -- and needs the same
-        // treatment, which is how a disconnected control panel renders.
         className={`${rootClassName}${
-          collapsed || panel?.bodyIsEmpty === true ? "" : " gap-2"
+          insetBottom ? ` ${CARD_INSET_BOTTOM}` : ""
         }`}
         style={rootStyle}
       >
@@ -247,6 +271,8 @@ export function TabGroupFrame({
             panel?.titleNode ? undefined : (panel?.title ?? group.activeId)
           }
           className={`flex flex-row items-center${
+            insetTop ? ` ${CARD_INSET_TOP}` : ""
+          }${headerBottom}${
             stripDragsGroup ? " cursor-grab touch-none select-none" : ""
           }`}
           onPointerDown={(event) => {
@@ -275,12 +301,18 @@ export function TabGroupFrame({
       data-dock-area={dockAreaId}
       data-dock-group={group.id}
       data-dock-collapsed={collapsed ? "true" : undefined}
-      className={`${rootClassName} gap-0`}
+      // With a grip bar, the top inset goes to the bar (a handle, and the thing
+      // the band reads as belonging to). Without one there is nothing to hand
+      // it to, so the frame keeps it as plain padding.
+      className={`${rootClassName} gap-0${
+        insetTop && !stripDragsGroup ? ` ${CARD_INSET_TOP}` : ""
+      }${insetBottom ? ` ${CARD_INSET_BOTTOM}` : ""}`}
       style={rootStyle}
     >
       {stripDragsGroup && (
         <GripBar
           collapsed={collapsed}
+          insetTop={insetTop}
           onToggle={handleClick}
           startDrag={(event, options) =>
             dock.startGroupDrag(event, group.id, options)

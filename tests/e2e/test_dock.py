@@ -529,6 +529,66 @@ def test_a_lone_click_on_the_handle_still_only_collapses(dock_page: Page) -> Non
     assert abs(still["x"] - moved["x"]) < 1.0, (still, moved, home)
 
 
+def _sits_on(page: Page, point: Point, selector: str) -> bool:
+    """Whether the topmost element at `point` belongs to `selector`."""
+    return page.evaluate(
+        "([x, y, sel]) => Boolean(document.elementFromPoint(x, y)?.closest(sel))",
+        [point[0], point[1], selector],
+    )
+
+
+def test_the_handle_reaches_the_edges_of_its_card(dock_page: Page) -> None:
+    """The band of card padding above a handle is part of the handle.
+
+    Nothing else is drawn there, so it reads as title bar -- and has to drag and
+    click like title bar rather than being the dead margin it started as. Same
+    for the band below the title once the panel is collapsed and the header is
+    the last thing left in the card.
+    """
+    page = dock_page
+    card = bounds(control_panel(page))
+    header = bounds(control_handle(page))
+    assert header["y"] <= card["y"] + 0.5, (header, card)
+    # Clear of the top resize grip, which owns the first few pixels of the card.
+    band = (card["x"] + card["width"] / 2, card["y"] + 8.0)
+    assert _sits_on(page, band, "[data-dock-header]")
+
+    # It drags what the title bar drags.
+    drag(page, band, CANVAS, (320.0, 400.0))
+    moved = bounds(control_panel(page))
+    assert (moved["x"], moved["y"]) != (card["x"], card["y"]), (moved, card)
+
+    # And it collapses what the title bar collapses.
+    page.mouse.click(moved["x"] + moved["width"] / 2, moved["y"] + 8.0)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+
+    # Folded, the header is the whole card -- including the band under the
+    # title, which now has the card's bottom padding to itself.
+    folded = bounds(control_panel(page))
+    under_title = (folded["x"] + folded["width"] / 2, folded["y"] + folded["height"] - 6.0)
+    assert _sits_on(page, under_title, "[data-dock-header]")
+    page.mouse.click(*under_title)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
+
+
+def test_a_grip_bar_reaches_the_top_of_its_window(dock_page: Page) -> None:
+    """The same band above a tabbed group's grip bar, which drags in place of a
+    header. Its own height is unchanged by taking the band on: the pill stays
+    centred in the bar rather than in the bar plus the padding above it."""
+    page = dock_page
+    window = tear_out_tab(page, "Alpha", PARK_UPPER)
+    card = bounds(window)
+    grip = bounds(grip_of(window))
+    assert grip["y"] <= card["y"] + 0.5, (grip, card)
+    assert grip["height"] == pytest.approx(32.0 + 16.0, abs=0.5), grip
+    assert _sits_on(
+        page, (card["x"] + card["width"] / 2, card["y"] + 8.0), "[data-dock-griphandle]"
+    )
+
+    pill = bounds(grip_of(window).locator('[data-slot="separator"]'))
+    assert pill["y"] + pill["height"] / 2 == pytest.approx(card["y"] + 16.0 + 16.0, abs=0.5)
+
+
 def _draws_a_shadow(box_shadow: str) -> bool:
     """Whether a computed `box-shadow` puts anything on screen.
 

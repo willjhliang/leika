@@ -494,8 +494,11 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       // Floating windows hover over the viewport, so they get a drop shadow to
       // lift them off it. Docked and split cards stay flat -- they tile the
       // surface rather than sitting on top of it.
+      // `py-0`: the window's vertical inset is carried by the handles at its
+      // top and bottom instead, so the whole band around them drags (see
+      // CARD_INSET_TOP in cardInset).
       className={cn(
-        "box-border shadow-md",
+        "box-border py-0 shadow-md",
         peek && PEEK_TRANSITION_CLASSES,
         faded && FADED_CLASSES,
       )}
@@ -579,6 +582,7 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
         {multi && (
           <StackHandleBar
             attrs={{ "data-floating-handle": win.id }}
+            insetTop
             onPointerDown={(event) => dock.startWindowDrag(event, win.id)}
             collapsed={collapsed}
             onToggle={() =>
@@ -629,6 +633,12 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
                         )
                       : FALLBACK_BODY_CAP_PX)
                 }
+                // The window's vertical inset belongs to whatever sits against
+                // each edge of the card: the stack's first and last groups,
+                // except at the top of a multi-group window, where the window
+                // header is already there to take it.
+                insetTop={!multi && index === 0}
+                insetBottom={index === win.stack.length - 1}
                 stripDragsGroup
               />
             );

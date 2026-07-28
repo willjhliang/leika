@@ -290,7 +290,10 @@ function DockLeafView({ node, edge }: { node: DockNode; edge: DockEdge }) {
       data-dock-edge={edge}
       data-testid={testIdForGroup(dock.panels, dock.groups[node.group])}
       data-dock-side={edge}
-      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+      // `py-0`: the leaf's vertical inset is carried by the handles at its top
+      // and bottom instead, so the whole band around them drags (see
+      // CARD_INSET_TOP in cardInset).
+      className="min-h-0 min-w-0 flex-1 overflow-hidden py-0"
       style={{
         flexGrow: 1,
         minWidth: 0,
@@ -314,7 +317,8 @@ function DockLeafView({ node, edge }: { node: DockNode; edge: DockEdge }) {
 function DockLeafFrame({ groupId }: { groupId: string }) {
   const group = useDock().groups[groupId];
   if (group === undefined) return null;
-  return <TabGroupFrame group={group} stripDragsGroup />;
+  // A leaf is alone in its card, so both of the card's insets are its own.
+  return <TabGroupFrame group={group} stripDragsGroup insetTop insetBottom />;
 }
 
 /** Draggable divider between two split children. Reports the pointer delta

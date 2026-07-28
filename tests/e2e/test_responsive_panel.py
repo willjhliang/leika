@@ -458,10 +458,14 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
     """A panel with nothing to show is just its header inside the card.
 
     The body stays mounted at zero height so its intrinsic-size transition can
-    be measured, which leaves it a flex item -- and the frame's header/body gap
-    hanging below a lone "Connecting..." or "Inactive" header, unbalanced by
-    the card's padding. The gap belongs to the body, so it goes when the body
-    has nothing in it.
+    be measured, which leaves it a flex item -- and the header/body gap hanging
+    below a lone "Connecting..." or "Inactive" header, unbalanced by the card's
+    padding. The gap belongs to the body, so it goes when the body has nothing
+    in it, and the header runs on to the bottom of the card instead.
+
+    The gap is the header's own bottom padding rather than a gap between flex
+    items, so that pressing it lands on the header: it is title bar to look at
+    and has to be title bar to the pointer too.
     """
     leika_server.gui.configure_theme(control_layout="floating")
     page.goto(leika_server.url)
@@ -473,7 +477,9 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
     measure = """el => {
         const header = el.querySelector('[data-dock-header]');
         return {
-            rowGap: getComputedStyle(el).rowGap,
+            // Below the title: the gap, or the card's own inset once the header
+            // is the last thing in the card and has taken that inset over.
+            underTitle: getComputedStyle(header).paddingBottom,
             // The frame is exactly its header when nothing follows it.
             trailingSpace: Math.round(
                 el.getBoundingClientRect().bottom
@@ -482,10 +488,10 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
         };
     }"""
     expect(frame).to_be_visible(timeout=5_000)
-    assert frame.evaluate(measure) == {"rowGap": "normal", "trailingSpace": 0}
+    assert frame.evaluate(measure) == {"underTitle": "16px", "trailingSpace": 0}
 
     # A populated body earns the gap back: it now has something to separate.
     leika_server.gui.add_text("Ready", initial_value="yes")
     expect(page.get_by_text("Ready")).to_be_visible(timeout=5_000)
-    assert frame.evaluate(measure)["rowGap"] == "8px"
+    assert frame.evaluate(measure)["underTitle"] == "8px"
     assert page_errors == []
