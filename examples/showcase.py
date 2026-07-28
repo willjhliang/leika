@@ -210,7 +210,23 @@ def main() -> None:
             step=0.01,
             initial_value=1.0,
             marks=((0.1, "slow"), (3.0, "fast")),
+            # The number is worth reading exactly here, and worth typing when a
+            # drag cannot land on 1.00 by hand.
+            show_value=True,
             hint="Fast drags stay optimistic while Python catches up.",
+        )
+        # The default the other way: no box, so the track takes the whole row.
+        # Trail length is a feel rather than a figure -- nobody types a number
+        # of samples -- which is the case `show_value` is off for.
+        # No `marks`, so the ends label themselves with the numbers -- the plain
+        # default, against `Speed` above naming its own ends instead.
+        trail = server.gui.add_slider(
+            "Trail",
+            min=0.05,
+            max=1.0,
+            step=0.01,
+            initial_value=0.6,
+            hint="No number box: the marks carry the range and the shape says the rest.",
         )
         frequency = server.gui.add_number(
             "Frequency", initial_value=1.2, min=0.2, max=3.0, step=0.05
@@ -408,13 +424,18 @@ def main() -> None:
                     gui_preview.image = frame[::4, ::4]
 
             if now - last_plot >= 0.2:
-                plot_figure.data[0].x = list(history_t)
-                plot_figure.data[0].y = list(history_y)
+                # How much of the buffered history the plots draw. Two points is
+                # the least that is still a line.
+                kept = max(2, round(len(history_t) * float(trail.value)))
+                trail_t = list(history_t)[-kept:]
+                trail_y = list(history_y)[-kept:]
+                plot_figure.data[0].x = trail_t
+                plot_figure.data[0].y = trail_y
                 plot_figure.update_yaxes(range=list(plot_range.value))
                 plot_pane.update(plot_figure)
                 gui_plot.figure = plot_figure
-                data_x = np.asarray(history_t, dtype=np.float64)
-                data_y = np.asarray(history_y, dtype=np.float64)
+                data_x = np.asarray(trail_t, dtype=np.float64)
+                data_y = np.asarray(trail_y, dtype=np.float64)
                 uplot.data = (data_x, data_y)
                 surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
                 surface_pane.update(surface_figure)

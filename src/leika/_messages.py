@@ -633,6 +633,8 @@ class GuiSliderProps(GuiBaseProps):
     """Step size for the slider."""
     precision: int
     """Number of decimal places to display for the slider value."""
+    show_value: bool
+    """Whether to show the editable number box beside the slider."""
     _marks: Optional[Tuple[GuiSliderMark, ...]]
     """(Private) Optional tuple of GuiSliderMark objects to display custom marks on the slider."""
 

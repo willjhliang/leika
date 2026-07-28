@@ -1952,6 +1952,7 @@ class GuiApi(GuiContainer):
         initial_value: IntOrFloat,
         *,
         marks: tuple[IntOrFloat | tuple[IntOrFloat, str], ...] | None = None,
+        show_value: bool = False,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1968,6 +1969,9 @@ class GuiApi(GuiContainer):
             marks: tuple of marks to display below the slider. Each mark should
                 either be a numerical or a (number, label) tuple, where the
                 label is provided as a string.
+            show_value: Whether to place an editable number box beside the
+                slider. Off by default, which leaves the slider the full width
+                of the row; the marks below it still name the range.
             disabled: Whether the slider is disabled.
             visible: Whether the slider is visible.
             hint: Optional hint to display on hover.
@@ -2010,6 +2014,7 @@ class GuiApi(GuiContainer):
                         max=max,
                         step=step,
                         precision=_compute_precision_digits(step),
+                        show_value=show_value,
                         visible=visible,
                         disabled=disabled,
                         _marks=_build_slider_marks(marks),

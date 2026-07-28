@@ -831,3 +831,32 @@ def test_gui_image_label_is_styled_like_every_other_label(
 
     assert image_label.evaluate(probe) == row_label.evaluate(probe)
     assert page_errors == []
+
+
+def test_the_slider_number_box_is_opt_in(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """`show_value` is off by default, which leaves the track the whole row."""
+    plain = leika_server.gui.add_slider("Trail", min=0.0, max=1.0, step=0.01, initial_value=0.5)
+    leika_server.gui.add_slider(
+        "Speed", min=0.0, max=1.0, step=0.01, initial_value=0.5, show_value=True
+    )
+
+    plain_row = find_gui_row(leika_page, "Trail")
+    shown_row = find_gui_row(leika_page, "Speed")
+    expect(plain_row.locator("[data-leika-slider]")).to_be_visible(timeout=5_000)
+    expect(plain_row.get_by_label("Trail value")).to_have_count(0)
+    expect(shown_row.get_by_label("Speed value")).to_have_value("0.5")
+
+    # The box costs the track its width, so the plain one is the wider of the two.
+    plain_track = plain_row.locator("[data-leika-slider]").bounding_box()
+    shown_track = shown_row.locator("[data-leika-slider]").bounding_box()
+    assert plain_track is not None and shown_track is not None
+    assert plain_track["width"] > shown_track["width"] + 40
+
+    # And it is a live prop, not only a constructor argument.
+    plain.show_value = True
+    expect(plain_row.get_by_label("Trail value")).to_have_value("0.5", timeout=5_000)
+    assert page_errors == []

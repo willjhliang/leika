@@ -372,6 +372,7 @@ export interface GuiSliderMessage {
     max: number;
     step: number;
     precision: number;
+    show_value: boolean;
     _marks: { value: number; label: string | null }[] | null;
   };
 }

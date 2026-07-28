@@ -24,6 +24,7 @@ export default function SliderComponent({
     max,
     precision,
     step,
+    show_value: showValue,
     _marks: marks,
   },
 }: GuiSliderMessage) {
@@ -75,17 +76,22 @@ export default function SliderComponent({
           />
           <SliderAnnotations marks={renderedMarks} min={min} max={max} />
         </div>
-        <NumericInput
-          aria-label={`${label} value`}
-          className="w-16"
-          value={value}
-          onValueChange={(next) => setValue(uuid, next)}
-          min={min}
-          max={max}
-          step={step ?? undefined}
-          precision={precision}
-          disabled={disabled}
-        />
+        {/* Absent, the track takes the row on its own: the annotations below
+            still name the range, so the number is an addition rather than the
+            only reading of the value. */}
+        {showValue ? (
+          <NumericInput
+            aria-label={`${label} value`}
+            className="w-16"
+            value={value}
+            onValueChange={(next) => setValue(uuid, next)}
+            min={min}
+            max={max}
+            step={step ?? undefined}
+            precision={precision}
+            disabled={disabled}
+          />
+        ) : null}
       </div>
     </GuiInputRow>
   );
