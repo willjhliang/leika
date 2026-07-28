@@ -17,7 +17,16 @@ import { TOGGLE_CLASSES } from "./toggleStyles";
 export default function ToggleGroupComponent({
   uuid,
   value,
-  props: { hint, label, disabled, options, color, multiple, _merge: merge },
+  props: {
+    hint,
+    label,
+    disabled,
+    options,
+    color,
+    multiple,
+    required,
+    _merge: merge,
+  },
 }: GuiToggleGroupMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
   return (
@@ -31,15 +40,20 @@ export default function ToggleGroupComponent({
         value={value}
         multiple={multiple}
         disabled={disabled}
-        // Reported in DECLARATION order, not the order they were clicked, so
-        // the value reads the same way the row does -- and so two clients that
-        // arrived at the same set of toggles report the same tuple.
-        onValueChange={(next) =>
+        onValueChange={(next) => {
+          // A required row refuses the press that would empty it, here rather
+          // than by correcting the value afterwards: the group is controlled,
+          // so declining to report the change leaves the toggle where it was
+          // with nothing sent and nothing to undo.
+          if (required && next.length === 0) return;
+          // Reported in DECLARATION order, not the order they were clicked, so
+          // the value reads the same way the row does -- and so two clients
+          // that arrived at the same set of toggles report the same tuple.
           setValue(
             uuid,
             options.filter((option) => next.includes(option)),
-          )
-        }
+          );
+        }}
         // Unlabelled, the row goes unnamed rather than inventing a name: every
         // toggle reads out its own text.
         aria-label={label ?? undefined}

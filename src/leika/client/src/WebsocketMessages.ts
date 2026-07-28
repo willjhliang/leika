@@ -497,6 +497,7 @@ export interface GuiToggleGroupMessage {
     color: "primary" | "secondary";
     options: string[];
     multiple: boolean;
+    required: boolean;
     _merge: boolean[];
   };
 }

@@ -755,6 +755,9 @@ class GuiToggleGroupProps(GuiBaseProps):
     multiple: bool
     """Whether more than one option may be on at a time. False makes the group
     a choice between its options, where turning one on turns the rest off."""
+    required: bool
+    """Whether one option must always be on. True refuses the press that would
+    empty the row, so the value is never an empty tuple."""
     _merge: Tuple[bool, ...]
     """(Private) One flag per gap between toggles; see
     `GuiButtonGroupProps._merge`."""

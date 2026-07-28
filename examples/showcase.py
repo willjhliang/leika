@@ -246,11 +246,11 @@ def main() -> None:
         # not an action, so the row shows which one is on. One at a time (the
         # default), merged (also the default), and outlined -- a row this long
         # in the accent would be the loudest thing in the panel.
+        # One at a time, which also means required: the row starts on its first
+        # option and the toggle that is on cannot be turned off, so the image
+        # always has a palette to render with.
         palette = server.gui.add_toggle(
-            ("Ocean", "Magma", "Viridis"),
-            label="Palette",
-            color="secondary",
-            initial_value="Ocean",
+            ("Ocean", "Magma", "Viridis"), label="Palette", color="secondary"
         )
         # Three options, so no search box: the plain dropdown opens with the
         # current one already under the cursor.
@@ -332,7 +332,6 @@ def main() -> None:
         )
 
     state: dict[str, Any] = {
-        "palette": "Ocean",
         "phase": 0.0,
         "start": time.monotonic(),
     }
@@ -398,17 +397,6 @@ def main() -> None:
                 "This modal is populated through the same GUI API as the hover panel."
             )
             server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.65)
-
-    @palette.on_update
-    def _(_) -> None:
-        # A row that holds one at a time can still hold none: the toggle that is
-        # on can be turned off. The image cannot do without a palette, so the
-        # last one goes straight back on, which is how a required choice
-        # behaves.
-        if len(palette.value) == 0:
-            palette.value = (state["palette"],)
-        else:
-            state["palette"] = palette.value[0]
 
     @revert.on_click
     def _(_) -> None:
@@ -483,7 +471,7 @@ def main() -> None:
                 frame = render_field(
                     state["phase"],
                     float(frequency.value),
-                    state["palette"],
+                    palette.value[0],
                     offset.value,
                     tint.value,
                 )

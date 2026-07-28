@@ -1139,6 +1139,9 @@ def test_a_toggle_row_holds_one_or_many(
     all be on at once. Either way the value is the tuple of what is on."""
     one = leika_server.gui.add_toggle(("Bold", "Italic"), label="One", initial_value="Bold")
     many = leika_server.gui.add_toggle(("Grid", "Axes"), label="Many", multiple=True)
+    clearable = leika_server.gui.add_toggle(
+        ("Bold", "Italic"), label="Clearable", initial_value="Bold", required=False
+    )
 
     one_row = find_gui_row(leika_page, "One").locator("[data-leika-toggle]")
     many_row = find_gui_row(leika_page, "Many").locator("[data-leika-toggle]")
@@ -1161,4 +1164,18 @@ def test_a_toggle_row_holds_one_or_many(
     wait_for(lambda: many.value, ("Axes",))
     many_row.nth(0).click()
     wait_for(lambda: many.value, ("Grid", "Axes"))
+
+    # A one-at-a-time row is required by default, so pressing the toggle that is
+    # on is refused rather than emptying the row -- nothing to undo, and no
+    # round trip. Made optional, the same press clears it.
+    one_row.nth(1).click()
+    wait_for(lambda: one.value, ("Italic",))
+    leika_page.wait_for_timeout(300)
+    assert one.value == ("Italic",)
+    expect(one_row.nth(1)).to_have_attribute("aria-pressed", "true")
+
+    clearable_row = find_gui_row(leika_page, "Clearable").locator("[data-leika-toggle]")
+    clearable_row.nth(0).click()
+    wait_for(lambda: clearable.value, ())
+    expect(clearable_row.nth(0)).to_have_attribute("aria-pressed", "false")
     assert page_errors == []

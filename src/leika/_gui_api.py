@@ -147,16 +147,18 @@ def _initial_toggles(
     initial_value: bool | str | Sequence[str] | None,
     *,
     multiple: bool,
+    required: bool,
 ) -> tuple[str, ...]:
     """Which options a row of toggles starts on, as a tuple in every case.
 
     Accepts the shapes a caller reaches for -- nothing, one option's text, or
     a sequence of them -- and rejects an option that is not in the row, which
     would otherwise start a group in a state the user cannot click their way
-    back to.
+    back to. A required row left unset starts on its first option, since it is
+    not allowed to be empty and something has to be chosen.
     """
     if initial_value is None:
-        return ()
+        return (options[0],) if required else ()
     if isinstance(initial_value, bool):
         raise ValueError(
             "A row of toggles starts on the options named, so initial_value= is"
@@ -170,6 +172,11 @@ def _initial_toggles(
         raise ValueError(
             f"initial_value={wanted!r} turns on {len(wanted)} options, but this row"
             " holds one at a time. Pass multiple=True to allow several."
+        )
+    if required and len(wanted) == 0:
+        raise ValueError(
+            "A required row cannot start empty: pass the option to start on, or"
+            " required=False to let the row hold nothing."
         )
     # Declaration order, not the order they were named: the value reads the
     # same way the row does.
@@ -1713,6 +1720,7 @@ class GuiApi(GuiContainer):
         label: str | None = None,
         color: Literal["primary", "secondary"] = "primary",
         multiple: bool = False,
+        required: bool | None = None,
         merge: bool | Sequence[bool] = True,
         disabled: bool = False,
         visible: bool = True,
@@ -1729,6 +1737,7 @@ class GuiApi(GuiContainer):
         label: str | None = None,
         color: Literal["primary", "secondary"] = "primary",
         multiple: bool = False,
+        required: bool | None = None,
         merge: bool | Sequence[bool] = True,
         disabled: bool = False,
         visible: bool = True,
@@ -1759,6 +1768,12 @@ class GuiApi(GuiContainer):
             multiple: Whether more than one option in a row may be on at once.
                 Off by default, which makes the row a choice between its
                 options: turning one on turns the others off.
+            required: Whether one option must always be on, so the toggle that
+                is on cannot be turned off. Left unset, a row behaves like the
+                control it resembles: one at a time requires a choice, the way
+                a radio group does, and a ``multiple`` row does not, the way
+                checkboxes do not. A required row given no ``initial_value``
+                starts on its first option.
             merge: Whether neighbouring toggles are joined or parted; see
                 :meth:`add_button`.
             disabled: Whether the toggle is disabled.
@@ -1777,6 +1792,11 @@ class GuiApi(GuiContainer):
             if not isinstance(merge, bool):
                 raise ValueError(
                     "merge= is about the gaps between toggles in a row; a single toggle has none."
+                )
+            if multiple or required is not None:
+                raise ValueError(
+                    "multiple= and required= are about how many options in a ROW may be"
+                    " on; a single toggle is simply on or off."
                 )
             if initial_value is not None and not isinstance(initial_value, bool):
                 raise ValueError(
@@ -1817,7 +1837,11 @@ class GuiApi(GuiContainer):
                 "add_toggle() needs at least one option: an empty sequence would draw"
                 " a row with nothing in it."
             )
-        value = _initial_toggles(options, initial_value, multiple=multiple)
+        # A row behaves like the control it resembles unless told otherwise: a
+        # choice between options is required the way a radio group is, and a row
+        # of independent switches is not, the way checkboxes are not.
+        required = (not multiple) if required is None else required
+        value = _initial_toggles(options, initial_value, multiple=multiple, required=required)
         uuid = _make_uuid()
         order = _apply_default_order(order)
         return GuiToggleGroupHandle(
@@ -1834,6 +1858,7 @@ class GuiApi(GuiContainer):
                         color=color,
                         options=options,
                         multiple=multiple,
+                        required=required,
                         _merge=_merge_flags(len(options), merge),
                         disabled=disabled,
                         visible=visible,

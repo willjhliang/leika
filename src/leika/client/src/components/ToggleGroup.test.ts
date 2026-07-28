@@ -8,11 +8,13 @@ import ToggleGroupComponent from "./ToggleGroup";
 function renderToggleGroup({
   value = ["Bold"],
   multiple = false,
+  required = false,
   color = "primary" as "primary" | "secondary",
   merge = [true, true],
 }: {
   value?: string[];
   multiple?: boolean;
+  required?: boolean;
   color?: "primary" | "secondary";
   merge?: boolean[];
 } = {}): string {
@@ -30,6 +32,7 @@ function renderToggleGroup({
       color,
       options: ["Bold", "Italic", "Under"],
       multiple,
+      required,
       _merge: merge,
     },
   };

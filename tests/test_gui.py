@@ -253,13 +253,19 @@ def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
 
     row = server.gui.add_toggle(("Bold", "Italic"), initial_value="Italic")
     assert row.value == ("Italic",)
+    # One at a time is required by default, like a radio group, so a row left
+    # without an initial value starts on its first option rather than empty.
+    assert server.gui.add_toggle(("Bold", "Italic")).value == ("Bold",)
+    assert server.gui.add_toggle(("Bold", "Italic"), required=False).value == ()
     # A tuple in both modes, and always in declaration order rather than the
     # order the caller named them in.
     many = server.gui.add_toggle(
         ("Bold", "Italic", "Under"), multiple=True, initial_value=("Under", "Bold")
     )
     assert many.value == ("Bold", "Under")
-    assert server.gui.add_toggle(("Bold", "Italic")).value == ()
+    # `multiple` is the other default pair, like checkboxes: optional, so empty.
+    assert server.gui.add_toggle(("Grid", "Axes"), multiple=True).value == ()
+    assert server.gui.add_toggle(("Grid", "Axes"), multiple=True, required=True).value == ("Grid",)
 
     with pytest.raises(ValueError, match="not among the options"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value="Underline")
@@ -269,5 +275,9 @@ def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
         server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[call-overload]
     with pytest.raises(ValueError, match="is a bool"):
         server.gui.add_toggle("Bookmark", initial_value="on")  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="cannot start empty"):
+        server.gui.add_toggle(("Bold", "Italic"), initial_value=())
+    with pytest.raises(ValueError, match="how many options in a ROW"):
+        server.gui.add_toggle("Bookmark", multiple=True)  # type: ignore[call-overload]
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_toggle([])
