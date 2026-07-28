@@ -18,7 +18,11 @@ import { useShowGenerated } from "./useShowGenerated";
 import GeneratedGuiContainer from "./Generated";
 import { GuiDockContext } from "./GuiDockContext";
 import { SettingsButton } from "./SettingsPane";
-import { useSettingsPanelOpen } from "./SettingsPanelController";
+import {
+  controlsSection,
+  useControlsShown,
+  useSettingsPanelOpen,
+} from "./SettingsPanelController";
 import { CONTROL_WIDTH_PX } from "./controlWidth";
 
 // Memoized so a torn-out tab's whole GUI tree doesn't re-render every time
@@ -68,9 +72,10 @@ export function ControlPanelDockSurface({
   // The body keeps itself mounted at zero height when there is no GUI, so the
   // frame has to be told; otherwise its header/body gap hangs below a lone
   // "Connecting..." header.
-  const showGenerated = useShowGenerated();
+  const hasGenerated = useShowGenerated();
   const settingsOpen = useSettingsPanelOpen();
-  const hasBody = showGenerated || settingsOpen;
+  const controlsShown = useControlsShown();
+  const hasBody = (hasGenerated && controlsShown) || settingsOpen;
   const controlPanelSpec: PanelRegistry = React.useMemo(
     () => ({
       [CONTROL_PANEL_ID]: {
@@ -81,6 +86,15 @@ export function ControlPanelDockSurface({
         titleNode: <PanelHeader actions={<SettingsButton />} />,
         render: () => <ControlPanelContents />,
         bodyIsEmpty: !hasBody,
+        // The handle owns ONE thing: whether the app's controls are shown. It
+        // does not fold the panel -- folding is what happens when nothing is
+        // left to show, and the gear's section is not the handle's to close.
+        // Always claims the click so the group's own collapse never fires; the
+        // sync node derives that from the two sections instead.
+        onHandleClick: () => {
+          controlsSection.toggle();
+          return true;
+        },
       },
     }),
     [hasBody],
@@ -254,6 +268,25 @@ function ControlPanelDockSync({
     // free to resize the window afterwards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The group is folded exactly when there is nothing to show -- a READING of
+  // the two sections, not a third state anyone toggles. That is what keeps the
+  // handle and the gear independent: hiding the controls with the settings up
+  // leaves the panel open on the settings, and closing the settings with the
+  // controls up leaves it open on those.
+  const settingsOpen = useSettingsPanelOpen();
+  const controlsShown = useControlsShown();
+  // Deliberately NOT gated on whether the server has sent any GUI: an app with
+  // no GUI keeps an open, empty panel, exactly as it did before these toggles
+  // existed. Only the viewer folds this panel.
+  const bodyVisible = controlsShown || settingsOpen;
+  React.useEffect(() => {
+    const groupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);
+    if (groupId === null) return;
+    const collapsed = dock.layout.groups[groupId]?.collapsed ?? false;
+    if (collapsed !== bodyVisible) return;
+    dock.toggleCollapsed(groupId);
+  }, [bodyVisible, dock]);
 
   // Where is the control panel now?
   const controlGroupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);

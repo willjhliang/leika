@@ -8,7 +8,7 @@ import { PlusIcon } from "lucide-react";
 import React from "react";
 import { Card } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
-import { useDock } from "./DockContext";
+import { toggleGroupVisibility, useDock } from "./DockContext";
 import { HandleIconButton } from "./handles";
 import { DockEdge, DockNode, NodeId, TabGroup, testIdForGroup } from "./types";
 import { collectLeaves } from "./layoutOps";
@@ -58,6 +58,12 @@ function VerticalMinimizedCell({
   group: TabGroup;
 }) {
   const dock = useDock();
+  // Unfolding a strip means the same as clicking the handle: the panel
+  // decides what comes back, and only a panel with no opinion is folded by
+  // the group's own flag.
+  const unfoldGroup = (groupId: string) => {
+    if (!toggleGroupVisibility(dock, groupId)) dock.toggleCollapsed(groupId);
+  };
   const title = group.panelIds
     .map((p) => dock.panels[p]?.title ?? p)
     .join(" / ");
@@ -84,7 +90,7 @@ function VerticalMinimizedCell({
         title={title}
         onPointerDown={(event: React.PointerEvent<HTMLDivElement>) =>
           dock.startGroupDrag(event, group.id, {
-            onClick: () => dock.toggleCollapsed(group.id),
+            onClick: () => unfoldGroup(group.id),
             // A drag that starts on the expand (+) button tears out the FULL
             // panel (expand-then-drag); from anywhere else the cell drags as
             // the minimized stub it shows.
@@ -106,7 +112,7 @@ function VerticalMinimizedCell({
           label="Expand panel"
           title="Expand"
           expanded={false}
-          onActivate={() => dock.toggleCollapsed(group.id)}
+          onActivate={() => unfoldGroup(group.id)}
           dragThrough
           // Static placement filling the cap (not bar-anchored).
           placement={{ width: "100%", height: "1.7em" }}

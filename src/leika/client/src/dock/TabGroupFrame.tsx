@@ -15,7 +15,7 @@ import {
 } from "../components/ui/tabs";
 import { prefersReducedMotion } from "../utils/motion";
 import { GripPill, HandleIconButton } from "./handles";
-import { useDock } from "./DockContext";
+import { toggleGroupVisibility, useDock } from "./DockContext";
 import { PanelSpec, TabGroup } from "./types";
 
 const PanelBody = React.memo(function PanelBody({
@@ -170,6 +170,13 @@ export function TabGroupFrame({
     });
   }, [orderKey, dock.draggingTabId]);
 
+  // Every click gives the panel first refusal: one that owns its own sections
+  // decides what "show me less of this" means, and only a panel with no
+  // opinion is folded by the group's own flag.
+  const handleClick = () => {
+    if (!toggleGroupVisibility(dock, group.id)) dock.toggleCollapsed(group.id);
+  };
+
   const renderPanelBody = (panelId: string) => (
     <PanelBody
       panel={panels[panelId]}
@@ -231,7 +238,7 @@ export function TabGroupFrame({
           onPointerDown={(event) => {
             if (stripDragsGroup) {
               dock.startGroupDrag(event, group.id, {
-                onClick: () => dock.toggleCollapsed(group.id),
+                onClick: handleClick,
               });
             }
           }}
@@ -260,7 +267,7 @@ export function TabGroupFrame({
       {stripDragsGroup && (
         <GripBar
           collapsed={collapsed}
-          onToggle={() => dock.toggleCollapsed(group.id)}
+          onToggle={handleClick}
           startDrag={(event, options) =>
             dock.startGroupDrag(event, group.id, options)
           }

@@ -20,7 +20,11 @@ import {
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { cn } from "@/lib/utils";
-import { settingsPanel, useSettingsPanelOpen } from "./SettingsPanelController";
+import {
+  settingsPanel,
+  useControlsShown,
+  useSettingsPanelOpen,
+} from "./SettingsPanelController";
 
 /** Ties the gear to the section it opens, for assistive technology. */
 const SETTINGS_SECTION_ID = "leika-settings";
@@ -176,6 +180,8 @@ function AboutRow() {
 export function SettingsSection() {
   const viewer = React.useContext(ViewerContext)!;
   const opened = useSettingsPanelOpen();
+  // Whether anything follows this section in the panel body.
+  const controlsShown = useControlsShown();
   const darkMode = viewer.useSettings((state) => state.darkMode);
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const { setDarkMode, setShowPaneTitles } = viewer.settingsActions;
@@ -198,7 +204,10 @@ export function SettingsSection() {
           The rule at the bottom is the one line in the panel that runs the
           body's full width: it separates the browser's controls from the
           server's, a bigger break than anything inside the GUI, so it crosses
-          the padding the rows stop at instead of aligning with them.
+          the padding the rows stop at instead of aligning with them. It is
+          there only while there are controls below it to separate -- with the
+          settings alone in the panel it would underline the last row and hold
+          the standoff meant to clear it open beneath, so both go.
 
           The pull-out and the padding that puts the rows back both belong on
           THIS element rather than a child of it, because the height transition
@@ -207,9 +216,15 @@ export function SettingsSection() {
           painted short. */}
       <CollapsibleContent
         id={SETTINGS_SECTION_ID}
-        className="-mx-(--card-spacing) h-(--collapsible-panel-height) overflow-hidden border-b px-(--card-spacing) transition-[height] duration-200 ease-out data-ending-style:h-0 data-starting-style:h-0"
+        className={cn(
+          "-mx-(--card-spacing) h-(--collapsible-panel-height) overflow-hidden px-(--card-spacing) transition-[height] duration-200 ease-out data-ending-style:h-0 data-starting-style:h-0",
+          controlsShown && "border-b",
+        )}
       >
-        <div className="flex flex-col gap-2 pt-2 pb-3" data-leika-settings-pane>
+        <div
+          className={cn("flex flex-col gap-2 pt-2", controlsShown && "pb-3")}
+          data-leika-settings-pane
+        >
           <SettingsRow htmlFor="leika-settings-dark-mode" label="Dark mode">
             <Switch
               id="leika-settings-dark-mode"

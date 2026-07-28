@@ -272,12 +272,26 @@ def test_the_gear_reaches_the_sidebar_and_mobile_chromes(
     )
 
     # Sidebar: same cluster as the floating header, gear before the pill.
-    trigger = page.locator(TRIGGER)
-    expect(trigger).to_have_count(1, timeout=5_000)
-    gear = trigger.bounding_box()
-    pill = page.locator('[data-slot="badge"]', has_text="Connected").first.bounding_box()
-    assert gear is not None and pill is not None
-    assert gear["x"] + gear["width"] <= pill["x"] + 0.5
+    expect(page.locator(TRIGGER)).to_be_visible(timeout=5_000)
+    # Both edges in ONE read: the header re-renders as the connection settles,
+    # and two separate measurements can land either side of that, leaving the
+    # second one measuring an element that has just been replaced.
+    cluster = page.evaluate(
+        """(trigger) => {
+            const gear = document.querySelector(trigger);
+            const pill = [...document.querySelectorAll('[data-slot="badge"]')].find(
+                (badge) => badge.textContent.includes("Connected"),
+            );
+            if (gear === null || pill === undefined) return null;
+            return {
+                gearRight: gear.getBoundingClientRect().right,
+                pillLeft: pill.getBoundingClientRect().left,
+            };
+        }""",
+        TRIGGER,
+    )
+    assert cluster is not None
+    assert cluster["gearRight"] <= cluster["pillLeft"] + 0.5, cluster
     open_settings(page)
     close_settings(page)
 
@@ -568,4 +582,99 @@ def test_the_footer_names_the_version_and_links_to_the_source(
     link = source.bounding_box()
     assert footer is not None and link is not None
     assert footer["height"] < link["height"] * 2, (footer, link)
+    assert page_errors == []
+
+
+def test_the_handle_and_the_gear_show_their_own_sections(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Two toggles, two sections, neither implying the other.
+
+    The handle shows or hides the app's controls; the gear shows or hides the
+    browser's settings. The panel folds away only when both are down, which is
+    a reading of the two rather than a state of its own -- so hiding the
+    controls with the settings up leaves the settings up.
+    """
+    leika_server.gui.add_checkbox("Enabled", initial_value=True)
+    generated = leika_page.locator("[data-leika-generated-gui]")
+    settings = leika_page.locator(f"{PANE}:visible")
+    folded = leika_page.locator("[data-dock-collapsed]")
+    expect(generated).to_be_visible(timeout=5_000)
+
+    box = leika_page.get_by_test_id("control-panel-handle").bounding_box()
+    assert box is not None
+
+    def click_handle() -> None:
+        """One deliberate click, spaced clear of the double-click window."""
+        leika_page.wait_for_timeout(450)
+        leika_page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
+
+    # Controls up, settings up.
+    leika_page.locator(TRIGGER).click()
+    expect(settings).to_be_visible(timeout=5_000)
+    expect(generated).to_be_visible()
+    expect(folded).to_have_count(0)
+
+    # Hiding the controls leaves the settings exactly where they were -- the
+    # gear still reads as open, and its section is still on screen.
+    click_handle()
+    expect(generated).to_be_hidden(timeout=5_000)
+    expect(settings).to_be_visible()
+    expect(leika_page.locator(TRIGGER)).to_have_attribute("aria-expanded", "true")
+    expect(folded).to_have_count(0)
+
+    # With both down there is nothing to show, so the panel folds.
+    leika_page.locator(TRIGGER).click()
+    expect(folded).to_have_count(1, timeout=5_000)
+    expect(settings).to_have_count(0)
+    expect(generated).to_be_hidden()
+
+    # Either toggle alone brings the panel back, showing only its own section.
+    click_handle()
+    expect(generated).to_be_visible(timeout=5_000)
+    expect(folded).to_have_count(0)
+    expect(settings).to_have_count(0)
+
+    click_handle()
+    expect(folded).to_have_count(1, timeout=5_000)
+    leika_page.locator(TRIGGER).click()
+    expect(settings).to_be_visible(timeout=5_000)
+    expect(folded).to_have_count(0)
+    expect(generated).to_be_hidden()
+    assert page_errors == []
+
+
+def test_the_settings_rule_is_only_there_to_separate(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The rule under the settings divides them from the app's controls, so with
+    the controls down it has nothing to divide -- and the standoff that exists
+    to clear it goes with it, rather than holding the panel open underneath."""
+    leika_server.gui.add_checkbox("Enabled", initial_value=True)
+    section = leika_page.locator(f"#{SECTION_ID}")
+    pane = open_settings(leika_page)
+    expect(leika_page.locator("[data-leika-generated-gui]")).to_be_visible()
+
+    assert section.evaluate("e => getComputedStyle(e).borderBottomWidth") == "1px"
+    assert pane.evaluate("e => getComputedStyle(e).paddingBottom") != "0px"
+
+    # Fold the controls away with the handle; the settings stay up.
+    box = leika_page.get_by_test_id("control-panel-handle").bounding_box()
+    assert box is not None
+    leika_page.wait_for_timeout(450)
+    leika_page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
+    expect(leika_page.locator("[data-leika-generated-gui]")).to_be_hidden(timeout=5_000)
+
+    assert section.evaluate("e => getComputedStyle(e).borderBottomWidth") == "0px"
+    assert pane.evaluate("e => getComputedStyle(e).paddingBottom") == "0px"
+
+    # What is left under the last row is the panel's own inset, nothing more.
+    last_row = leika_page.locator("[data-leika-settings-about]").bounding_box()
+    panel = leika_page.get_by_test_id("control-panel").bounding_box()
+    assert last_row is not None and panel is not None
+    assert panel["y"] + panel["height"] - (last_row["y"] + last_row["height"]) <= 17.0
     assert page_errors == []

@@ -9,7 +9,10 @@ import { CONTROL_WIDTH_CSS } from "./controlWidth";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { useMobileView } from "../hooks/useMediaQuery";
 import { SettingsButton, SettingsSection } from "./SettingsPane";
-import { useSettingsPanelOpen } from "./SettingsPanelController";
+import {
+  useControlsShown,
+  useSettingsPanelOpen,
+} from "./SettingsPanelController";
 import SidebarPanel from "./SidebarPanel";
 import { useShowGenerated } from "./useShowGenerated";
 
@@ -21,18 +24,24 @@ const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
 /** The control panel's body: the generated GUI. Shared by every panel chrome
  * (bottom sheet, sidebar, and the dock-library floating panel). */
 export function ControlPanelContents() {
-  const showGenerated = useShowGenerated();
+  const hasGenerated = useShowGenerated();
   const settingsOpen = useSettingsPanelOpen();
+  // The handle's flag, independent of the gear's. The controls stay MOUNTED
+  // when hidden rather than being dropped, so half-typed values and the heights
+  // the intrinsic-size transitions measure both survive being folded away.
+  const controlsShown = useControlsShown();
   return (
     /*For intrinsic-size transitions, this `keepMounted` is necessary to prevent
     some intermittent problems with the initial GUI height being set to 0 when
     we're under high CPU load.*/
-    <Collapsible open={showGenerated || settingsOpen}>
+    <Collapsible open={(hasGenerated && controlsShown) || settingsOpen}>
       <CollapsibleContent keepMounted>
         {/* Above the app's own controls, under the gear that opens it. An app
             with no GUI at all still has a body once this is open. */}
         <SettingsSection />
-        <MemoizedGeneratedGuiContainer containerUuid={ROOT_CONTAINER_ID} />
+        <div hidden={!controlsShown} data-leika-generated-gui>
+          <MemoizedGeneratedGuiContainer containerUuid={ROOT_CONTAINER_ID} />
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );

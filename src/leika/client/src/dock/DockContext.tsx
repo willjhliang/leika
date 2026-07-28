@@ -99,6 +99,25 @@ export function useDock(): DockContextValue {
   return ctx;
 }
 
+/** Ask a group to fold or unfold, giving its panel first refusal.
+ *
+ * The one entry point for every affordance that means "show me more / less of
+ * this panel": the handle, the minimize button, and a minimized strip. A panel
+ * that owns its own sections (`onHandleClick`) decides what that means and the
+ * group's collapsed flag is left alone -- for the control panel, folding is a
+ * consequence of both its sections being down, never a thing toggled directly.
+ *
+ * Returns true when the panel handled it, so callers know not to toggle.
+ */
+export function toggleGroupVisibility(
+  dock: DockContextValue,
+  groupId: string,
+): boolean {
+  const activeId = dock.layout.groups[groupId]?.activeId;
+  if (activeId === undefined) return false;
+  return dock.panels[activeId]?.onHandleClick?.() === true;
+}
+
 /** High-churn geometry, split out of DockContext so per-frame resize updates
  * don't invalidate the (memoized) main context and re-render every panel.
  * Consumed only by observers that genuinely track these values (e.g. the

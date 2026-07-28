@@ -95,6 +95,13 @@ export interface PanelSpec {
    * as a full-width header rather than a tab. An unmergeable panel always lives
    * alone in its group. */
   unmergeable?: boolean;
+  /** Take a single click on the handle before the default collapse toggle.
+   *
+   * Return true to say the click has been dealt with and the group must NOT
+   * toggle. For a panel showing only part of itself, the first click is how the
+   * rest arrives -- collapsing instead would throw away what the click was
+   * asking for. Anything else falls through to the toggle. */
+  onHandleClick?: () => boolean;
   /** Optional stable `data-testid` for the element this panel renders into.
    *
    * The library's own attributes (`data-dock-leaf`, `data-floating-window`,
