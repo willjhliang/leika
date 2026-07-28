@@ -1,7 +1,7 @@
 import * as msgpack from "@msgpack/msgpack";
 import { Message } from "./WebsocketMessages";
 import AwaitLock from "await-lock";
-import { LEIKA_VERSION } from "./VersionInfo";
+import { LEIKA_PROTOCOL, LEIKA_VERSION } from "./VersionInfo";
 import { ZSTDDecoder } from "zstddec";
 
 // Initialize zstd decoder at module load.
@@ -103,8 +103,11 @@ function decodeHybridMessage(
   const tryConnect = () => {
     if (ws !== null) ws.close();
 
-    // Use a single protocol that includes both client identification and version.
-    const protocol = `leika-v${LEIKA_VERSION}`;
+    // One subprotocol string carries the client identification, the version,
+    // and the schema this bundle was built against. The server turns away
+    // anything it does not match, which is what keeps a page from connecting
+    // to a server whose messages it cannot read.
+    const protocol = `leika-v${LEIKA_VERSION}+p${LEIKA_PROTOCOL}`;
     console.log(`Connecting to: ${server!} with protocol: ${protocol}`);
     ws = new WebSocket(server!, [protocol]);
     ws.binaryType = "arraybuffer";
@@ -142,7 +145,8 @@ function decodeHybridMessage(
 
       if (versionMismatch) {
         console.warn(
-          `Connection rejected due to version mismatch. Client version: ${LEIKA_VERSION}`,
+          `Connection rejected: ${event.reason}. Client version: ${LEIKA_VERSION},` +
+            ` protocol: ${LEIKA_PROTOCOL}`,
         );
       }
 

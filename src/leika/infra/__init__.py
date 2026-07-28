@@ -22,3 +22,6 @@ from ._typescript_interface_gen import (
 from ._typescript_interface_gen import (
     generate_typescript_interfaces as generate_typescript_interfaces,
 )
+from ._typescript_interface_gen import (
+    protocol_fingerprint as protocol_fingerprint,
+)

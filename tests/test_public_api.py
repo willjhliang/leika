@@ -6,7 +6,13 @@ import socket
 import time
 from pathlib import Path
 
+from websockets.exceptions import ConnectionClosed
+from websockets.sync.client import connect
+from websockets.typing import Subprotocol
+
 import leika
+import leika._messages
+import leika.infra
 
 VERSION_INFO = Path(__file__).resolve().parents[1] / "src/leika/client/src/VersionInfo.ts"
 
@@ -48,3 +54,54 @@ def test_atomic_flush_and_idempotent_stop(server: leika.Server) -> None:
     time.sleep(0.05)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         assert sock.connect_ex(("127.0.0.1", port)) != 0
+
+
+def test_client_carries_the_protocol_fingerprint() -> None:
+    """The bundle names the schema it was built against, and the server sends
+    anything else away.
+
+    Without this the two can disagree while agreeing on the version, which is
+    what a server left running across an edit does: it feeds the page fields
+    the page has never heard of, and the page goes blank rather than saying so.
+    """
+    generated = re.search(r'LEIKA_PROTOCOL = "([^"]+)"', VERSION_INFO.read_text(encoding="utf-8"))
+    assert generated is not None
+    assert generated.group(1) == leika.infra.protocol_fingerprint(leika._messages.Message)
+
+
+def test_a_mismatched_client_is_turned_away_with_a_reason() -> None:
+    """The rejection has to reach the page, not just the terminal."""
+
+    def attempt(subprotocol: str) -> tuple[int | None, str]:
+        # The synchronous client, because other tests in this suite leave an
+        # event loop running in this thread.
+        try:
+            with connect(url, subprotocols=[Subprotocol(subprotocol)], open_timeout=5) as ws:
+                try:
+                    ws.recv(timeout=1.0)
+                except ConnectionClosed:
+                    pass
+                return ws.close_code, ws.close_reason or ""
+        except ConnectionClosed as exc:
+            return exc.code, exc.reason or ""
+
+    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
+    url = server.url.replace("http://", "ws://")
+    version = leika.__version__
+    fingerprint = leika.infra.protocol_fingerprint(leika._messages.Message)
+    try:
+        code, reason = attempt(f"leika-v{version}+p{fingerprint}")
+        assert code is None, (code, reason)
+
+        for subprotocol, expected in (
+            (f"leika-v{version}+p0123456789ab", "Protocol mismatch"),
+            (f"leika-v0.0.0+p{fingerprint}", "Version mismatch"),
+        ):
+            code, reason = attempt(subprotocol)
+            assert code == 1002, (subprotocol, code, reason)
+            assert reason.startswith(expected), reason
+            # A close frame carries at most 123 bytes; over that the frame is
+            # never sent and the page sees an unexplained disconnect instead.
+            assert len(reason.encode()) <= 123, reason
+    finally:
+        server.stop()

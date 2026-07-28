@@ -295,24 +295,50 @@ class WebsockServer(WebsockMessageHandler):
                 nonlocal total_connections
                 total_connections += 1
 
-            # Version check to make sure Leika server/client match.
+            # Version and protocol check to make sure Leika server/client match.
             import leika
+            import leika._messages
 
-            # Extract client version from the selected subprotocol.
+            from ._typescript_interface_gen import protocol_fingerprint
+
+            # Both halves of the client's identification, `leika-vX.Y.Z+pHASH`.
             client_version_str = "unknown"
+            client_protocol = "unknown"
             if connection.subprotocol is not None:
                 if connection.subprotocol.startswith("leika-v"):
-                    client_version_str = connection.subprotocol[len("leika-v") :].strip()
+                    token = connection.subprotocol[len("leika-v") :].strip()
+                    client_version_str, _, client_protocol = token.partition("+p")
 
+            server_protocol = protocol_fingerprint(leika._messages.Message)
+            # A close frame carries at most 123 bytes of reason, so what the
+            # PAGE is told is short and what the TERMINAL is told is not. The
+            # short one still has to stand on its own: it is the text the
+            # browser shows in place of the connection status.
+            reason: str | None = None
+            detail = ""
             if client_version_str != leika.__version__:
-                rich.print(
-                    f"[bold red](leika)[/bold red] Version mismatch - connection rejected. "
-                    f"Client: '{client_version_str}', Server: '{leika.__version__}'"
+                reason = (
+                    f"Version mismatch: client {client_version_str}, server {leika.__version__}."
                 )
-                await connection.close(
-                    1002,
-                    f"Version mismatch. Client: {client_version_str}, Server: {leika.__version__}",
+            elif client_protocol != server_protocol:
+                # Same version, different message schema: the two were built
+                # from different code. In development that is nearly always a
+                # server left running across an edit, and without this check it
+                # reaches the user as a page that connects and then breaks on a
+                # field one side has never heard of.
+                reason = (
+                    f"Protocol mismatch: client schema {client_protocol},"
+                    f" server {server_protocol}. Restart the server or reload."
                 )
+                detail = (
+                    " The page was built against a different message schema than this"
+                    " process is running. Restart the Python program if its code has"
+                    " changed, or rebuild the client if the page is the stale one."
+                )
+
+            if reason is not None:
+                rich.print(f"[bold red](leika)[/bold red] Connection rejected. {reason}{detail}")
+                await connection.close(1002, reason[:123])
                 return  # Exit handler to prevent further processing.
 
             client_state = _ClientHandleState(

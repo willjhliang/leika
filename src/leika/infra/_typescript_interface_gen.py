@@ -1,4 +1,6 @@
 import dataclasses
+import functools
+import hashlib
 import types
 from collections import defaultdict
 from typing import Any, Type, Union, cast
@@ -142,6 +144,23 @@ class TypeScriptAnnotationOverride:
     TypeScript annotation corresponding to a dataclass field."""
 
     annotation: str
+
+
+@functools.lru_cache(maxsize=1)
+def protocol_fingerprint(message_cls: Type[Message]) -> str:
+    """A short hash of the message schema, for both sides to compare.
+
+    The version alone cannot catch a browser and a server that agree on the
+    version but disagree about what a field means -- which is the normal state
+    of affairs while the protocol is being edited, and reaches the user as a
+    client that connects and then breaks on a field the server never sent.
+
+    Hashes the GENERATED TypeScript rather than the dataclasses directly, so
+    the fingerprint changes exactly when the file the client is built from
+    changes, and no more often.
+    """
+    source = generate_typescript_interfaces(message_cls)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
 
 
 def generate_typescript_interfaces(message_cls: Type[Message]) -> str:
