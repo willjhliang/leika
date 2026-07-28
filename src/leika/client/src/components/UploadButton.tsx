@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ViewerContext, ViewerContextContents } from "../ViewerContext";
 import { GuiUploadButtonMessage } from "../WebsocketMessages";
-import { HintTooltip } from "./common";
+import { GuiInputRow, HintTooltip } from "./common";
 
 export default function UploadButtonComponent({
   uuid,
@@ -16,6 +16,7 @@ export default function UploadButtonComponent({
     mime_type: mimeType,
     _icon_html: iconHtml,
     label,
+    text,
   },
 }: GuiUploadButtonMessage) {
   const viewer = useContext(ViewerContext)!;
@@ -46,9 +47,27 @@ export default function UploadButtonComponent({
           dangerouslySetInnerHTML={{ __html: iconHtml }}
         />
       )}
-      {label}
+      {text}
     </Button>
   );
+  // The same two forms the plain button takes: labelled, it is a control in a
+  // row; unlabelled, it is the row.
+  const row =
+    label !== null ? (
+      <GuiInputRow
+        {...{ uuid, hint, label }}
+        disabled={disabled ?? false}
+        associateLabel={false}
+      >
+        {button}
+      </GuiInputRow>
+    ) : hint === null ? (
+      button
+    ) : (
+      <HintTooltip hint={hint}>
+        <span className="block w-full">{button}</span>
+      </HintTooltip>
+    );
 
   return (
     <>
@@ -64,13 +83,7 @@ export default function UploadButtonComponent({
           if (file !== undefined) upload(file);
         }}
       />
-      {hint === null ? (
-        button
-      ) : (
-        <HintTooltip hint={hint}>
-          <span className="block w-full">{button}</span>
-        </HintTooltip>
-      )}
+      {row}
       {/* Upload feedback lives with the button that started it. */}
       {isUploading && <Progress value={100 * progress} className="mt-2" />}
     </>

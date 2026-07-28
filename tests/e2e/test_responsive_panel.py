@@ -144,7 +144,7 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
         with tabs.add_tab(label):
             leika_server.gui.add_markdown(f"Panel content {index + 1}")
     leika_server.gui.add_button_group(
-        "Many modes",
+        label="Many modes",
         options=(
             "Interactive preview",
             "Publication quality",

@@ -18,7 +18,9 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
 }: {
   uuid: string;
   value: V;
-  label: string;
+  /** Null where the protocol allows an unlabelled row. A color's Python API
+   * requires a label, so the fallback below is a floor, not a case. */
+  label: string | null;
   hint: string | null;
   disabled: boolean;
   format: "rgb" | "rgba";
@@ -58,7 +60,7 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
       <ColorRow
         id={uuid}
         value={localValue}
-        label={label}
+        label={label ?? "Color"}
         format={format}
         disabled={disabled}
         // Undo restores what Python declared the row with.

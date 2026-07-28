@@ -41,22 +41,31 @@ export function GuiInputRow({
   hintDisabled,
   disabled = false,
   invalid = false,
+  associateLabel = true,
   children,
 }: {
   uuid: string;
   children: React.ReactNode;
-  label?: string;
+  /** Null is the protocol's way of saying "no label", and means the same as
+   * omitting it: the control fills the row instead of taking the right-hand
+   * column beside a label. */
+  label?: string | null;
   hint?: string | null;
   hintDisabled?: boolean;
   disabled?: boolean;
   invalid?: boolean;
+  /** Whether the label names the control through `htmlFor`. Off for a button:
+   * a `<label for>` would both take over its accessible name -- so it would
+   * announce as the row's label instead of the word on its face -- and fire it
+   * on a click, since a label forwards clicks to what it labels. */
+  associateLabel?: boolean;
 }) {
   const fieldState = {
     "data-disabled": disabled || undefined,
     "data-invalid": invalid || undefined,
   };
 
-  if (label === undefined) {
+  if (label === undefined || label === null) {
     const field = <Field {...fieldState}>{children}</Field>;
     return hint === undefined || hint === null ? (
       field
@@ -82,7 +91,7 @@ export function GuiInputRow({
       data-leika-gui-row
     >
       <FieldLabel
-        htmlFor={uuid}
+        htmlFor={associateLabel ? uuid : undefined}
         className={cn("w-full min-w-0 truncate", guiLabelClassName)}
         title={label}
       >

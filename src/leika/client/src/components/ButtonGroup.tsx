@@ -17,7 +17,9 @@ export default function ButtonGroupComponent({
         id={uuid}
         value={[value]}
         disabled={disabled}
-        aria-label={label}
+        // Unlabelled, the group goes unnamed rather than inventing a name:
+        // every option is a button that reads out its own text.
+        aria-label={label ?? undefined}
         variant="outline"
         spacing={0}
         className="no-scrollbar w-full min-w-0 justify-start overflow-x-auto"

@@ -107,7 +107,7 @@ def test_button_group_updates_optimistically_and_repeats_selected_action(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    handle = leika_server.gui.add_button_group("Render mode", options=("One", "Two", "Three"))
+    handle = leika_server.gui.add_button_group(("One", "Two", "Three"), label="Render mode")
     clicks: list[str] = []
     handle.on_click(lambda event: clicks.append(event.target.value))
 
@@ -368,7 +368,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     leika_server.gui.add_multi_slider(
         "Styled range", min=0.0, max=1.0, step=0.1, initial_value=(0.2, 0.8)
     )
-    leika_server.gui.add_button_group("Styled actions", options=("A", "B", "C"))
+    leika_server.gui.add_button_group(("A", "B", "C"), label="Styled actions")
     leika_server.gui.add_checkbox("Styled checkbox", initial_value=True)
     leika_server.gui.add_text("Styled text", initial_value="compact")
     leika_server.gui.add_dropdown("Styled dropdown", options=("First", "Second"))
@@ -889,4 +889,44 @@ def test_button_colorways_are_a_filled_and_an_outlined_role(
     expect(
         leika_page.locator('[data-leika-button][data-leika-button-color="secondary"]')
     ).to_have_count(2, timeout=5_000)
+    assert page_errors == []
+
+
+def test_a_label_is_what_takes_a_button_out_of_the_full_row(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Unlabelled -- the default -- a button or a group is the row. Given a
+    label, it becomes a control in one: the label takes the left column and the
+    control sits beside it, like every other row in the panel."""
+    leika_server.gui.add_button("Run")
+    leika_server.gui.add_button("Stop", label="Playback")
+    leika_server.gui.add_button_group(("A", "B", "C"))
+    leika_server.gui.add_button_group(("X", "Y", "Z"), label="Channel")
+
+    plain_button = leika_page.get_by_role("button", name="Run", exact=True)
+    labelled_button = leika_page.get_by_role("button", name="Stop", exact=True)
+    plain_group = leika_page.get_by_role("button", name="A", exact=True)
+    expect(plain_button).to_be_visible(timeout=5_000)
+
+    # The label is what puts a row around it, so an unlabelled control has none.
+    assert plain_button.locator("xpath=ancestor::*[@data-leika-gui-row]").count() == 0
+    assert plain_group.locator("xpath=ancestor::*[@data-leika-gui-row]").count() == 0
+    assert labelled_button.locator("xpath=ancestor::*[@data-leika-gui-row]").count() == 1
+
+    # And the width says the same thing: the labelled one gives up the label
+    # column, which is a fixed 6rem.
+    full = plain_button.bounding_box()
+    beside_a_label = labelled_button.bounding_box()
+    assert full is not None and beside_a_label is not None
+    assert beside_a_label["width"] < full["width"] - 90
+    assert beside_a_label["x"] > full["x"] + 90
+
+    # The group divides whatever width it is given, so its options are wider
+    # across the row than they are in the column.
+    wide_option = plain_group.bounding_box()
+    narrow_option = leika_page.get_by_role("button", name="X", exact=True).bounding_box()
+    assert wide_option is not None and narrow_option is not None
+    assert wide_option["width"] > narrow_option["width"]
     assert page_errors == []

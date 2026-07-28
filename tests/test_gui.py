@@ -51,7 +51,7 @@ def test_option_validation(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_dropdown("Empty", options=[])
     with pytest.raises(ValueError, match="at least one option"):
-        server.gui.add_button_group("Empty", options=[])
+        server.gui.add_button_group([], label="Empty")
     dropdown = server.gui.add_dropdown("Valid", options=("a", "b"))
     with pytest.raises(ValueError, match="at least one option"):
         dropdown.options = []
@@ -59,9 +59,10 @@ def test_option_validation(server: leika.Server) -> None:
 
 
 def test_form_compatibility_and_submission(server: leika.Server) -> None:
-    with server.gui.add_form(submit_label="Save", label="Profile") as form:
+    with server.gui.add_form(submit_text="Save", label="Profile") as form:
         name = server.gui.add_text("Name", initial_value="Ada")
-    assert form.submit.label == "Save"
+    # The caption is the button's `text`; `label` is the row label it has none of.
+    assert (form.submit.text, form.submit.label) == ("Save", None)
     submitted: list[str] = []
 
     @form.on_submit
@@ -74,9 +75,9 @@ def test_form_compatibility_and_submission(server: leika.Server) -> None:
     form.submit_form()
     _wait_for(lambda: submitted == ["Ada", "Grace"])
 
-    with server.gui.add_form(submit_label="Outer"):
+    with server.gui.add_form(submit_text="Outer"):
         with pytest.raises(ValueError, match="Nested forms"):
-            server.gui.add_form(submit_label="Inner")
+            server.gui.add_form(submit_text="Inner")
 
 
 def test_commands_notifications_and_modal(server: leika.Server) -> None:

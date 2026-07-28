@@ -242,7 +242,9 @@ def main() -> None:
         reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW)
 
     with server.gui.add_folder("Image appearance"):
-        palette = server.gui.add_button_group("Palette", options=("Ocean", "Magma", "Viridis"))
+        # Labelled, so it sits in the controls column beside its name -- the
+        # three options still fit. Unlabelled it would take the whole row.
+        palette = server.gui.add_button_group(("Ocean", "Magma", "Viridis"), label="Palette")
         # Three options, so no search box: the plain dropdown opens with the
         # current one already under the cursor.
         region = server.gui.add_dropdown(

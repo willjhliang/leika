@@ -36,7 +36,7 @@ export default function MultiSliderComponent({
         value={value}
         onChange={(next) => setValue(uuid, next)}
         disabled={disabled}
-        label={label}
+        label={label ?? "Value"}
       />
     </GuiInputRow>
   );

@@ -327,10 +327,11 @@ export interface GuiButtonMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
+    text: string;
     color: "primary" | "secondary";
     _icon_html: string | null;
     _hold_callback_freqs: number[];
@@ -346,10 +347,11 @@ export interface GuiUploadButtonMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
+    text: string;
     color: "primary" | "secondary";
     _icon_html: string | null;
     mime_type: string;
@@ -366,7 +368,7 @@ export interface GuiSliderMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -389,7 +391,7 @@ export interface GuiMultiSliderMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -413,7 +415,7 @@ export interface GuiNumberMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -434,7 +436,7 @@ export interface GuiRgbMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -451,7 +453,7 @@ export interface GuiRgbaMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -468,7 +470,7 @@ export interface GuiCheckboxMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -485,7 +487,7 @@ export interface GuiVector2Message {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -506,7 +508,7 @@ export interface GuiVector3Message {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -527,7 +529,7 @@ export interface GuiTextMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -545,7 +547,7 @@ export interface GuiDropdownMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;
@@ -564,7 +566,7 @@ export interface GuiButtonGroupMessage {
   container_uuid: string;
   props: {
     order: number;
-    label: string;
+    label: string | null;
     hint: string | null;
     visible: boolean;
     disabled: boolean;

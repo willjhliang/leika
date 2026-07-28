@@ -836,7 +836,7 @@ class GuiApi(GuiContainer):
 
     def add_form(
         self,
-        submit_label: str = "Submit",
+        submit_text: str = "Submit",
         *,
         label: str | None = None,
         order: float | None = None,
@@ -848,6 +848,9 @@ class GuiApi(GuiContainer):
         See :class:`GuiFormHandle` for usage and semantics.
 
         Args:
+            submit_text: Text on the form's submit button. Named like every
+                other button's face text, and distinct from ``label``, which
+                names the form.
             label: Label to display on the form. If ``None``, the form is
                 rendered without a header or collapse control.
             order: Optional ordering, smallest values will be displayed first.
@@ -906,7 +909,7 @@ class GuiApi(GuiContainer):
             )
         )
         with handle:
-            handle.submit = self.add_button(submit_label)
+            handle.submit = self.add_button(submit_text)
         handle.submit.on_click(lambda _: handle.submit_form())
         return handle
 
@@ -1376,8 +1379,9 @@ class GuiApi(GuiContainer):
 
     def add_button(
         self,
-        label: str,
+        text: str,
         *,
+        label: str | None = None,
         color: Literal["primary", "secondary"] = "primary",
         disabled: bool = False,
         visible: bool = True,
@@ -1389,7 +1393,11 @@ class GuiApi(GuiContainer):
         it is clicked; to detect clicks, we can manually set it back to `False`.
 
         Args:
-            label: Label to display on the button.
+            text: Text to display on the button itself.
+            label: Optional label for the row. Left unset, the button takes the
+                whole width of the panel, which is what a button that says what
+                it does needs; given one, the label takes the left column and
+                the button sits beside it, like every other labelled control.
             color: Colorway for the button. ``"primary"`` fills with the accent,
                 which is what a panel's main action wants; ``"secondary"``
                 outlines instead, for the ones that sit beside it.
@@ -1411,6 +1419,7 @@ class GuiApi(GuiContainer):
         props = _messages.GuiButtonProps(
             order=order,
             label=label,
+            text=text,
             hint=hint,
             color=color,
             _icon_html=None if icon is None else svg_from_icon(icon),
@@ -1446,8 +1455,9 @@ class GuiApi(GuiContainer):
 
     def add_upload_button(
         self,
-        label: str,
+        text: str,
         *,
+        label: str | None = None,
         color: Literal["primary", "secondary"] = "primary",
         disabled: bool = False,
         visible: bool = True,
@@ -1460,7 +1470,8 @@ class GuiApi(GuiContainer):
         it is clicked; to detect clicks, we can manually set it back to `False`.
 
         Args:
-            label: Label to display on the button.
+            text: Text to display on the button itself.
+            label: Optional label for the row; see :meth:`add_button`.
             color: Colorway for the button. ``"primary"`` fills with the accent,
                 which is what a panel's main action wants; ``"secondary"``
                 outlines instead, for the ones that sit beside it.
@@ -1491,6 +1502,7 @@ class GuiApi(GuiContainer):
                         visible=visible,
                         order=order,
                         label=label,
+                        text=text,
                         hint=hint,
                         color=color,
                         mime_type=mime_type,
@@ -1504,9 +1516,9 @@ class GuiApi(GuiContainer):
 
     def add_button_group(
         self,
-        label: str,
         options: Sequence[str],
         *,
+        label: str | None = None,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1515,8 +1527,11 @@ class GuiApi(GuiContainer):
         """Add a button group to the GUI.
 
         Args:
-            label: Label to display on the button group.
             options: Sequence of options to display as buttons.
+            label: Optional label for the row. Left unset, the group takes the
+                whole width of the panel and divides it between its options;
+                given one, the label takes the left column and the group sits
+                beside it, like every other labelled control.
             disabled: Whether the button group is disabled.
             visible: Whether the button group is visible.
             hint: Optional hint to display on hover.

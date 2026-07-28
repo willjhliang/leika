@@ -31,7 +31,9 @@ export default function SliderComponent({
   const { setValue } = React.useContext(GuiComponentContext)!;
   const [dragging, setDragging] = React.useState(false);
   const controlledValue = React.useMemo(() => [value], [value]);
-  const getThumbAriaLabel = React.useCallback(() => label, [label]);
+  // The protocol allows an unlabelled row; a slider's Python API does not, so
+  // this fallback is a floor rather than a case that happens.
+  const getThumbAriaLabel = React.useCallback(() => label ?? "Value", [label]);
 
   React.useEffect(() => {
     if (!dragging) return;

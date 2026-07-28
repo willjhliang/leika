@@ -3,13 +3,14 @@ import React, { useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonMessage } from "../WebsocketMessages";
-import { HintTooltip } from "./common";
+import { GuiInputRow, HintTooltip } from "./common";
 
 export default function ButtonComponent({
   uuid,
   props: {
     disabled,
     label,
+    text,
     hint,
     color,
     _icon_html: iconHtml,
@@ -87,9 +88,24 @@ export default function ButtonComponent({
           dangerouslySetInnerHTML={{ __html: iconHtml }}
         />
       )}
-      {label}
+      {text}
     </Button>
   );
+  // Labelled, the button is an ordinary control in the right-hand column, and
+  // the row owns the label and the hint. Unlabelled -- the default -- it takes
+  // the whole width instead: the text on its face is what a label would have
+  // said, so a column beside it would be one fixed width of nothing.
+  if (label !== null) {
+    return (
+      <GuiInputRow
+        {...{ uuid, hint, label }}
+        disabled={disabled ?? false}
+        associateLabel={false}
+      >
+        {button}
+      </GuiInputRow>
+    );
+  }
   if (hint === null) return button;
   return (
     <HintTooltip hint={hint}>

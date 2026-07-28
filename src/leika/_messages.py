@@ -323,8 +323,12 @@ class GuiBaseProps:
 
     order: float
     """Order value for arranging GUI elements. """
-    label: str
-    """Label text for the GUI element."""
+    label: Optional[str]
+    """Label for the element's row, or None for one that fills the row on its
+    own. Optional because a control can be self-describing -- a button says
+    what it does on its face -- and a label column beside one of those is a
+    fixed width of nothing. Most elements require one at the Python API and so
+    never send None."""
     hint: Optional[str]
     """Optional hint text for the GUI element."""
     visible: bool
@@ -585,6 +589,10 @@ class GuiCloseModalMessage(
 
 @dataclasses.dataclass
 class GuiButtonProps(GuiBaseProps):
+    text: str
+    """Text on the button's own face. Distinct from `label`, which names the
+    ROW the button sits in: a button says what it does on itself, so it is
+    labelled only when it needs a caption beside it as well."""
     color: Literal["primary", "secondary"]
     """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
@@ -613,6 +621,8 @@ class GuiButtonHoldMessage(Message):
 
 @dataclasses.dataclass
 class GuiUploadButtonProps(GuiBaseProps):
+    text: str
+    """Text on the button's own face; see `GuiButtonProps.text`."""
     color: Literal["primary", "secondary"]
     """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
