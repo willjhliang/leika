@@ -482,9 +482,10 @@ class GuiApi(GuiContainer):
     ) -> None:
         """Callback for client-initiated form submits.
 
-        Fires the form's on_submit callbacks. Nothing is sent back: the values
-        reached the server as they were typed, so a submit leaves the other
-        clients with nothing to redraw.
+        Fires the form's on_submit callbacks and broadcasts the submit back so
+        every client closes the form's popout -- including the one that sent
+        it, which waits to be told rather than closing on its own, so that all
+        the ways of submitting end the same way.
         """
         handle = self._container_handle_from_uuid.get(message.uuid, None)
         if not isinstance(handle, GuiFormHandle):
@@ -501,6 +502,9 @@ class GuiApi(GuiContainer):
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
                 ).add_done_callback(print_threadpool_errors)
+
+        # Broadcast so the clients showing this form close it.
+        self._websock_interface.queue_message(_messages.GuiFormSubmitMessage(uuid=message.uuid))
 
     def _handle_file_transfer_start(
         self, client_id: ClientId, message: _messages.FileTransferStartUpload
@@ -893,7 +897,6 @@ class GuiApi(GuiContainer):
         *,
         label: str | None = None,
         order: float | None = None,
-        expand_by_default: bool = True,
         visible: bool = True,
     ) -> GuiFormHandle:
         """Add a form, and return a handle that can be used to populate it.
@@ -904,11 +907,10 @@ class GuiApi(GuiContainer):
             submit_text: Text on the form's submit button. Named like every
                 other button's face text, and distinct from ``label``, which
                 names the form.
-            label: Label to display on the form. If ``None``, the form is
-                rendered without a header or collapse control.
+            label: Label shown beside the form's row, opposite the button that
+                opens it. If ``None``, that button takes the whole row, the
+                same rule a labelless :meth:`add_button` follows.
             order: Optional ordering, smallest values will be displayed first.
-            expand_by_default: Open the form by default. Set to False to
-                collapse it by default. Ignored when ``label`` is ``None``.
             visible: Whether the component is visible.
 
         Returns:
@@ -939,10 +941,9 @@ class GuiApi(GuiContainer):
 
         form_container_id = _make_uuid()
         order = _apply_default_order(order)
-        props = _messages.GuiFolderProps(
+        props = _messages.GuiFormProps(
             order=order,
             label=label,
-            expand_by_default=expand_by_default,
             visible=visible,
         )
         self._websock_interface.queue_message(

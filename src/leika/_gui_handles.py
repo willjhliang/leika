@@ -40,6 +40,7 @@ from ._messages import (
     GuiDividerProps,
     GuiDropdownProps,
     GuiFolderProps,
+    GuiFormSubmitMessage,
     GuiHtmlProps,
     GuiImageProps,
     GuiMarkdownProps,
@@ -985,9 +986,16 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
 class GuiFormHandle(GuiFolderHandle):
     """Use as a context to place GUI elements into a form.
 
-    A form is a folder whose children's values can be committed together by
+    A form is a container whose children's values can be committed together by
     calling :meth:`submit_form` (typically from a button's ``on_click`` handler) or
     by pressing Enter in a single-line text input inside the form.
+
+    It takes ONE row in the panel: its ``label``, and a button that opens the
+    fields in a popout. A form is one question asked in several parts, and the
+    parts belong together and apart from the live controls around them -- so
+    they are somewhere else, and the row is the way in. ``submit_text`` names
+    the button that closes the question; it is the form's last child, and the
+    popout is where it appears.
 
     Children of a form behave exactly like children of a folder. ``on_update``
     callbacks on individual inputs continue to fire on every keystroke; the
@@ -1068,9 +1076,9 @@ class GuiFormHandle(GuiFolderHandle):
     def submit_form(self) -> None:
         """Programmatically submit this form.
 
-        Fires all registered ``on_submit`` callbacks. The clients are not told:
-        a submit reads values they already sent, and leaves nothing on screen
-        for them to redraw.
+        Fires all registered ``on_submit`` callbacks, and closes the form's
+        popout on every client: the question has been answered, whoever
+        answered it.
         """
         gui_api = self._impl.gui_api
         # Fire on_submit callbacks. Server-initiated submits have no client.
@@ -1078,6 +1086,7 @@ class GuiFormHandle(GuiFolderHandle):
             cb_out = cb(GuiEvent(client_id=None, client=None, target=self))
             if isinstance(cb_out, Coroutine):
                 gui_api._event_loop.create_task(cb_out)
+        gui_api._websock_interface.queue_message(GuiFormSubmitMessage(uuid=self._impl.uuid))
 
 
 @dataclasses.dataclass

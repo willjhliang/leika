@@ -104,6 +104,89 @@ def test_button_and_upload_hints_and_visibility(
     assert page_errors == []
 
 
+def _wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert predicate()
+
+
+def open_form(page: Page) -> Locator:
+    """Open the panel's form popout, and return it."""
+    popover = page.locator("[data-leika-form-popover]")
+    if popover.count() == 0:
+        page.locator("[data-leika-form-trigger]").click()
+        expect(popover).to_be_visible(timeout=5_000)
+    return popover
+
+
+def test_a_form_opens_from_one_row_into_a_popout(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """A form is one row -- its label and a way in -- not a section sitting
+    open among the live controls. The fields are in the popout, and submitting
+    from there reaches Python, by the button and by Enter alike."""
+    submits: list[int] = []
+    with leika_server.gui.add_form(submit_text="Save", label="Profile") as form:
+        name = leika_server.gui.add_text("Name", initial_value="Ada")
+    form.on_submit(lambda _: submits.append(len(submits) + 1))
+
+    row = find_gui_row(leika_page, "Profile")
+    expect(row).to_be_visible(timeout=5_000)
+    trigger = row.locator("[data-leika-form-trigger]")
+    expect(trigger).to_have_text("Open form")
+    # Secondary: the way into a form does not carry the panel's accent.
+    expect(trigger).to_have_attribute("data-leika-button-color", "secondary")
+    # Closed, the form is a row and nothing else -- no fields on the panel.
+    expect(leika_page.get_by_label("Name")).to_have_count(0)
+
+    popout = open_form(leika_page)
+    field = popout.get_by_label("Name")
+    expect(field).to_be_visible()
+    expect(popout.get_by_role("button", name="Save", exact=True)).to_be_visible()
+
+    # Submitting is the way out: the popout closes on its own submit button.
+    popout.get_by_role("button", name="Save", exact=True).click()
+    _wait_until(lambda: submits == [1])
+    expect(popout).to_have_count(0, timeout=5_000)
+
+    # Enter in a single-line text input is the same commit, and closes it the
+    # same way. The edit is not waited on before the press, so a submit can
+    # ride in the same throttle window as the edit it commits -- which used to
+    # replace that edit outright, leaving `on_submit` reading the old value.
+    # Whether the two land in one window here is up to Playwright's own
+    # timings; what pins that case down is WebsocketUtils.test.ts.
+    popout = open_form(leika_page)
+    field = popout.get_by_label("Name")
+    field.fill("Grace")
+    field.press("Enter")
+    _wait_until(lambda: submits == [1, 2])
+    assert name.value == "Grace"
+    expect(popout).to_have_count(0, timeout=5_000)
+
+    # And a submit from Python closes it too, having reached the client by the
+    # one path every submit takes.
+    popout = open_form(leika_page)
+    form.submit_form()
+    _wait_until(lambda: submits == [1, 2, 3])
+    expect(popout).to_have_count(0, timeout=5_000)
+
+    # A form with no label: its trigger takes the whole row, the way a
+    # labelless button does, rather than leaving an empty label column.
+    plain = leika_server.gui.add_form(submit_text="Send")
+    plain.add_text("Comment", initial_value="")
+    triggers = leika_page.locator("[data-leika-form-trigger]")
+    expect(triggers).to_have_count(2, timeout=5_000)
+    labelled = trigger.bounding_box()
+    unlabelled = triggers.nth(1).bounding_box()
+    assert labelled is not None and unlabelled is not None
+    assert unlabelled["width"] > labelled["width"], (unlabelled, labelled)
+    assert triggers.nth(1).locator("xpath=ancestor::*[@data-leika-gui-row]").count() == 0
+    assert page_errors == []
+
+
 def test_a_forms_submit_button_renders_below_its_fields(
     leika_server: leika.Server,
     leika_page: Page,
@@ -123,6 +206,7 @@ def test_a_forms_submit_button_renders_below_its_fields(
 
     def assert_submit_is_last(page: Page) -> None:
         """Every row of the form sits above the submit button."""
+        open_form(page)
         save = page.get_by_role("button", name="Save", exact=True)
         expect(save).to_be_visible(timeout=5_000)
         button = save.bounding_box()

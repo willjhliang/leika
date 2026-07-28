@@ -68,6 +68,9 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
       case "GuiRemoveMessage":
         viewer.guiActions.removeGui(message.uuid);
         return;
+      case "GuiFormSubmitMessage":
+        viewer.guiActions.noteFormSubmit(message.uuid);
+        return;
       case "RegisterCommandMessage":
         viewer.guiActions.addCommand(message);
         return;

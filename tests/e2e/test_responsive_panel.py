@@ -373,11 +373,6 @@ def test_nested_sections_expand_and_collapse(
                 leika_server.gui.add_checkbox("Deep input", initial_value=True)
     with leika_server.gui.add_folder("Sibling section"):
         leika_server.gui.add_text("Sibling input", initial_value="sibling")
-    with leika_server.gui.add_form(label="Form section"):
-        leika_server.gui.add_text("Form input", initial_value="form")
-    with leika_server.gui.add_form():
-        leika_server.gui.add_text("Unlabeled first", initial_value="one")
-        leika_server.gui.add_text("Unlabeled second", initial_value="two")
 
     page.goto(leika_server.url)
     page.wait_for_function(
@@ -393,7 +388,6 @@ def test_nested_sections_expand_and_collapse(
     inner = section_named("Inner section")
     deep = section_named("Deep section")
     sibling = section_named("Sibling section")
-    form = section_named("Form section")
 
     for section in (outer, inner, deep, sibling):
         expect(section).to_have_attribute("data-slot", "accordion")
@@ -401,17 +395,8 @@ def test_nested_sections_expand_and_collapse(
     expect(outer.locator("[data-leika-section]")).to_have_count(2)
     expect(inner.locator("[data-leika-section]")).to_have_count(1)
     expect(deep.locator("[data-leika-section]")).to_have_count(0)
-    expect(form.locator(':scope > [data-slot="accordion"]')).to_have_count(1)
 
-    unlabeled_form = page.get_by_text("Unlabeled first", exact=True).locator(
-        "xpath=ancestor::form[1]"
-    )
-    unlabeled_metrics = unlabeled_form.evaluate(
-        "element => ({display: getComputedStyle(element).display, rowGap: getComputedStyle(element).rowGap})"
-    )
-    assert unlabeled_metrics == {"display": "flex", "rowGap": "12px"}
-
-    for section in (outer, inner, deep, sibling, form):
+    for section in (outer, inner, deep, sibling):
         trigger = section.locator("[data-leika-section-trigger]").first
         contents = section.locator("[data-leika-section-contents]").first
         expect(trigger).to_have_attribute("data-slot", "accordion-trigger")
@@ -438,15 +423,17 @@ def test_nested_sections_expand_and_collapse(
     expect(inner_trigger).to_have_attribute("aria-expanded", "true")
     expect(inner_contents).to_be_visible()
 
-    form_trigger = form.locator("[data-leika-section-trigger]").first
-    form_contents = form.locator("[data-leika-section-contents]").first
-    form_trigger.focus()
+    # The other order, on a section that has not been touched yet: Space opens
+    # what Enter opened above, and vice versa.
+    sibling_trigger = sibling.locator("[data-leika-section-trigger]").first
+    sibling_contents = sibling.locator("[data-leika-section-contents]").first
+    sibling_trigger.focus()
     page.keyboard.press("Space")
-    expect(form_trigger).to_have_attribute("aria-expanded", "false")
-    expect(form_contents).to_be_hidden()
+    expect(sibling_trigger).to_have_attribute("aria-expanded", "false")
+    expect(sibling_contents).to_be_hidden()
     page.keyboard.press("Enter")
-    expect(form_trigger).to_have_attribute("aria-expanded", "true")
-    expect(form_contents).to_be_visible()
+    expect(sibling_trigger).to_have_attribute("aria-expanded", "true")
+    expect(sibling_contents).to_be_visible()
     assert page_errors == []
 
 

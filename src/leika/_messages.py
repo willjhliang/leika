@@ -357,26 +357,39 @@ class GuiFolderMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiFormMessage(_CreateGuiComponentMessage):
-    """A form is a folder whose children's values can be committed together.
+class GuiFormProps:
+    order: float
+    """Order value for arranging GUI elements. """
+    label: Optional[str]
+    """Label for the form's row, or None for a row the trigger fills on its
+    own -- the same rule a button follows."""
+    visible: bool
+    """Visibility state of the GUI form."""
 
-    Reuses ``GuiFolderProps`` because the visual shape is identical to a
-    folder; the form-specific behavior (``on_submit`` callbacks, submit on
-    Enter) is keyed off the message type alone."""
+
+@dataclasses.dataclass
+class GuiFormMessage(_CreateGuiComponentMessage):
+    """A form is a container whose children's values are committed together.
+
+    Its own props rather than a folder's: a form is drawn as one row that
+    opens a popout, so there is no header to expand and nothing for a folder's
+    ``expand_by_default`` to say."""
 
     container_uuid: str
-    props: GuiFolderProps
+    props: GuiFormProps
 
 
 @dataclasses.dataclass
 class GuiFormSubmitMessage(Message):
-    """Form submit signal, sent client->server.
+    """Bidirectional form submit signal.
 
-    Sent when the user submits a form -- its submit button, or Enter in a
-    single-line text input inside it. The server fires the form's
-    ``on_submit`` callbacks. Nothing goes back: a submit changes no state the
-    other clients are showing, since the values themselves were reported as
-    they were typed."""
+    - Sent client->server when the user submits a form: its submit button, or
+      Enter in a single-line text input inside it. The server fires the form's
+      ``on_submit`` callbacks and broadcasts this message back.
+    - Sent server->client after any submit, including one from Python's
+      :meth:`GuiFormHandle.submit_form`. Clients close the form's popout on
+      receipt -- the question has been answered, whoever answered it, so the
+      one path out is the one every way of submitting takes."""
 
     uuid: str
 

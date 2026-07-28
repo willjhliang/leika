@@ -22,6 +22,11 @@ export interface GuiState {
   };
   modals: GuiModalMessage[];
   guiOrderFromUuid: { [id: string]: number };
+  /** The most recent form submit, as its form's UUID and a counter that only
+   * goes up. A signal rather than a state: a form's popout closes when its
+   * count changes, and there is nothing to clean up when the form goes away.
+   * Null until the first submit of the session. */
+  lastFormSubmit: { uuid: string; count: number } | null;
   uploadsInProgress: {
     [uuid: string]: {
       uploadedBytes: number;
@@ -39,6 +44,8 @@ export interface GuiActions {
   addModal: (config: GuiModalMessage) => void;
   removeModal: (id: string) => void;
   updateGuiProps: (id: string, updates: { [key: string]: any }) => void;
+  /** Record that a form was submitted, whoever submitted it. */
+  noteFormSubmit: (uuid: string) => void;
   /** Move components within their containers.
    *
    * Ordering lives in a map of its own -- containers sort on it, while the
@@ -77,6 +84,7 @@ const cleanGuiState: GuiState = {
   guiUuidSetFromContainerUuid: { root: {} },
   modals: [],
   guiOrderFromUuid: {},
+  lastFormSubmit: null,
   uploadsInProgress: {},
   commands: {},
 };
@@ -205,6 +213,7 @@ export function useGuiState(initialServer: string) {
             cleanGuiState.guiUuidSetFromContainerUuid,
           modals: cleanGuiState.modals,
           guiOrderFromUuid: cleanGuiState.guiOrderFromUuid,
+          lastFormSubmit: cleanGuiState.lastFormSubmit,
           uploadsInProgress: cleanGuiState.uploadsInProgress,
           commands: cleanGuiState.commands,
         });
@@ -269,6 +278,14 @@ export function useGuiState(initialServer: string) {
         if (newConfig !== config) {
           configStore.set({ [id]: newConfig });
         }
+      },
+      noteFormSubmit: (uuid) => {
+        store.set((state) => ({
+          lastFormSubmit: {
+            uuid,
+            count: (state.lastFormSubmit?.count ?? 0) + 1,
+          },
+        }));
       },
       reorderGui: (orderFromUuid) => {
         store.set((state) => {

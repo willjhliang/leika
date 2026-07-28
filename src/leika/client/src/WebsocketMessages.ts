@@ -15,11 +15,11 @@ export interface GuiFolderMessage {
     expand_by_default: boolean;
   };
 }
-/** A form is a folder whose children's values can be committed together.
+/** A form is a container whose children's values are committed together.
  *
- * Reuses ``GuiFolderProps`` because the visual shape is identical to a
- * folder; the form-specific behavior (``on_submit`` callbacks, submit on
- * Enter) is keyed off the message type alone.
+ * Its own props rather than a folder's: a form is drawn as one row that
+ * opens a popout, so there is no header to expand and nothing for a folder's
+ * ``expand_by_default`` to say.
  *
  * (automatically generated)
  */
@@ -27,12 +27,7 @@ export interface GuiFormMessage {
   type: "GuiFormMessage";
   uuid: string;
   container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    visible: boolean;
-    expand_by_default: boolean;
-  };
+  props: { order: number; label: string | null; visible: boolean };
 }
 /** GuiMarkdownMessage(uuid: 'str', container_uuid: 'str', props: 'GuiMarkdownProps')
  *
@@ -683,13 +678,15 @@ export interface RemoveNotificationMessage {
 export interface ResetGuiMessage {
   type: "ResetGuiMessage";
 }
-/** Form submit signal, sent client->server.
+/** Bidirectional form submit signal.
  *
- * Sent when the user submits a form -- its submit button, or Enter in a
- * single-line text input inside it. The server fires the form's
- * ``on_submit`` callbacks. Nothing goes back: a submit changes no state the
- * other clients are showing, since the values themselves were reported as
- * they were typed.
+ * - Sent client->server when the user submits a form: its submit button, or
+ * Enter in a single-line text input inside it. The server fires the form's
+ * ``on_submit`` callbacks and broadcasts this message back.
+ * - Sent server->client after any submit, including one from Python's
+ * :meth:`GuiFormHandle.submit_form`. Clients close the form's popout on
+ * receipt -- the question has been answered, whoever answered it, so the
+ * one path out is the one every way of submitting takes.
  *
  * (automatically generated)
  */
