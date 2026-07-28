@@ -21,11 +21,7 @@
 // elsewhere must not be counted as a strip. (Getting this wrong squeezed a
 // freshly docked panel into a 36px region.)
 
-import {
-  isColumnMinimized,
-  topColumns,
-  widthColumns,
-} from "./layoutOps";
+import { isColumnMinimized, topColumns, widthColumns } from "./layoutOps";
 import {
   DockNode,
   GroupId,

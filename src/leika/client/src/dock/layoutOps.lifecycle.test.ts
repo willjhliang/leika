@@ -63,7 +63,14 @@ describe("addPanelToArea", () => {
   it("is a no-op when the panel is already placed elsewhere (dragged out)", () => {
     // tab2 torn out of the area into a floating window; the server later
     // re-sends the tab list -- re-adding must not duplicate it in the area.
-    const torn = tearOutPanel(areaLayout(), "g-area", "tab2", 10, 10, 260).layout;
+    const torn = tearOutPanel(
+      areaLayout(),
+      "g-area",
+      "tab2",
+      10,
+      10,
+      260,
+    ).layout;
     const out = addPanelToArea(torn, "area-1", "tab2");
     expect(out).toBe(torn);
     expect(out.groups["g-area"].panelIds).toEqual(["tab1"]);

@@ -74,7 +74,10 @@ function colsMax(cols: DockNode[]): number {
  * - INVARIANT, enforced on every commit: regionWidth is never below the
  *   expanded columns' summed minimum (so docking a panel into a region grows
  *   it instead of squeezing panels below their per-panel minimum). */
-export function reconcileRegionWidths(prev: DockLayout, next: DockLayout): void {
+export function reconcileRegionWidths(
+  prev: DockLayout,
+  next: DockLayout,
+): void {
   // Carry-over base: the op's own value when it set one (clones inherit
   // prev's, so a differing value is a deliberate write), else prev's.
   const nextRW = regionWidthsOf(next.regionWidth !== undefined ? next : prev);

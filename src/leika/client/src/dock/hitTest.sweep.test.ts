@@ -40,15 +40,18 @@ const STRIP_H = 28;
  * region band [regionLeft, regionLeft+regionW] x [0, height]. We approximate
  * the real layout: a row splits width, a column splits height. Tabs are placed
  * along the strip; a group with >tabsPerRow panels wraps to a second row. */
-function dockedTargets(
-  layout: DockLayout,
-  edge: DockEdge,
-): GroupTarget[] {
+function dockedTargets(layout: DockLayout, edge: DockEdge): GroupTarget[] {
   const tree = layout.docked[edge];
   if (tree === null) return [];
   const regionLeft = edge === "left" ? 0 : CONTAINER.width - REGION_W[edge];
   const out: GroupTarget[] = [];
-  const place = (node: DockNode, x: number, y: number, w: number, h: number) => {
+  const place = (
+    node: DockNode,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ) => {
     if (node.type === "leaf") {
       const group = layout.groups[node.group];
       const r = rect(x, y, w, h);
@@ -126,7 +129,11 @@ function targetsFor(layout: DockLayout): DropTargets {
 // ---------------------------------------------------------------------------
 // Result validation against the layout + targets.
 // ---------------------------------------------------------------------------
-function nodeExists(layout: DockLayout, edge: DockEdge, nodeId: string): boolean {
+function nodeExists(
+  layout: DockLayout,
+  edge: DockEdge,
+  nodeId: string,
+): boolean {
   const walk = (node: DockNode | null): boolean => {
     if (node === null) return false;
     if (node.id === nodeId) return true;
@@ -155,12 +162,16 @@ function validateResult(
       }
       // Suppression contract: must be a multi-cell edge for that side.
       if (edgeIsSingleLeaf(tree, result.side))
-        errs.push(`regionEdge ${result.side} on a single-leaf edge (should be suppressed)`);
+        errs.push(
+          `regionEdge ${result.side} on a single-leaf edge (should be suppressed)`,
+        );
       break;
     }
     case "split":
       if (!nodeExists(layout, result.edge, result.nodeId))
-        errs.push(`split references missing node ${result.nodeId} on ${result.edge}`);
+        errs.push(
+          `split references missing node ${result.nodeId} on ${result.edge}`,
+        );
       // A split region must be one of the four sides ("center" merges instead and
       // is excluded from the split result's type).
       if (!["top", "bottom", "left", "right"].includes(result.region))
@@ -206,7 +217,12 @@ function validateHint(hint: {
 }): string[] {
   const errs: string[] = [];
   const fin = (n: number) => Number.isFinite(n);
-  if (!fin(hint.left) || !fin(hint.top) || !fin(hint.width) || !fin(hint.height))
+  if (
+    !fin(hint.left) ||
+    !fin(hint.top) ||
+    !fin(hint.width) ||
+    !fin(hint.height)
+  )
     errs.push(`hint has non-finite field ${JSON.stringify(hint)}`);
   if (hint.width < 0 || hint.height < 0)
     errs.push(`hint has negative size ${JSON.stringify(hint)}`);
@@ -359,7 +375,10 @@ describe("hitTest pointer sweep invariants", () => {
             zoneTally.set("null", (zoneTally.get("null") ?? 0) + 1);
             continue;
           }
-          zoneTally.set(res.result.kind, (zoneTally.get(res.result.kind) ?? 0) + 1);
+          zoneTally.set(
+            res.result.kind,
+            (zoneTally.get(res.result.kind) ?? 0) + 1,
+          );
           const rErrs = validateResult(layout, targets, res.result);
           const hErrs = validateHint(res.hint);
           for (const e of [...rErrs, ...hErrs]) {
@@ -376,7 +395,11 @@ describe("hitTest pointer sweep invariants", () => {
       expect(errors, errors.join("\n")).toEqual([]);
       // Sanity: the sweep should actually reach *some* non-null zone for any
       // non-empty layout (guards against the harness silently testing nothing).
-      if (targets.groups.length > 0 || layout.docked.left || layout.docked.right) {
+      if (
+        targets.groups.length > 0 ||
+        layout.docked.left ||
+        layout.docked.right
+      ) {
         const nonNull = [...zoneTally.entries()]
           .filter(([k]) => k !== "null")
           .reduce((s, [, n]) => s + n, 0);
@@ -402,7 +425,12 @@ describe("hitTest randomized-geometry sweep", () => {
       const rng = mulberry32(seed * 101 + 7);
       const cw = 600 + Math.floor(rng() * 800);
       const ch = 400 + Math.floor(rng() * 600);
-      const container: ContainerRect = { left: 0, top: 0, width: cw, height: ch };
+      const container: ContainerRect = {
+        left: 0,
+        top: 0,
+        width: cw,
+        height: ch,
+      };
       const regionW: Record<DockEdge, number> = {
         left: 200 + Math.floor(rng() * 200),
         right: 200 + Math.floor(rng() * 200),
@@ -423,17 +451,28 @@ describe("hitTest randomized-geometry sweep", () => {
           try {
             res = hitTest(layout, regionW, container, targets, x, y);
           } catch (err) {
-            errors.push(`THREW seed=${seed} (${x},${y}) cw=${cw} ch=${ch}: ${err}`);
+            errors.push(
+              `THREW seed=${seed} (${x},${y}) cw=${cw} ch=${ch}: ${err}`,
+            );
             continue;
           }
           if (res === null) continue;
           // The referenced target must exist (group/window/node).
           const r = res.result;
-          if (r.kind === "merge" && layout.groups[r.targetGroupId] === undefined)
+          if (
+            r.kind === "merge" &&
+            layout.groups[r.targetGroupId] === undefined
+          )
             errors.push(`merge->missing group seed=${seed} (${x},${y})`);
-          if (r.kind === "insertTab" && layout.groups[r.targetGroupId] === undefined)
+          if (
+            r.kind === "insertTab" &&
+            layout.groups[r.targetGroupId] === undefined
+          )
             errors.push(`insertTab->missing group seed=${seed} (${x},${y})`);
-          if (r.kind === "snap" && !layout.floating.some((w) => w.id === r.windowId))
+          if (
+            r.kind === "snap" &&
+            !layout.floating.some((w) => w.id === r.windowId)
+          )
             errors.push(`snap->missing window seed=${seed} (${x},${y})`);
           if (
             !Number.isFinite(res.hint.left) ||
@@ -441,7 +480,9 @@ describe("hitTest randomized-geometry sweep", () => {
             res.hint.width < 0 ||
             res.hint.height < 0
           )
-            errors.push(`bad hint seed=${seed} (${x},${y}): ${JSON.stringify(res.hint)}`);
+            errors.push(
+              `bad hint seed=${seed} (${x},${y}): ${JSON.stringify(res.hint)}`,
+            );
           if (errors.length > 8) break;
         }
         if (errors.length > 8) break;

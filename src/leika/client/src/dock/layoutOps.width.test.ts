@@ -54,7 +54,11 @@ import {
 } from "./testUtils";
 
 function layoutWith(tree: DockNode, ...gids: GroupId[]): DockLayout {
-  return { groups: groups(...gids), docked: { left: tree, right: null }, floating: [] };
+  return {
+    groups: groups(...gids),
+    docked: { left: tree, right: null },
+    floating: [],
+  };
 }
 /** The single split node in a tree shaped as one split (for weight checks). */
 function asSplit(n: DockNode | null): Extract<DockNode, { type: "split" }> {
@@ -87,7 +91,10 @@ describe("topColumns", () => {
     const tree = rowSplit([leaf("a"), inner]);
     // Top columns are [a, inner] -- the nested row is one (already-flat in
     // practice, but topColumns only looks one level deep).
-    expect(topColumns(tree)).toEqual([tree.type === "split" ? tree.children[0] : tree, inner]);
+    expect(topColumns(tree)).toEqual([
+      tree.type === "split" ? tree.children[0] : tree,
+      inner,
+    ]);
   });
 });
 
@@ -144,7 +151,6 @@ describe("widthColumns", () => {
     const tree = colSplit([colSplit([rowSplit([a, b])])]);
     expect(widthColumns(tree)).toEqual([a, b]);
   });
-
 });
 
 // ===========================================================================
@@ -163,19 +169,23 @@ describe("maxRegionWidth", () => {
   });
 
   it("a column (stacked) takes the max of its children (shared width)", () => {
-    expect(maxRegionWidth(colSplit([leaf("a"), leaf("b")]))).toBe(MAX_PANEL_WIDTH_PX);
+    expect(maxRegionWidth(colSplit([leaf("a"), leaf("b")]))).toBe(
+      MAX_PANEL_WIDTH_PX,
+    );
   });
 
   it("honors a custom divider width and >=2 children", () => {
-    expect(maxRegionWidth(rowSplit([leaf("a"), leaf("b"), leaf("c")]), 10)).toBe(
-      MAX_PANEL_WIDTH_PX * 3 + 10 * 2,
-    );
+    expect(
+      maxRegionWidth(rowSplit([leaf("a"), leaf("b"), leaf("c")]), 10),
+    ).toBe(MAX_PANEL_WIDTH_PX * 3 + 10 * 2);
   });
 
   it("nested: a column containing a row uses the row's summed max", () => {
     const divider = 6;
     const node = colSplit([leaf("a"), rowSplit([leaf("b"), leaf("c")])]);
-    expect(maxRegionWidth(node, divider)).toBe(MAX_PANEL_WIDTH_PX * 2 + divider);
+    expect(maxRegionWidth(node, divider)).toBe(
+      MAX_PANEL_WIDTH_PX * 2 + divider,
+    );
   });
 });
 
@@ -378,7 +388,10 @@ describe("RegionResizer clamp bounds for a column-rooted unequal region", () => 
   it("a column root with an unequal inner row clamps so the smaller column keeps its min", () => {
     // column[C, row[A(400), B(200)]]: B is 1/3 of the width. At the region's lo
     // bound, B must still be >= MIN_PANEL_WIDTH_PX.
-    const tree = colSplit([leaf("c", 1), rowSplit([leaf("a", 400), leaf("b", 200)], 1)]);
+    const tree = colSplit([
+      leaf("c", 1),
+      rowSplit([leaf("a", 400), leaf("b", 200)], 1),
+    ]);
     const { lo, hi } = clampBounds(tree);
     // B proportion = 200/600; min region so B >= 220 is 220 / (1/3) = 660.
     expect(lo).toBeCloseTo(MIN_PANEL_WIDTH_PX / (200 / 600), 0);
@@ -390,7 +403,10 @@ describe("RegionResizer clamp bounds for a column-rooted unequal region", () => 
   });
 
   it("matches plain summed bounds for a column root with an EQUAL inner row", () => {
-    const tree = colSplit([leaf("c", 1), rowSplit([leaf("a", 1), leaf("b", 1)], 1)]);
+    const tree = colSplit([
+      leaf("c", 1),
+      rowSplit([leaf("a", 1), leaf("b", 1)], 1),
+    ]);
     const { lo, hi } = clampBounds(tree);
     // Equal columns (prop = 0.5 each):
     // - lo: the summed row min WITH the 7px divider (447) beats the per-column

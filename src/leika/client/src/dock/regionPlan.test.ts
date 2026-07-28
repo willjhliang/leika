@@ -7,11 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { toggleCollapsed } from "./layoutOps";
 import { planRegion, plannedReservedWidth } from "./regionPlan";
-import {
-  emptyLayout,
-  MINIMIZED_STRIP_PX,
-  SPLIT_DIVIDER_PX,
-} from "./types";
+import { emptyLayout, MINIMIZED_STRIP_PX, SPLIT_DIVIDER_PX } from "./types";
 import { reconcileRegionWidths } from "./widthReconciliation";
 import { leaf, row, col, groupsRecord as groups } from "./testUtils";
 

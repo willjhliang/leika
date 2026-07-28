@@ -290,10 +290,19 @@ export function hitTest(
     if (cy < REGION_EDGE_PX && !edgeIsSingleLeaf(tree, "top")) {
       return {
         result: { kind: "regionEdge", edge, side: "top" },
-        hint: { left: regionLeft, top: 0, width: w, height: t, variant: "line" },
+        hint: {
+          left: regionLeft,
+          top: 0,
+          width: w,
+          height: t,
+          variant: "line",
+        },
       };
     }
-    if (crect.height - cy < REGION_EDGE_PX && !edgeIsSingleLeaf(tree, "bottom")) {
+    if (
+      crect.height - cy < REGION_EDGE_PX &&
+      !edgeIsSingleLeaf(tree, "bottom")
+    ) {
       return {
         result: { kind: "regionEdge", edge, side: "bottom" },
         hint: {
@@ -309,7 +318,13 @@ export function hitTest(
     if (cx - regionLeft < REGION_SIDE_PX && !edgeIsSingleLeaf(tree, "left")) {
       return {
         result: { kind: "regionEdge", edge, side: "left" },
-        hint: { left: regionLeft, top: 0, width: t, height: crect.height, variant: "line" },
+        hint: {
+          left: regionLeft,
+          top: 0,
+          width: t,
+          height: crect.height,
+          variant: "line",
+        },
       };
     }
     if (regionRight - cx < REGION_SIDE_PX && !edgeIsSingleLeaf(tree, "right")) {
@@ -366,7 +381,10 @@ export function hitTest(
   const mergeResult = (): { result: DropResult; hint: DropHint } | null =>
     g!.unmergeable || draggingUnmergeable
       ? null
-      : { result: { kind: "merge", targetGroupId: g!.groupId }, hint: rel(r, "merge") };
+      : {
+          result: { kind: "merge", targetGroupId: g!.groupId },
+          hint: rel(r, "merge"),
+        };
 
   // 3-area. A nested dockable area is a FLAT tab group -- the only drops are
   // insert-at-a-tab-position (over its strip) or merge/append (anywhere else,
@@ -379,15 +397,27 @@ export function hitTest(
       const ins = tabInsertion(g.tabs, clientX, clientY);
       if (ins !== null) {
         return {
-          result: { kind: "insertTab", targetGroupId: g.groupId, index: ins.index },
+          result: {
+            kind: "insertTab",
+            targetGroupId: g.groupId,
+            index: ins.index,
+          },
           hint: rel(
-            { left: ins.lineLeft - 1, top: ins.lineTop, width: 2, height: ins.lineHeight },
+            {
+              left: ins.lineLeft - 1,
+              top: ins.lineTop,
+              width: 2,
+              height: ins.lineHeight,
+            },
             "line",
           ),
         };
       }
     }
-    return { result: { kind: "merge", targetGroupId: g.groupId }, hint: rel(r, "merge") };
+    return {
+      result: { kind: "merge", targetGroupId: g.groupId },
+      hint: rel(r, "merge"),
+    };
   }
 
   // 3z. A minimized target has no content area, so its whole bar is a 5-way
@@ -404,22 +434,48 @@ export function hitTest(
     if (g.ctx.kind === "docked") {
       const e = g.ctx.edge;
       const n = g.ctx.nodeId;
-      if (ry < V) return { result: { kind: "split", edge: e, nodeId: n, region: "top" }, hint: splitLine("top") };
-      if (ry > 1 - V) return { result: { kind: "split", edge: e, nodeId: n, region: "bottom" }, hint: splitLine("bottom") };
-      if (rx < H) return { result: { kind: "split", edge: e, nodeId: n, region: "left" }, hint: splitLine("left") };
-      if (rx > 1 - H) return { result: { kind: "split", edge: e, nodeId: n, region: "right" }, hint: splitLine("right") };
+      if (ry < V)
+        return {
+          result: { kind: "split", edge: e, nodeId: n, region: "top" },
+          hint: splitLine("top"),
+        };
+      if (ry > 1 - V)
+        return {
+          result: { kind: "split", edge: e, nodeId: n, region: "bottom" },
+          hint: splitLine("bottom"),
+        };
+      if (rx < H)
+        return {
+          result: { kind: "split", edge: e, nodeId: n, region: "left" },
+          hint: splitLine("left"),
+        };
+      if (rx > 1 - H)
+        return {
+          result: { kind: "split", edge: e, nodeId: n, region: "right" },
+          hint: splitLine("right"),
+        };
       return mergeResult();
     }
     // Floating minimized: snap above/below; left/right & center merge.
     if (ry < V)
       return {
         result: { kind: "snap", windowId: g.ctx.windowId, index: g.ctx.index },
-        hint: rel({ left: r.left, top: r.top - 2, width: r.width, height: 4 }, "line"),
+        hint: rel(
+          { left: r.left, top: r.top - 2, width: r.width, height: 4 },
+          "line",
+        ),
       };
     if (ry > 1 - V)
       return {
-        result: { kind: "snap", windowId: g.ctx.windowId, index: g.ctx.index + 1 },
-        hint: rel({ left: r.left, top: r.bottom - 2, width: r.width, height: 4 }, "line"),
+        result: {
+          kind: "snap",
+          windowId: g.ctx.windowId,
+          index: g.ctx.index + 1,
+        },
+        hint: rel(
+          { left: r.left, top: r.bottom - 2, width: r.width, height: 4 },
+          "line",
+        ),
       };
     return mergeResult();
   }
@@ -441,13 +497,21 @@ export function hitTest(
   ) {
     if (g.ctx.kind === "docked") {
       return {
-        result: { kind: "split", edge: g.ctx.edge, nodeId: g.ctx.nodeId, region: "top" },
+        result: {
+          kind: "split",
+          edge: g.ctx.edge,
+          nodeId: g.ctx.nodeId,
+          region: "top",
+        },
         hint: splitLine("top"),
       };
     }
     return {
       result: { kind: "snap", windowId: g.ctx.windowId, index: g.ctx.index },
-      hint: rel({ left: r.left, top: r.top - 2, width: r.width, height: 4 }, "line"),
+      hint: rel(
+        { left: r.left, top: r.top - 2, width: r.width, height: 4 },
+        "line",
+      ),
     };
   }
 
@@ -464,7 +528,11 @@ export function hitTest(
     const ins = tabInsertion(g.tabs, clientX, clientY);
     if (ins !== null) {
       return {
-        result: { kind: "insertTab", targetGroupId: g.groupId, index: ins.index },
+        result: {
+          kind: "insertTab",
+          targetGroupId: g.groupId,
+          index: ins.index,
+        },
         hint: rel(
           {
             left: ins.lineLeft - 1,
@@ -490,9 +558,12 @@ export function hitTest(
   // also pixel-capped so the band doesn't balloon on a wide panel (a docked
   // control panel can be 320-384px wide -- 22% of that reads as "most of the
   // way in" rather than "near the edge").
-  const vBand = ch > 0 ? Math.min(SPLIT_BAND_V, SPLIT_BAND_V_MAX_PX / ch) : SPLIT_BAND_V;
+  const vBand =
+    ch > 0 ? Math.min(SPLIT_BAND_V, SPLIT_BAND_V_MAX_PX / ch) : SPLIT_BAND_V;
   const hBand =
-    r.width > 0 ? Math.min(SPLIT_BAND, SPLIT_BAND_H_MAX_PX / r.width) : SPLIT_BAND;
+    r.width > 0
+      ? Math.min(SPLIT_BAND, SPLIT_BAND_H_MAX_PX / r.width)
+      : SPLIT_BAND;
   if (g.ctx.kind === "docked") {
     // Content area splits THIS panel: left/right/below; center merges. "Above
     // this panel" is NOT here -- it lives in the grip bar above the tabs (3a),
@@ -503,14 +574,26 @@ export function hitTest(
     else if (rx > 1 - hBand) region = "right";
     if (region !== null) {
       return {
-        result: { kind: "split", edge: g.ctx.edge, nodeId: g.ctx.nodeId, region },
+        result: {
+          kind: "split",
+          edge: g.ctx.edge,
+          nodeId: g.ctx.nodeId,
+          region,
+        },
         hint: splitLine(region),
       };
     }
   } else if (ry > 1 - vBand) {
     return {
-      result: { kind: "snap", windowId: g.ctx.windowId, index: g.ctx.index + 1 },
-      hint: rel({ left: r.left, top: r.bottom - 2, width: r.width, height: 4 }, "line"),
+      result: {
+        kind: "snap",
+        windowId: g.ctx.windowId,
+        index: g.ctx.index + 1,
+      },
+      hint: rel(
+        { left: r.left, top: r.bottom - 2, width: r.width, height: 4 },
+        "line",
+      ),
     };
   }
 

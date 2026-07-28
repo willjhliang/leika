@@ -375,8 +375,7 @@ export function cascadeResize(opts: {
   const { weights, collapsed, containerPx, deltaPx, minCell, maxCell } = opts;
   const index = opts.dividerIndex;
   if (containerPx <= 0) return null;
-  const total =
-    weights.reduce((s, w, i) => (collapsed[i] ? s : s + w), 0) || 1;
+  const total = weights.reduce((s, w, i) => (collapsed[i] ? s : s + w), 0) || 1;
   const next = weights.map((w, i) =>
     collapsed[i] ? 0 : (w / total) * containerPx,
   );
@@ -590,12 +589,14 @@ export function dockToRegionEdge(
   // for column/top-bottom docks it can't, so equalizing here is what keeps the
   // new band at ~50% height.)
   const subtreeW =
-    weights !== undefined ? { ...subtree, weight: weights.dragged } : { ...subtree, weight: 1 };
+    weights !== undefined
+      ? { ...subtree, weight: weights.dragged }
+      : { ...subtree, weight: 1 };
   const existingW =
-    weights !== undefined ? { ...existing, weight: weights.existing } : { ...existing, weight: 1 };
-  const children = draggedFirst
-    ? [subtreeW, existingW]
-    : [existingW, subtreeW];
+    weights !== undefined
+      ? { ...existing, weight: weights.existing }
+      : { ...existing, weight: 1 };
+  const children = draggedFirst ? [subtreeW, existingW] : [existingW, subtreeW];
   draft.docked[edge] = normalizeTree({
     type: "split",
     id: freshId("node"),
@@ -643,7 +644,10 @@ export function dropOnDockedLeaf(
 
   const dw = weights?.dragged ?? 1;
   const tw = weights?.target ?? 1;
-  const subtree: DockNode = { ...buildColumnSubtree(draggedGroupIds), weight: dw };
+  const subtree: DockNode = {
+    ...buildColumnSubtree(draggedGroupIds),
+    weight: dw,
+  };
   const keptTarget: DockNode = { ...liveTarget, weight: tw };
   const dir: "row" | "column" =
     region === "left" || region === "right" ? "row" : "column";
@@ -1191,9 +1195,7 @@ export function expandStack(
   const tagged = present.filter((g) => g.collapsedByParent === true);
   const targets = tagged.length > 0 ? tagged : present;
   if (
-    !targets.some(
-      (g) => g.collapsed === true || g.collapsedByParent === true,
-    )
+    !targets.some((g) => g.collapsed === true || g.collapsedByParent === true)
   ) {
     return layout;
   }

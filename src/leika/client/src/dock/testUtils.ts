@@ -34,7 +34,11 @@ export function col(children: DockNode[], weight = 1): DockNode {
 // ---------------------------------------------------------------------------
 // Group builders. `group("a", 2)` holds panels "a.0", "a.1".
 // ---------------------------------------------------------------------------
-export function group(id: string, panelCount = 1, collapsed?: boolean): TabGroup {
+export function group(
+  id: string,
+  panelCount = 1,
+  collapsed?: boolean,
+): TabGroup {
   const panelIds = Array.from({ length: panelCount }, (_, i) => `${id}.${i}`);
   return {
     id,
@@ -130,7 +134,10 @@ export type Shape =
   | { leaf: GroupId; weight?: number }
   | { dir: "row" | "column"; children: Shape[]; weight?: number };
 
-export function shapeOf(node: DockNode | null, withWeights = false): Shape | null {
+export function shapeOf(
+  node: DockNode | null,
+  withWeights = false,
+): Shape | null {
   if (node === null) return null;
   if (node.type === "leaf") {
     return withWeights
