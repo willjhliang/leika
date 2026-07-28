@@ -17,6 +17,7 @@ import {
   colorWithOpacity,
   relativeLuminance,
   accentForeground,
+  colorDisplayString,
 } from "./colorUtils";
 
 describe("rgbToString / rgbaToString", () => {
@@ -212,5 +213,22 @@ describe("accentForeground", () => {
 
   it("falls back to the light foreground for an unparseable accent", () => {
     expect(accentForeground("not-a-color")).toBe(LIGHT);
+  });
+});
+
+describe("colorDisplayString", () => {
+  it("shows alpha at two decimals, and leaves everything else alone", () => {
+    // 18% of 255 is the byte 46, which stores as 0.1804.
+    expect(colorDisplayString("rgba(20, 90, 210, 0.1804)")).toBe(
+      "rgba(20, 90, 210, 0.18)",
+    );
+    expect(colorDisplayString("rgb(20, 90, 210)")).toBe("rgb(20, 90, 210)");
+    expect(colorDisplayString("Default")).toBe("Default");
+  });
+
+  it("does not shorten the stored value, which has to survive a re-parse", () => {
+    const stored = rgbaToString([20, 90, 210, 45]);
+    expect(parseToRgba(stored)![3]).toBe(45);
+    expect(colorDisplayString(stored)).toBe("rgba(20, 90, 210, 0.18)");
   });
 });

@@ -4,6 +4,7 @@ import re
 import time
 from collections.abc import Callable
 
+import imageio.v3 as iio
 from playwright.sync_api import Locator, Page, expect
 
 import leika
@@ -355,4 +356,50 @@ def test_hue_survives_greyscale_and_the_far_right(
 
     # And it is still the red that hue 0 would have given.
     _wait_for_value(lambda: color.value[0] > 200 and color.value[1] < 40)
+    assert page_errors == []
+
+
+def _edge_scanlines(selection: Locator) -> dict[str, float]:
+    """Mean brightness of each outermost edge of the block, read off the pixels.
+
+    Sampled on the centre scanline of each edge, so the rounded corners are not
+    what gets measured.
+    """
+    pixels = iio.imread(selection.screenshot(), extension=".png")[:, :, :3]
+    height, width = pixels.shape[:2]
+    return {
+        "top": float(pixels[0, width // 4 : -width // 4].mean()),
+        "bottom": float(pixels[-1, width // 4 : -width // 4].mean()),
+        "left": float(pixels[height // 4 : -height // 4, 0].mean()),
+        "right": float(pixels[height // 4 : -height // 4, -1].mean()),
+    }
+
+
+def test_the_selection_gradient_does_not_wrap_at_its_edges(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The block's gradients are sized to one box and painted into a larger one.
+
+    Left at the CSS defaults that is a one-pixel shortfall filled by `repeat`
+    with the START of the next tile, so every edge showed the color of the
+    OPPOSITE edge: a white seam down the right, a pale one along the bottom.
+    Only dark mode shows it, since a light theme's opaque border covers the
+    overhang, so the assertion needs the translucent border to see through.
+    """
+    leika_server.gui.configure_theme(dark_mode=True)
+    leika_server.gui.add_rgb("Accent", initial_value=(20, 90, 210))
+    expect(leika_page.locator("html")).to_have_class(re.compile(r"\bdark\b"))
+    picker = _open_color_picker(leika_page, "Accent")
+    selection = picker.locator("[data-leika-color-selection]")
+    expect(selection).to_be_visible()
+
+    edges = _edge_scanlines(selection)
+    # Brightness runs dark at the bottom to bright at the top, and saturation
+    # white at the left to the full hue at the right. Both inverted under the
+    # wrap, which is what makes this a fact about the gradient rather than a
+    # reading of whichever pixels it happens to produce.
+    assert edges["top"] > edges["bottom"] + 40, edges
+    assert edges["left"] > edges["right"] + 40, edges
     assert page_errors == []

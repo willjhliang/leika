@@ -4,6 +4,7 @@ import { PipetteIcon } from "lucide-react";
 import * as React from "react";
 
 import {
+  colorDisplayString,
   colorFromRgb,
   colorValueToHex,
   colorWithOpacity,
@@ -348,10 +349,28 @@ export function ColorPicker({
         aria-label="Color saturation and brightness"
         aria-disabled={disabled}
         className="relative h-40 w-full cursor-crosshair rounded-lg border border-input transition-colors outline-none focus-visible:border-ring"
+        // Longhands rather than the `background` shorthand, which would reset
+        // the origin and repeat below it.
+        //
+        // Both matter here. A gradient is sized to the origin box but painted
+        // across the clip box, which defaults to padding and border
+        // respectively -- so the default leaves each gradient one pixel short
+        // of the area it is painted into, and the default `repeat` fills that
+        // last pixel with the START of the next tile: opaque white down the
+        // right edge, and the transparent end of the black ramp along the
+        // bottom. Sizing to the border box removes the shortfall, and
+        // `no-repeat` means rounding at fractional sizes or scale factors
+        // cannot bring the seam back.
+        //
+        // The border box is also the one the pointer reads (`updateSelection`
+        // measures `getBoundingClientRect`), so this is the box that agrees
+        // with what a click at the far edge resolves to.
         style={{
-          background: `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
-            linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)),
-            hsl(${hsv.h}, 100%, 50%)`,
+          backgroundImage: `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
+            linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0))`,
+          backgroundColor: `hsl(${hsv.h}, 100%, 50%)`,
+          backgroundOrigin: "border-box",
+          backgroundRepeat: "no-repeat",
         }}
         onKeyDown={(event) => {
           const amount = event.shiftKey ? 10 : 1;
@@ -575,7 +594,7 @@ export function ColorPickerPopover({
           className="size-4 shrink-0 rounded-sm"
           style={{ backgroundColor: value }}
         />
-        <span className="truncate">{text ?? value}</span>
+        <span className="truncate">{text ?? colorDisplayString(value)}</span>
       </PopoverTrigger>
       <PopoverContent
         align="end"

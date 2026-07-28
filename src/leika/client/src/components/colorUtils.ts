@@ -21,6 +21,18 @@ export function rgbaToString(rgba: RgbaTuple): string {
   )}, ${(rgba[3] / 255).toFixed(4)})`;
 }
 
+/** Alpha at the two decimals a viewer reads, matching the picker's CSS output.
+ *
+ * Display only. The stored value keeps four because the picker re-parses it on
+ * every edit, and two cannot tell 45/255 from 46/255 -- shortening it would
+ * nudge an untouched alpha by a byte.
+ */
+export function colorDisplayString(value: string): string {
+  const rgba = parseToRgba(value);
+  if (rgba === null || !/^rgba\(/i.test(value.trim())) return value;
+  return `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${(rgba[3] / 255).toFixed(2)})`;
+}
+
 function rgbChannels(match: RegExpMatchArray): RgbTuple | null {
   const channels = [match[1], match[2], match[3]].map(Number) as RgbTuple;
   return channels.every((channel) => channel >= 0 && channel <= 255)
