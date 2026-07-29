@@ -99,6 +99,37 @@ def test_form_action_buttons_stay_below_the_fields(server: leika.Server) -> None
     assert form.actions.order > added.order > last.order
 
 
+def test_a_mini_form_holds_one_field_and_no_action_buttons(
+    server: leika.Server,
+) -> None:
+    """A mini form is drawn as its field's own row with a send button, so it
+    has no buttons of its own -- and nowhere to put a second field."""
+    with server.gui.add_mini_form() as mini:
+        field = server.gui.add_text("Search", initial_value="")
+    assert not hasattr(mini, "actions")
+
+    submitted: list[str] = []
+    mini.on_submit(lambda _: submitted.append(field.value))
+    field.value = "leika"
+    mini.submit_form()
+    _wait_for(lambda: submitted == ["leika"])
+
+    # Reset works the same as any form's, on the one field it has.
+    mini.reset_form()
+    assert field.value == ""
+
+    with pytest.raises(ValueError, match="single field"):
+        with server.gui.add_mini_form():
+            server.gui.add_text("One", initial_value="")
+            server.gui.add_text("Two", initial_value="")
+
+    # The rule is about fields, not rows: a form of one field plus something
+    # that holds no value is still a mini form.
+    with server.gui.add_mini_form():
+        server.gui.add_markdown("Ask away")
+        server.gui.add_text("Query", initial_value="")
+
+
 def test_form_reset_restores_what_the_fields_were_declared_with(
     server: leika.Server,
 ) -> None:

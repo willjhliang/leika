@@ -41,6 +41,7 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_html": (("<b>html</b>",), {}),
     "add_image": ((np.zeros((2, 3, 3), dtype=np.uint8),), {}),
     "add_markdown": (("**markdown**",), {}),
+    "add_mini_form": ((), {}),
     "add_modal": (("Modal",), {}),
     "add_multi_slider": (("Multi", 0.0, 1.0, 0.1), {"initial_value": (0.2, 0.8)}),
     "add_number": (("Number", 1.0), {}),

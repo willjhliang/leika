@@ -362,9 +362,15 @@ class GuiFormProps:
     """Order value for arranging GUI elements. """
     label: Optional[str]
     """Label for the form's row, or None for a row the trigger fills on its
-    own -- the same rule a button follows."""
+    own -- the same rule a button follows. Ignored when ``mini``, which has no
+    row of its own to label."""
     visible: bool
     """Visibility state of the GUI form."""
+    mini: bool
+    """Whether this form wraps a single field rather than opening a popout.
+    Drawn as that field's own row with a send button on the end of it: one
+    field is not worth a door, and the button is small enough to sit beside
+    what it commits."""
 
 
 @dataclasses.dataclass

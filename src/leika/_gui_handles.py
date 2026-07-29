@@ -1010,6 +1010,11 @@ class GuiFormHandle(GuiFolderHandle):
     the form's last child and reachable as ``form.actions``: start the answer
     again (:meth:`reset_form`), or give it (:meth:`submit_form`).
 
+    A form built by :meth:`GuiApi.add_mini_form` holds one field and is drawn
+    as that field's own row with a send button on the end of it -- no popout,
+    no row of its own, and no ``actions``, the send button being the client's
+    rather than a child of the form.
+
     Children of a form behave exactly like children of a folder. ``on_update``
     callbacks on individual inputs continue to fire on every keystroke; the
     form's :meth:`on_submit` callback fires only when the form is submitted.
@@ -1042,11 +1047,28 @@ class GuiFormHandle(GuiFolderHandle):
 
     def __exit__(self, *args: Any) -> None:
         super().__exit__(*args)
+        # An exception on its way out of the block takes precedence: whatever
+        # is half-built in here, the error that got us here is the one to
+        # report.
+        if args and args[0] is not None:
+            return
+
+        fields = list(_fields_within(self))
+        # A mini form is drawn as its one field's own row, so a second field
+        # has nowhere to go. Caught here rather than swallowed on the client,
+        # where it would come out as a field that silently never appeared.
+        if self._impl.props.mini and len(fields) > 1:  # type: ignore[attr-defined]
+            raise ValueError(
+                "A mini form holds a single field, but "
+                f"{len(fields)} were added to this one. Use add_form() for "
+                "several fields."
+            )
+
         # What Reset puts back. Read here rather than at reset time, because by
         # then the field holds whatever was typed into it: a field is at its
         # declared value the moment it is created, and this is the first look
         # at it after that. Fields added later are picked up on their own exit.
-        for field in _fields_within(self):
+        for field in fields:
             self._initial_values.setdefault(field._impl.uuid, field.value)
 
         # Keep the action buttons at the bottom, where a form's submit belongs.

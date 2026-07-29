@@ -27,7 +27,12 @@ export interface GuiFormMessage {
   type: "GuiFormMessage";
   uuid: string;
   container_uuid: string;
-  props: { order: number; label: string | null; visible: boolean };
+  props: {
+    order: number;
+    label: string | null;
+    visible: boolean;
+    mini: boolean;
+  };
 }
 /** GuiMarkdownMessage(uuid: 'str', container_uuid: 'str', props: 'GuiMarkdownProps')
  *

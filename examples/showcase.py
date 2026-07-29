@@ -345,6 +345,11 @@ def main() -> None:
                 ("Info", "Warning"), label="Level", color="secondary"
             )
         log = server.gui.add_markdown("_Nothing logged yet._")
+        # The same commit semantics with one field to commit: no popout, no row
+        # of its own, just the field wearing a send button. A broadcast is worth
+        # sending when it is written, not letter by letter.
+        with server.gui.add_mini_form() as broadcast:
+            message = server.gui.add_text("Broadcast", "")
 
     state: dict[str, Any] = {
         "phase": 0.0,
@@ -446,6 +451,14 @@ def main() -> None:
         note_title.value = ""
         note_body.value = ""
         server.gui.add_notification("Annotation logged", title, auto_close_seconds=2.0)
+
+    @broadcast.on_submit
+    def _(_) -> None:
+        text = message.value.strip()
+        if not text:
+            return
+        server.gui.add_notification("Broadcast", text, auto_close_seconds=3.0)
+        message.value = ""
 
     @upload.on_upload
     def _(event: leika.GuiEvent[Any]) -> None:

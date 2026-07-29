@@ -912,6 +912,67 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used as a context to populate the form.
         """
+        handle = self._create_form(label=label, order=order, visible=visible, mini=False)
+        # The form's two ways out, as one row at the bottom of its popout:
+        # start the answer again, or give it. Parted, because they are opposite
+        # moves rather than one control with two ends -- joining them would
+        # invite the wrong one, which for a Reset is the answer thrown away.
+        with handle:
+            handle.actions = self.add_button(("Reset", "Submit"), merge=False)
+
+        def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
+            if event.target.value == "Reset":
+                handle.reset_form()
+            else:
+                handle.submit_form()
+
+        handle.actions.on_click(_act)
+        return handle
+
+    def add_mini_form(
+        self,
+        *,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiFormHandle:
+        """Add a form around a single field, and return a handle to populate it.
+
+        The same commit semantics as :meth:`add_form` in the space of one row:
+        no popout and no row of its own, just the field's own row with a send
+        button on the end of it. One field is not worth a door.
+
+        Exactly one field goes inside -- a second raises :class:`ValueError`
+        when the form's context closes. Sending is the button, or Enter in a
+        single-line text input, and both fire :meth:`GuiFormHandle.on_submit`.
+        There is no Reset: with one field, undoing is retyping.
+
+        Args:
+            order: Optional ordering, smallest values will be displayed first.
+            visible: Whether the component is visible.
+
+        Returns:
+            A handle that can be used as a context to populate the form.
+
+        Example::
+
+            with server.gui.add_mini_form() as ask:
+                query = server.gui.add_text("Search", "")
+
+            @ask.on_submit
+            def _(event):
+                run_search(query.value)
+        """
+        return self._create_form(label=None, order=order, visible=visible, mini=True)
+
+    def _create_form(
+        self,
+        *,
+        label: str | None,
+        order: float | None,
+        visible: bool,
+        mini: bool,
+    ) -> GuiFormHandle:
+        """The container both form flavors are built on."""
         # Nested forms would produce invalid HTML on the client (nested
         # <form> elements are not allowed and the browser flattens
         # them). Walk through folders, tabs, and tab groups -- they
@@ -941,6 +1002,7 @@ class GuiApi(GuiContainer):
             order=order,
             label=label,
             visible=visible,
+            mini=mini,
         )
         self._websock_interface.queue_message(
             _messages.GuiFormMessage(
@@ -958,20 +1020,6 @@ class GuiApi(GuiContainer):
                 parent_container_id=self._get_container_uuid(),
             )
         )
-        # The form's two ways out, as one row at the bottom of its popout:
-        # start the answer again, or give it. Parted, because they are opposite
-        # moves rather than one control with two ends -- joining them would
-        # invite the wrong one, which for a Reset is the answer thrown away.
-        with handle:
-            handle.actions = self.add_button(("Reset", "Submit"), merge=False)
-
-        def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
-            if event.target.value == "Reset":
-                handle.reset_form()
-            else:
-                handle.submit_form()
-
-        handle.actions.on_click(_act)
         return handle
 
     def add_modal(

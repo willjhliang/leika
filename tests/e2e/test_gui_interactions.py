@@ -200,6 +200,42 @@ def test_a_form_opens_from_one_row_into_a_popout(
     assert page_errors == []
 
 
+def test_a_mini_form_sends_from_the_end_of_its_field_row(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """One field, no popout: the field keeps its row and the commit joins it as
+    a square button on the end, sized like the undo a color row carries."""
+    submits: list[str] = []
+    with leika_server.gui.add_mini_form() as mini:
+        query = leika_server.gui.add_text("Search", initial_value="")
+    mini.on_submit(lambda _: submits.append(query.value))
+
+    field = find_gui_input(leika_page, "Search")
+    expect(field).to_be_visible(timeout=5_000)
+    send = leika_page.locator("[data-leika-form-send]")
+    # No door and no row of its own: the field's row is the whole of it.
+    expect(leika_page.locator("[data-leika-form-trigger]")).to_have_count(0)
+    expect(send).to_be_visible()
+    box = send.bounding_box()
+    assert box is not None
+    assert box["width"] == box["height"], box
+
+    field.fill("comets")
+    _wait_until(lambda: query.value == "comets")
+    send.click()
+    _wait_until(lambda: submits == ["comets"])
+
+    # Enter in the field is the same send, since the button is the form's own
+    # submit rather than a click handler beside it.
+    field.fill("again")
+    _wait_until(lambda: query.value == "again")
+    field.press("Enter")
+    _wait_until(lambda: submits == ["comets", "again"])
+    assert page_errors == []
+
+
 def test_a_forms_action_buttons_render_below_its_fields(
     leika_server: leika.Server,
     leika_page: Page,

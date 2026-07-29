@@ -1,4 +1,4 @@
-import { ClipboardPen } from "lucide-react";
+import { ClipboardPen, SendIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,59 @@ import { GuiFormMessage } from "../WebsocketMessages";
 import { useContainerIsEmpty } from "./GuiSection";
 import { GuiInputRow } from "./common";
 
-/** A form: fields committed together, kept in a popout off a single row.
+/** A form: values committed together rather than reported as they are typed.
+ *
+ * Two shapes, by how much there is to ask: several fields go behind a door,
+ * one field keeps its row and grows a send button. */
+export default function FormComponent(message: GuiFormMessage) {
+  return message.props.mini ? (
+    <MiniForm {...message} />
+  ) : (
+    <PopoutForm {...message} />
+  );
+}
+
+/** A form around one field, drawn as that field's own row.
+ *
+ * A popout for a single question is a door in front of a doorway, so the field
+ * stays where it would have been and the commit joins it: a send button on the
+ * end of the row, sized and placed like the undo a color row carries, because
+ * it is the same kind of thing -- a small square that acts on the control
+ * beside it rather than a row of its own. */
+function MiniForm({ uuid }: GuiFormMessage) {
+  const guiContext = React.useContext(GuiComponentContext)!;
+  return (
+    <form
+      className="flex min-w-0 items-center gap-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        guiContext.messageSender(
+          { type: "GuiFormSubmitMessage", uuid },
+          { coalesce: false },
+        );
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        <guiContext.GuiContainer containerUuid={uuid} unwrapped />
+      </div>
+      {/* A real submit button, so it is also what Enter in a single-line text
+          input activates -- one control for both ways of sending. */}
+      <Button
+        type="submit"
+        variant="outline"
+        size="icon-xs"
+        className="shrink-0 text-muted-foreground"
+        aria-label="Send"
+        title="Send"
+        data-leika-form-send
+      >
+        <SendIcon />
+      </Button>
+    </form>
+  );
+}
+
+/** A form of several fields, kept in a popout off a single row.
  *
  * Not the collapsible section it reads like in the tree. A section is a place
  * to keep things, and its contents are the panel's own rows -- live, each one
@@ -28,10 +80,7 @@ import { GuiInputRow } from "./common";
  * So the panel keeps one row for it -- what it is called, and a way in -- and
  * the parts live in the popout, where they are plainly a thing apart from the
  * controls behind them and a submit is plainly the way out. */
-export default function FormComponent({
-  uuid,
-  props: { label },
-}: GuiFormMessage) {
+function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
   const viewer = React.useContext(ViewerContext)!;
   const guiContext = React.useContext(GuiComponentContext)!;
   const [open, setOpen] = React.useState(false);
