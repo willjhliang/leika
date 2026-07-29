@@ -8,7 +8,14 @@ import { ViewerContext } from "../ViewerContext";
 import { ColorRow } from "../components/ColorPicker";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { Button } from "../components/ui/button";
-import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "../components/ui/popover";
 import { Label } from "../components/ui/label";
 import {
   Select,
@@ -20,13 +27,9 @@ import {
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { cn } from "@/lib/utils";
-import {
-  settingsPanel,
-  useControlsShown,
-  useSettingsPanelOpen,
-} from "./SettingsPanelController";
+import { settingsPanel, useSettingsPanelOpen } from "./SettingsPanelController";
 
-/** Ties the gear to the section it opens, for assistive technology. */
+/** Names the popout the gear opens, for assistive technology. */
 const SETTINGS_SECTION_ID = "leika-settings";
 
 /** The accent a viewer lands on when they first open the picker: the theme's
@@ -137,9 +140,37 @@ function ImageFitRow() {
 }
 
 const REPOSITORY_URL = "https://github.com/willjhliang/leika";
+const DOCUMENTATION_URL = "https://willjhliang.github.io/leika/";
+const EXAMPLES_URL = "https://github.com/willjhliang/leika/tree/main/examples";
+
+/** One word of the footer sentence that goes somewhere.
+ *
+ * External destinations out of an app holding live state, so they open beside
+ * the workspace rather than navigating away from it and losing the session. */
+function FooterLink({
+  href,
+  attrs,
+  children,
+}: {
+  href: string;
+  attrs: Record<string, string>;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      {...attrs}
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="underline underline-offset-2 hover:text-foreground"
+    >
+      {children}
+    </a>
+  );
+}
 
 /** The footer of the browser's own controls: what a viewer would be asked to
- * quote in a bug report, and where to take it.
+ * quote in a bug report, and the three places to go next.
  *
  * The version is the client's, baked in at build time, which is the one worth
  * printing: the server refuses a client whose version differs from its own, so
@@ -154,34 +185,42 @@ function AboutRow() {
       className="pt-0.5 text-center text-xs text-muted-foreground select-text"
       data-leika-settings-about
     >
-      <span data-leika-settings-version>Leika v{LEIKA_VERSION}</span>. Source
-      code on{" "}
-      <a
+      <span data-leika-settings-version>Leika v{LEIKA_VERSION}</span>.{" "}
+      <FooterLink
         href={REPOSITORY_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="underline underline-offset-2 hover:text-foreground"
-        data-leika-settings-source
+        attrs={{ "data-leika-settings-source": "true" }}
       >
-        GitHub
-      </a>
+        Source
+      </FooterLink>
+      ,{" "}
+      <FooterLink
+        href={DOCUMENTATION_URL}
+        attrs={{ "data-leika-settings-docs": "true" }}
+      >
+        docs
+      </FooterLink>
+      , and{" "}
+      <FooterLink
+        href={EXAMPLES_URL}
+        attrs={{ "data-leika-settings-examples": "true" }}
+      >
+        examples
+      </FooterLink>
+      .
     </div>
   );
 }
 
-/** Display preferences, revealed at the top of the control panel.
- *
- * It reads as part of the panel rather than a layer over it, unfolding on the
- * same height transition the GUI's own sections use. There is no header of its
- * own: the gear is its only handle, and a second one in the body would be a
- * second thing to keep in sync. Its open state lives outside React because that
- * gear sits in the panel header, which the dock mounts separately from the
- * body. */
-export function SettingsSection() {
+/** Display preferences, in the popout the gear opens.
+
+ * A popout rather than a section of the panel: these are the browser's
+ * settings, not the app's controls, and a band of them wedged in above the
+ * app's own rows read as more of the panel -- the one thing it is not. Off to
+ * the side it is plainly a thing apart, the way a color picker or a form is,
+ * and the panel underneath is left whole.
+ */
+export function SettingsRows() {
   const viewer = React.useContext(ViewerContext)!;
-  const opened = useSettingsPanelOpen();
-  // Whether anything follows this section in the panel body.
-  const controlsShown = useControlsShown();
   const darkMode = viewer.useSettings((state) => state.darkMode);
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const { setDarkMode, setShowPaneTitles } = viewer.settingsActions;
@@ -196,77 +235,50 @@ export function SettingsSection() {
   );
 
   return (
-    <Collapsible open={opened}>
-      {/* The height transition the panel's sections use: the panel reports its
-          own height as a variable, and the starting and ending styles give the
-          transition somewhere to run from and to.
-
-          The rule at the bottom is the one line in the panel that runs the
-          body's full width: it separates the browser's controls from the
-          server's, a bigger break than anything inside the GUI, so it crosses
-          the padding the rows stop at instead of aligning with them. It is
-          there only while there are controls below it to separate -- with the
-          settings alone in the panel it would underline the last row and hold
-          the standoff meant to clear it open beneath, so both go.
-
-          The pull-out and the padding that puts the rows back both belong on
-          THIS element rather than a child of it, because the height transition
-          needs `overflow-hidden` and that clips anything reaching past its
-          edges -- a child would keep its full-width layout box and still be
-          painted short. */}
-      <CollapsibleContent
-        id={SETTINGS_SECTION_ID}
-        className={cn(
-          "-mx-(--card-spacing) h-(--collapsible-panel-height) overflow-hidden px-(--card-spacing) transition-[height] duration-200 ease-out data-ending-style:h-0 data-starting-style:h-0",
-          controlsShown && "border-b",
-        )}
+    <div className="flex flex-col gap-2" data-leika-settings-pane>
+      <SettingsRow htmlFor="leika-settings-dark-mode" label="Dark mode">
+        <Switch
+          id="leika-settings-dark-mode"
+          className="justify-self-start"
+          checked={resolvedDarkMode}
+          onCheckedChange={setDarkMode}
+        />
+      </SettingsRow>
+      <SettingsRow htmlFor="leika-settings-pane-titles" label="Pane titles">
+        <Switch
+          id="leika-settings-pane-titles"
+          className="justify-self-start"
+          checked={showPaneTitles}
+          onCheckedChange={setShowPaneTitles}
+        />
+      </SettingsRow>
+      <AccentColorRow />
+      <ImageFitRow />
+      {/* A step clear of the fields: it does not set a preference, it opens
+          something else. */}
+      <Button
+        variant="outline"
+        className="mt-2 h-7 w-full"
+        disabled={commandCount === 0}
+        onClick={() => commandPalette.open()}
+        data-leika-settings-commands
       >
-        <div
-          className={cn("flex flex-col gap-2 pt-2", controlsShown && "pb-3")}
-          data-leika-settings-pane
-        >
-          <SettingsRow htmlFor="leika-settings-dark-mode" label="Dark mode">
-            <Switch
-              id="leika-settings-dark-mode"
-              className="justify-self-start"
-              checked={resolvedDarkMode}
-              onCheckedChange={setDarkMode}
-            />
-          </SettingsRow>
-          <SettingsRow htmlFor="leika-settings-pane-titles" label="Pane titles">
-            <Switch
-              id="leika-settings-pane-titles"
-              className="justify-self-start"
-              checked={showPaneTitles}
-              onCheckedChange={setShowPaneTitles}
-            />
-          </SettingsRow>
-          <AccentColorRow />
-          <ImageFitRow />
-          <Button
-            variant="outline"
-            className="h-7 w-full"
-            disabled={commandCount === 0}
-            onClick={() => commandPalette.open()}
-            data-leika-settings-commands
-          >
-            Open command palette
-          </Button>
-          <AboutRow />
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+        Open command palette
+      </Button>
+      <AboutRow />
+    </div>
   );
 }
 
-/** The gear that opens the settings, sized to sit beside the status pill. */
 export function SettingsButton() {
   const { useGui } = React.useContext(ViewerContext)!;
   const connected = useGui((state) => state.websocketState === "connected");
   const opened = useSettingsPanelOpen();
 
-  // Closed on the way down, not merely locked: leaving the pane open behind a
-  // disabled gear would strand it, with nothing left that could fold it away.
+  const gear = React.useRef<HTMLSpanElement>(null);
+
+  // Closed on the way down, not merely locked: leaving the popout open behind
+  // a disabled gear would strand it, with nothing left that could close it.
   React.useEffect(() => {
     if (!connected) settingsPanel.close();
   }, [connected]);
@@ -274,37 +286,77 @@ export function SettingsButton() {
   return (
     // The panel header is the floating window's drag handle and its
     // click-to-collapse target, both driven from `pointerdown`, so the gesture
-    // that opens the section must not also reach it.
+    // that opens the popout must not also reach it.
     <span
+      ref={gear}
       className="inline-flex"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <Button
-        // Circular, and the same 20px height as the status badge beside it, so
-        // the two read as one cluster in the header. Idle, the gear is typed
-        // like the pill's own label rather than a step darker, so the pair
-        // reads as one weight.
-        //
-        // Open, it fills with the accent the same way a checked checkbox or a
-        // filled slider does -- `default` IS that pair of tokens, so an accent
-        // set below reaches the gear that opened the pane without being told.
-        variant={opened ? "default" : "secondary"}
-        size="icon-xs"
-        className={cn(
-          "size-5 rounded-full",
-          !opened && "text-muted-foreground",
-        )}
-        aria-label="Settings"
-        aria-expanded={opened}
-        aria-controls={SETTINGS_SECTION_ID}
-        // Nothing in here is worth reading off a page that has stopped
-        // tracking its server, so it goes with the connection.
-        disabled={!connected}
-        onClick={() => settingsPanel.toggle()}
-        data-leika-settings-trigger
+      {/* Open state stays in the shared controller rather than in this
+          component: the gear is mounted by the panel HEADER, which the dock
+          registers separately from the body, and other parts of the panel read
+          whether the settings are up. */}
+      <Popover
+        open={opened}
+        onOpenChange={(next) =>
+          next ? settingsPanel.open() : settingsPanel.close()
+        }
       >
-        <SettingsIcon />
-      </Button>
+        <PopoverTrigger
+          render={
+            <Button
+              // Circular, and the same 20px height as the status badge beside
+              // it, so the two read as one cluster in the header. Idle, the
+              // gear is typed like the pill's own label rather than a step
+              // darker, so the pair reads as one weight.
+              //
+              // Open, it fills with the accent the same way a checked checkbox
+              // or a filled slider does -- `default` IS that pair of tokens, so
+              // an accent set inside reaches the gear that opened it without
+              // being told.
+              variant={opened ? "default" : "secondary"}
+              size="icon-xs"
+              className={cn(
+                "size-5 rounded-full",
+                !opened && "text-muted-foreground",
+              )}
+              aria-label="Settings"
+              // Nothing in here is worth reading off a page that has stopped
+              // tracking its server, so it goes with the connection.
+              disabled={!connected}
+              data-leika-settings-trigger
+            />
+          }
+        >
+          <SettingsIcon />
+        </PopoverTrigger>
+        <PopoverContent
+          id={SETTINGS_SECTION_ID}
+          align="end"
+          // Aligned to the HEADER, not to the gear: every other popout in the
+          // panel hangs off a row and lines up with that row's end, which is
+          // the panel's own edge. The gear is a 20px circle somewhere in the
+          // middle of its row, so aligning to it would put the popout wherever
+          // the title's length happened to leave it -- a different place in
+          // every app. The header row ends where the rows below it do.
+          anchor={() =>
+            gear.current?.closest("[data-leika-panel-header]") ?? gear.current
+          }
+          className="w-[min(20rem,calc(100vw-1rem))]"
+          data-leika-settings-popover
+        >
+          {/* Named out loud. A popout that arrives beside the panel rather
+              than in it has nothing around it to say what it is, and the gear
+              that opened it is a 20px circle the pointer has already left. */}
+          <PopoverHeader>
+            <PopoverTitle data-leika-settings-title>Settings</PopoverTitle>
+            <PopoverDescription className="sr-only">
+              Display preferences for this browser.
+            </PopoverDescription>
+          </PopoverHeader>
+          <SettingsRows />
+        </PopoverContent>
+      </Popover>
     </span>
   );
 }

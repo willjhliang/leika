@@ -15,30 +15,30 @@ import leika
 
 TRIGGER = "[data-leika-settings-trigger]"
 PANE = "[data-leika-settings-pane]"
+POPOVER = "[data-leika-settings-popover]"
 SECTION_ID = "leika-settings"
 
 
 def open_settings(page: Page) -> Locator:
     page.locator(TRIGGER).click()
     expect(page.locator(TRIGGER)).to_have_attribute("aria-expanded", "true")
-    pane = page.locator(f"{PANE}:visible")
-    expect(pane).to_be_visible(timeout=5_000)
-    # It unfolds over 200ms, so geometry read before the transition ends is a
-    # frame of the animation. While it runs, the panel pins its own height into
-    # a variable and transitions to it; once settled that goes back to `auto`.
+    popover = page.locator(POPOVER)
+    expect(popover).to_be_visible(timeout=5_000)
+    # It zooms in, so geometry read before that settles is a frame of the
+    # animation -- and the frames are SMALLER than the popup, being scaled. The
+    # starting style is dropped when the transition begins rather than when it
+    # ends, so what says it is over is the scale being back to 1.
     page.wait_for_function(
-        """id => {
-            const panel = document.getElementById(id);
-            if (panel === null) return false;
-            const height = getComputedStyle(panel).getPropertyValue(
-                "--collapsible-panel-height",
-            );
-            return height.trim() === "auto";
+        """selector => {
+            const popup = document.querySelector(selector);
+            if (popup === null) return false;
+            const transform = getComputedStyle(popup).transform;
+            return transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
         }""",
-        arg=SECTION_ID,
+        arg=POPOVER,
         timeout=5_000,
     )
-    return pane
+    return page.locator(f"{PANE}:visible")
 
 
 def close_settings(page: Page) -> None:
@@ -136,97 +136,74 @@ def test_the_open_gear_fills_with_the_accent(
     assert page_errors == []
 
 
-def test_settings_unfold_inside_the_panel(
+def test_settings_open_in_a_popout_off_the_gear(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """It is part of the panel, not a layer over it: it takes the width of the
-    rows around it and pushes the app's controls down rather than covering
-    them, unfolding on a height transition the way the panel's sections do.
+    """A layer over the panel, not part of it: the browser's settings are not
+    the app's controls, so they open off the gear the way a color picker or a
+    form does and leave the panel underneath exactly as it was.
 
     The header the gear sits in is also the floating window's drag handle and
     its click-to-collapse target, so neither may fire on the way in.
     """
     with leika_server.gui.add_folder("Controls"):
         leika_server.gui.add_checkbox("Enabled", initial_value=True)
-        leika_server.gui.add_divider()
-        leika_server.gui.add_checkbox("Also enabled", initial_value=False)
     checkbox = leika_page.get_by_role("checkbox", name="Enabled", exact=True)
     expect(checkbox).to_be_visible(timeout=5_000)
 
     panel = leika_page.locator("[data-dock-group]").first
-    row = leika_page.locator("[data-leika-gui-row]").first
     before_panel = panel.bounding_box()
     before_checkbox = checkbox.bounding_box()
-    row_box = row.bounding_box()
     assert before_panel is not None and before_checkbox is not None
-    assert row_box is not None
     # No settings markup at all until it is asked for.
     assert leika_page.locator(PANE).count() == 0
 
     pane = open_settings(leika_page)
 
+    # The panel is where it was, at the size it was, with its controls in the
+    # same place: nothing was pushed down to make room.
     after_panel = panel.bounding_box()
-    assert after_panel is not None
+    after_checkbox = checkbox.bounding_box()
+    assert after_panel is not None and after_checkbox is not None
     assert abs(after_panel["x"] - before_panel["x"]) < 1
     assert abs(after_panel["y"] - before_panel["y"]) < 1
+    assert abs(after_panel["height"] - before_panel["height"]) < 1
+    assert abs(after_checkbox["y"] - before_checkbox["y"]) < 1
     # The panel body is still there: the click did not toggle it collapsed.
     expect(checkbox).to_be_visible()
 
-    pane_box = pane.bounding_box()
-    after_checkbox = checkbox.bounding_box()
-    assert pane_box is not None and after_checkbox is not None
-    assert abs(pane_box["width"] - row_box["width"]) < 1
-    assert after_checkbox["y"] > before_checkbox["y"] + pane_box["height"] / 2
+    # It says what it is: arriving beside the panel rather than inside it, it
+    # has nothing around it to explain itself and the gear is behind it.
+    expect(leika_page.locator(POPOVER).get_by_text("Settings", exact=True)).to_be_visible()
 
-    # It unfolds rather than appearing whole.
-    panel_wrapper = leika_page.locator(f"#{SECTION_ID}")
-    assert panel_wrapper.evaluate("e => getComputedStyle(e).transitionProperty") == "height"
-
-    # The rule under it is the one line in the panel that crosses the body's
-    # padding: it separates the browser's controls from the server's. Its rows
-    # still line up with the GUI's, so only the line runs wide.
-    rule = leika_page.locator(f"#{SECTION_ID}")
-    rule_box = rule.bounding_box()
-    body_box = leika_page.locator('[data-slot="card-content"]').first.bounding_box()
-    assert rule_box is not None and body_box is not None
-    assert rule.evaluate("e => parseFloat(getComputedStyle(e).borderBottomWidth)") >= 1
-    assert rule_box["width"] > row_box["width"] + 8
-    assert rule_box["x"] <= body_box["x"] + 0.5
-    assert rule_box["x"] + rule_box["width"] >= body_box["x"] + body_box["width"] - 0.5
-
-    # ...and it is actually painted that wide. A clipping ancestor leaves the
-    # layout box above at its full width while cutting the pixels short, which
-    # is exactly how this went unnoticed once.
-    clipped_by = rule.evaluate(
-        """element => {
-            const width = element.getBoundingClientRect().width;
-            for (let node = element.parentElement; node; node = node.parentElement) {
-                const style = getComputedStyle(node);
-                if (style.overflowX === "visible") continue;
-                if (node.getBoundingClientRect().width < width - 0.5) {
-                    return node.tagName + "." + node.className;
-                }
-            }
-            return null;
-        }"""
+    # Hung off the panel the way every other popout is: its end lines up with
+    # the end of the rows, not with the 20px gear somewhere along the header.
+    popout_box = leika_page.locator(POPOVER).bounding_box()
+    row_box = leika_page.locator("[data-leika-gui-row]").first.bounding_box()
+    gear_box = leika_page.locator(TRIGGER).bounding_box()
+    assert popout_box is not None and row_box is not None and gear_box is not None
+    assert abs((popout_box["x"] + popout_box["width"]) - (row_box["x"] + row_box["width"])) < 1.0, (
+        popout_box,
+        row_box,
     )
-    assert clipped_by is None, clipped_by
+    assert popout_box["x"] + popout_box["width"] > gear_box["x"] + gear_box["width"]
 
-    # Every other rule in the panel stops at the column the rows share: a
-    # section's own border, and any `add_divider` the server asked for.
-    panel_scope = '[data-testid="control-panel"]'
-    others = leika_page.locator(
-        f'{panel_scope} [data-slot="accordion-item"], '
-        f'{panel_scope} [data-slot="separator"][data-orientation="horizontal"]'
-        f":not({PANE} *)"
+    # It is its own surface, over the panel rather than in it: portalled out
+    # of the panel entirely, and painted on the popover's own colour.
+    popover = leika_page.locator(POPOVER)
+    expect(popover).to_have_attribute("data-slot", "popover-content")
+    assert pane.evaluate("""pane => pane.closest('[data-testid="control-panel"]') === null""")
+    surfaces = popover.evaluate(
+        """popup => ({
+            popover: getComputedStyle(popup).backgroundColor,
+            panel: getComputedStyle(
+                document.querySelector('[data-testid="control-panel"]'),
+            ).backgroundColor,
+        })"""
     )
-    assert others.count() >= 2
-    for index in range(others.count()):
-        other_box = others.nth(index).bounding_box()
-        assert other_box is not None
-        assert other_box["width"] <= row_box["width"] + 0.5
+    assert surfaces["popover"] != "rgba(0, 0, 0, 0)", surfaces
 
     close_settings(leika_page)
     assert leika_page.locator(PANE).count() == 0
@@ -557,7 +534,7 @@ def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
     assert page_errors == []
 
 
-def test_the_footer_names_the_version_and_links_to_the_source(
+def test_the_footer_names_the_version_and_links_to_the_project(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
@@ -568,13 +545,20 @@ def test_the_footer_names_the_version_and_links_to_the_source(
     expect(about.locator("[data-leika-settings-version]")).to_have_text(
         f"Leika v{leika.__version__}"
     )
-    expect(about).to_have_text(f"Leika v{leika.__version__}. Source code on GitHub")
+    expect(about).to_have_text(f"Leika v{leika.__version__}. Source, docs, and examples.")
 
     source = about.locator("[data-leika-settings-source]")
+    docs = about.locator("[data-leika-settings-docs]")
+    examples = about.locator("[data-leika-settings-examples]")
     expect(source).to_have_attribute("href", "https://github.com/willjhliang/leika")
-    # An external destination out of an app that holds live state, so it opens
+    expect(docs).to_have_attribute("href", "https://willjhliang.github.io/leika/")
+    expect(examples).to_have_attribute(
+        "href", "https://github.com/willjhliang/leika/tree/main/examples"
+    )
+    # External destinations out of an app that holds live state, so they open
     # beside the workspace rather than navigating away from it.
-    expect(source).to_have_attribute("target", "_blank")
+    for link in (source, docs, examples):
+        expect(link).to_have_attribute("target", "_blank")
 
     # One line: the sentence fits the panel at its default width, so the footer
     # is no taller than the single line of text inside it.
@@ -585,18 +569,15 @@ def test_the_footer_names_the_version_and_links_to_the_source(
     assert page_errors == []
 
 
-def test_the_handle_and_the_gear_show_their_own_sections(
+def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Two toggles, two sections, neither implying the other.
-
-    The handle shows or hides the app's controls; the gear shows or hides the
-    browser's settings. The panel folds away only when both are down, which is
-    a reading of the two rather than a state of its own -- so hiding the
-    controls with the settings up leaves the settings up.
-    """
+    """The handle shows or hides the app's controls, and the panel folds with
+    them. The gear is not part of that: its settings are a layer over the
+    panel, so they open whether the body is up or folded away, and closing them
+    leaves the body where it was."""
     leika_server.gui.add_checkbox("Enabled", initial_value=True)
     generated = leika_page.locator("[data-leika-generated-gui]")
     settings = leika_page.locator(f"{PANE}:visible")
@@ -611,70 +592,63 @@ def test_the_handle_and_the_gear_show_their_own_sections(
         leika_page.wait_for_timeout(450)
         leika_page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
 
-    # Controls up, settings up.
-    leika_page.locator(TRIGGER).click()
-    expect(settings).to_be_visible(timeout=5_000)
+    # Opening the settings leaves the controls alone.
+    open_settings(leika_page)
     expect(generated).to_be_visible()
     expect(folded).to_have_count(0)
+    close_settings(leika_page)
+    expect(generated).to_be_visible()
 
-    # Hiding the controls leaves the settings exactly where they were -- the
-    # gear still reads as open, and its section is still on screen.
+    # Folding the panel is the handle's, and the gear goes on working over a
+    # folded panel -- the header it sits in is still there.
     click_handle()
-    expect(generated).to_be_hidden(timeout=5_000)
+    expect(folded).to_have_count(1, timeout=5_000)
+    expect(generated).to_be_hidden()
+    open_settings(leika_page)
     expect(settings).to_be_visible()
-    expect(leika_page.locator(TRIGGER)).to_have_attribute("aria-expanded", "true")
-    expect(folded).to_have_count(0)
+    expect(folded).to_have_count(1)
 
-    # With both down there is nothing to show, so the panel folds.
-    leika_page.locator(TRIGGER).click()
-    expect(folded).to_have_count(1, timeout=5_000)
-    expect(settings).to_have_count(0)
-    expect(generated).to_be_hidden()
-
-    # Either toggle alone brings the panel back, showing only its own section.
+    # Closing them leaves the panel folded: the settings were never what was
+    # holding it open.
+    close_settings(leika_page)
+    expect(folded).to_have_count(1)
     click_handle()
-    expect(generated).to_be_visible(timeout=5_000)
-    expect(folded).to_have_count(0)
-    expect(settings).to_have_count(0)
-
-    click_handle()
-    expect(folded).to_have_count(1, timeout=5_000)
-    leika_page.locator(TRIGGER).click()
-    expect(settings).to_be_visible(timeout=5_000)
-    expect(folded).to_have_count(0)
-    expect(generated).to_be_hidden()
+    expect(folded).to_have_count(0, timeout=5_000)
+    expect(generated).to_be_visible()
     assert page_errors == []
 
 
-def test_the_settings_rule_is_only_there_to_separate(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """The rule under the settings divides them from the app's controls, so with
-    the controls down it has nothing to divide -- and the standoff that exists
-    to clear it goes with it, rather than holding the panel open underneath."""
-    leika_server.gui.add_checkbox("Enabled", initial_value=True)
-    section = leika_page.locator(f"#{SECTION_ID}")
-    pane = open_settings(leika_page)
-    expect(leika_page.locator("[data-leika-generated-gui]")).to_be_visible()
-
-    assert section.evaluate("e => getComputedStyle(e).borderBottomWidth") == "1px"
-    assert pane.evaluate("e => getComputedStyle(e).paddingBottom") != "0px"
-
-    # Fold the controls away with the handle; the settings stay up.
-    box = leika_page.get_by_test_id("control-panel-handle").bounding_box()
-    assert box is not None
-    leika_page.wait_for_timeout(450)
-    leika_page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
-    expect(leika_page.locator("[data-leika-generated-gui]")).to_be_hidden(timeout=5_000)
-
-    assert section.evaluate("e => getComputedStyle(e).borderBottomWidth") == "0px"
-    assert pane.evaluate("e => getComputedStyle(e).paddingBottom") == "0px"
-
-    # What is left under the last row is the panel's own inset, nothing more.
-    last_row = leika_page.locator("[data-leika-settings-about]").bounding_box()
-    panel = leika_page.get_by_test_id("control-panel").bounding_box()
-    assert last_row is not None and panel is not None
-    assert panel["y"] + panel["height"] - (last_row["y"] + last_row["height"]) <= 17.0
-    assert page_errors == []
+def _settings_stay_on_top(page: Page) -> dict[str, object]:
+    """Scroll the panel body past the settings, and read what is left at its top."""
+    return page.evaluate(
+        """id => {
+            const section = document.getElementById(id);
+            // Whatever the chrome scrolls with: the floating and mobile panels
+            // put the body in a ScrollArea, the sidebar scrolls its own column.
+            let viewport = section.parentElement;
+            while (
+                viewport &&
+                !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)
+            ) {
+                viewport = viewport.parentElement;
+            }
+            viewport.scrollTop = viewport.scrollHeight;
+            const rect = section.getBoundingClientRect();
+            const top = viewport.getBoundingClientRect().top;
+            const under = document.elementFromPoint(
+                rect.left + rect.width / 2,
+                top + rect.height / 2,
+            );
+            return {
+                scrolled: viewport.scrollTop > 0,
+                offset: Math.round(rect.top - top),
+                // What is painted where the settings are, now that the app's
+                // own rows are passing behind them.
+                showing: under === null ? null : under.closest(
+                    '[data-leika-settings-pane]',
+                ) !== null,
+                surface: getComputedStyle(section).backgroundColor,
+            };
+        }""",
+        SECTION_ID,
+    )

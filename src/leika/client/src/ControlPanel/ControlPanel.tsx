@@ -8,11 +8,8 @@ import BottomPanel from "./BottomPanel";
 import { CONTROL_WIDTH_CSS } from "./controlWidth";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { useMobileView } from "../hooks/useMediaQuery";
-import { SettingsButton, SettingsSection } from "./SettingsPane";
-import {
-  useControlsShown,
-  useSettingsPanelOpen,
-} from "./SettingsPanelController";
+import { SettingsButton } from "./SettingsPane";
+import { useControlsShown } from "./SettingsPanelController";
 import SidebarPanel from "./SidebarPanel";
 import { useShowGenerated } from "./useShowGenerated";
 
@@ -25,20 +22,20 @@ const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
  * (bottom sheet, sidebar, and the dock-library floating panel). */
 export function ControlPanelContents() {
   const hasGenerated = useShowGenerated();
-  const settingsOpen = useSettingsPanelOpen();
-  // The handle's flag, independent of the gear's. The controls stay MOUNTED
-  // when hidden rather than being dropped, so half-typed values and the heights
-  // the intrinsic-size transitions measure both survive being folded away.
+  // The handle's flag. The controls stay MOUNTED when hidden rather than being
+  // dropped, so half-typed values and the heights the intrinsic-size
+  // transitions measure both survive being folded away.
+  //
+  // The gear's flag is not in here: the browser's own settings open in a
+  // popout off the header, so the body holds the app's controls and nothing
+  // else.
   const controlsShown = useControlsShown();
   return (
     /*For intrinsic-size transitions, this `keepMounted` is necessary to prevent
     some intermittent problems with the initial GUI height being set to 0 when
     we're under high CPU load.*/
-    <Collapsible open={(hasGenerated && controlsShown) || settingsOpen}>
+    <Collapsible open={hasGenerated && controlsShown}>
       <CollapsibleContent keepMounted>
-        {/* Above the app's own controls, under the gear that opens it. An app
-            with no GUI at all still has a body once this is open. */}
-        <SettingsSection />
         <div hidden={!controlsShown} data-leika-generated-gui>
           <MemoizedGeneratedGuiContainer containerUuid={ROOT_CONTAINER_ID} />
         </div>
@@ -112,7 +109,13 @@ export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
     // card (`data-dock-peek-fade`); the badge stays and is what the pointer
     // comes back to (`data-dock-peek`). Inert in every other chrome -- the
     // sidebar and the bottom sheet have no such state to be in.
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div
+      className="flex min-w-0 flex-1 items-center gap-2"
+      // What the settings popout aligns to: the gear is a 20px circle in the
+      // middle of this row, and a popout hung off it would sit wherever the
+      // title's length left it. See SettingsButton.
+      data-leika-panel-header
+    >
       {/* The title is whatever the server passed as its panel label, so it is
           empty until one is set. Typed like a GUI row's field label, so the
           panel reads with one voice from its header down. */}

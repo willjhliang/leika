@@ -18,11 +18,7 @@ import { useShowGenerated } from "./useShowGenerated";
 import GeneratedGuiContainer from "./Generated";
 import { GuiDockContext } from "./GuiDockContext";
 import { SettingsButton } from "./SettingsPane";
-import {
-  controlsSection,
-  useControlsShown,
-  useSettingsPanelOpen,
-} from "./SettingsPanelController";
+import { controlsSection, useControlsShown } from "./SettingsPanelController";
 import { CONTROL_WIDTH_PX } from "./controlWidth";
 
 // Memoized so a torn-out tab's whole GUI tree doesn't re-render every time
@@ -73,9 +69,8 @@ export function ControlPanelDockSurface({
   // frame has to be told; otherwise its header/body gap hangs below a lone
   // "Connecting..." header.
   const hasGenerated = useShowGenerated();
-  const settingsOpen = useSettingsPanelOpen();
   const controlsShown = useControlsShown();
-  const hasBody = (hasGenerated && controlsShown) || settingsOpen;
+  const hasBody = hasGenerated && controlsShown;
   // Double-clicking the handle sends the panel home; the sync node inside the
   // DockManager is what knows where that is, so the spec calls through a ref.
   const resetLayoutRef = React.useRef<() => void>(() => {});
@@ -288,17 +283,14 @@ function ControlPanelDockSync({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The group is folded exactly when there is nothing to show -- a READING of
-  // the two sections, not a third state anyone toggles. That is what keeps the
-  // handle and the gear independent: hiding the controls with the settings up
-  // leaves the panel open on the settings, and closing the settings with the
-  // controls up leaves it open on those.
-  const settingsOpen = useSettingsPanelOpen();
-  const controlsShown = useControlsShown();
+  // The group is folded exactly when the handle says so. The gear does not
+  // come into it: the browser's own settings open in a popout off the header,
+  // which is there to be opened whether the body is up or folded away.
+  //
   // Deliberately NOT gated on whether the server has sent any GUI: an app with
   // no GUI keeps an open, empty panel, exactly as it did before these toggles
   // existed. Only the viewer folds this panel.
-  const bodyVisible = controlsShown || settingsOpen;
+  const bodyVisible = useControlsShown();
   React.useEffect(() => {
     const groupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);
     if (groupId === null) return;
