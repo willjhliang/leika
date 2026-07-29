@@ -40,6 +40,7 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_form": ((), {}),
     "add_html": (("<b>html</b>",), {}),
     "add_image": ((np.zeros((2, 3, 3), dtype=np.uint8),), {}),
+    "add_list": ((("one", "two"),), {}),
     "add_markdown": (("**markdown**",), {}),
     "add_mini_form": ((), {}),
     "add_modal": (("Modal",), {}),

@@ -387,3 +387,33 @@ def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
         server.gui.add_toggle("Bookmark", multiple=True)  # type: ignore[call-overload]
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_toggle([])
+
+
+def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> None:
+    """The value is the entries, in order: editing one, adding, removing, and
+    reordering all read and write the same tuple."""
+    entries = server.gui.add_list(("alpha", "beta"), label="Tags")
+    assert entries.value == ("alpha", "beta")
+    assert entries.frozen is False
+
+    seen: list[tuple[str, ...]] = []
+    entries.on_update(lambda event: seen.append(event.target.value))
+    entries.value = ("alpha", "beta", "gamma")  # Appended.
+    entries.value = ("gamma", "alpha")  # Removed one and reordered the rest.
+    _wait_for(lambda: seen == [("alpha", "beta", "gamma"), ("gamma", "alpha")])
+
+    # An empty list is a list with nothing in it, and starts that way by
+    # default -- the viewer's first Add is what fills it.
+    assert server.gui.add_list().value == ()
+
+    # Frozen fixes the length and the order, and says so on the wire; the
+    # entries themselves are still editable, which `disabled` is for.
+    fixed = server.gui.add_list(("read", "only"), frozen=True)
+    assert fixed.frozen is True
+    fixed.frozen = False
+    assert fixed.frozen is False
+
+    # Text entries, so anything else is a mistake worth naming rather than a
+    # str() applied behind the caller's back.
+    with pytest.raises(ValueError, match="sequence of strings"):
+        server.gui.add_list(("fine", 3))  # type: ignore[arg-type]

@@ -42,6 +42,7 @@ export function GuiInputRow({
   disabled = false,
   invalid = false,
   associateLabel = true,
+  alignLabelToFirstRow = false,
   children,
 }: {
   uuid: string;
@@ -59,6 +60,10 @@ export function GuiInputRow({
    * announce as the row's label instead of the word on its face -- and fire it
    * on a click, since a label forwards clicks to what it labels. */
   associateLabel?: boolean;
+  /** For a control that is a STACK rather than one thing: put the label beside
+   * its first row instead of halfway down the pile. A column of one thing
+   * centres, which is what every other row wants. */
+  alignLabelToFirstRow?: boolean;
 }) {
   const fieldState = {
     "data-disabled": disabled || undefined,
@@ -86,13 +91,23 @@ export function GuiInputRow({
       // The `has-` half restates the alignment because Field's horizontal
       // variant top-aligns any row that holds a FieldContent, which is the
       // stacked-description layout rather than this one.
-      className="grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center has-[>[data-slot=field-content]]:items-center"
+      className={cn(
+        "grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center has-[>[data-slot=field-content]]:items-center",
+        alignLabelToFirstRow &&
+          "items-start has-[>[data-slot=field-content]]:items-start",
+      )}
       {...fieldState}
       data-leika-gui-row
     >
       <FieldLabel
         htmlFor={associateLabel ? uuid : undefined}
-        className={cn("w-full min-w-0 truncate", guiLabelClassName)}
+        className={cn(
+          "w-full min-w-0 truncate",
+          // Top-aligned, the label still centres against the row it names --
+          // that row being the panel's own 24px.
+          alignLabelToFirstRow && "flex min-h-6 items-center",
+          guiLabelClassName,
+        )}
         title={label}
       >
         {label}

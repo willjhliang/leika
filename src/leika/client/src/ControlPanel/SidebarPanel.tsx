@@ -60,7 +60,9 @@ export default function SidebarPanel({
       ) : (
         <div
           data-slot="sidebar"
-          className="flex h-full w-(--sidebar-width) flex-col bg-sidebar text-sidebar-foreground"
+          // The sidebar is the one panel chrome that is not a card, so it
+          // says so for whatever inside it has to paint its own surface.
+          className="flex h-full w-(--sidebar-width) flex-col bg-sidebar text-sidebar-foreground [--leika-panel-surface:var(--sidebar)]"
           style={{ "--sidebar-width": width } as React.CSSProperties}
         >
           {children}

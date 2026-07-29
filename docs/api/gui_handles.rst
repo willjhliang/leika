@@ -19,6 +19,9 @@ Inputs
 .. autoclass:: GuiTextHandle
    :members:
 
+.. autoclass:: GuiListHandle
+   :members:
+
 .. autoclass:: GuiNumberHandle
    :members:
 

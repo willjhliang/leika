@@ -841,6 +841,22 @@ class GuiTextMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiListProps(GuiBaseProps):
+    frozen: bool
+    """Whether the list's LENGTH and ORDER are fixed. Frozen, the entries can
+    still be edited but none can be added, removed, or moved, and the controls
+    that would do those things are not drawn. Separate from ``disabled``, which
+    stops the entries being edited as well."""
+
+
+@dataclasses.dataclass
+class GuiListMessage(_CreateGuiComponentMessage):
+    value: Tuple[str, ...]
+    container_uuid: str
+    props: GuiListProps
+
+
+@dataclasses.dataclass
 class GuiDropdownProps(GuiBaseProps):
     # This will actually be manually overridden for better types.
     options: Tuple[str, ...]

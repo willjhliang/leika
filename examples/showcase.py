@@ -350,6 +350,16 @@ def main() -> None:
         # sending when it is written, not letter by letter.
         with server.gui.add_mini_form() as broadcast:
             message = server.gui.add_text("Broadcast", "")
+        # A list is a stack of text boxes and the whole tuple as its value: the
+        # viewer types in one, adds, removes, or drags one somewhere else, and
+        # every one of those arrives as the list now reads. Labelled, so it
+        # takes the controls column with its label beside the first entry.
+        watchlist = server.gui.add_list(
+            ("phase drift", "edge ringing"),
+            label="Watch for",
+            hint="Drag an entry to reorder it.",
+        )
+        watching = server.gui.add_markdown("")
 
     state: dict[str, Any] = {
         "phase": 0.0,
@@ -451,6 +461,13 @@ def main() -> None:
         note_title.value = ""
         note_body.value = ""
         server.gui.add_notification("Annotation logged", title, auto_close_seconds=2.0)
+
+    @watchlist.on_update
+    def _(_) -> None:
+        # Reads the list back as it now stands, whichever of the four ways it
+        # was changed -- typed in, added to, removed from, or dragged about.
+        kept = [entry.strip() for entry in watchlist.value if entry.strip()]
+        watching.content = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
 
     @broadcast.on_submit
     def _(_) -> None:

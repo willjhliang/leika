@@ -8,6 +8,7 @@ import ButtonComponent from "../components/Button";
 import SliderComponent from "../components/Slider";
 import NumberInputComponent from "../components/NumberInput";
 import TextInputComponent from "../components/TextInput";
+import ListInputComponent from "../components/ListInput";
 import CheckboxComponent from "../components/Checkbox";
 import Vector2Component from "../components/Vector2";
 import Vector3Component from "../components/Vector3";
@@ -135,6 +136,8 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <NumberInputComponent {...conf} />;
     case "GuiTextMessage":
       return <TextInputComponent {...conf} />;
+    case "GuiListMessage":
+      return <ListInputComponent {...conf} />;
     case "GuiCheckboxMessage":
       return <CheckboxComponent {...conf} />;
     case "GuiVector2Message":

@@ -1402,3 +1402,298 @@ def test_a_toggle_row_holds_one_or_many(
     wait_for(lambda: clearable.value, ())
     expect(clearable_row.nth(0)).to_have_attribute("aria-pressed", "false")
     assert page_errors == []
+
+
+def _showing_controls(page: Page) -> list[str]:
+    """The entries whose row is showing its grip and remove.
+
+    A list keeps both in the tree at every row so they can be tabbed to and
+    focused, and brings out only the ones on the row being worked on -- so what
+    is on show is read off the paint rather than off the markup."""
+    return page.locator("[data-leika-list-item]").evaluate_all(
+        """rows => rows
+            .filter((row) => getComputedStyle(
+                row.querySelector("[data-leika-list-controls]")).opacity === "1")
+            .map((row) => row.querySelector("[data-leika-list-entry]").value)"""
+    )
+
+
+def test_a_list_is_edited_added_to_removed_from_and_reordered(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Every one of the four reports the whole list, in the order it now reads."""
+    entries = leika_server.gui.add_list(("alpha", "beta", "gamma"), label="Tags")
+
+    boxes = leika_page.locator("[data-leika-list-entry]")
+    rows = leika_page.locator("[data-leika-list-item]")
+    expect(boxes).to_have_count(3, timeout=5_000)
+
+    # At rest a list is its entries: the controls come out for the row being
+    # worked on, and the box keeps the width they would take.
+    assert _showing_controls(leika_page) == []
+    idle = boxes.first.bounding_box()
+    rows.first.hover()
+    assert _showing_controls(leika_page) == ["alpha"]
+    hovered = boxes.first.bounding_box()
+    assert idle is not None and hovered is not None
+    # The box keeps its width: the controls are inside it, not beside it.
+    assert hovered["width"] == idle["width"], (hovered, idle)
+    for control in ("[data-leika-list-grip]", "[data-leika-list-remove]"):
+        box = leika_page.locator(control).first.bounding_box()
+        assert box is not None, control
+        assert idle["x"] <= box["x"], (control, box, idle)
+        assert box["x"] + box["width"] <= idle["x"] + idle["width"] + 0.5
+        assert idle["y"] <= box["y"] + 0.5
+        assert box["y"] + box["height"] <= idle["y"] + idle["height"] + 0.5
+
+    # Typing in one.
+    boxes.nth(0).fill("ALPHA")
+    _wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma"))
+
+    # Adding one: a new entry starts empty, at the end.
+    leika_page.locator("[data-leika-list-add]").click()
+    _wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma", ""))
+
+    # A box with the caret in it is not a row being worked on, so typing does
+    # not bring the controls out.
+    boxes.nth(0).click()
+    leika_page.mouse.move(0, 0)
+    assert _showing_controls(leika_page) == []
+
+    # Removing one, by its own button rather than the row's position.
+    rows.nth(1).hover()
+    leika_page.get_by_label("Remove entry 2").click()
+    _wait_until(lambda: entries.value == ("ALPHA", "gamma", ""))
+
+    # Reordering by dragging a grip: the entry follows the pointer, and the
+    # list is left alone until it lands -- so the move is reported once, as the
+    # viewer meant it, rather than once for every row it crossed on the way.
+    #
+    # One row down means ONE row: an entry belongs to the row whose middle the
+    # pointer is nearest. Measured from the top of the first row instead, it
+    # changed rows half a row early and a drag onto the next one landed two
+    # down.
+    rows.first.hover()
+    grip = leika_page.get_by_label("Reorder entry 1").bounding_box()
+    second = rows.nth(1).bounding_box()
+    last = rows.nth(2).bounding_box()
+    assert grip is not None and second is not None and last is not None
+
+    # Watch the carried box on every frame of what follows. Its surface is only
+    # ever wrong for an instant -- a fade, restarted at each row it crosses --
+    # so reading it once afterwards says nothing.
+    leika_page.evaluate(
+        """() => {
+            window.__leikaSeeThrough = 0;
+            const tick = () => {
+                const box = document.querySelector(
+                    "[data-leika-list-carried] [data-leika-list-entry]",
+                );
+                if (box !== null) {
+                    const paint = getComputedStyle(box).backgroundColor;
+                    if (paint.includes("/") || paint === "rgba(0, 0, 0, 0)") {
+                        window.__leikaSeeThrough += 1;
+                    }
+                }
+                if (window.__leikaWatching) requestAnimationFrame(tick);
+            };
+            window.__leikaWatching = true;
+            requestAnimationFrame(tick);
+        }"""
+    )
+    leika_page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2)
+    leika_page.mouse.down()
+    leika_page.mouse.move(
+        grip["x"] + grip["width"] / 2, second["y"] + second["height"] / 2, steps=6
+    )
+    leika_page.wait_for_timeout(250)
+    # In hand is not moved: nothing has been reported, and the list still reads
+    # as it did when the grip went down.
+    assert entries.value == ("ALPHA", "gamma", ""), entries.value
+
+    # The row is carried: it rides with the cursor rather than snapping between
+    # slots, so it is offset from where its row rests and lifted over the ones
+    # it passes.
+    carried = leika_page.locator("[data-leika-list-carried]")
+    expect(carried).to_have_count(1)
+    expect(carried.locator("[data-leika-list-entry]")).to_have_value("ALPHA")
+    assert carried.evaluate("row => getComputedStyle(row).transform") != "none"
+    assert carried.evaluate("row => Number(getComputedStyle(row).zIndex)") > 0
+
+    # And SOLID, not merely coloured, from the first frame it is held. A box
+    # fades its colours by default, so the surface used to arrive over a sixth
+    # of a second and start again from nothing at every row the entry crossed
+    # -- see-through for most of a drag, with the entries behind showing
+    # through the one in hand.
+    surface = carried.locator("[data-leika-list-entry]").evaluate(
+        "box => getComputedStyle(box).backgroundColor"
+    )
+    assert "/" not in surface and surface != "rgba(0, 0, 0, 0)", surface
+
+    # The row it would fall into has stepped aside to open the space, so the
+    # list reads as it will once the entry lands.
+    assert rows.nth(1).evaluate("row => getComputedStyle(row).transform") != "none"
+
+    # Only the entry in hand shows its controls. The rows are moving under a
+    # cursor that is holding one of them, so whichever row happens to be
+    # beneath it is not the row being worked on -- and each one it passed used
+    # to light up as it went.
+    assert _showing_controls(leika_page) == ["ALPHA"]
+
+    leika_page.mouse.move(grip["x"] + grip["width"] / 2, last["y"] + last["height"] / 2, steps=6)
+
+    # Dragged well past the end, it sits on the last row's place rather than
+    # sailing on over whatever the panel has below the list.
+    leika_page.mouse.move(grip["x"] + grip["width"] / 2, last["y"] + 400, steps=4)
+    floating = carried.bounding_box()
+    assert floating is not None
+    assert abs(floating["y"] - last["y"]) < 1.5, (floating, last)
+    assert _showing_controls(leika_page) == ["ALPHA"]
+
+    leika_page.mouse.up()
+    _wait_until(lambda: entries.value == ("gamma", "", "ALPHA"))
+
+    see_through = leika_page.evaluate(
+        "() => { window.__leikaWatching = false; return window.__leikaSeeThrough; }"
+    )
+    assert see_through == 0, f"{see_through} frames of a see-through carried row"
+
+    # Dropped, it is given back to the list: no row is carried, lifted, or left
+    # holding the offset it travelled by.
+    expect(leika_page.locator("[data-leika-list-carried]")).to_have_count(0)
+    assert (
+        leika_page.locator("[data-leika-list-item]").evaluate_all(
+            "rows => rows.every(row => getComputedStyle(row).transform === 'none')"
+        )
+        is True
+    )
+
+    # And by the keyboard, which a drag cannot be asked to do. Rows are keyed
+    # by place, so a reorder rewrites their contents rather than moving them:
+    # the keys follow the entry to the row it moved into, which keeps its
+    # controls out because that is the row the keys are working.
+    rows.nth(2).hover()
+    leika_page.get_by_label("Reorder entry 3").click()
+    leika_page.keyboard.press("ArrowUp")
+    leika_page.mouse.move(0, 0)
+    _wait_until(lambda: entries.value == ("gamma", "ALPHA", ""))
+    expect(leika_page.get_by_label("Reorder entry 2")).to_be_focused()
+    assert _showing_controls(leika_page) == ["ALPHA"]
+
+    # A move slides the rows it touches from where their new contents came
+    # from -- except here, where the browser is asked for reduced motion and
+    # the rows are simply redrawn. Either way none of them is left holding a
+    # transform once it is over.
+    assert (
+        leika_page.locator("[data-leika-list-item]").evaluate_all(
+            "rows => rows.every(row => getComputedStyle(row).transform === 'none')"
+        )
+        is True
+    )
+    assert page_errors == []
+
+
+def test_a_list_shows_its_controls_to_the_row_being_worked_on(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """An entry's controls are the pointer's or the keyboard's: they come out
+    on the row one of them is on, on no other, and not at all once both have
+    gone elsewhere."""
+    entries = leika_server.gui.add_list(("alpha", "beta", "gamma"), label="Items")
+    rows = leika_page.locator("[data-leika-list-item]")
+    expect(rows).to_have_count(3, timeout=5_000)
+
+    def look_away() -> None:
+        leika_page.mouse.move(2.0, 2.0)
+        leika_page.wait_for_timeout(150)
+
+    # The pointer: whichever row it is over, and none once it has left.
+    rows.nth(1).hover()
+    assert _showing_controls(leika_page) == ["beta"]
+    look_away()
+    assert _showing_controls(leika_page) == []
+
+    # A drag leaves the keys on the grip so they can carry on from where the
+    # pointer left off -- on the entry it moved rather than the row the drag
+    # started in -- but leaving them there is not the same as working the row,
+    # so the controls go with the cursor.
+    rows.first.hover()
+    grip = leika_page.get_by_label("Reorder entry 1").bounding_box()
+    second = rows.nth(1).bounding_box()
+    assert grip is not None and second is not None
+    leika_page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2)
+    leika_page.mouse.down()
+    leika_page.mouse.move(
+        grip["x"] + grip["width"] / 2, second["y"] + second["height"] / 2, steps=6
+    )
+    leika_page.mouse.up()
+    _wait_until(lambda: entries.value == ("beta", "alpha", "gamma"))
+    look_away()
+    expect(leika_page.get_by_label("Reorder entry 2")).to_be_focused()
+    assert _showing_controls(leika_page) == []
+
+    # An arrow key IS the keys working the row, so from there on the row shows
+    # what they are working with, cursor or no cursor.
+    leika_page.keyboard.press("ArrowUp")
+    look_away()
+    _wait_until(lambda: entries.value == ("alpha", "beta", "gamma"))
+    assert _showing_controls(leika_page) == ["alpha"]
+
+    # The keyboard can reach them at all, which is why they are kept in the
+    # tree rather than drawn only for the pointer: Tab out of a box lands on
+    # that row's grip, and a grip the keys have found shows itself.
+    leika_page.get_by_label("Items entry 3").click()
+    look_away()
+    assert _showing_controls(leika_page) == []
+    leika_page.keyboard.press("Tab")
+    expect(leika_page.get_by_label("Reorder entry 3")).to_be_focused()
+    assert _showing_controls(leika_page) == ["gamma"]
+
+    # And they go when the keys leave the controls, the pointer being nowhere
+    # near them.
+    leika_page.locator("[data-leika-list-add]").click()
+    _wait_until(lambda: entries.value == ("alpha", "beta", "gamma", ""))
+    look_away()
+    assert _showing_controls(leika_page) == []
+
+    # A focused box does not take its own controls with it: the box lifts
+    # itself over the neighbours it hugs when focused, which once put it over
+    # the controls as well -- visible, and swallowing every click meant for
+    # them.
+    leika_page.get_by_label("Items entry 2").click()
+    leika_page.keyboard.type("!")
+    _wait_until(lambda: entries.value == ("alpha", "beta!", "gamma", ""))
+    rows.nth(1).hover()
+    leika_page.get_by_label("Remove entry 2").click()
+    _wait_until(lambda: entries.value == ("alpha", "gamma", ""))
+    assert page_errors == []
+
+
+def test_a_frozen_list_keeps_its_length_and_order(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Frozen is about the LIST, not its entries: nothing can be added,
+    removed, or moved, and the controls that would do so are not drawn -- but
+    the text is still the viewer's to edit."""
+    entries = leika_server.gui.add_list(("read", "only"), label="Fixed", frozen=True)
+
+    boxes = leika_page.locator("[data-leika-list-entry]")
+    expect(boxes).to_have_count(2, timeout=5_000)
+    expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(0)
+    expect(leika_page.locator("[data-leika-list-remove]")).to_have_count(0)
+    expect(leika_page.locator("[data-leika-list-add]")).to_have_count(0)
+
+    boxes.nth(1).fill("edited")
+    _wait_until(lambda: entries.value == ("read", "edited"))
+
+    # Thawing it from Python brings the controls back without a reload.
+    entries.frozen = False
+    expect(leika_page.locator("[data-leika-list-add]")).to_have_count(1, timeout=5_000)
+    expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(2)
+    assert page_errors == []

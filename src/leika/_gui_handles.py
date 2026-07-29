@@ -44,6 +44,7 @@ from ._messages import (
     GuiFormSubmitMessage,
     GuiHtmlProps,
     GuiImageProps,
+    GuiListProps,
     GuiMarkdownProps,
     GuiMultiSliderProps,
     GuiNumberProps,
@@ -464,6 +465,19 @@ class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps)
     @color.setter
     def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
         _set_row_colors(self, color)
+
+
+class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
+    """Handle for an editable list of text entries.
+
+    .. attribute:: value
+       :type: tuple[str, ...]
+
+       The entries, in the order they are shown. Editing an entry, adding one,
+       removing one, or dragging one somewhere else all report the whole tuple.
+       Assigning one sets the list to exactly those entries, which is how
+       Python adds, removes, and reorders: ``handle.value += ("next",)``.
+    """
 
 
 class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):

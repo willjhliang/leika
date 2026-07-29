@@ -46,6 +46,7 @@ from ._gui_handles import (
     GuiFormHandle,
     GuiHtmlHandle,
     GuiImageHandle,
+    GuiListHandle,
     GuiMarkdownHandle,
     GuiModalHandle,
     GuiMultiSliderHandle,
@@ -2050,6 +2051,71 @@ class GuiApi(GuiContainer):
                         disabled=disabled,
                         visible=visible,
                         multiline=multiline,
+                    ),
+                ),
+            )
+        )
+
+    def add_list(
+        self,
+        initial_value: Sequence[str] = (),
+        *,
+        label: str | None = None,
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiListHandle:
+        """Add an editable list of text entries to the GUI.
+
+        A stack of text boxes rather than one: the value is a tuple of strings,
+        and a viewer can edit any of them, add an entry, remove one, or drag
+        one to another place in the list. Every one of those reports the whole
+        tuple, so ``on_update`` sees the list as it now reads.
+
+        Args:
+            initial_value: The entries the list starts with. An empty list is
+                a list with nothing in it yet, not an error.
+            label: Optional label for the row. Left unset, the list takes the
+                whole width of the panel, which a stack of boxes usually wants;
+                given one, the label takes the left column and the entries sit
+                beside it, like every other labelled control.
+            frozen: Fix the list's length and order. The entries can still be
+                edited; what goes is adding, removing, and reordering, along
+                with the controls that do them. Use ``disabled`` to stop the
+                editing too.
+            disabled: Whether the list is disabled.
+            visible: Whether the list is visible.
+            hint: Optional hint to display on hover.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+        entries = tuple(initial_value)
+        for entry in entries:
+            if not isinstance(entry, str):
+                raise ValueError(
+                    "add_list() holds text entries, so initial_value= is a sequence of"
+                    f" strings; got {entry!r}. Pass str(...) for anything else."
+                )
+        uuid = _make_uuid()
+        order = _apply_default_order(order)
+        return GuiListHandle(
+            self._create_gui_input(
+                entries,
+                message=_messages.GuiListMessage(
+                    value=entries,
+                    uuid=uuid,
+                    container_uuid=self._get_container_uuid(),
+                    props=_messages.GuiListProps(
+                        order=order,
+                        label=label,
+                        hint=hint,
+                        disabled=disabled,
+                        visible=visible,
+                        frozen=frozen,
                     ),
                 ),
             )

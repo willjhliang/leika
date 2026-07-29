@@ -83,6 +83,13 @@
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-border: oklch(0.922 0 0);
+  /* Whatever the control panel is painted on, for the things inside it that
+     have to hide what is behind them -- a list entry lifted off its list, say.
+     The panel is a card when it floats or sits at the bottom of a phone and
+     the sidebar's own colour when it is docked to an edge, and something
+     drawn inside it cannot know which. The sidebar says so on its container;
+     the card is the default because the other two are cards. */
+  --leika-panel-surface: var(--card);
 }
 
 .dark {
@@ -183,4 +190,13 @@
   & [data-slot="input"] {
     @apply py-0;
   }
+}
+
+/* While a list entry is being carried, the whole document keeps the closed
+   hand. The pointer leaves the grip the moment the row starts moving, and a
+   cursor that turned into a text beam over the boxes it passes -- or an arrow
+   over the canvas -- would read as having let go of it. */
+.leika-carrying,
+.leika-carrying * {
+  cursor: grabbing !important;
 }

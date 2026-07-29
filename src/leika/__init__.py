@@ -13,6 +13,7 @@ from ._gui_handles import GuiFormHandle as GuiFormHandle
 from ._gui_handles import GuiHtmlHandle as GuiHtmlHandle
 from ._gui_handles import GuiImageHandle as GuiImageHandle
 from ._gui_handles import GuiInputHandle as GuiInputHandle
+from ._gui_handles import GuiListHandle as GuiListHandle
 from ._gui_handles import GuiMarkdownHandle as GuiMarkdownHandle
 from ._gui_handles import GuiModalHandle as GuiModalHandle
 from ._gui_handles import GuiMultiSliderHandle as GuiMultiSliderHandle
