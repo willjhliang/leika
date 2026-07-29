@@ -1404,6 +1404,45 @@ def test_a_toggle_row_holds_one_or_many(
     assert page_errors == []
 
 
+def test_a_multiline_text_input_keeps_its_height_and_scrolls_its_own_text(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """The height a field asks for is the height it keeps. Sizing itself to its
+    content instead, it grew without end: a pasted page of text made a 2618px
+    box and pushed the control below it off the bottom of the screen."""
+    leika_server.gui.add_text("Note", "", multiline=True, rows=3)
+    leika_server.gui.add_text("Body", "", multiline=True, rows=8)
+    leika_server.gui.add_button("Run")
+
+    note = find_gui_row(leika_page, "Note").locator("textarea")
+    body = find_gui_row(leika_page, "Body").locator("textarea")
+    expect(note).to_be_visible(timeout=5_000)
+
+    # More lines is a taller box, by something worth calling a line.
+    short = note.bounding_box()
+    tall = body.bounding_box()
+    assert short is not None and tall is not None
+    assert (tall["height"] - short["height"]) / 5 > 4, (tall, short)
+
+    run = leika_page.get_by_role("button", name="Run")
+    was = run.bounding_box()
+    assert was is not None
+
+    # Filled well past its height, the box is unmoved and scrolls its own text
+    # instead -- and so is everything under it in the panel.
+    note.fill("\n".join(f"line {n}" for n in range(200)))
+    expect(note).to_have_value(re.compile("line 199"))
+    now = note.bounding_box()
+    after = run.bounding_box()
+    assert now is not None and after is not None
+    assert abs(now["height"] - short["height"]) < 1.0, (now, short)
+    assert abs(after["y"] - was["y"]) < 1.0, (after, was)
+    assert note.evaluate("el => el.scrollHeight > el.clientHeight + 1") is True
+    assert page_errors == []
+
+
 def _showing_controls(page: Page) -> list[str]:
     """The entries whose row is showing its grip and remove.
 

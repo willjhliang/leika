@@ -165,6 +165,15 @@
     @apply font-normal leading-tight;
   }
 
+  /* Except the one control whose lines are READ rather than fitted into a
+     row. Leading 1 is what packs a control into the row's 24px, and it sets
+     the descenders of one line of a note against the tops of the next. Later
+     than the rule above and no more specific, so it wins on order alone --
+     and it decides the height of the box, `rows` being a count of lines. */
+  & [data-slot="textarea"] {
+    @apply leading-snug;
+  }
+
   /* One height for every control that shares a row with a label: 24px, the
      row's own minimum. A button left at its standalone 32px was the odd one
      out, and made the row it sat in taller than the rest of the panel. */

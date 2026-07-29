@@ -47,6 +47,27 @@ def test_controls_containers_and_callbacks(server: leika.Server) -> None:
     assert markdown.content == "## Updated"
 
 
+def test_a_multiline_text_input_is_the_height_it_asks_for(
+    server: leika.Server,
+) -> None:
+    """``rows`` is a height, so it is fixed and it is assignable -- and it is a
+    height in LINES, which starts at one."""
+    note = server.gui.add_text("Note", "", multiline=True)
+    assert (note.multiline, note.rows) == (True, 3)
+    tall = server.gui.add_text("Body", "", multiline=True, rows=12)
+    assert tall.rows == 12
+    tall.rows = 6
+    assert tall.rows == 6
+
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="height in lines"):
+            server.gui.add_text("Bad", "", multiline=True, rows=bad)
+
+    # A single-line field carries the default and pays it no attention: it is
+    # one line by definition, and the client draws an `input` for it.
+    assert server.gui.add_text("Name", "Ada").rows == 3
+
+
 def test_option_validation(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_dropdown("Empty", options=[])

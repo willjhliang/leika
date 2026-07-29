@@ -831,6 +831,12 @@ class GuiVector3Message(_CreateGuiComponentMessage):
 @dataclasses.dataclass
 class GuiTextProps(GuiBaseProps):
     multiline: bool
+    rows: int
+    """How many lines of text the box shows, when ``multiline`` is set. It is
+    the box's HEIGHT, not a starting point: more text than that scrolls inside
+    it rather than growing the box, so the row a field sits in keeps its size
+    however much is typed into it. Ignored by a single-line field, which is one
+    line by definition."""
 
 
 @dataclasses.dataclass

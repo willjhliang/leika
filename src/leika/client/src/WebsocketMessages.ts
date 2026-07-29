@@ -576,6 +576,7 @@ export interface GuiTextMessage {
     visible: boolean;
     disabled: boolean;
     multiline: boolean;
+    rows: number;
   };
 }
 /** GuiListMessage(uuid: 'str', value: 'Tuple[str, ...]', container_uuid: 'str', props: 'GuiListProps')

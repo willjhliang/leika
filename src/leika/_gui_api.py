@@ -2013,6 +2013,7 @@ class GuiApi(GuiContainer):
         initial_value: str,
         *,
         multiline: bool = False,
+        rows: int = 3,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -2025,6 +2026,9 @@ class GuiApi(GuiContainer):
             initial_value: Initial value of the text input.
             multiline: Whether the text input supports multiple lines, delimited with
                 the \n character.
+            rows: Height of a multiline input, in lines. The box keeps that height
+                whatever is typed into it, scrolling its own text rather than growing
+                and pushing the rest of the panel down. Ignored unless ``multiline``.
             disabled: Whether the text input is disabled.
             visible: Whether the text input is visible.
             hint: Optional hint to display on hover.
@@ -2035,6 +2039,8 @@ class GuiApi(GuiContainer):
         """
         value = initial_value
         assert isinstance(value, str)
+        if rows < 1:
+            raise ValueError(f"rows= is a height in lines, so it starts at 1; got {rows}.")
         uuid = _make_uuid()
         order = _apply_default_order(order)
         return GuiTextHandle(
@@ -2051,6 +2057,7 @@ class GuiApi(GuiContainer):
                         disabled=disabled,
                         visible=visible,
                         multiline=multiline,
+                        rows=rows,
                     ),
                 ),
             )

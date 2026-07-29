@@ -9,7 +9,7 @@ import { GuiInputRow } from "./common";
 export default function TextInputComponent({
   uuid,
   value,
-  props: { hint, label, disabled, multiline },
+  props: { hint, label, disabled, multiline, rows },
 }: GuiTextMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
   return (
@@ -20,7 +20,13 @@ export default function TextInputComponent({
           value={value}
           onChange={(event) => setValue(uuid, event.currentTarget.value)}
           disabled={disabled}
-          rows={2}
+          rows={rows}
+          // `rows` only means anything to a box that is not sizing itself:
+          // the stock textarea grows with its content from a floor of its
+          // own, which overrode the attribute at every value and left a
+          // pasted page of text pushing the rest of the panel off the screen.
+          // Fixed, the field is the height it was asked for and scrolls.
+          className="field-sizing-fixed min-h-0"
         />
       ) : (
         <Input
