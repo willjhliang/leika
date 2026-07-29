@@ -69,11 +69,16 @@ export default function ButtonComponent({
       data-leika-button
       data-leika-button-color={color}
       onClick={() =>
-        messageSender({
-          type: "GuiUpdateMessage",
-          uuid,
-          updates: { value: true },
-        })
+        // A press, not a reading: two of them inside one throttle window are
+        // two presses, and a row of buttons reports every one.
+        messageSender(
+          {
+            type: "GuiUpdateMessage",
+            uuid,
+            updates: { value: true },
+          },
+          { coalesce: false },
+        )
       }
       onPointerDown={handlePointerDown}
       onPointerUp={stopHoldTimers}
