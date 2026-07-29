@@ -97,7 +97,12 @@ export default function FormComponent({
           </PopoverDescription>
         </PopoverHeader>
         <form
-          className="flex w-full min-w-0 flex-col gap-2"
+          // The actions sit a step further down than the fields sit from each
+          // other: they are what to do with the answer rather than another
+          // part of it, and the panel's own row gap reads as neither. The
+          // server keeps them last (see GuiFormHandle.__exit__), so the last
+          // child is who they are.
+          className="flex w-full min-w-0 flex-col gap-2 [&>:last-child]:mt-2"
           onSubmit={(event) => {
             event.preventDefault();
             guiContext.messageSender(

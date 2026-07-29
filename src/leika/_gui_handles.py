@@ -983,6 +983,17 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
         gui_api._container_handle_from_uuid.pop(self._impl.uuid)
 
 
+def _fields_within(container: Any) -> Iterable[_GuiInputHandle]:
+    """Every input under `container`, however deeply folders or tabs nest it.
+
+    Buttons are excluded: their "value" is the fact of a press, so there is
+    nothing about one to remember or put back."""
+    for child in getattr(container, "_children", {}).values():
+        if isinstance(child, _GuiInputHandle) and not child._impl.is_button:
+            yield child
+        yield from _fields_within(child)
+
+
 class GuiFormHandle(GuiFolderHandle):
     """Use as a context to place GUI elements into a form.
 
@@ -993,9 +1004,11 @@ class GuiFormHandle(GuiFolderHandle):
     It takes ONE row in the panel: its ``label``, and a button that opens the
     fields in a popout. A form is one question asked in several parts, and the
     parts belong together and apart from the live controls around them -- so
-    they are somewhere else, and the row is the way in. ``submit_text`` names
-    the button that closes the question; it is the form's last child, and the
-    popout is where it appears.
+    they are somewhere else, and the row is the way in.
+
+    The popout ends in the form's two ways out, a Reset and a Submit added as
+    the form's last child and reachable as ``form.actions``: start the answer
+    again (:meth:`reset_form`), or give it (:meth:`submit_form`).
 
     Children of a form behave exactly like children of a folder. ``on_update``
     callbacks on individual inputs continue to fire on every keystroke; the
@@ -1024,25 +1037,33 @@ class GuiFormHandle(GuiFolderHandle):
     def __init__(self, _impl: _GuiHandleState[None]) -> None:
         super().__init__(_impl)
         self._submit_cb: list[Callable[[GuiEvent[GuiFormHandle]], None | Coroutine]] = []
-        self.submit: GuiButtonHandle
+        self._initial_values: dict[str, Any] = {}
+        self.actions: GuiButtonGroupHandle
 
     def __exit__(self, *args: Any) -> None:
         super().__exit__(*args)
-        # Keep the submit button at the bottom, where a form's submit belongs.
+        # What Reset puts back. Read here rather than at reset time, because by
+        # then the field holds whatever was typed into it: a field is at its
+        # declared value the moment it is created, and this is the first look
+        # at it after that. Fields added later are picked up on their own exit.
+        for field in _fields_within(self):
+            self._initial_values.setdefault(field._impl.uuid, field.value)
+
+        # Keep the action buttons at the bottom, where a form's submit belongs.
         #
-        # It is created with the form, which is necessarily BEFORE the fields
-        # the caller adds inside it -- so it holds the smallest order number in
-        # the form and would otherwise render above everything it submits. Its
+        # They are created with the form, which is necessarily BEFORE the
+        # fields they act on -- so they hold the smallest order number in the
+        # form and would otherwise render above everything they submit. That
         # number is re-stamped here instead, once everything added inside has
-        # taken one. Children added through `form.add_text(...)` rather than the
-        # context manager arrive one exit at a time, and each of them moves the
-        # button along again.
-        button = getattr(self, "submit", None)
-        if button is not None:
+        # taken one. Children added through `form.add_text(...)` rather than
+        # the context manager arrive one exit at a time, and each of them moves
+        # the buttons along again.
+        actions = getattr(self, "actions", None)
+        if actions is not None:
             # Runtime import to break the circular edge with `_gui_api`.
             from ._gui_api import _apply_default_order
 
-            button.order = _apply_default_order(None)
+            actions.order = _apply_default_order(None)
 
     def on_submit(
         self,
@@ -1072,6 +1093,25 @@ class GuiFormHandle(GuiFolderHandle):
             self._submit_cb.clear()
         else:
             self._submit_cb = [cb for cb in self._submit_cb if cb != callback]
+
+    def reset_form(self) -> None:
+        """Put every field in this form back to the value it was declared with.
+
+        What a browser's own form reset does, except that the values live on
+        the server: the fields are driven from Python, so this is the only side
+        that knows what "back" means. Fields inside folders or tabs within the
+        form are reset too; buttons are not fields and are left alone.
+
+        Assigning those values fires each field's ``on_update``, as any other
+        assignment from Python does. The form's own ``on_submit`` does not
+        fire: nothing has been submitted.
+        """
+        registry = self._impl.gui_api._gui_input_handle_from_uuid
+        for field_uuid, initial in self._initial_values.items():
+            field = registry.get(field_uuid)
+            if field is None or field._impl.removed:
+                continue
+            field.value = initial
 
     def submit_form(self) -> None:
         """Programmatically submit this form.

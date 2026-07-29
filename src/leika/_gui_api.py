@@ -893,7 +893,6 @@ class GuiApi(GuiContainer):
 
     def add_form(
         self,
-        submit_text: str = "Submit",
         *,
         label: str | None = None,
         order: float | None = None,
@@ -904,9 +903,6 @@ class GuiApi(GuiContainer):
         See :class:`GuiFormHandle` for usage and semantics.
 
         Args:
-            submit_text: Text on the form's submit button. Named like every
-                other button's face text, and distinct from ``label``, which
-                names the form.
             label: Label shown beside the form's row, opposite the button that
                 opens it. If ``None``, that button takes the whole row, the
                 same rule a labelless :meth:`add_button` follows.
@@ -962,9 +958,20 @@ class GuiApi(GuiContainer):
                 parent_container_id=self._get_container_uuid(),
             )
         )
+        # The form's two ways out, as one row at the bottom of its popout:
+        # start the answer again, or give it. Parted, because they are opposite
+        # moves rather than one control with two ends -- joining them would
+        # invite the wrong one, which for a Reset is the answer thrown away.
         with handle:
-            handle.submit = self.add_button(submit_text)
-        handle.submit.on_click(lambda _: handle.submit_form())
+            handle.actions = self.add_button(("Reset", "Submit"), merge=False)
+
+        def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
+            if event.target.value == "Reset":
+                handle.reset_form()
+            else:
+                handle.submit_form()
+
+        handle.actions.on_click(_act)
         return handle
 
     def add_modal(

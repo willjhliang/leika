@@ -63,10 +63,10 @@ def test_option_validation(server: leika.Server) -> None:
 
 
 def test_form_compatibility_and_submission(server: leika.Server) -> None:
-    with server.gui.add_form(submit_text="Save", label="Profile") as form:
+    with server.gui.add_form(label="Profile") as form:
         name = server.gui.add_text("Name", initial_value="Ada")
-    # The caption is the button's `text`; `label` is the row label it has none of.
-    assert (form.submit.text, form.submit.label) == ("Save", None)
+    # One row holding the form's two ways out, and no row label of its own.
+    assert (form.actions.options, form.actions.label) == (("Reset", "Submit"), None)
     submitted: list[str] = []
 
     @form.on_submit
@@ -79,23 +79,55 @@ def test_form_compatibility_and_submission(server: leika.Server) -> None:
     form.submit_form()
     _wait_for(lambda: submitted == ["Ada", "Grace"])
 
-    with server.gui.add_form(submit_text="Outer"):
+    with server.gui.add_form(label="Outer"):
         with pytest.raises(ValueError, match="Nested forms"):
-            server.gui.add_form(submit_text="Inner")
+            server.gui.add_form(label="Inner")
 
 
-def test_form_submit_button_stays_below_the_fields(server: leika.Server) -> None:
-    """The submit button is created with the form -- before any of the fields it
-    submits -- so its order has to be re-stamped or it renders above them."""
-    with server.gui.add_form(submit_text="Save") as form:
+def test_form_action_buttons_stay_below_the_fields(server: leika.Server) -> None:
+    """The action buttons are created with the form -- before any of the fields
+    they act on -- so their order has to be re-stamped or they render above
+    them."""
+    with server.gui.add_form() as form:
         first = server.gui.add_text("Name", initial_value="Ada")
         last = server.gui.add_checkbox("Subscribe", initial_value=False)
-    assert form.submit.order > last.order > first.order
+    assert form.actions.order > last.order > first.order
 
     # Children added through the container's own methods arrive one at a time,
-    # each after the button was last moved. Every one of them moves it again.
+    # each after the buttons were last moved. Every one of them moves them again.
     added = form.add_text("Nickname", initial_value="")
-    assert form.submit.order > added.order > last.order
+    assert form.actions.order > added.order > last.order
+
+
+def test_form_reset_restores_what_the_fields_were_declared_with(
+    server: leika.Server,
+) -> None:
+    """Reset is the values Python declared, not the ones the browser last sent
+    -- and it reaches fields nested in a folder inside the form."""
+    with server.gui.add_form(label="Profile") as form:
+        name = server.gui.add_text("Name", initial_value="Ada")
+        with server.gui.add_folder("More"):
+            age = server.gui.add_number("Age", initial_value=36)
+            tags = server.gui.add_toggle(("A", "B"), label="Tags", multiple=True)
+    late = form.add_text("Nickname", initial_value="Countess")
+
+    name.value = "Grace"
+    age.value = 45
+    tags.value = ("A", "B")
+    late.value = "Amazing"
+
+    form.reset_form()
+    assert (name.value, age.value, tags.value, late.value) == (
+        "Ada",
+        36,
+        (),
+        "Countess",
+    )
+
+    # A field removed since is skipped rather than resurrected.
+    late.remove()
+    form.reset_form()
+    assert name.value == "Ada"
 
 
 def test_commands_notifications_and_modal(server: leika.Server) -> None:

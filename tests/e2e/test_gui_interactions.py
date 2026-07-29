@@ -129,7 +129,7 @@ def test_a_form_opens_from_one_row_into_a_popout(
     open among the live controls. The fields are in the popout, and submitting
     from there reaches Python, by the button and by Enter alike."""
     submits: list[int] = []
-    with leika_server.gui.add_form(submit_text="Save", label="Profile") as form:
+    with leika_server.gui.add_form(label="Profile") as form:
         name = leika_server.gui.add_text("Name", initial_value="Ada")
     form.on_submit(lambda _: submits.append(len(submits) + 1))
 
@@ -145,10 +145,23 @@ def test_a_form_opens_from_one_row_into_a_popout(
     popout = open_form(leika_page)
     field = popout.get_by_label("Name")
     expect(field).to_be_visible()
-    expect(popout.get_by_role("button", name="Save", exact=True)).to_be_visible()
+    submit = popout.get_by_role("button", name="Submit", exact=True)
+    reset = popout.get_by_role("button", name="Reset", exact=True)
+    expect(submit).to_be_visible()
+    expect(reset).to_be_visible()
 
-    # Submitting is the way out: the popout closes on its own submit button.
-    popout.get_by_role("button", name="Save", exact=True).click()
+    # Reset is the other way out of a half-written answer: it puts the fields
+    # back to what Python declared, and leaves the popout open to start again.
+    field.fill("Edited")
+    _wait_until(lambda: name.value == "Edited")
+    reset.click()
+    _wait_until(lambda: name.value == "Ada")
+    expect(field).to_have_value("Ada")
+    expect(popout).to_be_visible()
+    assert submits == []
+
+    # Submitting is the way out proper: the popout closes on its own button.
+    submit.click()
     _wait_until(lambda: submits == [1])
     expect(popout).to_have_count(0, timeout=5_000)
 
@@ -175,7 +188,7 @@ def test_a_form_opens_from_one_row_into_a_popout(
 
     # A form with no label: its trigger takes the whole row, the way a
     # labelless button does, rather than leaving an empty label column.
-    plain = leika_server.gui.add_form(submit_text="Send")
+    plain = leika_server.gui.add_form()
     plain.add_text("Comment", initial_value="")
     triggers = leika_page.locator("[data-leika-form-trigger]")
     expect(triggers).to_have_count(2, timeout=5_000)
@@ -187,35 +200,35 @@ def test_a_form_opens_from_one_row_into_a_popout(
     assert page_errors == []
 
 
-def test_a_forms_submit_button_renders_below_its_fields(
+def test_a_forms_action_buttons_render_below_its_fields(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """A form's submit belongs at the bottom, and it is created at the top.
+    """A form's actions belong at the bottom, and they are created at the top.
 
-    It has to exist before the `with` body that fills the form runs, so it
-    holds the form's smallest order number and the server moves it after the
+    They have to exist before the `with` body that fills the form runs, so they
+    hold the form's smallest order number and the server moves them after the
     fact. That has to land on the client that watched the form being built as
     well as on one that arrives to find it finished -- two different paths, an
     update and a replay.
     """
-    with leika_server.gui.add_form(submit_text="Save", label="Profile") as form:
+    with leika_server.gui.add_form(label="Profile") as form:
         leika_server.gui.add_text("Name", initial_value="Ada")
         leika_server.gui.add_checkbox("Subscribe", initial_value=False)
 
     def assert_submit_is_last(page: Page) -> None:
-        """Every row of the form sits above the submit button."""
+        """Every row of the form sits above the action buttons."""
         open_form(page)
-        save = page.get_by_role("button", name="Save", exact=True)
+        save = page.get_by_role("button", name="Submit", exact=True)
         expect(save).to_be_visible(timeout=5_000)
         button = save.bounding_box()
         assert button is not None
         rows = page.locator("form", has=save).locator("[data-leika-gui-row]")
         for index in range(rows.count()):
             row = rows.nth(index)
-            # The button's own row is the one it is allowed to be level with.
-            if row.get_by_role("button", name="Save", exact=True).count():
+            # The actions' own row is the one they are allowed to be level with.
+            if row.get_by_role("button", name="Submit", exact=True).count():
                 continue
             box = row.bounding_box()
             assert box is not None
