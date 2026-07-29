@@ -10,27 +10,29 @@ import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 
-/** Split the options into runs of buttons that are joined to each other.
+/** Split the options into runs of buttons that are joined to each other, as
+ * indices into the row -- an option's place is what says which colorway it
+ * wears, so the runs carry that rather than the text.
  *
  * `merge[i]` answers for the gap between option `i` and `i + 1`, so a false
  * starts a new run. One option per run means every button stands alone; one
  * run means the whole row is a single block. */
-function runsOf(options: string[], merge: boolean[]): string[][] {
-  const runs: string[][] = [];
-  options.forEach((option, index) => {
-    if (index > 0 && merge[index - 1]) runs[runs.length - 1].push(option);
-    else runs.push([option]);
+function runsOf(options: string[], merge: boolean[]): number[][] {
+  const runs: number[][] = [];
+  options.forEach((_option, index) => {
+    if (index > 0 && merge[index - 1]) runs[runs.length - 1].push(index);
+    else runs.push([index]);
   });
   return runs;
 }
 
-/** A row of buttons that share a row and a colorway.
+/** A row of buttons.
  *
  * Buttons, not toggles: nothing here is "on". The group's value is the option
  * last pressed, which Python reads and acts on -- pressing the same one twice
- * is two presses, not a no-op -- so there is no selected state to draw, and
- * the colorway applies to every option alike, exactly as if each of these were
- * an `add_button` of its own.
+ * is two presses, not a no-op -- so there is no selected state to draw. Each
+ * option wears its own colorway, exactly as if it were an `add_button` of its
+ * own; a row that names one role for all of them arrives as that role repeated.
  *
  * Joined runs nest a ButtonGroup inside the row's own, which is how the stock
  * component composes: the inner one shares the edges between its buttons, the
@@ -69,27 +71,31 @@ export default function ButtonGroupComponent({
           "[&>[data-slot]~[data-slot]]:ml-0",
         )}
         data-leika-button-group
-        data-leika-button-color={color}
       >
         {runs.map((run) => (
-          <ButtonGroup key={run[0]} className="min-w-fit flex-1">
-            {run.map((option, index) => (
-              <React.Fragment key={option}>
+          <ButtonGroup key={options[run[0]]} className="min-w-fit flex-1">
+            {run.map((option, place) => (
+              <React.Fragment key={options[option]}>
                 {/* Filled buttons meeting edge to edge would read as one bar
-                    with words at intervals, so a joined run of them is divided
-                    by a hairline in their own foreground. Outlined ones bring
-                    their own borders and need nothing. */}
-                {index > 0 && color === "primary" && (
-                  <ButtonGroupSeparator className="bg-primary-foreground/25" />
-                )}
+                    with words at intervals, so a joined pair of them is divided
+                    by a hairline in their own foreground. An outlined one on
+                    either side brings a border of its own and needs nothing. */}
+                {place > 0 &&
+                  color[option] === "primary" &&
+                  color[run[place - 1]] === "primary" && (
+                    <ButtonGroupSeparator className="bg-primary-foreground/25" />
+                  )}
                 <Button
-                  variant={color === "secondary" ? "outline" : "default"}
+                  variant={
+                    color[option] === "secondary" ? "outline" : "default"
+                  }
                   className="min-w-fit flex-1"
                   disabled={disabled}
                   data-leika-button
-                  onClick={() => setValue(uuid, option)}
+                  data-leika-button-color={color[option]}
+                  onClick={() => setValue(uuid, options[option])}
                 >
-                  {option}
+                  {options[option]}
                 </Button>
               </React.Fragment>
             ))}

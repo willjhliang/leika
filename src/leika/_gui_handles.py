@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 import warnings
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -18,6 +18,7 @@ from typing import (
     Literal,
     Tuple,
     TypeVar,
+    Union,
     cast,
     overload,
 )
@@ -406,6 +407,40 @@ class GuiToggleHandle(GuiInputHandle[bool], GuiToggleProps):
     """
 
 
+ButtonColor = Literal["primary", "secondary"]
+
+
+def _row_props(handle: Any) -> Union[GuiButtonGroupProps, GuiToggleGroupProps]:
+    props = handle._impl.props
+    assert isinstance(props, (GuiButtonGroupProps, GuiToggleGroupProps))
+    return props
+
+
+def _row_colors(handle: Any) -> Tuple[ButtonColor, ...]:
+    """The colorways a row of buttons or toggles is currently wearing."""
+    return _row_props(handle).color
+
+
+def _set_row_colors(handle: Any, color: ButtonColor | Sequence[ButtonColor]) -> None:
+    """Recolor a row, by one role for all of it or one role per element.
+
+    A property rather than a plain prop because the wire carries one role per
+    element and the caller may mean either -- which is the same latitude
+    ``add_button`` gives, kept for the live prop so that recoloring a row later
+    is not a different API from declaring it.
+    """
+    # Runtime import to break the circular edge with `_gui_api`.
+    from ._gui_api import _button_colors
+
+    props = _row_props(handle)
+    noun = "toggle" if isinstance(props, GuiToggleGroupProps) else "button"
+    colors = _button_colors(len(props.options), color, noun=noun)
+    if colors == props.color:
+        return
+    props.color = colors
+    handle._queue_update("color", colors)
+
+
 class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps):
     """Handle for a row of toggles.
 
@@ -417,6 +452,18 @@ class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps)
        configured: with ``multiple=False`` it simply never holds more than one.
        Assigning turns exactly those options on and the rest off.
     """
+
+    @property
+    def color(self) -> Tuple[ButtonColor, ...]:
+        """One colorway per toggle, as a tuple however it was assigned.
+
+        Assigning a single role sets the whole row; assigning a sequence sets
+        one toggle at a time, and must be as long as ``options``."""
+        return _row_colors(self)
+
+    @color.setter
+    def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
+        _set_row_colors(self, color)
 
 
 class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):
@@ -748,6 +795,18 @@ class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
         """
         self._impl.update_cb.append(func)
         return func
+
+    @property
+    def color(self) -> Tuple[ButtonColor, ...]:
+        """One colorway per button, as a tuple however it was assigned.
+
+        Assigning a single role sets the whole row; assigning a sequence sets
+        one button at a time, and must be as long as ``options``."""
+        return _row_colors(self)
+
+    @color.setter
+    def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
+        _set_row_colors(self, color)
 
     @property
     def disabled(self) -> bool:

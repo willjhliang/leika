@@ -63,7 +63,6 @@ export default function ToggleGroupComponent({
         variant="outline"
         className="no-scrollbar w-full min-w-0 justify-start overflow-x-auto"
         data-leika-toggle-group
-        data-leika-button-color={color}
       >
         {options.map((option, index) => {
           const startsRun = index === 0 || !merge[index - 1];
@@ -74,7 +73,7 @@ export default function ToggleGroupComponent({
               value={option}
               className={cn(
                 "min-w-fit flex-1",
-                TOGGLE_CLASSES[color],
+                TOGGLE_CLASSES[color[index]],
                 // A run's ends are rounded and its insides are square, so a
                 // run reads as one block however many toggles are in it.
                 startsRun ? "rounded-l-lg!" : "rounded-l-none!",
@@ -84,12 +83,15 @@ export default function ToggleGroupComponent({
                 startsRun ? index > 0 && "ml-1!" : "-ml-px",
                 // Filled toggles have no border to share, so a joined pair
                 // needs a line of its own -- the same hairline a merged row of
-                // filled buttons draws, for the same reason.
+                // filled buttons draws, for the same reason. A joined pair with
+                // an outlined half already has that half's border.
                 !startsRun &&
-                  color === "primary" &&
+                  color[index] === "primary" &&
+                  color[index - 1] === "primary" &&
                   "border-l-primary-foreground/25",
               )}
               data-leika-toggle
+              data-leika-button-color={color[index]}
             >
               {option}
             </ToggleGroupItem>

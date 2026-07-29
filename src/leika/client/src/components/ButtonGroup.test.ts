@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import ButtonGroupComponent from "./ButtonGroup";
 
+type Color = "primary" | "secondary";
+
 function renderButtonGroup(
   disabled = false,
-  color: "primary" | "secondary" = "primary",
+  color: Color | Color[] = "primary",
   merge: boolean[] = [false, false],
 ): string {
+  const options = ["Ocean", "Magma", "Viridis"];
   const message: GuiButtonGroupMessage = {
     type: "GuiButtonGroupMessage",
     uuid: "palette",
@@ -21,8 +24,8 @@ function renderButtonGroup(
       hint: null,
       visible: true,
       disabled,
-      color,
-      options: ["Ocean", "Magma", "Viridis"],
+      color: typeof color === "string" ? options.map(() => color) : color,
+      options,
       _merge: merge,
     },
   };
@@ -47,7 +50,7 @@ describe("ButtonGroupComponent", () => {
     expect(markup).not.toContain("flex-wrap");
   });
 
-  it("gives every option the same colorway", () => {
+  it("gives every option one role, the row's own unless told otherwise", () => {
     const primary = renderButtonGroup(false, "primary");
     const secondary = renderButtonGroup(false, "secondary");
     // Whatever the colorway resolves to, all three options share it: nothing
@@ -60,6 +63,40 @@ describe("ButtonGroupComponent", () => {
       expect(new Set(classes).size).toBe(1);
     }
     expect(primary).not.toEqual(secondary);
+  });
+
+  it("colors options one at a time when the row asks for it", () => {
+    const mixed = renderButtonGroup(false, ["secondary", "primary", "primary"]);
+    const roles = [...mixed.matchAll(/data-leika-button-color="(\w+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(roles).toEqual(["secondary", "primary", "primary"]);
+    const classes = [...mixed.matchAll(/<button[^>]*class="([^"]*)"/g)].map(
+      (match) => match[1],
+    );
+    // The outlined one is drawn differently from the two filled ones, which
+    // still match each other.
+    expect(classes[1]).toEqual(classes[2]);
+    expect(classes[0]).not.toEqual(classes[1]);
+  });
+
+  it("only divides a merged pair when both halves are filled", () => {
+    // The hairline exists because two filled buttons have no edge between
+    // them; an outlined neighbour brings one of its own.
+    const mixed = renderButtonGroup(
+      false,
+      ["primary", "secondary", "primary"],
+      [true, true],
+    );
+    expect(mixed).not.toContain("button-group-separator");
+    const twoFilled = renderButtonGroup(
+      false,
+      ["primary", "primary", "secondary"],
+      [true, true],
+    );
+    expect(twoFilled.match(/data-slot="button-group-separator"/g)).toHaveLength(
+      1,
+    );
   });
 
   it("makes one run per stretch of merged buttons", () => {

@@ -754,8 +754,8 @@ class GuiToggleMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiToggleGroupProps(GuiBaseProps):
-    color: Literal["primary", "secondary"]
-    """Colorway for every toggle in the group; see `GuiToggleProps.color`."""
+    color: Tuple[Literal["primary", "secondary"], ...]
+    """One colorway per toggle; see `GuiButtonGroupProps.color`."""
     options: Tuple[str, ...]
     """Tuple of toggles in the group."""
     multiple: bool
@@ -858,10 +858,12 @@ class GuiDropdownMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiButtonGroupProps(GuiBaseProps):
-    color: Literal["primary", "secondary"]
-    """Colorway for every option in the group: filled with the accent, or
-    outlined. The same two roles a single button takes, applied alike -- these
-    are buttons, so none of them is ever the selected one."""
+    color: Tuple[Literal["primary", "secondary"], ...]
+    """One colorway per option: filled with the accent, or outlined. The same
+    two roles a single button takes -- these are buttons, so none of them is
+    ever the selected one -- but taken per button, so a row can put its accent
+    behind one action and leave the rest quiet. Always as long as
+    ``options``; the Python API fills a single role across the row."""
     options: Tuple[str, ...]
     """Tuple of buttons for the button group."""
     _merge: Tuple[bool, ...]

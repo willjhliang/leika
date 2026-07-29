@@ -5,17 +5,21 @@ import { describe, expect, it } from "vitest";
 import { GuiToggleGroupMessage } from "../WebsocketMessages";
 import ToggleGroupComponent from "./ToggleGroup";
 
+type Color = "primary" | "secondary";
+
+const OPTIONS = ["Bold", "Italic", "Under"];
+
 function renderToggleGroup({
   value = ["Bold"],
   multiple = false,
   required = false,
-  color = "primary" as "primary" | "secondary",
+  color = "primary" as Color | Color[],
   merge = [true, true],
 }: {
   value?: string[];
   multiple?: boolean;
   required?: boolean;
-  color?: "primary" | "secondary";
+  color?: Color | Color[];
   merge?: boolean[];
 } = {}): string {
   const message: GuiToggleGroupMessage = {
@@ -29,8 +33,8 @@ function renderToggleGroup({
       hint: null,
       visible: true,
       disabled: false,
-      color,
-      options: ["Bold", "Italic", "Under"],
+      color: typeof color === "string" ? OPTIONS.map(() => color) : color,
+      options: OPTIONS,
       multiple,
       required,
       _merge: merge,
@@ -66,5 +70,27 @@ describe("ToggleGroupComponent", () => {
     const parted = renderToggleGroup({ merge: [false, false] });
     expect(parted.match(/rounded-l-lg!/g)).toHaveLength(3);
     expect(parted.match(/ml-1!/g)).toHaveLength(2);
+  });
+
+  it("colors toggles one at a time when the row asks for it", () => {
+    const mixed = renderToggleGroup({
+      color: ["secondary", "primary", "primary"],
+    });
+    const roles = [...mixed.matchAll(/data-leika-button-color="(\w+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(roles).toEqual(["secondary", "primary", "primary"]);
+
+    // The hairline between joined toggles is for two filled ones meeting; the
+    // outlined half of a pair brings a border of its own.
+    expect(mixed.match(/border-l-primary-foreground\/25/g)).toHaveLength(1);
+    expect(
+      renderToggleGroup({ color: "primary" }).match(
+        /border-l-primary-foreground\/25/g,
+      ),
+    ).toHaveLength(2);
+    expect(renderToggleGroup({ color: "secondary" })).not.toContain(
+      "border-l-primary-foreground/25",
+    );
   });
 });

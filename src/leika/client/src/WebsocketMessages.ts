@@ -494,7 +494,7 @@ export interface GuiToggleGroupMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    color: "primary" | "secondary";
+    color: ("primary" | "secondary")[];
     options: string[];
     multiple: boolean;
     required: boolean;
@@ -612,7 +612,7 @@ export interface GuiButtonGroupMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    color: "primary" | "secondary";
+    color: ("primary" | "secondary")[];
     options: string[];
     _merge: boolean[];
   };

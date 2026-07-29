@@ -95,6 +95,10 @@ TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 T = TypeVar("T")
 
+# The two roles a button or toggle can take. Named once here because it now
+# appears per element as well as per row.
+ButtonColor = Literal["primary", "secondary"]
+
 
 @overload
 def _cast_vector(vector: tuple | np.ndarray, length: Literal[2]) -> tuple[float, float]: ...
@@ -181,6 +185,35 @@ def _initial_toggles(
     # Declaration order, not the order they were named: the value reads the
     # same way the row does.
     return tuple(option for option in options if option in wanted)
+
+
+def _button_colors(
+    count: int,
+    color: ButtonColor | Sequence[ButtonColor],
+    *,
+    noun: str = "button",
+) -> tuple[ButtonColor, ...]:
+    """One colorway per BUTTON, the way ``_merge_flags`` gives one per gap.
+
+    A single role answers for the whole row, which is the common case and what
+    a row usually wants: same kind of thing, same weight. A sequence answers
+    one button at a time, for the row that holds a main action and something
+    quieter beside it -- a Submit and the Reset next to it, say, where giving
+    both the accent would put the same weight behind starting over.
+    """
+    if isinstance(color, str):
+        _validate_button_color(color)
+        return (color,) * count
+    colors = tuple(color)
+    if len(colors) != count:
+        raise ValueError(
+            f"color= takes one role per {noun}: {count} for this row, but got"
+            f" {len(colors)}. Pass a single role to answer for every button at"
+            " once."
+        )
+    for one in colors:
+        _validate_button_color(one)
+    return colors
 
 
 def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
@@ -917,8 +950,12 @@ class GuiApi(GuiContainer):
         # start the answer again, or give it. Parted, because they are opposite
         # moves rather than one control with two ends -- joining them would
         # invite the wrong one, which for a Reset is the answer thrown away.
+        # The accent goes behind the Submit alone: giving it is what the form
+        # is for, and starting over should not ask for the eye as loudly.
         with handle:
-            handle.actions = self.add_button(("Reset", "Submit"), merge=False)
+            handle.actions = self.add_button(
+                ("Reset", "Submit"), color=("secondary", "primary"), merge=False
+            )
 
         def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
             if event.target.value == "Reset":
@@ -1510,7 +1547,7 @@ class GuiApi(GuiContainer):
         text: list[str] | tuple[str, ...],
         *,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "primary",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1524,7 +1561,7 @@ class GuiApi(GuiContainer):
         text: str | Sequence[str],
         *,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "primary",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1554,8 +1591,10 @@ class GuiApi(GuiContainer):
                 the button sits beside it, like every other labelled control.
             color: Colorway. ``"primary"`` fills with the accent, which is what
                 a panel's main action wants; ``"secondary"`` outlines instead,
-                for the ones that sit beside it. It applies to every option in
-                a row alike, exactly as if each were its own button.
+                for the ones that sit beside it. A single role answers for
+                every button in a row; a sequence answers one button at a time,
+                so ``color=("secondary", "primary")`` puts the accent behind
+                the second of a pair and not the first.
             merge: Whether neighbouring buttons in a row are joined into one
                 block, sharing an edge, or parted by a gap. A single bool
                 answers for the whole row; a sequence answers one gap at a
@@ -1574,11 +1613,6 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        _validate_button_color(color)
-        if isinstance(text, str) and not isinstance(merge, bool):
-            raise ValueError(
-                "merge= is about the gaps between buttons in a row; a single button has none."
-            )
         if not isinstance(text, str):
             if icon is not None:
                 raise ValueError(
@@ -1595,6 +1629,17 @@ class GuiApi(GuiContainer):
                 hint=hint,
                 order=order,
             )
+
+        if not isinstance(merge, bool):
+            raise ValueError(
+                "merge= is about the gaps between buttons in a row; a single button has none."
+            )
+        if not isinstance(color, str):
+            raise ValueError(
+                "color= takes one role per button, and a single button is one button;"
+                " pass the role itself rather than a sequence."
+            )
+        _validate_button_color(color)
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
@@ -1702,7 +1747,7 @@ class GuiApi(GuiContainer):
         options: Sequence[str],
         *,
         label: str | None,
-        color: Literal["primary", "secondary"],
+        color: ButtonColor | Sequence[ButtonColor],
         merge: bool | Sequence[bool],
         disabled: bool,
         visible: bool,
@@ -1729,7 +1774,7 @@ class GuiApi(GuiContainer):
                         order=order,
                         label=label,
                         hint=hint,
-                        color=color,
+                        color=_button_colors(len(options), color),
                         options=tuple(options),
                         _merge=_merge_flags(len(options), merge),
                         disabled=disabled,
@@ -1762,7 +1807,7 @@ class GuiApi(GuiContainer):
         *,
         initial_value: str | Sequence[str] | None = None,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "primary",
         multiple: bool = False,
         required: bool | None = None,
         merge: bool | Sequence[bool] = True,
@@ -1779,7 +1824,7 @@ class GuiApi(GuiContainer):
         *,
         initial_value: bool | str | Sequence[str] | None = None,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "primary",
         multiple: bool = False,
         required: bool | None = None,
         merge: bool | Sequence[bool] = True,
@@ -1831,12 +1876,17 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        _validate_button_color(color)
         if isinstance(text, str):
             if not isinstance(merge, bool):
                 raise ValueError(
                     "merge= is about the gaps between toggles in a row; a single toggle has none."
                 )
+            if not isinstance(color, str):
+                raise ValueError(
+                    "color= takes one role per toggle, and a single toggle is one"
+                    " toggle; pass the role itself rather than a sequence."
+                )
+            _validate_button_color(color)
             if multiple or required is not None:
                 raise ValueError(
                     "multiple= and required= are about how many options in a ROW may be"
@@ -1899,7 +1949,7 @@ class GuiApi(GuiContainer):
                         order=order,
                         label=label,
                         hint=hint,
-                        color=color,
+                        color=_button_colors(len(options), color, noun="toggle"),
                         options=options,
                         multiple=multiple,
                         required=required,

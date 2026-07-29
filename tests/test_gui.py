@@ -237,6 +237,35 @@ def test_removed_visual_customization_arguments_are_rejected(
         server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
 
 
+def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> None:
+    """A row usually wants one weight throughout, and sometimes wants its accent
+    behind one action only. Both are ``color=``; the wire always carries one
+    role per element."""
+    row = server.gui.add_button(("Reset", "Submit"), color=("secondary", "primary"))
+    assert row.color == ("secondary", "primary")
+    # A single role still answers for the whole row, and reads back per button.
+    plain = server.gui.add_toggle(("A", "B", "C"), color="secondary")
+    assert plain.color == ("secondary", "secondary", "secondary")
+
+    # Live, with the same latitude as the constructor.
+    plain.color = ("primary", "secondary", "primary")
+    assert plain.color == ("primary", "secondary", "primary")
+    plain.color = "primary"
+    assert plain.color == ("primary", "primary", "primary")
+
+    with pytest.raises(ValueError, match="one role per button"):
+        server.gui.add_button(("One", "Two"), color=("primary",))
+    with pytest.raises(ValueError, match="one role per toggle"):
+        server.gui.add_toggle(("One", "Two"), color=("primary", "primary", "primary"))
+    with pytest.raises(ValueError, match="must be 'primary' or 'secondary'"):
+        server.gui.add_button(("One", "Two"), color=("primary", "blue"))  # type: ignore[arg-type]
+    # A single button is one button: the sequence form has nothing to spread.
+    with pytest.raises(ValueError, match="a single button is one button"):
+        server.gui.add_button("Solo", color=("primary",))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="a single toggle is one toggle"):
+        server.gui.add_toggle("Solo", color=("primary",))  # type: ignore[arg-type]
+
+
 def test_gui_images_always_span_the_panel(server: leika.Server) -> None:
     """A GUI image has one width -- the panel's -- so there is no knob for it."""
     frame = np.zeros((4, 6, 3), dtype=np.uint8)

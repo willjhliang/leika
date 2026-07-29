@@ -1150,15 +1150,53 @@ def test_a_group_takes_the_same_colorways_as_a_single_button(
     assert fill(marked.nth(0)) == fill(marked.nth(1))
     assert fill(filled.nth(0)) != fill(marked.nth(0))
 
-    # And it is a live prop, as it is on a single button.
-    assert group.color == "primary"
+    # And it is a live prop, as it is on a single button -- read back per
+    # option, since a row may wear a different role on each.
+    assert group.color == ("primary", "primary")
     group.color = "secondary"
     expect(
         find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="secondary"]')
-    ).to_have_count(1, timeout=5_000)
+    ).to_have_count(2, timeout=5_000)
     # The fill is a transition, so this polls rather than reading one frame of
     # it: settled, the two groups are the same control in the same role.
     expect(filled.nth(0)).to_have_css("background-color", fill(marked.nth(0)), timeout=5_000)
+    assert page_errors == []
+
+
+def test_a_row_can_wear_one_role_per_option(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """A row usually wants one weight throughout, and sometimes wants its
+    accent behind one option only -- a Submit with a Reset beside it."""
+    leika_server.gui.add_button(
+        ("Reset", "Submit"), label="Actions", color=("secondary", "primary"), merge=True
+    )
+    leika_server.gui.add_toggle(
+        ("Draft", "Live"), label="Stage", color=("secondary", "primary"), multiple=True
+    )
+
+    for row, kind in (("Actions", "button"), ("Stage", "toggle")):
+        options = find_gui_row(leika_page, row).locator(f"[data-leika-{kind}]")
+        expect(options.first).to_be_visible(timeout=5_000)
+        assert options.count() == 2, row
+        quiet, loud = options.nth(0), options.nth(1)
+        assert quiet.get_attribute("data-leika-button-color") == "secondary", row
+        assert loud.get_attribute("data-leika-button-color") == "primary", row
+        # The accent is a fill: the quiet one leaves the surface behind it and
+        # draws a border instead.
+        fills = [
+            option.evaluate("e => getComputedStyle(e).backgroundColor") for option in (quiet, loud)
+        ]
+        assert fills[0] != fills[1], (row, fills)
+        assert quiet.evaluate("e => parseFloat(getComputedStyle(e).borderLeftWidth)") >= 1
+
+    # Joined, and one half outlined: the hairline that divides two filled
+    # neighbours would be drawn over that half's own border, so it is not.
+    expect(
+        find_gui_row(leika_page, "Actions").locator('[data-slot="button-group-separator"]')
+    ).to_have_count(0)
     assert page_errors == []
 
 
