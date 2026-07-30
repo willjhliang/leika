@@ -82,13 +82,19 @@ export default function ToggleGroupComponent({
                 // runs they take the panel's own gap.
                 startsRun ? index > 0 && "ml-1!" : "-ml-px",
                 // Filled toggles have no border to share, so a joined pair
-                // needs a line of its own -- the same hairline a merged row of
-                // filled buttons draws, for the same reason. A joined pair with
-                // an outlined half already has that half's border.
+                // needs a line of its own, drawn in the surface the row sits
+                // on. That is what a joined pair of filled BUTTONS shows:
+                // those are parted by a pixel of the panel rather than by a
+                // rule of their own, and the panel stands opposite the filled
+                // colorway in either theme, so the seam reads alike here. A
+                // quarter-opacity foreground -- what this drew before -- lands
+                // a quarter as far from the fill and all but disappears. A
+                // joined pair with an outlined half already has that half's
+                // border.
                 !startsRun &&
                   color[index] === "primary" &&
                   color[index - 1] === "primary" &&
-                  "border-l-primary-foreground/25",
+                  "border-l-(--leika-panel-surface)",
               )}
               data-leika-toggle
               data-leika-button-color={color[index]}

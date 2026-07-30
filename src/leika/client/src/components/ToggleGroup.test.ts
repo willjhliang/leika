@@ -82,15 +82,15 @@ describe("ToggleGroupComponent", () => {
     expect(roles).toEqual(["secondary", "primary", "primary"]);
 
     // The hairline between joined toggles is for two filled ones meeting; the
-    // outlined half of a pair brings a border of its own.
-    expect(mixed.match(/border-l-primary-foreground\/25/g)).toHaveLength(1);
+    // outlined half of a pair brings a border of its own. It is drawn in the
+    // panel's own surface, which is what shows between two filled buttons.
+    const hairline = /border-l-\(--leika-panel-surface\)/g;
+    expect(mixed.match(hairline)).toHaveLength(1);
     expect(
-      renderToggleGroup({ color: "primary" }).match(
-        /border-l-primary-foreground\/25/g,
-      ),
+      renderToggleGroup({ color: "primary" }).match(hairline),
     ).toHaveLength(2);
     expect(renderToggleGroup({ color: "secondary" })).not.toContain(
-      "border-l-primary-foreground/25",
+      "border-l-(--leika-panel-surface)",
     );
   });
 });
