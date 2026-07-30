@@ -51,7 +51,16 @@ function MdxAnchor(props: React.ComponentPropsWithoutRef<"a">) {
   );
 }
 
-const HEADING_CLASS = "scroll-m-20 font-semibold tracking-tight";
+// A heading takes more room above it than below: the space over one belongs
+// to the break it makes from what came before, while the text under it is
+// what it names and reads as part of it. Paragraphs are 4 apart, so anything
+// less than that above a heading would have grouped it with the wrong side.
+// One value for every level -- the break a heading makes is the same break
+// whatever its rank, and the descending sizes already say which is which.
+// `first:mt-0` keeps a document that opens with a heading flush with the top
+// of whatever is showing it -- a panel row or a preview dialog.
+const HEADING_CLASS =
+  "mt-6 scroll-m-20 font-semibold tracking-tight first:mt-0";
 const HEADING_SIZE = {
   h1: "text-3xl",
   h2: "text-2xl",
