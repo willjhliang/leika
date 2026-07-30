@@ -471,7 +471,6 @@ function ColorPicker({
             tabIndex={eyedropper ? undefined : -1}
             aria-label={eyedropper ? "Pick a color from the screen" : undefined}
             title={eyedropper ? "Pick a color from the screen" : undefined}
-            className="text-muted-foreground"
             onClick={eyedropper ? pickFromScreen : undefined}
             data-leika-color-eyedropper
           >
@@ -714,7 +713,7 @@ export function ColorRow({
           type="button"
           variant="outline"
           size="icon-xs"
-          className="shrink-0 text-muted-foreground"
+          className="shrink-0"
           aria-label={`Reset ${label}`}
           title={`Reset ${label}`}
           disabled={disabled}

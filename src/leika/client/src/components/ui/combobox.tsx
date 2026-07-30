@@ -253,7 +253,11 @@ function ComboboxChip({
       {showRemove && (
         <ComboboxPrimitive.ChipRemove
           render={<Button variant="ghost" size="icon-xs" />}
-          className="-ml-1 opacity-50 hover:opacity-100"
+          // Leika: `text-current` opts out of the muted resting color ghost
+          // icons take elsewhere. This one sits on the chip's own fill rather
+          // than on the panel, and dims by opacity against it; muting the
+          // color as well would take it two steps back instead of one.
+          className="-ml-1 text-current opacity-50 hover:opacity-100"
           data-slot="combobox-chip-remove"
         >
           <XIcon className="pointer-events-none" />

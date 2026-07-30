@@ -127,8 +127,10 @@ function ToastClose({
       className={cn(
         // Pinned to the corner rather than sitting in the row, so it lands in
         // the same place as the dialog's close button. `after` widens the hit
-        // area to the toast's edge without moving the icon.
-        "absolute top-2 right-2 text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-foreground",
+        // area to the toast's edge without moving the icon. The color comes
+        // from the ghost icon variant, which is what makes it the same close
+        // button the dialog draws.
+        "absolute top-2 right-2 after:absolute after:-inset-2 after:content-['']",
         className
       )}
       {...props}

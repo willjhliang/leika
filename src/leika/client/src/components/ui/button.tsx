@@ -10,11 +10,11 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 [&_[data-icon]]:text-muted-foreground hover:[&_[data-icon]]:text-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
-          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50 [&_[data-icon]]:text-muted-foreground hover:[&_[data-icon]]:text-foreground",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 dark:bg-destructive/20 dark:hover:bg-destructive/30",
         link: "text-primary underline-offset-4 hover:underline",
@@ -33,6 +33,31 @@ const buttonVariants = cva(
         "icon-lg": "size-9",
       },
     },
+    // Leika: on the bare variants, an icon rests a step back from the words
+    // beside it and comes up to full strength on hover, with the background
+    // the variant already brings. Two shapes of the same rule, because a
+    // button can be an icon or merely carry one:
+    //
+    // - The whole button, when the icon is all there is (an icon size). Every
+    //   close, collapse, expand and send button in the app is one of these,
+    //   and each was pasting -- or forgetting -- the same pair of classes.
+    // - The icon alone, when it sits before a label (`data-icon`, which the
+    //   sizes above already reach for to tighten the padding). The label
+    //   stays where it was; it is what the button is called.
+    //
+    // The step is the muted foreground, which is what the rest of the app's
+    // secondary text is -- so it only applies where that color reads as a
+    // quieter version of the text beside it. On a fill it would not: over the
+    // accent a neutral gray is a different color at worse contrast, not a
+    // softer one. Filled variants leave the icon on the same foreground as
+    // their label.
+    compoundVariants: [
+      {
+        variant: ["ghost", "outline"],
+        size: ["icon", "icon-xs", "icon-sm", "icon-lg"],
+        class: "text-muted-foreground hover:text-foreground",
+      },
+    ],
     defaultVariants: {
       variant: "default",
       size: "default",

@@ -27,6 +27,9 @@ export const TOGGLE_CLASSES: Record<"primary" | "secondary", string> = {
     "hover:bg-primary/80 hover:text-primary-foreground",
     "aria-pressed:bg-primary/80! aria-pressed:text-primary-foreground",
     "data-[state=on]:bg-primary/80!",
+    // No icon treatment, as in the filled button this borrows from: over the
+    // accent, the muted foreground is a different color at worse contrast
+    // rather than a softer one, so the icon stays on the label's own.
   ].join(" "),
   // Outlined, like an outline button: transparent at rest, filling under a
   // press with `muted` in light and the same `input/50` that button hovers to
@@ -37,5 +40,10 @@ export const TOGGLE_CLASSES: Record<"primary" | "secondary", string> = {
     "aria-pressed:bg-muted! aria-pressed:text-foreground",
     "dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
     "dark:aria-pressed:bg-input/50!",
+    // Muted at rest, as in the outline button. It comes forward when pressed
+    // as well as on hover: pressed fills the toggle with `muted` itself, and
+    // a muted icon on it would be a step back onto its own color.
+    "[&_[data-icon]]:text-muted-foreground hover:[&_[data-icon]]:text-foreground",
+    "aria-pressed:[&_[data-icon]]:text-foreground",
   ].join(" "),
 };

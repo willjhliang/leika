@@ -58,7 +58,7 @@ function MiniForm({ uuid }: GuiFormMessage) {
         type="submit"
         variant="outline"
         size="icon-xs"
-        className="shrink-0 text-muted-foreground"
+        className="shrink-0"
         aria-label="Send"
         title="Send"
         data-leika-form-send
