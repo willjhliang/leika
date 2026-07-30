@@ -20,8 +20,7 @@ import React, {
 import { ViewerContext } from "./ViewerContext";
 import {
   commandPalette,
-  getCommandPaletteOpen,
-  subscribeCommandPalette,
+  useCommandPaletteOpen,
 } from "./CommandPaletteController";
 import { RegisterCommandMessage } from "./WebsocketMessages";
 import { KeyModifier } from "./dragUtils";
@@ -133,12 +132,6 @@ function useFuseFilter() {
       .search(normalizedQuery)
       .map((result: FuseResult<CommandAction>) => result.item);
   }, []);
-}
-
-function useCommandPaletteOpen() {
-  const [opened, setOpened] = useState(getCommandPaletteOpen);
-  useEffect(() => subscribeCommandPalette(setOpened), []);
-  return opened;
 }
 
 export function CommandPalette() {

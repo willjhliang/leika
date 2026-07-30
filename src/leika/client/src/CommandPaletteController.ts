@@ -1,31 +1,14 @@
-export type CommandPaletteListener = (opened: boolean) => void;
+import { createStore } from "./store";
 
-let requestedOpen = false;
-const openListeners = new Set<CommandPaletteListener>();
+const paletteStore = createStore({ open: false });
 
-function publishOpenState(opened: boolean) {
-  requestedOpen = opened;
-  for (const listener of openListeners) listener(opened);
-}
-
-/**
- * Imperative command-palette entry point used by application chrome.
- */
+/** Imperative command-palette entry point used by application chrome. */
 export const commandPalette = {
-  open: () => publishOpenState(true),
-  close: () => publishOpenState(false),
-  toggle: () => publishOpenState(!requestedOpen),
+  open: () => paletteStore.set({ open: true }),
+  close: () => paletteStore.set({ open: false }),
 };
 
-export function getCommandPaletteOpen(): boolean {
-  return requestedOpen;
-}
-
-export function subscribeCommandPalette(
-  listener: CommandPaletteListener,
-): () => void {
-  openListeners.add(listener);
-  return () => {
-    openListeners.delete(listener);
-  };
+/** Subscribe a component to the palette's open state. */
+export function useCommandPaletteOpen(): boolean {
+  return paletteStore((state) => state.open);
 }
