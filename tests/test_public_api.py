@@ -81,7 +81,9 @@ def test_a_mismatched_client_is_turned_away_with_a_reason() -> None:
                     ws.recv(timeout=1.0)
                 except ConnectionClosed:
                     pass
-                return ws.close_code, ws.close_reason or ""
+                # Through the sans-io protocol, which has carried the close
+                # handshake since 13.1; the connection only forwards it in 14+.
+                return ws.protocol.close_code, ws.protocol.close_reason or ""
         except ConnectionClosed as exc:
             return exc.code, exc.reason or ""
 
