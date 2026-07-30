@@ -796,6 +796,103 @@ class GuiUploadButtonHandle(_GuiInputHandle[UploadedFile], GuiUploadButtonProps)
         return func
 
 
+DownloadContent = Union[
+    bytes, Path, Callable[["GuiEvent[GuiDownloadButtonHandle]"], Union[bytes, Path]]
+]
+"""What a download button sends: the bytes themselves, a path to read them
+from, or a function called at click time returning either."""
+
+
+class GuiDownloadButtonHandle(GuiButtonHandle):
+    """Handle for a download button in our visualizer.
+
+    A button that sends a file to the client that pressed it. The press is an
+    ordinary one -- the handle is a :class:`GuiButtonHandle`, and `on_click`
+    still works -- so what this adds is the sending: the file goes to the one
+    client that asked for it rather than to every connected browser, the
+    browser saves it on arrival, and the button holds itself disabled while the
+    contents are produced, so a slow export cannot be started twice over.
+
+    .. attribute:: value
+       :type: bool
+
+       Value of the button. Set to `True` when the button is pressed. Can be manually set back to `False`.
+    """
+
+    def __init__(
+        self,
+        _impl: _GuiHandleState[bool],
+        _icon: IconName | None,
+        _content: DownloadContent,
+        _filename: str | None,
+    ):
+        super().__init__(_impl=_impl, _icon=_icon)
+        self._content = _content
+        self._filename = _filename
+
+    @property
+    def content(self) -> DownloadContent:
+        """What the button sends: bytes, a path to read at click time, or a
+        function of the click event returning one of those."""
+        return self._content
+
+    @content.setter
+    def content(self, content: DownloadContent) -> None:
+        self._content = content
+
+    @property
+    def filename(self) -> str | None:
+        """Name the file is saved under, or None to take it from the path that
+        the contents were read from."""
+        return self._filename
+
+    @filename.setter
+    def filename(self, filename: str | None) -> None:
+        self._filename = filename
+
+    def _resolve(self, event: GuiEvent[GuiDownloadButtonHandle]) -> Tuple[str, bytes | Path]:
+        """The name and contents to send for one press."""
+        content = self._content(event) if callable(self._content) else self._content
+        if self._filename is not None:
+            return self._filename, content
+        if isinstance(content, Path):
+            return content.name, content
+        # Bytes name nothing, so there is nothing to fall back to. Raised here
+        # rather than at creation because a callable's return type is only
+        # known once it has run.
+        raise ValueError(
+            "A download of bytes has no name to save under; pass filename= to"
+            " add_download_button(), or return a Path to take the name from."
+        )
+
+    def _send(self, event: GuiEvent[GuiDownloadButtonHandle]) -> None:
+        """Send the file to whoever pressed the button."""
+        if event.client is None:
+            return
+        # Held down for the length of the transfer, not just the production of
+        # the contents: the click that starts a second copy of a large file is
+        # the one made while the first is still going out.
+        self._set_disabled_if_present(True)
+        try:
+            filename, content = self._resolve(event)
+            # A press is already the ask, so the file saves rather than
+            # arriving as a link to press again. Offering the link is for the
+            # sends nobody asked for -- `send_file_download` at a moment that
+            # is not a click.
+            event.client.send_file_download(filename, content, save_immediately=True)
+        finally:
+            self._set_disabled_if_present(False)
+
+    def _set_disabled_if_present(self, disabled: bool) -> None:
+        """Assign `disabled`, unless the button has been removed underneath us.
+
+        Assigning to a removed handle raises, which would replace whatever the
+        callback was really doing with an error about the button.
+        """
+        if not self._impl.removed:
+            self.disabled = disabled
+
+
 class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
     """Handle for a button group input in our visualizer.
 

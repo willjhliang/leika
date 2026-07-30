@@ -320,8 +320,21 @@ def main() -> None:
             icon=leika.Icon.UPLOAD,
             color="secondary",
         )
-        download = server.gui.add_button(
-            "Download signal CSV", icon=leika.Icon.DOWNLOAD, color="secondary"
+
+        # The contents are made when the button is pressed, so the CSV holds
+        # the signal as it stood at that moment rather than at startup.
+        def signal_csv(event: leika.GuiEvent[Any]) -> bytes:
+            buffer = io.StringIO()
+            buffer.write("time,signal\n")
+            buffer.writelines(f"{x},{y}\n" for x, y in zip(history_t, history_y))
+            return buffer.getvalue().encode()
+
+        server.gui.add_download_button(
+            "Download signal CSV",
+            signal_csv,
+            filename="leika-signal.csv",
+            icon=leika.Icon.DOWNLOAD,
+            color="secondary",
         )
         # A form: a note is worth reading once it is finished, not at every
         # keystroke. Fields still report every edit; `on_submit` adds the commit.
@@ -480,18 +493,6 @@ def main() -> None:
             "File received",
             f"{uploaded.name}: {len(uploaded.content):,} bytes",
             auto_close_seconds=3.0,
-        )
-
-    @download.on_click
-    def _(event: leika.GuiEvent[Any]) -> None:
-        if event.client is None:
-            return
-        buffer = io.StringIO()
-        buffer.write("time,signal\n")
-        buffer.writelines(f"{x},{y}\n" for x, y in zip(history_t, history_y))
-        event.client.send_file_download(
-            "leika-signal.csv",
-            buffer.getvalue().encode(),
         )
 
     pause_command = server.gui.add_command(

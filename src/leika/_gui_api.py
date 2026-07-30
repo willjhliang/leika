@@ -32,12 +32,14 @@ from . import _messages, theme, uplot
 from ._gui_handles import (
     CommandEvent,
     CommandHandle,
+    DownloadContent,
     GuiButtonGroupHandle,
     GuiButtonHandle,
     GuiCheckboxHandle,
     GuiContainer,
     GuiContainerProtocol,
     GuiDividerHandle,
+    GuiDownloadButtonHandle,
     GuiDropdownHandle,
     GuiEvent,
     GuiFolderHandle,
@@ -1667,6 +1669,102 @@ class GuiApi(GuiContainer):
             ),
             _icon=icon,
         )
+
+    def add_download_button(
+        self,
+        text: str,
+        content: DownloadContent,
+        *,
+        filename: str | None = None,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: IconName | None = None,
+        order: float | None = None,
+    ) -> GuiDownloadButtonHandle:
+        """Add a button that sends a file to the client that presses it.
+
+        A button wired to :meth:`ClientHandle.send_file_download`, which is the
+        wiring worth having done for you: the file goes to the one client that
+        pressed rather than to everyone connected, the browser saves it as soon
+        as it arrives, and the button stays disabled until the transfer is out,
+        so a slow export cannot be started twice. Sending a file at a moment
+        that is not a click -- when a job finishes, on a timer -- is what the
+        underlying method is for, and it can offer the file as a link instead.
+
+        Args:
+            text: Text on the button's face.
+            content: What to send. Bytes are sent as they are; a
+                :class:`~pathlib.Path` is read when the button is pressed and
+                streamed a chunk at a time, so the file may change, or outgrow
+                memory, after the button is made. A function is called on each
+                press with the click event and returns either -- run in a
+                thread pool if defined with ``def``, on the event loop if
+                defined with ``async def``. Note that a `str` is neither: text
+                has to be encoded, and a path has to be a Path.
+            filename: Name the file is saved under. Optional only when the
+                contents come from a path, whose own name is then used.
+            label: Optional label for the row; see :meth:`add_button`.
+            color: Colorway for the button. ``"primary"`` fills with the accent,
+                which is what a panel's main action wants; ``"secondary"``
+                outlines instead, for the ones that sit beside it.
+            visible: Whether the button is visible.
+            disabled: Whether the button is disabled.
+            hint: Optional hint to display on hover.
+            icon: Optional icon to display on the button.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+
+        _validate_button_color(color)
+        if isinstance(content, str):
+            raise TypeError(
+                "content= must be bytes, a Path, or a function returning one of"
+                " those; a str is neither a file's contents (encode it) nor a"
+                " path we would guess at (wrap it in Path)."
+            )
+        if filename is None and isinstance(content, bytes):
+            # Only bytes can be ruled out this early: a callable has said
+            # nothing yet about which of the two it will return.
+            raise ValueError(
+                "filename= is required when the contents are bytes, which carry"
+                " no name to save under."
+            )
+
+        uuid = _make_uuid()
+        order = _apply_default_order(order)
+        props = _messages.GuiButtonProps(
+            order=order,
+            label=label,
+            text=text,
+            hint=hint,
+            color=color,
+            _icon_html=None if icon is None else svg_from_icon(icon),
+            _hold_callback_freqs=(),
+            disabled=disabled,
+            visible=visible,
+        )
+        message = _messages.GuiButtonMessage(
+            value=False,
+            uuid=uuid,
+            container_uuid=self._get_container_uuid(),
+            props=props,
+        )
+
+        handle = GuiDownloadButtonHandle(
+            self._create_gui_input(False, message, is_button=True),
+            _icon=icon,
+            _content=content,
+            _filename=filename,
+        )
+        # Registered ahead of any `on_click` the caller adds, so the file is on
+        # its way before whatever else the press was meant to do.
+        handle._impl.update_cb.append(handle._send)
+        return handle
 
     def _add_button_group(
         self,

@@ -52,6 +52,9 @@ Inputs
 .. autoclass:: UploadedFile
    :members:
 
+.. autoclass:: GuiDownloadButtonHandle
+   :members:
+
 Colors and vectors
 ------------------
 
