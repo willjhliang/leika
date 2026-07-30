@@ -40,20 +40,24 @@ def test_controls_containers_and_callbacks(server: leika.Server) -> None:
     tabs = server.gui.add_tab_group()
     first = tabs.add_tab("First")
     with first:
-        markdown = server.gui.add_markdown("**Hello**")
+        markdown = server.gui.add_text(
+            None, "**Hello**", editable=False, markdown=True, multiline=True
+        )
     second = tabs.add_tab("Second")
     second.remove()
-    markdown.content = "## Updated"
-    assert markdown.content == "## Updated"
+    markdown.value = "## Updated"
+    assert markdown.value == "## Updated"
 
 
 def test_a_multiline_text_input_is_the_height_it_asks_for(
     server: leika.Server,
 ) -> None:
     """``rows`` is a height, so it is fixed and it is assignable -- and it is a
-    height in LINES, which starts at one."""
+    height in LINES, which starts at one. Left out it is None, and what that
+    comes to is the field's business: three lines to type in, and as tall as
+    the text when the text is only being read."""
     note = server.gui.add_text("Note", "", multiline=True)
-    assert (note.multiline, note.rows) == (True, 3)
+    assert (note.multiline, note.rows) == (True, None)
     tall = server.gui.add_text("Body", "", multiline=True, rows=12)
     assert tall.rows == 12
     tall.rows = 6
@@ -63,9 +67,33 @@ def test_a_multiline_text_input_is_the_height_it_asks_for(
         with pytest.raises(ValueError, match="height in lines"):
             server.gui.add_text("Bad", "", multiline=True, rows=bad)
 
-    # A single-line field carries the default and pays it no attention: it is
-    # one line by definition, and the client draws an `input` for it.
-    assert server.gui.add_text("Name", "Ada").rows == 3
+
+def test_text_is_read_or_written_and_renders_markdown_when_read(
+    server: leika.Server,
+) -> None:
+    """One element does both. What separates them is ``editable``: written, it
+    is an input whose value is what was typed; read, it is that value shown,
+    and drawn as markdown if it is asked to be."""
+    written = server.gui.add_text("Name", "Ada")
+    assert (written.editable, written.markdown) == (True, False)
+
+    read = server.gui.add_text(None, "**Hello**", editable=False, markdown=True)
+    assert (read.editable, read.markdown, read.label) == (False, True, None)
+    assert read.value == "**Hello**"
+
+    # The client renders the SOURCE: the value with its image paths resolved,
+    # which the browser cannot do itself. It follows the value.
+    assert read._source == "**Hello**"
+    read.value = "## Updated"
+    assert read._source == "## Updated"
+
+    # And it follows a change of mind about rendering, so a field turned
+    # read-only after the viewer typed in it renders what they typed rather
+    # than what was there before.
+    written.value = "# Typed"
+    written.editable = False
+    written.markdown = True
+    assert written._source == "# Typed"
 
 
 def test_option_validation(server: leika.Server) -> None:
@@ -147,7 +175,7 @@ def test_a_mini_form_holds_one_field_and_no_action_buttons(
     # The rule is about fields, not rows: a form of one field plus something
     # that holds no value is still a mini form.
     with server.gui.add_mini_form():
-        server.gui.add_markdown("Ask away")
+        server.gui.add_text(None, "Ask away", editable=False, markdown=True, multiline=True)
         server.gui.add_text("Query", initial_value="")
 
 

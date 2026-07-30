@@ -401,22 +401,6 @@ class GuiFormSubmitMessage(Message):
 
 
 @dataclasses.dataclass
-class GuiMarkdownProps:
-    order: float
-    """Order value for arranging GUI elements. """
-    _markdown: str
-    """(Private) Markdown content to be displayed."""
-    visible: bool
-    """Visibility state of the markdown element."""
-
-
-@dataclasses.dataclass
-class GuiMarkdownMessage(_CreateGuiComponentMessage):
-    container_uuid: str
-    props: GuiMarkdownProps
-
-
-@dataclasses.dataclass
 class GuiHtmlProps:
     order: float
     """Order value for arranging GUI elements. """
@@ -831,12 +815,28 @@ class GuiVector3Message(_CreateGuiComponentMessage):
 @dataclasses.dataclass
 class GuiTextProps(GuiBaseProps):
     multiline: bool
-    rows: int
-    """How many lines of text the box shows, when ``multiline`` is set. It is
-    the box's HEIGHT, not a starting point: more text than that scrolls inside
-    it rather than growing the box, so the row a field sits in keeps its size
-    however much is typed into it. Ignored by a single-line field, which is one
-    line by definition."""
+    rows: Optional[int]
+    """How many lines of text the box shows, when ``multiline`` is set, or None
+    to leave the height to the field. Given, it is the box's HEIGHT rather than
+    a starting point: more text than that scrolls inside it, so the row keeps
+    its size however much goes into it. Left out, an editable box is three
+    lines -- a fixed height, since it is being typed into and the panel should
+    not reflow under the typing -- and one that is only being read fits itself
+    to what it holds. Ignored by a single-line field, which is one line by
+    definition."""
+    editable: bool
+    """Whether the viewer can type in it. Read-only, it is not an input at all:
+    no box to click into, a tinted surface to say so, and the value changes
+    only when Python changes it."""
+    markdown: bool
+    """Whether the value is drawn as markdown rather than as the characters it
+    is made of. Only for a field that is not editable: what is being edited is
+    the source, so an editable field always shows it."""
+    _source: str
+    """(Private) The value with its relative image paths resolved to data URLs,
+    which is what a rendered field draws from -- the browser cannot read a path
+    on the server's disk. Kept in step with the value whenever a rendered field
+    could be looking at it."""
 
 
 @dataclasses.dataclass

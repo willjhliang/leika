@@ -344,7 +344,9 @@ def main() -> None:
             note_level = server.gui.add_toggle(
                 ("Info", "Warning"), label="Level", color="secondary"
             )
-        log = server.gui.add_markdown("_Nothing logged yet._")
+        log = server.gui.add_text(
+            None, "_Nothing logged yet._", editable=False, markdown=True, multiline=True
+        )
         # The same commit semantics with one field to commit: no popout, no row
         # of its own, just the field wearing a send button. A broadcast is worth
         # sending when it is written, not letter by letter.
@@ -359,7 +361,7 @@ def main() -> None:
             label="Watch for",
             hint="Drag an entry to reorder it.",
         )
-        watching = server.gui.add_markdown("")
+        watching = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
 
     state: dict[str, Any] = {
         "phase": 0.0,
@@ -423,8 +425,12 @@ def main() -> None:
             )
             return
         with server.gui.add_modal("Python-created modal"):
-            server.gui.add_markdown(
-                "This modal is populated through the same GUI API as the hover panel."
+            server.gui.add_text(
+                None,
+                "This modal is populated through the same GUI API as the hover panel.",
+                editable=False,
+                markdown=True,
+                multiline=True,
             )
             server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.65)
 
@@ -455,7 +461,7 @@ def main() -> None:
             f"- `t={at:5.1f}s` **{title}** ({note_level.value[0]})"
             + (f" -- {body}" if body else "")
         )
-        log.content = "\n".join(entries)
+        log.value = "\n".join(entries)
         # Assigning a value pushes it to every client, so the form empties
         # itself for the next note.
         note_title.value = ""
@@ -467,7 +473,7 @@ def main() -> None:
         # Reads the list back as it now stands, whichever of the four ways it
         # was changed -- typed in, added to, removed from, or dragged about.
         kept = [entry.strip() for entry in watchlist.value if entry.strip()]
-        watching.content = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
+        watching.value = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
 
     @broadcast.on_submit
     def _(_) -> None:

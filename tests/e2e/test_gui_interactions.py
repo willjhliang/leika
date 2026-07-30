@@ -20,7 +20,7 @@ def test_core_controls_render_and_update(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.add_markdown("## Controls")
+    leika_server.gui.add_text(None, "## Controls", editable=False, markdown=True, multiline=True)
     checkbox = leika_server.gui.add_checkbox("Enabled", initial_value=True)
     text = leika_server.gui.add_text("Name", initial_value="Leika")
     # Searchable, so this covers the filtering path; the plain default has its
@@ -815,7 +815,9 @@ def test_visibility_toggles_uniformly_across_element_kinds(
     with folder:
         leika_server.gui.add_text("Nested", initial_value="inside")
     slider = leika_server.gui.add_slider("Gain", min=0.0, max=1.0, step=0.1, initial_value=0.5)
-    markdown = leika_server.gui.add_markdown("## Heading")
+    markdown = leika_server.gui.add_text(
+        None, "## Heading", editable=False, markdown=True, multiline=True
+    )
     image = leika_server.gui.add_image(np.zeros((8, 12, 3), dtype=np.uint8), label="Preview")
 
     heading = leika_page.get_by_role("heading", name="Heading")
@@ -1401,6 +1403,54 @@ def test_a_toggle_row_holds_one_or_many(
     clearable_row.nth(0).click()
     wait_for(lambda: clearable.value, ())
     expect(clearable_row.nth(0)).to_have_attribute("aria-pressed", "false")
+    assert page_errors == []
+
+
+def test_text_can_be_read_only_and_rendered_as_markdown(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """One element for text the viewer writes and text it only reads. Read-only
+    it is not an input at all: no box to type in, a tint to say so, and markdown
+    drawn as markdown -- which only the browser can show, the renderer being
+    asynchronous and contributing nothing to server-rendered markup."""
+    prose = leika_server.gui.add_text(
+        None, "## Heading\n\nWith **bold** in it.", editable=False, markdown=True, multiline=True
+    )
+    leika_server.gui.add_text("Status", "**ready**", editable=False)
+    field = leika_server.gui.add_text("Name", "Ada")
+
+    expect(leika_page.get_by_role("heading", name="Heading")).to_be_visible(timeout=15_000)
+    expect(leika_page.locator("strong", has_text="bold")).to_be_visible()
+
+    # Read-only means read-only: nowhere to type, and no input to find.
+    reading = leika_page.locator("[data-leika-text-reading]")
+    expect(reading).to_have_count(2)
+    assert reading.first.locator("input, textarea").count() == 0
+
+    # The characters themselves when markdown was not asked for, so a value
+    # with markup in it is shown rather than interpreted.
+    literal = find_gui_row(leika_page, "Status").locator("[data-leika-text-reading]")
+    expect(literal).to_have_text("**ready**")
+
+    # Tinted, and unmistakably not the same surface as the box beside it.
+    tint, plain = (
+        locator.evaluate("el => getComputedStyle(el).backgroundColor")
+        for locator in (literal, find_gui_input(leika_page, "Name"))
+    )
+    assert tint != plain, (tint, plain)
+    assert tint != "rgba(0, 0, 0, 0)", tint
+
+    # Python still owns the value, and the rendering follows it.
+    prose.value = "### Later"
+    expect(leika_page.get_by_role("heading", name="Later")).to_be_visible(timeout=5_000)
+
+    # And the editable one is still an input, which is the point of one element
+    # doing both.
+    name = find_gui_input(leika_page, "Name")
+    name.fill("Grace")
+    _wait_until(lambda: field.value == "Grace")
     assert page_errors == []
 
 

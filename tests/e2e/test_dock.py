@@ -53,9 +53,9 @@ def dock_page(
     leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Alpha"):
-        leika_server.gui.add_markdown("Alpha body")
+        leika_server.gui.add_text(None, "Alpha body", editable=False, markdown=True, multiline=True)
     with tabs.add_tab("Beta"):
-        leika_server.gui.add_markdown("Beta body")
+        leika_server.gui.add_text(None, "Beta body", editable=False, markdown=True, multiline=True)
 
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)

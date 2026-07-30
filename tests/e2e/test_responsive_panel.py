@@ -104,7 +104,9 @@ def test_dockable_tabs_keep_inactive_panel_dom_mounted(
     with tabs.add_tab("First mount"):
         leika_server.gui.add_html("<span data-tab-mount-sentinel>original</span>")
     with tabs.add_tab("Second mount"):
-        leika_server.gui.add_markdown("Second panel")
+        leika_server.gui.add_text(
+            None, "Second panel", editable=False, markdown=True, multiline=True
+        )
 
     page.goto(leika_server.url)
     page.wait_for_function(
@@ -142,7 +144,13 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
     )
     for index, label in enumerate(tab_labels):
         with tabs.add_tab(label):
-            leika_server.gui.add_markdown(f"Panel content {index + 1}")
+            leika_server.gui.add_text(
+                None,
+                f"Panel content {index + 1}",
+                editable=False,
+                markdown=True,
+                multiline=True,
+            )
     leika_server.gui.add_button(
         (
             "Interactive preview",

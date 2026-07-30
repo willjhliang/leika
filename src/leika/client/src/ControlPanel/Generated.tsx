@@ -18,7 +18,6 @@ import RgbaComponent from "../components/Rgba";
 import ButtonGroupComponent from "../components/ButtonGroup";
 import ToggleComponent from "../components/Toggle";
 import ToggleGroupComponent from "../components/ToggleGroup";
-import MarkdownComponent from "../components/Markdown";
 import PlotlyComponent from "../components/PlotlyComponent";
 import UplotComponent from "../components/UplotComponent";
 import TabGroupComponent from "../components/TabGroup";
@@ -112,8 +111,6 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <FormComponent {...conf} />;
     case "GuiTabGroupMessage":
       return <TabGroupComponent {...conf} />;
-    case "GuiMarkdownMessage":
-      return <MarkdownComponent {...conf} />;
     case "GuiHtmlMessage":
       return <HtmlComponent {...conf} />;
     case "GuiDividerMessage":

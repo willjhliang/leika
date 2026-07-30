@@ -92,9 +92,6 @@ Containers
 Display
 -------
 
-.. autoclass:: GuiMarkdownHandle
-   :members:
-
 .. autoclass:: GuiHtmlHandle
    :members:
 

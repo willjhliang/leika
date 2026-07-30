@@ -91,7 +91,9 @@ def test_dismissing_closes_the_modal_for_every_client(
     """Modals added to `server.gui` are global, so dismissal is global too."""
     handle = leika_server.gui.add_modal("Details")
     with handle:
-        leika_server.gui.add_markdown("Shared across clients.")
+        leika_server.gui.add_text(
+            None, "Shared across clients.", editable=False, markdown=True, multiline=True
+        )
 
     context = browser.new_context(viewport={"width": 800, "height": 600}, reduced_motion="reduce")
     first = context.new_page()

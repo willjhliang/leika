@@ -34,16 +34,6 @@ export interface GuiFormMessage {
     mini: boolean;
   };
 }
-/** GuiMarkdownMessage(uuid: 'str', container_uuid: 'str', props: 'GuiMarkdownProps')
- *
- * (automatically generated)
- */
-export interface GuiMarkdownMessage {
-  type: "GuiMarkdownMessage";
-  uuid: string;
-  container_uuid: string;
-  props: { order: number; _markdown: string; visible: boolean };
-}
 /** GuiHtmlMessage(uuid: 'str', container_uuid: 'str', props: 'GuiHtmlProps')
  *
  * (automatically generated)
@@ -576,7 +566,10 @@ export interface GuiTextMessage {
     visible: boolean;
     disabled: boolean;
     multiline: boolean;
-    rows: number;
+    rows: number | null;
+    editable: boolean;
+    markdown: boolean;
+    _source: string;
   };
 }
 /** GuiListMessage(uuid: 'str', value: 'Tuple[str, ...]', container_uuid: 'str', props: 'GuiListProps')
@@ -1015,7 +1008,6 @@ export interface CommandTriggerMessage {
 export type Message =
   | GuiFolderMessage
   | GuiFormMessage
-  | GuiMarkdownMessage
   | GuiHtmlMessage
   | GuiDividerMessage
   | GuiProgressBarMessage
@@ -1069,7 +1061,6 @@ export type Message =
 export type GuiComponentMessage =
   | GuiFolderMessage
   | GuiFormMessage
-  | GuiMarkdownMessage
   | GuiHtmlMessage
   | GuiDividerMessage
   | GuiProgressBarMessage
@@ -1096,7 +1087,6 @@ export type GuiComponentMessage =
 const typeSetGuiComponentMessage = new Set([
   "GuiFolderMessage",
   "GuiFormMessage",
-  "GuiMarkdownMessage",
   "GuiHtmlMessage",
   "GuiDividerMessage",
   "GuiProgressBarMessage",

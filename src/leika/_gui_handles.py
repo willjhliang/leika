@@ -45,7 +45,6 @@ from ._messages import (
     GuiHtmlProps,
     GuiImageProps,
     GuiListProps,
-    GuiMarkdownProps,
     GuiMultiSliderProps,
     GuiNumberProps,
     GuiPlotlyProps,
@@ -491,13 +490,39 @@ class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):
 
 
 class GuiTextHandle(GuiInputHandle[str], GuiTextProps):
-    """Handle for text inputs.
+    """Handle for text, editable or read-only.
 
     .. attribute:: value
        :type: str
 
-       Value of the input. Synchronized automatically when assigned.
+       The text itself, whether it is being edited or only read. Synchronized
+       automatically when assigned.
     """
+
+    def __init__(self, _impl: _GuiHandleState, _image_root: Path | None = None):
+        super().__init__(impl=_impl)
+        self._image_root = _image_root
+
+    def _refresh_source(self) -> None:
+        """Re-resolve the markdown a rendered field draws from.
+
+        Called wherever the value the viewer READS could have changed: on an
+        assignment to the value, and on one to ``editable`` or ``markdown``,
+        which is what turns a field into something that renders. Client-side
+        edits write the value without coming through here, and do not need to --
+        a field being typed into is showing its source, and the flip that would
+        render it refreshes this on the way past.
+        """
+        self._source = _parse_markdown(self.value, self._image_root)
+
+    @GuiInputHandle.value.setter  # type: ignore[attr-defined]
+    def value(self, value: str) -> None:
+        GuiInputHandle.value.fset(self, value)  # type: ignore[attr-defined]
+        self._refresh_source()
+
+    def _on_prop_assigned(self, name: str) -> None:
+        if name in ("editable", "markdown"):
+            self._refresh_source()
 
 
 IntOrFloat = TypeVar("IntOrFloat", int, float)
@@ -1057,12 +1082,20 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
 
 
 def _fields_within(container: Any) -> Iterable[_GuiInputHandle]:
-    """Every input under `container`, however deeply folders or tabs nest it.
+    """Every input under `container` the viewer can answer with, however deeply
+    folders or tabs nest it.
 
     Buttons are excluded: their "value" is the fact of a press, so there is
-    nothing about one to remember or put back."""
+    nothing about one to remember or put back. So is text that is only there to
+    be read -- prose above a field, a rendered heading -- which holds a value
+    the way a button does not, but is no more a part of the answer than the
+    label beside a slider is."""
     for child in getattr(container, "_children", {}).values():
-        if isinstance(child, _GuiInputHandle) and not child._impl.is_button:
+        if (
+            isinstance(child, _GuiInputHandle)
+            and not child._impl.is_button
+            and getattr(child._impl.props, "editable", True)
+        ):
             yield child
         yield from _fields_within(child)
 
@@ -1316,26 +1349,6 @@ def _parse_markdown(markdown: str, image_root: Path | None) -> str:
 
 class GuiProgressBarHandle(_GuiInputHandle[float], GuiProgressBarProps):
     """Handle for updating and removing progress bars."""
-
-
-class GuiMarkdownHandle(_GuiHandle[None], GuiMarkdownProps):
-    """Handling for updating and removing markdown elements."""
-
-    def __init__(self, _impl: _GuiHandleState, _content: str, _image_root: Path | None):
-        super().__init__(impl=_impl)
-        self._content = _content
-        self._image_root = _image_root
-
-    @property
-    def content(self) -> str:
-        """Current content of this markdown element. Synchronized automatically when assigned."""
-        assert self._content is not None
-        return self._content
-
-    @content.setter
-    def content(self, content: str) -> None:
-        self._content = content
-        self._markdown = _parse_markdown(content, self._image_root)
 
 
 class GuiHtmlHandle(_GuiHandle[None], GuiHtmlProps):

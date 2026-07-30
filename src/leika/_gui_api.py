@@ -47,7 +47,6 @@ from ._gui_handles import (
     GuiHtmlHandle,
     GuiImageHandle,
     GuiListHandle,
-    GuiMarkdownHandle,
     GuiModalHandle,
     GuiMultiSliderHandle,
     GuiNumberHandle,
@@ -1130,53 +1129,6 @@ class GuiApi(GuiContainer):
             )
         )
 
-    def add_markdown(
-        self,
-        content: str,
-        *,
-        image_root: Path | None = None,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiMarkdownHandle:
-        """Add markdown to the GUI.
-
-        Args:
-            content: Markdown content to display.
-            image_root: Optional root directory to resolve relative image paths.
-            order: Optional ordering, smallest values will be displayed first.
-            visible: Whether the component is visible.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        message = _messages.GuiMarkdownMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiMarkdownProps(
-                order=_apply_default_order(order),
-                _markdown="",
-                visible=visible,
-            ),
-        )
-        self._websock_interface.queue_message(message)
-
-        handle = GuiMarkdownHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-            ),
-            _content=content,
-            _image_root=image_root,
-        )
-
-        # Logic for processing markdown, handling images, etc is all in the
-        # `.content` setter, which should send a GuiUpdateMessage.
-        handle.content = content
-        return handle
-
     def add_html(
         self,
         content: str,
@@ -2009,28 +1961,49 @@ class GuiApi(GuiContainer):
 
     def add_text(
         self,
-        label: str,
+        label: str | None,
         initial_value: str,
         *,
+        editable: bool = True,
+        markdown: bool = False,
         multiline: bool = False,
-        rows: int = 3,
+        rows: int | None = None,
+        image_root: Path | None = None,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
     ) -> GuiTextHandle:
-        r"""Add a text input to the GUI.
+        r"""Add text to the GUI, for the viewer to read or to edit.
+
+        Editable, it is a text box and its value is whatever has been typed into
+        it. Read-only, it is that value shown rather than asked for: no box to
+        click into, a tinted surface to say as much, and markdown drawn as
+        markdown if ``markdown`` is set. Prose in a panel is the read-only,
+        markdown, unlabelled case::
+
+            server.gui.add_text(None, "## Notes", editable=False,
+                                markdown=True, multiline=True)
 
         Args:
-            label: Label to display on the text input.
-            initial_value: Initial value of the text input.
-            multiline: Whether the text input supports multiple lines, delimited with
-                the \n character.
-            rows: Height of a multiline input, in lines. The box keeps that height
-                whatever is typed into it, scrolling its own text rather than growing
-                and pushing the rest of the panel down. Ignored unless ``multiline``.
-            disabled: Whether the text input is disabled.
-            visible: Whether the text input is visible.
+            label: Label to display beside the text, or None for text that fills
+                the row on its own.
+            initial_value: Initial value of the text.
+            editable: Whether the viewer can type in it.
+            markdown: Whether the value is drawn as markdown rather than as the
+                characters it is made of. Only for text that is not editable: what
+                is edited is the source, so an editable field shows it.
+            multiline: Whether the text runs to several lines, delimited with the \n
+                character. One line otherwise, ending in an ellipsis if it does not
+                fit.
+            rows: Height in lines, or None to leave it to the field. Given, it is the
+                height the box keeps, scrolling its own text rather than growing.
+                Left out, an editable box is three lines and a read-only one fits
+                itself to the text it holds. Ignored unless ``multiline``.
+            image_root: Optional root directory to resolve relative image paths in
+                markdown against.
+            disabled: Whether an editable box is disabled.
+            visible: Whether the text is visible.
             hint: Optional hint to display on hover.
             order: Optional ordering, smallest values will be displayed first.
 
@@ -2039,11 +2012,11 @@ class GuiApi(GuiContainer):
         """
         value = initial_value
         assert isinstance(value, str)
-        if rows < 1:
+        if rows is not None and rows < 1:
             raise ValueError(f"rows= is a height in lines, so it starts at 1; got {rows}.")
         uuid = _make_uuid()
         order = _apply_default_order(order)
-        return GuiTextHandle(
+        handle = GuiTextHandle(
             self._create_gui_input(
                 value,
                 message=_messages.GuiTextMessage(
@@ -2056,12 +2029,21 @@ class GuiApi(GuiContainer):
                         hint=hint,
                         disabled=disabled,
                         visible=visible,
+                        editable=editable,
+                        markdown=markdown,
                         multiline=multiline,
                         rows=rows,
+                        _source=value,
                     ),
                 ),
-            )
+            ),
+            _image_root=image_root,
         )
+        # Resolving the image paths needs the root, so it cannot be done above:
+        # the handle is what holds it. Nothing is sent twice -- the create
+        # message is still queued, and this updates it before it goes out.
+        handle._refresh_source()
+        return handle
 
     def add_list(
         self,
