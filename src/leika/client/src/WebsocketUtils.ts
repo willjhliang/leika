@@ -75,7 +75,6 @@ export function makeThrottledMessageSender(
     if (pending.size === 0) return false;
     const queued = [...pending.values()];
     pending.clear();
-    if (sendMessage === null) return false;
     queued.forEach((message) => sendMessage(message));
     return true;
   }
@@ -91,7 +90,6 @@ export function makeThrottledMessageSender(
 
   function send(message: Message, options?: { coalesce?: boolean }) {
     const sendMessage = viewer.mutable.current.sendMessage;
-    if (sendMessage === null) return;
     if (readyToSend) {
       sendMessage(message);
       openWindow();

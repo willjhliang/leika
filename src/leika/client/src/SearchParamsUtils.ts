@@ -26,13 +26,17 @@ export function syncSearchParamServer(server: string) {
   window.history.replaceState(
     null,
     "Leika",
-    // We could use URLSearchParams.toString() to build this string, but that
-    // would escape it. We're going to just not escape the string. :)
+    // Built by hand rather than URLSearchParams.toString(), which would
+    // percent-escape the ws:// URL into an unreadable address bar. Only the
+    // characters that would corrupt the query itself are escaped.
     searchParams.size === 0
       ? window.location.href.split("?")[0]
       : "?" +
           Array.from(searchParams.entries())
-            .map(([k, v]) => `${k}=${v}`)
+            .map(
+              ([k, v]) =>
+                `${k}=${v.replaceAll("&", "%26").replaceAll("#", "%23")}`,
+            )
             .join("&"),
   );
 }

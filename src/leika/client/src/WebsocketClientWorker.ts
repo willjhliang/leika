@@ -19,7 +19,6 @@ export type WsWorkerOutgoing =
   | {
       type: "closed";
       versionMismatch?: boolean;
-      clientVersion?: string;
       closeReason?: string;
     }
   | { type: "message_batch"; messages: Message[] };
@@ -28,6 +27,7 @@ import {
   replaceBinaryPlaceholders,
   computeBinaryOffsets,
 } from "./BinaryMessageDecode";
+import { newPacingState, paceBatch } from "./pacing";
 
 type SerializedStruct = {
   messages: Message[];
@@ -135,7 +135,6 @@ function decodeHybridMessage(
       postOutgoing({
         type: "closed",
         versionMismatch: versionMismatch,
-        clientVersion: LEIKA_VERSION,
         closeReason: event.reason || "Connection closed",
       });
 
@@ -154,11 +153,7 @@ function decodeHybridMessage(
     };
 
     // State for tracking message timing.
-    const state: {
-      prevPythonTimestampMs?: number;
-      lastIdealJsMs?: number;
-      jsTimeMinusPythonTime: number;
-    } = { jsTimeMinusPythonTime: Infinity };
+    const pacing = newPacingState();
     ws.onmessage = async (event) => {
       const dataPromise = (async () => {
         // binaryType="arraybuffer" ensures event.data is an ArrayBuffer directly
@@ -188,12 +183,6 @@ function decodeHybridMessage(
       try {
         const data = await dataPromise;
 
-        // Compute offset between JavaScript and Python time.
-        state.jsTimeMinusPythonTime = Math.min(
-          jsReceivedMs - data.timestampSec * 1000,
-          state.jsTimeMinusPythonTime,
-        );
-
         // Function to send the message and release the order lock.
         const messages = data.messages;
         // All typed array views point into the original WebSocket ArrayBuffer.
@@ -217,43 +206,14 @@ function decodeHybridMessage(
           }
         };
 
-        // Calculate timing deltas between Python and JavaScript.
-        const jsNowMs = performance.now();
-        const currentPythonTimestampMs = data.timestampSec * 1000;
-        const pythonTimeDeltaMs =
-          currentPythonTimestampMs -
-          (state.prevPythonTimestampMs ?? currentPythonTimestampMs);
-        state.prevPythonTimestampMs = currentPythonTimestampMs;
-
-        if (
-          // Flush immediately for first message.
-          state.lastIdealJsMs === undefined ||
-          // Flush immediately if the Python delta is large, in this case we're
-          // probably not sensitive to exact timing.
-          pythonTimeDeltaMs > 100 ||
-          // Flush if we're more than 100ms behind real-time.
-          jsNowMs - state.jsTimeMinusPythonTime - currentPythonTimestampMs > 100
-        ) {
-          // First message or no expected delta, send immediately.
-          sendFn();
-          state.lastIdealJsMs = jsNowMs;
-        } else {
-          // For messages that are being sent frequently: smooth out the sending rate.
-          const idealNextSendTimeMs = state.lastIdealJsMs + pythonTimeDeltaMs;
-          const timeUntilIdealJsMs = idealNextSendTimeMs - jsNowMs;
-
-          if (timeUntilIdealJsMs > 3) {
-            // We're early! This means the previous message was processed late...
-            const dampingFactor = 0.95;
-            setTimeout(sendFn, timeUntilIdealJsMs * dampingFactor);
-            state.lastIdealJsMs =
-              state.lastIdealJsMs + pythonTimeDeltaMs * dampingFactor;
-          } else {
-            // Message is on-time or late: send immediately.
-            sendFn();
-            state.lastIdealJsMs = jsNowMs;
-          }
-        }
+        const delayMs = paceBatch(
+          pacing,
+          jsReceivedMs,
+          performance.now(),
+          data.timestampSec * 1000,
+        );
+        if (delayMs > 0) setTimeout(sendFn, delayMs);
+        else sendFn();
       } catch (e) {
         console.error("Failed to process incoming message:", e);
         if (acquiredLock) {
@@ -278,7 +238,12 @@ function decodeHybridMessage(
       server = data.server;
       tryConnect();
     } else if (data.type === "retry") {
-      if (server !== null) {
+      // A retry closes the current socket before opening a fresh one -- so
+      // while an attempt is still CONNECTING, leave it alone. The 5-second
+      // timeout in `tryConnect` owns slow attempts; killing them here every
+      // second would starve a link (e.g. an SSH tunnel) that takes longer
+      // than the retry interval to come up.
+      if (server !== null && ws?.readyState !== WebSocket.CONNECTING) {
         tryConnect();
       }
     } else if (data.type === "close") {

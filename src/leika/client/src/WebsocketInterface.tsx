@@ -10,7 +10,9 @@ export function WebsocketMessageProducer() {
   const viewer = useContext(ViewerContext)!;
   const server = viewer.useGui((state) => state.server);
 
-  syncSearchParamServer(server);
+  // An effect, not a render side effect: `replaceState` mutates shared
+  // browser state, which render must not.
+  React.useEffect(() => syncSearchParamServer(server), [server]);
 
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);
@@ -59,6 +61,8 @@ export function WebsocketMessageProducer() {
       if (data.type === "closed") {
         isConnected = false;
         viewer.guiActions.resetGui();
+        // Anything still queued belongs to the dead connection.
+        viewer.mutable.current.messageQueue.length = 0;
         updateRetryInterval();
         viewer.mutable.current.sendMessage = (message) =>
           console.log(
@@ -74,7 +78,10 @@ export function WebsocketMessageProducer() {
         }
         return;
       }
-      viewer.mutable.current.messageQueue.push(...data.messages);
+      // The worker's rate smoothing can deliver a batch after the close; a
+      // batch from a dead connection must not replay over the reset GUI.
+      if (isConnected)
+        viewer.mutable.current.messageQueue.push(...data.messages);
     };
 
     postToWorker({ type: "set_server", server });

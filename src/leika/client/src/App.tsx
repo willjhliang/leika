@@ -53,16 +53,21 @@ export function Root() {
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();
   const settingsState = useClientSettings();
-  const viewer: ViewerContextContents = {
-    useGui: guiState.store,
-    useGuiConfig: guiState.configStore,
-    guiActions: guiState.actions,
-    useViewport: viewportState.store,
-    viewportActions: viewportState.actions,
-    useSettings: settingsState.store,
-    settingsActions: settingsState.actions,
-    mutable,
-  };
+  // Memoized: a rebuilt context value would re-render every consumer in the
+  // app whenever `Root` re-renders.
+  const viewer: ViewerContextContents = React.useMemo(
+    () => ({
+      useGui: guiState.store,
+      useGuiConfig: guiState.configStore,
+      guiActions: guiState.actions,
+      useViewport: viewportState.store,
+      viewportActions: viewportState.actions,
+      useSettings: settingsState.store,
+      settingsActions: settingsState.actions,
+      mutable,
+    }),
+    [guiState, viewportState, settingsState],
+  );
 
   return (
     <ViewerContext.Provider value={viewer}>
