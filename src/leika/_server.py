@@ -13,12 +13,22 @@ from typing import Any, BinaryIO, Callable, ContextManager, Iterator, Tuple, Typ
 
 from . import _client_autobuild, _messages, infra
 from ._gui_api import GuiApi
-from ._gui_handles import _make_uuid
+from ._gui_handles import PREVIEW_MAX_BYTES, _make_uuid
 from ._notification_handle import NotificationHandle
 from ._panes import Panes
 from ._threadpool_exceptions import print_threadpool_errors
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
+
+
+def _format_bytes(count: int) -> str:
+    """A byte count as something to read in a notification."""
+    size = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024.0 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    raise AssertionError("unreachable")
 
 
 def _read_in_chunks(
@@ -123,6 +133,53 @@ class ClientHandle:
                 a link to the file will be shown as a notification. Being able to
                 right click the link and choose "Save as..." can be useful.
         """
+        self._send_file(filename, content, chunk_size, "save" if save_immediately else "link")
+
+    def send_file_preview(
+        self,
+        filename: str,
+        content: bytes | Path,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int = PREVIEW_MAX_BYTES,
+    ) -> None:
+        """Send a file for a client or clients to look at in a dialog.
+
+        The same transfer as :meth:`send_file_download`, shown rather than
+        saved: text and markdown as themselves, images, audio and video in
+        players, PDFs in a frame, and anything with no viewer of its own as a
+        card naming it and offering to download it instead.
+
+        Args:
+            filename: Name of the file to send. Its type decides which viewer
+                the browser reaches for, so an extension is worth having.
+            content: Contents of the file, or a path to read them from; see
+                :meth:`send_file_download`.
+            chunk_size: Number of bytes to send at a time.
+            max_bytes: Size past which the file is not sent at all, and the
+                client is told why. A preview is held whole in the browser --
+                that is what showing it means -- so an arbitrarily large file
+                would be an arbitrarily large tab. Defaults to 64 MiB.
+        """
+        size_bytes = len(content) if isinstance(content, bytes) else content.stat().st_size
+        if size_bytes > max_bytes:
+            # Said rather than sent: the alternative is a tab that stops
+            # responding with nothing on screen to explain why.
+            self.add_notification(
+                "Too large to preview",
+                f"{filename} is {_format_bytes(size_bytes)}, over the"
+                f" {_format_bytes(max_bytes)} preview limit.",
+            )
+            return
+        self._send_file(filename, content, chunk_size, "preview")
+
+    def _send_file(
+        self,
+        filename: str,
+        content: bytes | Path,
+        chunk_size: int,
+        disposition: _messages.FileDisposition,
+    ) -> None:
+        """One file onto the wire, whatever the client is to do with it."""
         if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer.")
 
@@ -134,7 +191,7 @@ class ClientHandle:
         with _download_source(content, chunk_size) as (size_bytes, chunks):
             self._websock_connection.queue_message(
                 _messages.FileTransferStartDownload(
-                    save_immediately=save_immediately,
+                    disposition=disposition,
                     transfer_uuid=uuid,
                     filename=filename,
                     mime_type=mime_type,
@@ -439,6 +496,30 @@ class Server:
 
         for client in self.clients.values():
             client.send_file_download(filename, content, chunk_size, save_immediately)
+
+    def send_file_preview(
+        self,
+        filename: str,
+        content: bytes | Path,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int = PREVIEW_MAX_BYTES,
+    ) -> None:
+        """Open a file in a dialog on every connected client.
+
+        Args:
+            filename: Name of the file to send. Its type decides which viewer
+                the browser reaches for.
+            content: Contents of the file, or a path to read them from; see
+                :meth:`ClientHandle.send_file_download`.
+            chunk_size: Number of bytes to send at a time.
+            max_bytes: Size past which the file is not sent, and the clients
+                are told why; see :meth:`ClientHandle.send_file_preview`.
+        """
+        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError("chunk_size must be a positive integer.")
+
+        for client in self.clients.values():
+            client.send_file_preview(filename, content, chunk_size, max_bytes)
 
     def add_notification(
         self,

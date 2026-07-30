@@ -85,6 +85,12 @@ def _make_uuid() -> str:
     return str(uuid.uuid4())
 
 
+PREVIEW_MAX_BYTES = 64 * 1024 * 1024
+"""Past this, a preview is refused rather than sent. Generous for the text and
+images most previews are, and short of the size at which holding a whole file
+in a tab becomes the browser's problem."""
+
+
 class GuiContainerProtocol(Protocol):
     _children: dict[str, SupportsRemoveProtocol] = dataclasses.field(default_factory=dict)
 

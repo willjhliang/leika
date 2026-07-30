@@ -12,7 +12,7 @@ recording stand-in rather than standing up a websocket and a GUI api.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Tuple
 
 import pytest
 
@@ -30,14 +30,25 @@ class _RecordingConnection:
 
 
 class _Client:
-    """The two members ``ClientHandle.send_file_download`` actually touches."""
+    """The members the sending methods actually touch.
+
+    ``_send_file`` is borrowed from the real class rather than stubbed: it is
+    the thing under test, reached through whichever public method the test
+    called.
+    """
+
+    _send_file = ClientHandle._send_file
 
     def __init__(self) -> None:
         self._websock_connection = _RecordingConnection()
         self.flushes = 0
+        self.notifications: List[Tuple[str, str]] = []
 
     def flush(self) -> None:
         self.flushes += 1
+
+    def add_notification(self, title: str, body: str = "", **kwargs: Any) -> None:
+        self.notifications.append((title, body))
 
 
 def _send(filename: str, content: bytes | Path, **kwargs: Any) -> List[Any]:
@@ -58,13 +69,13 @@ def _parts(messages: List[Any]) -> List[_messages.FileTransferPart]:
 
 def test_save_immediately_defaults_to_false() -> None:
     # The documented default is the link-in-a-notification flow, not a forced
-    # save; the client reads this flag to choose between them.
-    assert _start(_send("report.csv", b"a,b\n1,2\n")).save_immediately is False
+    # save; the client reads the disposition to choose between them.
+    assert _start(_send("report.csv", b"a,b\n1,2\n")).disposition == "link"
 
 
 def test_save_immediately_is_forwarded() -> None:
     messages = _send("report.csv", b"a,b\n1,2\n", save_immediately=True)
-    assert _start(messages).save_immediately is True
+    assert _start(messages).disposition == "save"
 
 
 def test_filename_and_inferred_mime_type_are_sent() -> None:
@@ -158,6 +169,53 @@ def test_a_file_truncated_mid_send_says_so(tmp_path: Path) -> None:
             pass
         with pytest.raises(OSError, match="shrank while it was being sent"):
             list(chunks)
+
+
+def test_a_preview_rides_the_same_transfer_under_its_own_disposition() -> None:
+    # One transfer, three endings: the client reads the disposition to know
+    # whether to save the file, offer it, or show it.
+    client = _Client()
+    ClientHandle.send_file_preview(client, "notes.md", b"# Title\n")  # type: ignore[arg-type]
+    messages = client._websock_connection.messages
+
+    assert _start(messages).disposition == "preview"
+    assert _start(messages).mime_type == "text/markdown"
+    assert b"".join(part.content for part in _parts(messages)) == b"# Title\n"
+
+
+def test_a_file_over_the_preview_limit_is_described_rather_than_sent() -> None:
+    # Showing a file means holding all of it in the tab; past some size that
+    # is a tab that stops responding, with nothing on screen to say why.
+    client = _Client()
+    ClientHandle.send_file_preview(client, "capture.bin", b"x" * 2048, max_bytes=1024)  # type: ignore[arg-type]
+
+    assert client._websock_connection.messages == []
+    assert len(client.notifications) == 1
+    title, body = client.notifications[0]
+    assert title == "Too large to preview"
+    assert "capture.bin" in body
+    assert "2.0 KiB" in body and "1.0 KiB" in body
+
+
+def test_a_path_is_measured_before_it_is_read(tmp_path: Path) -> None:
+    # The limit is checked against the file on disk, so an oversize file is
+    # never opened, let alone streamed.
+    path = tmp_path / "capture.bin"
+    path.write_bytes(b"x" * 2048)
+    client = _Client()
+    ClientHandle.send_file_preview(client, "capture.bin", path, max_bytes=1024)  # type: ignore[arg-type]
+
+    assert client._websock_connection.messages == []
+    assert client.notifications[0][0] == "Too large to preview"
+
+
+def test_a_file_at_the_limit_is_sent() -> None:
+    # The limit is a ceiling, not a bound: exactly max_bytes is allowed.
+    client = _Client()
+    ClientHandle.send_file_preview(client, "capture.bin", b"x" * 1024, max_bytes=1024)  # type: ignore[arg-type]
+
+    assert _start(client._websock_connection.messages).size_bytes == 1024
+    assert client.notifications == []
 
 
 @pytest.mark.parametrize("chunk_size", [0, -1, True])

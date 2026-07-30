@@ -12,6 +12,7 @@ import {
   ControlPanelDockSurface,
 } from "./ControlPanel/ControlPanelDock";
 import { useGuiState } from "./ControlPanel/GuiState";
+import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
 import { searchParamKey } from "./SearchParamsUtils";
@@ -109,6 +110,7 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
         {children}
         <MessageHandler />
         <LeikaModal />
+        <FilePreviewHost />
         <CommandPalette />
         <AppLayout controlLayout={controlLayout} />
       </TooltipProvider>

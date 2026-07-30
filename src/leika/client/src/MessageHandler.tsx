@@ -2,6 +2,7 @@ import React, { useContext } from "react";
 
 import { applyGuiConfigUpdate } from "./ControlPanel/GuiState";
 import { toast } from "./components/ui/toast";
+import { openFilePreview } from "./filePreview";
 import {
   dismissNotification,
   fileDownloadToastOptions,
@@ -239,18 +240,17 @@ function useFileDownloadHandler(): (
     if (state.bytesDownloaded < state.metadata.size_bytes) return;
 
     // Every chunk has arrived: assemble the blob.
-    const url = URL.createObjectURL(
-      new Blob(
-        state.parts
-          .sort((left, right) => left.part_index - right.part_index)
-          .map((part) => part.content),
-        { type: state.metadata.mime_type },
-      ),
+    const blob = new Blob(
+      state.parts
+        .sort((left, right) => left.part_index - right.part_index)
+        .map((part) => part.content),
+      { type: state.metadata.mime_type },
     );
-    const { filename, save_immediately: saveImmediately } = state.metadata;
+    const url = URL.createObjectURL(blob);
+    const { filename, mime_type: mimeType, disposition } = state.metadata;
     delete downloadStatesRef.current[message.transfer_uuid];
 
-    if (saveImmediately) {
+    if (disposition === "save") {
       // Hand the blob straight to the browser, which owns the download UI from
       // here (its own progress/downloads list).
       const link = document.createElement("a");
@@ -259,6 +259,20 @@ function useFileDownloadHandler(): (
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      return;
+    }
+
+    if (disposition === "preview") {
+      // The dialog owns the URL from here: every viewer in it reads from the
+      // URL, so it is revoked when the dialog closes rather than now.
+      openFilePreview({
+        id: message.transfer_uuid,
+        filename,
+        mimeType,
+        sizeBytes: state.metadata.size_bytes,
+        url,
+        blob,
+      });
       return;
     }
 

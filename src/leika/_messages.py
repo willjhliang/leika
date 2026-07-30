@@ -158,6 +158,14 @@ purged when their entity is removed:
 EntityIdField: TypeAlias = Literal["uuid", "pane_id"]
 """Dataclass field carrying the entity ID."""
 
+FileDisposition: TypeAlias = Literal["save", "link", "preview"]
+"""What the browser does with a file once every chunk of it has arrived.
+
+- ``save``: hand it straight to the browser's own download machinery.
+- ``link``: offer it in a notification, which can be right clicked to
+  "Save as...".
+- ``preview``: show it in a dialog, in whatever viewer its type calls for."""
+
 
 @dataclasses.dataclass(frozen=True)
 class EntityLifecycle:
@@ -1030,7 +1038,7 @@ class FileTransferStartDownload(Message):
     This message is used to send files to clients from the server.
     """
 
-    save_immediately: bool
+    disposition: FileDisposition
     transfer_uuid: str
     filename: str
     mime_type: str

@@ -853,7 +853,7 @@ export interface FileTransferStartUpload {
  */
 export interface FileTransferStartDownload {
   type: "FileTransferStartDownload";
-  save_immediately: boolean;
+  disposition: "save" | "link" | "preview";
   transfer_uuid: string;
   filename: string;
   mime_type: string;
