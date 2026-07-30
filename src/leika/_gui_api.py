@@ -2016,9 +2016,9 @@ class GuiApi(GuiContainer):
 
     def add_list(
         self,
+        label: str | None = None,
         initial_value: Sequence[str] = (),
         *,
-        label: str | None = None,
         frozen: bool = False,
         disabled: bool = False,
         visible: bool = True,
@@ -2372,7 +2372,7 @@ class GuiApi(GuiContainer):
 
     def add_progress_bar(
         self,
-        value: float,
+        initial_value: float,
         *,
         visible: bool = True,
         animated: bool = False,
@@ -2381,7 +2381,7 @@ class GuiApi(GuiContainer):
         """Add a progress bar to the GUI.
 
         Args:
-            value: Value of the progress bar. (0 - 100)
+            initial_value: Initial value of the progress bar, from 0 to 100.
             visible: Whether the progress bar is visible.
             animated: Whether the progress bar is in an animated loading state.
             order: Optional ordering, smallest values will be displayed first.
@@ -2389,10 +2389,12 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        if not 0 <= value <= 100:
-            raise ValueError(f"value= is a percentage, so it lives in [0, 100]; got {value}.")
+        if not 0 <= initial_value <= 100:
+            raise ValueError(
+                f"initial_value= is a percentage, so it lives in [0, 100]; got {initial_value}."
+            )
         message = _messages.GuiProgressBarMessage(
-            value=value,
+            value=initial_value,
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiProgressBarProps(
@@ -2406,7 +2408,7 @@ class GuiApi(GuiContainer):
             _GuiHandleState(
                 message.uuid,
                 self,
-                value=value,
+                value=initial_value,
                 props=message.props,
                 parent_container_id=message.container_uuid,
             ),
@@ -2416,11 +2418,11 @@ class GuiApi(GuiContainer):
     def add_slider(
         self,
         label: str,
+        initial_value: IntOrFloat,
+        *,
         min: IntOrFloat,
         max: IntOrFloat,
         step: IntOrFloat,
-        initial_value: IntOrFloat,
-        *,
         marks: tuple[IntOrFloat | tuple[IntOrFloat, str], ...] | None = None,
         show_value: bool = False,
         disabled: bool = False,
@@ -2432,10 +2434,10 @@ class GuiApi(GuiContainer):
 
         Args:
             label: Label to display on the slider.
+            initial_value: Initial value of the slider.
             min: Minimum value of the slider.
             max: Maximum value of the slider.
             step: Step size of the slider.
-            initial_value: Initial value of the slider.
             marks: tuple of marks to display below the slider. Each mark should
                 either be a numerical or a (number, label) tuple, where the
                 label is provided as a string.
@@ -2492,11 +2494,11 @@ class GuiApi(GuiContainer):
     def add_multi_slider(
         self,
         label: str,
+        initial_value: tuple[IntOrFloat, ...],
+        *,
         min: IntOrFloat,
         max: IntOrFloat,
         step: IntOrFloat,
-        initial_value: tuple[IntOrFloat, ...],
-        *,
         min_range: IntOrFloat | None = None,
         fixed_endpoints: bool = False,
         marks: tuple[IntOrFloat | tuple[IntOrFloat, str], ...] | None = None,

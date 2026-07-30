@@ -1346,7 +1346,7 @@ def test_a_list_is_edited_added_to_removed_from_and_reordered(
     page_errors: list[str],
 ) -> None:
     """Every one of the four reports the whole list, in the order it now reads."""
-    entries = leika_server.gui.add_list(("alpha", "beta", "gamma"), label="Tags")
+    entries = leika_server.gui.add_list("Tags", ("alpha", "beta", "gamma"))
 
     boxes = leika_page.locator("[data-leika-list-entry]")
     rows = leika_page.locator("[data-leika-list-item]")
@@ -1515,7 +1515,7 @@ def test_a_list_shows_its_controls_to_the_row_being_worked_on(
     """An entry's controls are the pointer's or the keyboard's: they come out
     on the row one of them is on, on no other, and not at all once both have
     gone elsewhere."""
-    entries = leika_server.gui.add_list(("alpha", "beta", "gamma"), label="Items")
+    entries = leika_server.gui.add_list("Items", ("alpha", "beta", "gamma"))
     rows = leika_page.locator("[data-leika-list-item]")
     expect(rows).to_have_count(3, timeout=5_000)
 
@@ -1593,7 +1593,7 @@ def test_a_frozen_list_keeps_its_length_and_order(
     """Frozen is about the LIST, not its entries: nothing can be added,
     removed, or moved, and the controls that would do so are not drawn -- but
     the text is still the viewer's to edit."""
-    entries = leika_server.gui.add_list(("read", "only"), label="Fixed", frozen=True)
+    entries = leika_server.gui.add_list("Fixed", ("read", "only"), frozen=True)
 
     boxes = leika_page.locator("[data-leika-list-entry]")
     expect(boxes).to_have_count(2, timeout=5_000)

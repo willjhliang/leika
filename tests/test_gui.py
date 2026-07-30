@@ -441,7 +441,7 @@ def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
 def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> None:
     """The value is the entries, in order: editing one, adding, removing, and
     reordering all read and write the same tuple."""
-    entries = server.gui.add_list(("alpha", "beta"), label="Tags")
+    entries = server.gui.add_list("Tags", ("alpha", "beta"))
     assert entries.value == ("alpha", "beta")
     assert entries.frozen is False
 
@@ -457,7 +457,7 @@ def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> No
 
     # Frozen fixes the length and the order, and says so on the wire; the
     # entries themselves are still editable, which `disabled` is for.
-    fixed = server.gui.add_list(("read", "only"), frozen=True)
+    fixed = server.gui.add_list("Fixed", ("read", "only"), frozen=True)
     assert fixed.frozen is True
     fixed.frozen = False
     assert fixed.frozen is False
@@ -465,4 +465,4 @@ def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> No
     # Text entries, so anything else is a mistake worth naming rather than a
     # str() applied behind the caller's back.
     with pytest.raises(ValueError, match="sequence of strings"):
-        server.gui.add_list(("fine", 3))  # type: ignore[arg-type]
+        server.gui.add_list("Bad", ("fine", 3))  # type: ignore[arg-type]
