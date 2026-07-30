@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import mimetypes
+import os
 import threading
 import time
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, ContextManager, TypeVar
-
-import numpy as np
+from typing import Any, BinaryIO, Callable, ContextManager, Iterator, Tuple, TypeVar
 
 from . import _client_autobuild, _messages, infra
 from ._gui_api import GuiApi
@@ -19,6 +19,53 @@ from ._panes import Panes
 from ._threadpool_exceptions import print_threadpool_errors
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
+
+
+def _read_in_chunks(
+    file: BinaryIO, size_bytes: int, chunk_size: int, path: Path
+) -> Iterator[bytes]:
+    """Exactly `size_bytes` from an open file, `chunk_size` at a time."""
+    remaining = size_bytes
+    while remaining > 0:
+        part = file.read(min(chunk_size, remaining))
+        if not part:
+            # The transfer announced its length before the first byte went out
+            # and the client waits for exactly that many; a file truncated
+            # underneath us can no longer supply them, and a short transfer
+            # would leave the download hanging with no way to say why.
+            raise OSError(
+                f"{path} shrank while it was being sent: {remaining} of"
+                f" {size_bytes} bytes were still expected."
+            )
+        remaining -= len(part)
+        yield part
+
+
+@contextlib.contextmanager
+def _download_source(
+    content: bytes | Path, chunk_size: int
+) -> Iterator[Tuple[int, Iterator[bytes]]]:
+    """How long a download is and how to read it, from memory or from disk.
+
+    The length is settled first because the transfer declares it up front, and
+    it is taken from the open descriptor rather than from the path so that a
+    file replaced mid-send -- a rotated log, say -- is still sent whole from
+    the copy this holds open.
+    """
+    if isinstance(content, bytes):
+        yield (
+            len(content),
+            (content[i : i + chunk_size] for i in range(0, len(content), chunk_size)),
+        )
+        return
+    if not isinstance(content, Path):
+        raise TypeError(
+            "content must be bytes or a Path; a str is neither a file's contents"
+            " (encode it) nor a path we would guess at (wrap it in Path)."
+        )
+    with content.open("rb") as file:
+        size_bytes = os.fstat(file.fileno()).st_size
+        yield size_bytes, _read_in_chunks(file, size_bytes, chunk_size, content)
 
 
 class ClientHandle:
@@ -58,7 +105,7 @@ class ClientHandle:
     def send_file_download(
         self,
         filename: str,
-        content: bytes,
+        content: bytes | Path,
         chunk_size: int = 1024 * 1024,
         save_immediately: bool = False,
     ) -> None:
@@ -66,7 +113,11 @@ class ClientHandle:
 
         Args:
             filename: Name of the file to send. Used to infer MIME type.
-            content: Content of the file.
+            content: Contents of the file, or a path to read them from. A path
+                is opened when this is called and streamed a chunk at a time,
+                so sending a file costs one chunk of memory rather than its
+                whole length. Text has to be encoded: a `str` names no file and
+                holds no bytes, so it is refused rather than guessed at.
             chunk_size: Number of bytes to send at a time.
             save_immediately: Whether to save the file immediately. If `False`,
                 a link to the file will be shown as a notification. Being able to
@@ -79,32 +130,28 @@ class ClientHandle:
         if mime_type is None:
             mime_type = "application/octet-stream"
 
-        parts = [
-            content[i * chunk_size : (i + 1) * chunk_size]
-            for i in range(int(np.ceil(len(content) / chunk_size)))
-        ]
-
         uuid = _make_uuid()
-        self._websock_connection.queue_message(
-            _messages.FileTransferStartDownload(
-                save_immediately=save_immediately,
-                transfer_uuid=uuid,
-                filename=filename,
-                mime_type=mime_type,
-                part_count=len(parts),
-                size_bytes=len(content),
-            )
-        )
-        for i, part in enumerate(parts):
+        with _download_source(content, chunk_size) as (size_bytes, chunks):
             self._websock_connection.queue_message(
-                _messages.FileTransferPart(
-                    None,
+                _messages.FileTransferStartDownload(
+                    save_immediately=save_immediately,
                     transfer_uuid=uuid,
-                    part_index=i,
-                    content=part,
+                    filename=filename,
+                    mime_type=mime_type,
+                    part_count=-(-size_bytes // chunk_size),
+                    size_bytes=size_bytes,
                 )
             )
-            self.flush()
+            for i, part in enumerate(chunks):
+                self._websock_connection.queue_message(
+                    _messages.FileTransferPart(
+                        None,
+                        transfer_uuid=uuid,
+                        part_index=i,
+                        content=part,
+                    )
+                )
+                self.flush()
 
     def add_notification(
         self,
@@ -370,7 +417,7 @@ class Server:
     def send_file_download(
         self,
         filename: str,
-        content: bytes,
+        content: bytes | Path,
         chunk_size: int = 1024 * 1024,
         save_immediately: bool = False,
     ) -> None:
@@ -378,7 +425,10 @@ class Server:
 
         Args:
             filename: Name of the file to send. Used to infer MIME type.
-            content: Content of the file.
+            content: Contents of the file, or a path to read them from; see
+                :meth:`ClientHandle.send_file_download`. A path is read once
+                per client rather than held in memory between them, so a file
+                rewritten mid-fan-out can reach two clients differently.
             chunk_size: Number of bytes to send at a time.
             save_immediately: Whether to save the file immediately. If `False`,
                 a link to the file will be shown as a notification. Being able to

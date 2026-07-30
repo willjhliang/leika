@@ -11,13 +11,14 @@ recording stand-in rather than standing up a websocket and a GUI api.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, List
 
 import pytest
 
 import leika
 from leika import _messages
-from leika._server import ClientHandle
+from leika._server import ClientHandle, _download_source
 
 
 class _RecordingConnection:
@@ -39,7 +40,7 @@ class _Client:
         self.flushes += 1
 
 
-def _send(filename: str, content: bytes, **kwargs: Any) -> List[Any]:
+def _send(filename: str, content: bytes | Path, **kwargs: Any) -> List[Any]:
     client = _Client()
     ClientHandle.send_file_download(client, filename, content, **kwargs)  # type: ignore[arg-type]
     return client._websock_connection.messages
@@ -100,6 +101,63 @@ def test_empty_file_sends_no_parts() -> None:
     assert _start(messages).size_bytes == 0
     assert _start(messages).part_count == 0
     assert _parts(messages) == []
+
+
+def test_a_path_is_read_from_disk_and_chunked_like_bytes(tmp_path: Path) -> None:
+    content = bytes(range(256)) * 4
+    path = tmp_path / "data.bin"
+    path.write_bytes(content)
+
+    messages = _send("data.bin", path, chunk_size=100)
+    start, parts = _start(messages), _parts(messages)
+
+    assert start.size_bytes == len(content)
+    assert start.part_count == len(parts)
+    assert b"".join(part.content for part in parts) == content
+
+
+def test_an_empty_path_sends_no_parts(tmp_path: Path) -> None:
+    path = tmp_path / "empty.txt"
+    path.write_bytes(b"")
+    assert _parts(_send("empty.txt", path)) == []
+
+
+def test_a_str_is_refused_rather_than_guessed_at() -> None:
+    # It could be either the contents or a path, and picking one silently
+    # sends the wrong file half the time.
+    with pytest.raises(TypeError, match="bytes or a Path"):
+        _send("notes.txt", "hello")  # type: ignore[arg-type]
+
+
+def test_a_file_replaced_mid_send_is_still_sent_whole(tmp_path: Path) -> None:
+    # A rotated log: the path is renamed away and a new file takes its place
+    # after the transfer has announced its length. The open descriptor still
+    # refers to the original, so the bytes match what was promised.
+    path = tmp_path / "app.log"
+    path.write_bytes(b"original contents")
+
+    with _download_source(path, chunk_size=4) as (size_bytes, chunks):
+        path.rename(tmp_path / "app.log.1")
+        path.write_bytes(b"new")
+        assert b"".join(chunks) == b"original contents"
+    assert size_bytes == len(b"original contents")
+
+
+def test_a_file_truncated_mid_send_says_so(tmp_path: Path) -> None:
+    # The length is already on the wire and the client waits for exactly that
+    # many bytes, so a short read has to raise rather than quietly hang the
+    # download.
+    # Large enough that the rest of it cannot be sitting in the reader's
+    # buffer already, which is what makes a small file survive this.
+    path = tmp_path / "app.log"
+    path.write_bytes(b"x" * (1024 * 1024))
+
+    with _download_source(path, chunk_size=4096) as (_, chunks):
+        assert next(chunks) == b"x" * 4096
+        with path.open("wb"):
+            pass
+        with pytest.raises(OSError, match="shrank while it was being sent"):
+            list(chunks)
 
 
 @pytest.mark.parametrize("chunk_size", [0, -1, True])
