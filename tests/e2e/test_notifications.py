@@ -3,7 +3,8 @@
 ``add_notification`` sends a message the client turns into a shadcn toast, so
 every property in the protocol -- body, loading, close button, auto-close --
 only really exists if it survives that trip. These drive the real server API
-and assert on the rendered toast.
+and assert on the rendered toast; the props-to-toast mapping itself is pinned
+by ``notifications.test.ts``.
 """
 
 from __future__ import annotations
@@ -38,28 +39,48 @@ def toast_titled(page: Page, title: str) -> Locator:
     return toasts(page).filter(has=page.locator('[data-slot="toast-title"]', has_text=title))
 
 
-def test_notification_renders_title_and_body(
+def test_notifications_render_their_parts(
     leika_server: leika.Server, notify_page: Page, page_errors: list[str]
 ) -> None:
     leika_server.gui.add_notification("Export finished", "Wrote 12 files.", auto_close_seconds=None)
-
-    toast = toasts(notify_page)
-    expect(toast).to_have_count(1, timeout=5_000)
-    expect(toast.locator('[data-slot="toast-title"]')).to_have_text("Export finished")
-    expect(toast.locator('[data-slot="toast-description"]')).to_have_text("Wrote 12 files.")
-    assert page_errors == []
-
-
-def test_notification_without_a_body_renders_no_description(
-    leika_server: leika.Server, notify_page: Page, page_errors: list[str]
-) -> None:
     leika_server.gui.add_notification("Saved", auto_close_seconds=None)
+    leika_server.gui.add_notification(
+        "A title long enough to fill the row and reach the corner",
+        "Body copy that wraps onto a second line so the toast is tall.",
+        with_close_button=True,
+        auto_close_seconds=None,
+    )
+    expect(toasts(notify_page)).to_have_count(3, timeout=5_000)
 
-    toast = toasts(notify_page)
-    expect(toast).to_have_count(1, timeout=5_000)
-    expect(toast.locator('[data-slot="toast-title"]')).to_have_text("Saved")
+    titled = toast_titled(notify_page, "Export finished")
+    expect(titled.locator('[data-slot="toast-description"]')).to_have_text("Wrote 12 files.")
     # An empty body must not leave a blank description line under the title.
-    expect(toast.locator('[data-slot="toast-description"]')).to_have_count(0)
+    bare = toast_titled(notify_page, "Saved")
+    expect(bare.locator('[data-slot="toast-description"]')).to_have_count(0)
+
+    # The close button sits in the top-right corner, positioned like a
+    # dialog's close button rather than inline in the row. Layout offsets, so
+    # an in-flight enter animation cannot skew them.
+    close = toast_titled(notify_page, "A title long enough to fill the row and reach the corner")
+    box = close.locator('[data-slot="toast-close"]').evaluate(
+        """el => {
+            const host = el.closest('[data-slot="toast"]');
+            const style = getComputedStyle(el);
+            return {
+                position: style.position,
+                top: style.top,
+                right: style.right,
+                overlapsText: [...host.querySelectorAll(
+                    '[data-slot="toast-title"], [data-slot="toast-description"]'
+                )].some((text) => {
+                    const a = text.getBoundingClientRect();
+                    const b = el.getBoundingClientRect();
+                    return a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+                }),
+            };
+        }"""
+    )
+    assert box == {"position": "absolute", "top": "8px", "right": "8px", "overlapsText": False}
     assert page_errors == []
 
 
@@ -90,50 +111,12 @@ def test_close_button_is_shown_only_when_requested(
     assert page_errors == []
 
 
-def test_close_button_sits_in_the_top_right_corner(
-    leika_server: leika.Server, notify_page: Page, page_errors: list[str]
-) -> None:
-    """Positioned like a dialog's close button rather than inline in the row."""
-    leika_server.gui.add_notification(
-        "A title long enough to fill the row and reach the corner",
-        "Body copy that wraps onto a second line so the toast is tall.",
-        with_close_button=True,
-        auto_close_seconds=None,
-    )
-    toast = toasts(notify_page)
-    expect(toast).to_have_count(1, timeout=5_000)
-
-    close = toast.locator('[data-slot="toast-close"]')
-    # Layout offsets, so an in-flight enter animation cannot skew them.
-    box = close.evaluate(
-        """el => {
-            const host = el.closest('[data-slot="toast"]');
-            const style = getComputedStyle(el);
-            return {
-                position: style.position,
-                top: style.top,
-                right: style.right,
-                overlapsText: [...host.querySelectorAll(
-                    '[data-slot="toast-title"], [data-slot="toast-description"]'
-                )].some((text) => {
-                    const a = text.getBoundingClientRect();
-                    const b = el.getBoundingClientRect();
-                    return a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-                }),
-            };
-        }"""
-    )
-    assert box == {"position": "absolute", "top": "8px", "right": "8px", "overlapsText": False}
-    assert page_errors == []
-
-
-def test_loading_notification_shows_a_spinner(
+def test_handle_drives_the_notification_through_its_lifecycle(
     leika_server: leika.Server, notify_page: Page, page_errors: list[str]
 ) -> None:
     handle = leika_server.gui.add_notification(
         "Rendering", "Frame 1 of 100", loading=True, auto_close_seconds=None
     )
-
     toast = toasts(notify_page)
     expect(toast).to_have_count(1, timeout=5_000)
     spinner = toast.locator('[data-slot="toast-icon"] .animate-spin')
@@ -143,34 +126,16 @@ def test_loading_notification_shows_a_spinner(
     handle.loading = False
     expect(spinner).to_have_count(0, timeout=5_000)
     expect(toast).to_have_count(1)
-    assert page_errors == []
 
-
-def test_handle_updates_the_notification_in_place(
-    leika_server: leika.Server, notify_page: Page, page_errors: list[str]
-) -> None:
-    handle = leika_server.gui.add_notification(
-        "Rendering", "Frame 1 of 100", auto_close_seconds=None
-    )
-    expect(toasts(notify_page)).to_have_count(1, timeout=5_000)
-
+    # Updating replaces the existing toast rather than stacking a second one.
     handle.update(title="Rendering", body="Frame 50 of 100")
-    expect(toasts(notify_page).locator('[data-slot="toast-description"]')).to_have_text(
+    expect(toast.locator('[data-slot="toast-description"]')).to_have_text(
         "Frame 50 of 100", timeout=5_000
     )
-    # Updating replaces the existing toast rather than stacking a second one.
-    expect(toasts(notify_page)).to_have_count(1)
-    assert page_errors == []
-
-
-def test_handle_removes_the_notification(
-    leika_server: leika.Server, notify_page: Page, page_errors: list[str]
-) -> None:
-    handle = leika_server.gui.add_notification("Working", auto_close_seconds=None)
-    expect(toasts(notify_page)).to_have_count(1, timeout=5_000)
+    expect(toast).to_have_count(1)
 
     handle.remove()
-    expect(toasts(notify_page)).to_have_count(0, timeout=5_000)
+    expect(toast).to_have_count(0, timeout=5_000)
     assert page_errors == []
 
 

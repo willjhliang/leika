@@ -24,6 +24,18 @@ def wait_for_port(port: int, timeout: float = 5.0) -> None:
     raise RuntimeError(f"Leika did not start on port {port}")
 
 
+def wait_until(predicate, timeout: float = 2.0) -> None:
+    """Poll a server-side predicate until it holds, then assert that it does.
+
+    The browser-side equivalents are Playwright's own `expect` timeouts; this
+    is for Python state, which has no locator to wait on.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert predicate()
+
+
 def find_gui_row(page: Page, label: str) -> Locator:
     element = page.locator("label", has_text=label).first
     return element.locator("xpath=ancestor::*[@data-leika-gui-row][1]")

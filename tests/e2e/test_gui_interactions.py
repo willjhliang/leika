@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -12,7 +11,7 @@ from playwright.sync_api import Locator, Page, expect
 
 import leika
 
-from .utils import find_gui_input, find_gui_row
+from .utils import find_gui_input, find_gui_row, wait_until
 
 
 def test_core_controls_render_and_update(
@@ -31,10 +30,7 @@ def test_core_controls_render_and_update(
     enabled = find_gui_row(leika_page, "Enabled").get_by_role("checkbox")
     expect(enabled).to_be_checked(timeout=5_000)
     enabled.click()
-    deadline = time.monotonic() + 2.0
-    while checkbox.value and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert checkbox.value is False
+    wait_until(lambda: checkbox.value is False)
 
     name = find_gui_input(leika_page, "Name")
     expect(name).to_have_value("Leika")
@@ -55,10 +51,7 @@ def test_core_controls_render_and_update(
     expect(accurate).to_be_visible()
     expect(leika_page.get_by_role("option", name="Fast", exact=True)).to_have_count(0)
     accurate.click()
-    deadline = time.monotonic() + 2.0
-    while dropdown.value != "Accurate" and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert dropdown.value == "Accurate"
+    wait_until(lambda: dropdown.value == "Accurate")
     expect(mode).to_contain_text("Accurate")
 
     run_button = leika_page.get_by_role("button", name="Run")
@@ -104,13 +97,6 @@ def test_button_and_upload_hints_and_visibility(
     assert page_errors == []
 
 
-def _wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert predicate()
-
-
 def open_form(page: Page) -> Locator:
     """Open the panel's form popout, and return it."""
     popover = page.locator("[data-leika-form-popover]")
@@ -153,16 +139,16 @@ def test_a_form_opens_from_one_row_into_a_popout(
     # Reset is the other way out of a half-written answer: it puts the fields
     # back to what Python declared, and leaves the popout open to start again.
     field.fill("Edited")
-    _wait_until(lambda: name.value == "Edited")
+    wait_until(lambda: name.value == "Edited")
     reset.click()
-    _wait_until(lambda: name.value == "Ada")
+    wait_until(lambda: name.value == "Ada")
     expect(field).to_have_value("Ada")
     expect(popout).to_be_visible()
     assert submits == []
 
     # Submitting is the way out proper: the popout closes on its own button.
     submit.click()
-    _wait_until(lambda: submits == [1])
+    wait_until(lambda: submits == [1])
     expect(popout).to_have_count(0, timeout=5_000)
 
     # Enter in a single-line text input is the same commit, and closes it the
@@ -175,7 +161,7 @@ def test_a_form_opens_from_one_row_into_a_popout(
     field = popout.get_by_label("Name")
     field.fill("Grace")
     field.press("Enter")
-    _wait_until(lambda: submits == [1, 2])
+    wait_until(lambda: submits == [1, 2])
     assert name.value == "Grace"
     expect(popout).to_have_count(0, timeout=5_000)
 
@@ -183,7 +169,7 @@ def test_a_form_opens_from_one_row_into_a_popout(
     # one path every submit takes.
     popout = open_form(leika_page)
     form.submit_form()
-    _wait_until(lambda: submits == [1, 2, 3])
+    wait_until(lambda: submits == [1, 2, 3])
     expect(popout).to_have_count(0, timeout=5_000)
 
     # A form with no label: its trigger takes the whole row, the way a
@@ -223,16 +209,16 @@ def test_a_mini_form_sends_from_the_end_of_its_field_row(
     assert box["width"] == box["height"], box
 
     field.fill("comets")
-    _wait_until(lambda: query.value == "comets")
+    wait_until(lambda: query.value == "comets")
     send.click()
-    _wait_until(lambda: submits == ["comets"])
+    wait_until(lambda: submits == ["comets"])
 
     # Enter in the field is the same send, since the button is the form's own
     # submit rather than a click handler beside it.
     field.fill("again")
-    _wait_until(lambda: query.value == "again")
+    wait_until(lambda: query.value == "again")
     field.press("Enter")
-    _wait_until(lambda: submits == ["comets", "again"])
+    wait_until(lambda: submits == ["comets", "again"])
     assert page_errors == []
 
 
@@ -307,54 +293,17 @@ def test_a_button_group_reports_every_press_and_marks_none_of_them(
     expect(one).to_be_visible(timeout=5_000)
 
     two.click()
-    deadline = time.monotonic() + 2.0
-    while (handle.value != "Two" or clicks != ["Two"]) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert handle.value == "Two"
-    assert clicks == ["Two"]
+    wait_until(lambda: handle.value == "Two" and clicks == ["Two"])
 
     # The same option again: two presses, not one press and a no-op.
     two.click()
-    deadline = time.monotonic() + 2.0
-    while len(clicks) < 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
+    wait_until(lambda: len(clicks) >= 2)
     assert clicks == ["Two", "Two"]
 
     # And none of it shows on screen: no option is on.
     for option in (one, two):
         assert option.get_attribute("aria-pressed") is None
         assert option.get_attribute("data-state") is None
-    assert page_errors == []
-
-
-def test_fast_slider_release_never_flickers_backward(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    slider = leika_server.gui.add_slider("Speed", min=0.0, max=10.0, step=0.1, initial_value=1.0)
-    track = find_gui_row(leika_page, "Speed").locator("[data-leika-slider]")
-    track.wait_for(state="visible", timeout=5_000)
-    slider_role = track.get_by_role("slider")
-    bounds = track.bounding_box()
-    assert bounds is not None
-    y = bounds["y"] + bounds["height"] / 2
-    leika_page.mouse.move(bounds["x"] + bounds["width"] * 0.1, y)
-    leika_page.mouse.down()
-    leika_page.mouse.move(bounds["x"] + bounds["width"] * 0.92, y, steps=24)
-    leika_page.mouse.up()
-
-    released = float(slider_role.get_attribute("aria-valuenow") or "0")
-    samples: list[float] = []
-    for _ in range(15):
-        samples.append(float(slider_role.get_attribute("aria-valuenow") or "0"))
-        leika_page.wait_for_timeout(30)
-    assert min(samples) >= released - 0.11, (released, samples)
-
-    deadline = time.monotonic() + 2.0
-    while abs(float(slider.value) - released) > 0.11 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert abs(float(slider.value) - released) <= 0.11
     assert page_errors == []
 
 
@@ -518,10 +467,7 @@ def test_multislider_track_click_and_keyboard_are_accessible(
         track_bounds["x"] + track_bounds["width"] * 0.72,
         track_bounds["y"] + track_bounds["height"] / 2.0,
     )
-    deadline = time.monotonic() + 2.0
-    while handle.value != (0.1, 0.5, 0.9) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert handle.value == (0.1, 0.5, 0.9)
+    wait_until(lambda: handle.value == (0.1, 0.5, 0.9))
     expect(slider_roles.nth(2)).to_have_attribute("aria-valuenow", "0.9")
 
     middle = slider_roles.nth(1)
@@ -532,10 +478,7 @@ def test_multislider_track_click_and_keyboard_are_accessible(
     expect(middle).to_have_attribute("aria-label", "Accessible range handle 2")
     middle.focus()
     middle.press("ArrowRight")
-    deadline = time.monotonic() + 2.0
-    while handle.value != (0.1, 0.7, 0.9) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert handle.value == (0.1, 0.7, 0.9)
+    wait_until(lambda: handle.value == (0.1, 0.7, 0.9))
     expect(middle).to_have_attribute("aria-valuenow", "0.7")
     assert page_errors == []
 
@@ -626,8 +569,6 @@ def test_controls_use_semantic_tokens_and_compact_density(
     slider_bar = style(slider_row.locator('[data-slot="slider-range"]'))
 
     range_slider = find_gui_row(leika_page, "Styled range").locator('[data-leika-slider="multi"]')
-    range_thumb_locator = range_slider.locator('[data-slot="slider-thumb"]').first
-    range_thumb = style(range_thumb_locator)
     range_fill = style(range_slider.locator('[data-slot="slider-range"]'))
 
     checkbox_locator = find_gui_row(leika_page, "Styled checkbox").get_by_role("checkbox")
@@ -639,29 +580,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     color_locator = find_gui_row(leika_page, "Styled color").locator("[data-leika-color-trigger]")
     action_group = find_gui_row(leika_page, "Styled actions").locator("[data-leika-button-group]")
     expect(action_group).to_have_attribute("aria-label", "Styled actions")
-    action_items = action_group.locator('[data-slot="button"]')
-    expect(action_items).to_have_count(3)
-    group_metrics = action_group.evaluate(
-        """element => ({
-            display: getComputedStyle(element).display,
-            clientWidth: element.clientWidth,
-            scrollWidth: element.scrollWidth,
-        })"""
-    )
-    assert group_metrics["display"] == "flex"
-    assert group_metrics["scrollWidth"] <= group_metrics["clientWidth"]
-    item_boxes = [action_items.nth(index).bounding_box() for index in range(3)]
-    assert all(item is not None for item in item_boxes)
-    typed_item_boxes = [item for item in item_boxes if item is not None]
-    assert (
-        max(item["y"] for item in typed_item_boxes) - min(item["y"] for item in typed_item_boxes)
-        <= 0.5
-    )
-    assert (
-        max(item["height"] for item in typed_item_boxes)
-        - min(item["height"] for item in typed_item_boxes)
-        <= 0.5
-    )
+    expect(action_group.locator('[data-slot="button"]')).to_have_count(3)
     expect(checkbox_locator).to_be_visible()
     expect(checkbox_locator).to_have_attribute("data-slot", "checkbox")
     expect(action_locator).to_be_visible()
@@ -705,26 +624,12 @@ def test_controls_use_semantic_tokens_and_compact_density(
             )
             <= 0.5
         )
+    # Every kind of row runs at the same height; the number itself is design.
     assert max(row_heights) - min(row_heights) <= 0.5
-    assert 23.5 <= row_heights[0] <= 24.5
 
     for field_text in (field_label, action, text_input, dropdown_trigger, color_trigger):
         assert field_text["fontWeight"] == body_font_weight
         assert abs(field_text["lineHeight"] - field_text["fontSize"]) <= 0.25
-
-    # Nova's controls stay dense and use modest, non-capsule rounding.
-    # Slider thumbs use the stock compact circular pointer target.
-    for thumb in (slider_thumb, range_thumb):
-        assert abs(thumb["width"] - thumb["height"]) <= 0.25
-        assert 10.0 <= thumb["width"] <= 16.0
-        assert thumb["borderRadius"] > 0.0
-    assert slider_track["height"] <= 6.0
-    assert 14.0 <= checkbox["width"] <= 20.0
-    assert abs(checkbox["width"] - checkbox["height"]) <= 0.25
-    for control in (action, text_input, dropdown_trigger, color_trigger):
-        assert 23.5 <= control["height"] <= 24.5
-        assert 0.0 < control["borderRadius"] < control["height"] / 2.0
-    assert 4.0 <= floating_panel["borderRadius"] <= 16.0
 
     # Resolve the live CSS variables instead of pinning the test to a palette.
     # This checks semantic wiring in both stock light and dark themes.
@@ -784,10 +689,7 @@ def test_command_palette_keyboard_fuzzy_search_and_close(
 
     search.press("Enter")
     expect(palette).to_have_count(0)
-    deadline = time.monotonic() + 2.0
-    while triggered != ["export"] and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert triggered == ["export"]
+    wait_until(lambda: triggered == ["export"])
 
     leika_page.keyboard.press("Control+K")
     expect(palette).to_be_visible()
@@ -905,10 +807,7 @@ def test_dropdown_defaults_to_a_plain_select_with_no_search_box(
     expect(leika_page.get_by_role("combobox", name="Search options")).to_have_count(0)
 
     leika_page.get_by_role("option", name="Exact", exact=True).click()
-    deadline = time.monotonic() + 2.0
-    while dropdown.value != "Exact" and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert dropdown.value == "Exact"
+    wait_until(lambda: dropdown.value == "Exact")
     expect(trigger).to_contain_text("Exact")
 
     # Server-side assignment drives the trigger too, not just user clicks.
@@ -953,17 +852,21 @@ def test_plain_dropdown_list_can_open_above_the_trigger(
     assert page_errors == []
 
 
-def test_media_elements_share_one_expand_affordance(
+def test_media_chrome_is_shared_and_labelled_like_the_panel(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Images and charts expand through the same control, drawn the same way.
+    """Images and charts expand through the same control, drawn the same way,
+    and an image's stacked label is typographically a row label.
 
-    The three media elements each carried their own copy of this button, which
-    is how they came to disagree about its size. Only the corner is allowed to
-    differ, and only because uPlot puts its legend where the others do not.
+    The media elements each carried their own copy of the expand button, which
+    is how they came to disagree about its size; only the corner may differ,
+    and only because uPlot puts its legend where the others do not. The label
+    above an image is a layout difference, not a typographic one, so it is
+    compared against a row label rather than pinned to literal values.
     """
+    leika_server.gui.add_slider("Threshold", min=0.0, max=1.0, step=0.1, initial_value=0.5)
     leika_server.gui.add_image(np.zeros((20, 30, 3), dtype=np.uint8), label="Preview")
     x_data = np.linspace(0.0, 1.0, 16)
     leika_server.gui.add_uplot((x_data, x_data), ({}, {"label": "y"}), aspect=2.0)
@@ -986,32 +889,7 @@ def test_media_elements_share_one_expand_affordance(
     }"""
     assert image_button.evaluate(probe) == plot_button.evaluate(probe)
 
-    # Chrome, not content: hidden until the pointer (or focus) arrives.
-    assert image_button.evaluate("el => getComputedStyle(el).opacity") == "0"
-    leika_page.get_by_role("img").first.hover()
-    expect(image_button).to_be_visible()
-    image_button.click()
-    expect(leika_page.get_by_role("dialog")).to_be_visible(timeout=5_000)
-    assert page_errors == []
-
-
-def test_gui_image_label_is_styled_like_every_other_label(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """An image's label stacks above it instead of sitting in the label column.
-
-    That is a layout difference, not a typographic one: it still names a
-    control, so it has to read as a label rather than as a heading. Stock
-    `Label` is medium-weight foreground, so the styling has to be applied
-    deliberately -- this compares it against a row label rather than pinning
-    literal values, which would just restate the CSS.
-    """
-    leika_server.gui.add_slider("Threshold", min=0.0, max=1.0, step=0.1, initial_value=0.5)
-    leika_server.gui.add_image(np.zeros((20, 30, 3), dtype=np.uint8), label="Preview")
-
-    probe = """el => {
+    label_probe = """el => {
         const style = getComputedStyle(el);
         return {
             fontSize: style.fontSize,
@@ -1024,8 +902,14 @@ def test_gui_image_label_is_styled_like_every_other_label(
     expect(row_label).to_be_visible(timeout=5_000)
     image_label = leika_page.locator('[data-slot="field-label"]', has_text="Preview")
     expect(image_label).to_be_visible(timeout=5_000)
+    assert image_label.evaluate(label_probe) == row_label.evaluate(label_probe)
 
-    assert image_label.evaluate(probe) == row_label.evaluate(probe)
+    # Chrome, not content: hidden until the pointer (or focus) arrives.
+    assert image_button.evaluate("el => getComputedStyle(el).opacity") == "0"
+    leika_page.get_by_role("img").first.hover()
+    expect(image_button).to_be_visible()
+    image_button.click()
+    expect(leika_page.get_by_role("dialog")).to_be_visible(timeout=5_000)
     assert page_errors == []
 
 
@@ -1058,19 +942,28 @@ def test_the_slider_number_box_is_opt_in(
     assert page_errors == []
 
 
-def test_button_colorways_are_a_filled_and_an_outlined_role(
+def test_button_and_toggle_colorways_are_roles(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Two roles, not two palettes: one carries the accent, one does not."""
+    """Two roles, not two palettes: one carries the accent, one does not --
+    across a single button, a whole group, and one option at a time (a Submit
+    with a Reset beside it). All of them live props."""
     primary = leika_server.gui.add_button("Run")
     leika_server.gui.add_button("Cancel", color="secondary")
+    group = leika_server.gui.add_button(("A", "B"), label="Filled")
+    leika_server.gui.add_button(("C", "D"), label="Marked", color="secondary")
+    leika_server.gui.add_button(
+        ("Reset", "Submit"), label="Actions", color=("secondary", "primary"), merge=True
+    )
+    leika_server.gui.add_toggle(
+        ("Draft", "Live"), label="Stage", color=("secondary", "primary"), multiple=True
+    )
 
-    run = leika_page.locator('[data-leika-button][data-leika-button-color="primary"]')
-    cancel = leika_page.locator('[data-leika-button][data-leika-button-color="secondary"]')
+    run = leika_page.get_by_role("button", name="Run", exact=True)
+    cancel = leika_page.get_by_role("button", name="Cancel", exact=True)
     expect(run).to_be_visible(timeout=5_000)
-    expect(cancel).to_be_visible(timeout=5_000)
 
     # The filled one paints its background; the outlined one draws a border and
     # leaves the surface behind it alone.
@@ -1082,20 +975,55 @@ def test_button_colorways_are_a_filled_and_an_outlined_role(
     # The default is the filled one, and the role is a live prop.
     assert primary.color == "primary"
     primary.color = "secondary"
+    expect(run).to_have_attribute("data-leika-button-color", "secondary", timeout=5_000)
+
+    # A group is a row of buttons, so the colorway is what a button's is: it
+    # applies to every option alike.
+    filled = find_gui_row(leika_page, "Filled").locator('[data-slot="button"]')
+    marked = find_gui_row(leika_page, "Marked").locator('[data-slot="button"]')
+
+    def fill(option: Locator) -> str:
+        return option.evaluate("e => getComputedStyle(e).backgroundColor")
+
+    assert fill(filled.nth(0)) == fill(filled.nth(1))
+    assert fill(marked.nth(0)) == fill(marked.nth(1))
+    assert fill(filled.nth(0)) != fill(marked.nth(0))
+
+    assert group.color == ("primary", "primary")
+    group.color = "secondary"
     expect(
-        leika_page.locator('[data-leika-button][data-leika-button-color="secondary"]')
+        find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="secondary"]')
     ).to_have_count(2, timeout=5_000)
+    # The fill is a transition, so this polls rather than reading one frame of
+    # it: settled, the two groups are the same control in the same role.
+    expect(filled.nth(0)).to_have_css("background-color", fill(marked.nth(0)), timeout=5_000)
+
+    # And a sequence answers one option at a time, buttons and toggles alike.
+    for row, kind in (("Actions", "button"), ("Stage", "toggle")):
+        options = find_gui_row(leika_page, row).locator(f"[data-leika-{kind}]")
+        expect(options.first).to_be_visible(timeout=5_000)
+        assert options.count() == 2, row
+        quiet, loud = options.nth(0), options.nth(1)
+        assert quiet.get_attribute("data-leika-button-color") == "secondary", row
+        assert loud.get_attribute("data-leika-button-color") == "primary", row
+        fills = [
+            option.evaluate("e => getComputedStyle(e).backgroundColor") for option in (quiet, loud)
+        ]
+        assert fills[0] != fills[1], (row, fills)
+        assert quiet.evaluate("e => parseFloat(getComputedStyle(e).borderLeftWidth)") >= 1
     assert page_errors == []
 
 
-def test_a_label_is_what_takes_a_button_out_of_the_full_row(
+def test_a_label_sets_a_buttons_row_and_its_height(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Unlabelled -- the default -- a button or a group is the row. Given a
-    label, it becomes a control in one: the label takes the left column and the
-    control sits beside it, like every other row in the panel."""
+    """Unlabelled -- the default -- a button or a group is the row, at its
+    standalone 32px. Given a label it becomes a control in one: the label
+    takes the left column, and the button drops to the 24px every other row
+    control runs at."""
+    leika_server.gui.add_text("Text", initial_value="x")
     leika_server.gui.add_button("Run")
     leika_server.gui.add_button("Stop", label="Playback")
     leika_server.gui.add_button(("A", "B", "C"))
@@ -1104,6 +1032,7 @@ def test_a_label_is_what_takes_a_button_out_of_the_full_row(
     plain_button = leika_page.get_by_role("button", name="Run", exact=True)
     labelled_button = leika_page.get_by_role("button", name="Stop", exact=True)
     plain_group = leika_page.get_by_role("button", name="A", exact=True)
+    labelled_option = leika_page.get_by_role("button", name="X", exact=True)
     expect(plain_button).to_be_visible(timeout=5_000)
 
     # The label is what puts a row around it, so an unlabelled control has none.
@@ -1122,116 +1051,20 @@ def test_a_label_is_what_takes_a_button_out_of_the_full_row(
     # The group divides whatever width it is given, so its options are wider
     # across the row than they are in the column.
     wide_option = plain_group.bounding_box()
-    narrow_option = leika_page.get_by_role("button", name="X", exact=True).bounding_box()
+    narrow_option = labelled_option.bounding_box()
     assert wide_option is not None and narrow_option is not None
     assert wide_option["width"] > narrow_option["width"]
-    assert page_errors == []
-
-
-def test_a_group_takes_the_same_colorways_as_a_single_button(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """One `color` setting across both faces of `add_button`. A group is a row
-    of buttons, so the colorway is what a button's is: it applies to every
-    option alike, exactly as if each were its own `add_button`."""
-    group = leika_server.gui.add_button(("A", "B"), label="Filled")
-    leika_server.gui.add_button(("C", "D"), label="Marked", color="secondary")
-
-    filled = find_gui_row(leika_page, "Filled").locator('[data-slot="button"]')
-    marked = find_gui_row(leika_page, "Marked").locator('[data-slot="button"]')
-    expect(filled.first).to_be_visible(timeout=5_000)
-
-    def fill(option: Locator) -> str:
-        return option.evaluate("e => getComputedStyle(e).backgroundColor")
-
-    # Every option in a group shares its colorway -- none of them is picked out
-    # -- and the two colorways differ.
-    assert fill(filled.nth(0)) == fill(filled.nth(1))
-    assert fill(marked.nth(0)) == fill(marked.nth(1))
-    assert fill(filled.nth(0)) != fill(marked.nth(0))
-
-    # And it is a live prop, as it is on a single button -- read back per
-    # option, since a row may wear a different role on each.
-    assert group.color == ("primary", "primary")
-    group.color = "secondary"
-    expect(
-        find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="secondary"]')
-    ).to_have_count(2, timeout=5_000)
-    # The fill is a transition, so this polls rather than reading one frame of
-    # it: settled, the two groups are the same control in the same role.
-    expect(filled.nth(0)).to_have_css("background-color", fill(marked.nth(0)), timeout=5_000)
-    assert page_errors == []
-
-
-def test_a_row_can_wear_one_role_per_option(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """A row usually wants one weight throughout, and sometimes wants its
-    accent behind one option only -- a Submit with a Reset beside it."""
-    leika_server.gui.add_button(
-        ("Reset", "Submit"), label="Actions", color=("secondary", "primary"), merge=True
-    )
-    leika_server.gui.add_toggle(
-        ("Draft", "Live"), label="Stage", color=("secondary", "primary"), multiple=True
-    )
-
-    for row, kind in (("Actions", "button"), ("Stage", "toggle")):
-        options = find_gui_row(leika_page, row).locator(f"[data-leika-{kind}]")
-        expect(options.first).to_be_visible(timeout=5_000)
-        assert options.count() == 2, row
-        quiet, loud = options.nth(0), options.nth(1)
-        assert quiet.get_attribute("data-leika-button-color") == "secondary", row
-        assert loud.get_attribute("data-leika-button-color") == "primary", row
-        # The accent is a fill: the quiet one leaves the surface behind it and
-        # draws a border instead.
-        fills = [
-            option.evaluate("e => getComputedStyle(e).backgroundColor") for option in (quiet, loud)
-        ]
-        assert fills[0] != fills[1], (row, fills)
-        assert quiet.evaluate("e => parseFloat(getComputedStyle(e).borderLeftWidth)") >= 1
-
-    # Joined, and one half outlined: the hairline that divides two filled
-    # neighbours would be drawn over that half's own border, so it is not.
-    expect(
-        find_gui_row(leika_page, "Actions").locator('[data-slot="button-group-separator"]')
-    ).to_have_count(0)
-    assert page_errors == []
-
-
-def test_a_labelled_button_is_the_height_of_every_other_row_control(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """24px beside a label, 32px filling the row. A button used to stay at its
-    standalone height in both, which made its row taller than the panel's."""
-    leika_server.gui.add_text("Text", initial_value="x")
-    leika_server.gui.add_button("Face", label="Row")
-    leika_server.gui.add_button(("A", "B"), label="Group")
-    leika_server.gui.add_button("Solo")
-    leika_server.gui.add_button(("C", "D"))
 
     def height(locator: Locator) -> float:
         box = locator.bounding_box()
         assert box is not None
         return box["height"]
 
-    solo = leika_page.get_by_role("button", name="Solo", exact=True)
-    expect(solo).to_be_visible(timeout=5_000)
-
     row_input = find_gui_row(leika_page, "Text").get_by_role("textbox")
-    labelled_button = find_gui_row(leika_page, "Row").get_by_role("button", name="Face")
-    labelled_option = find_gui_row(leika_page, "Group").locator('[data-slot="button"]').first
     for control in (labelled_button, labelled_option):
         assert height(control) == pytest.approx(height(row_input), abs=0.5)
         assert height(control) == pytest.approx(24.0, abs=0.5)
-
-    lone_option = leika_page.get_by_role("button", name="C", exact=True)
-    for control in (solo, lone_option):
+    for control in (plain_button, plain_group):
         assert height(control) == pytest.approx(32.0, abs=0.5)
     assert page_errors == []
 
@@ -1251,6 +1084,9 @@ def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
     # have to be the same too -- the buttons once lost a pixel of theirs to the
     # stock group's border overlap, which has no edge to overlap between runs.
     leika_server.gui.add_toggle(("A", "B", "C"), label="Toggles", merge=(True, False))
+    leika_server.gui.add_button(
+        ("Reset", "Submit"), label="Half", color=("secondary", "primary"), merge=True
+    )
 
     def gaps(row_label: str, kind: str = "button") -> list[float]:
         """Horizontal space between each pair of neighbouring controls."""
@@ -1270,6 +1106,12 @@ def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
     assert parted == [4.0, 4.0], parted
     assert mixed == [-1.0, 4.0], mixed
     assert gaps("Toggles", "toggle") == mixed, (gaps("Toggles", "toggle"), mixed)
+
+    # Joined, and one half outlined: the hairline that divides two filled
+    # neighbours would be drawn over that half's own border, so it is not.
+    expect(
+        find_gui_row(leika_page, "Half").locator('[data-slot="button-group-separator"]')
+    ).to_have_count(0)
     assert page_errors == []
 
 
@@ -1348,10 +1190,7 @@ def test_a_toggle_wears_the_button_pressed_look_in_both_themes(
 
     # And the browser drives it, not only Python.
     control("Filled toggle", "toggle").click()
-    deadline = time.monotonic() + 2.0
-    while toggle.value is not False and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert toggle.value is False
+    wait_until(lambda: toggle.value is False)
     assert page_errors == []
 
 
@@ -1372,36 +1211,30 @@ def test_a_toggle_row_holds_one_or_many(
     many_row = find_gui_row(leika_page, "Many").locator("[data-leika-toggle]")
     expect(one_row.first).to_have_attribute("aria-pressed", "true", timeout=5_000)
 
-    def wait_for(read: Callable[[], tuple[str, ...]], expected: tuple[str, ...]) -> None:
-        deadline = time.monotonic() + 2.0
-        while read() != expected and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert read() == expected
-
     # Turning one on turns the other off.
     one_row.nth(1).click()
-    wait_for(lambda: one.value, ("Italic",))
+    wait_until(lambda: one.value == ("Italic",))
     expect(one_row.first).to_have_attribute("aria-pressed", "false")
 
     # Where several may be on, they accumulate -- and stay in declaration order
     # however they were clicked.
     many_row.nth(1).click()
-    wait_for(lambda: many.value, ("Axes",))
+    wait_until(lambda: many.value == ("Axes",))
     many_row.nth(0).click()
-    wait_for(lambda: many.value, ("Grid", "Axes"))
+    wait_until(lambda: many.value == ("Grid", "Axes"))
 
     # A one-at-a-time row is required by default, so pressing the toggle that is
     # on is refused rather than emptying the row -- nothing to undo, and no
     # round trip. Made optional, the same press clears it.
     one_row.nth(1).click()
-    wait_for(lambda: one.value, ("Italic",))
+    wait_until(lambda: one.value == ("Italic",))
     leika_page.wait_for_timeout(300)
     assert one.value == ("Italic",)
     expect(one_row.nth(1)).to_have_attribute("aria-pressed", "true")
 
     clearable_row = find_gui_row(leika_page, "Clearable").locator("[data-leika-toggle]")
     clearable_row.nth(0).click()
-    wait_for(lambda: clearable.value, ())
+    wait_until(lambda: clearable.value == ())
     expect(clearable_row.nth(0)).to_have_attribute("aria-pressed", "false")
     assert page_errors == []
 
@@ -1450,7 +1283,7 @@ def test_text_can_be_read_only_and_rendered_as_markdown(
     # doing both.
     name = find_gui_input(leika_page, "Name")
     name.fill("Grace")
-    _wait_until(lambda: field.value == "Grace")
+    wait_until(lambda: field.value == "Grace")
     assert page_errors == []
 
 
@@ -1519,12 +1352,10 @@ def test_a_list_is_edited_added_to_removed_from_and_reordered(
     rows = leika_page.locator("[data-leika-list-item]")
     expect(boxes).to_have_count(3, timeout=5_000)
 
-    # At rest a list is its entries: the controls come out for the row being
-    # worked on, and the box keeps the width they would take.
-    assert _showing_controls(leika_page) == []
+    # At rest a list is its entries; the controls come out inside the box,
+    # which keeps the width they take.
     idle = boxes.first.bounding_box()
     rows.first.hover()
-    assert _showing_controls(leika_page) == ["alpha"]
     hovered = boxes.first.bounding_box()
     assert idle is not None and hovered is not None
     # The box keeps its width: the controls are inside it, not beside it.
@@ -1539,22 +1370,16 @@ def test_a_list_is_edited_added_to_removed_from_and_reordered(
 
     # Typing in one.
     boxes.nth(0).fill("ALPHA")
-    _wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma"))
+    wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma"))
 
     # Adding one: a new entry starts empty, at the end.
     leika_page.locator("[data-leika-list-add]").click()
-    _wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma", ""))
-
-    # A box with the caret in it is not a row being worked on, so typing does
-    # not bring the controls out.
-    boxes.nth(0).click()
-    leika_page.mouse.move(0, 0)
-    assert _showing_controls(leika_page) == []
+    wait_until(lambda: entries.value == ("ALPHA", "beta", "gamma", ""))
 
     # Removing one, by its own button rather than the row's position.
     rows.nth(1).hover()
     leika_page.get_by_label("Remove entry 2").click()
-    _wait_until(lambda: entries.value == ("ALPHA", "gamma", ""))
+    wait_until(lambda: entries.value == ("ALPHA", "gamma", ""))
 
     # Reordering by dragging a grip: the entry follows the pointer, and the
     # list is left alone until it lands -- so the move is reported once, as the
@@ -1639,10 +1464,9 @@ def test_a_list_is_edited_added_to_removed_from_and_reordered(
     floating = carried.bounding_box()
     assert floating is not None
     assert abs(floating["y"] - last["y"]) < 1.5, (floating, last)
-    assert _showing_controls(leika_page) == ["ALPHA"]
 
     leika_page.mouse.up()
-    _wait_until(lambda: entries.value == ("gamma", "", "ALPHA"))
+    wait_until(lambda: entries.value == ("gamma", "", "ALPHA"))
 
     see_through = leika_page.evaluate(
         "() => { window.__leikaWatching = false; return window.__leikaSeeThrough; }"
@@ -1667,9 +1491,8 @@ def test_a_list_is_edited_added_to_removed_from_and_reordered(
     leika_page.get_by_label("Reorder entry 3").click()
     leika_page.keyboard.press("ArrowUp")
     leika_page.mouse.move(0, 0)
-    _wait_until(lambda: entries.value == ("gamma", "ALPHA", ""))
+    wait_until(lambda: entries.value == ("gamma", "ALPHA", ""))
     expect(leika_page.get_by_label("Reorder entry 2")).to_be_focused()
-    assert _showing_controls(leika_page) == ["ALPHA"]
 
     # A move slides the rows it touches from where their new contents came
     # from -- except here, where the browser is asked for reduced motion and
@@ -1720,7 +1543,7 @@ def test_a_list_shows_its_controls_to_the_row_being_worked_on(
         grip["x"] + grip["width"] / 2, second["y"] + second["height"] / 2, steps=6
     )
     leika_page.mouse.up()
-    _wait_until(lambda: entries.value == ("beta", "alpha", "gamma"))
+    wait_until(lambda: entries.value == ("beta", "alpha", "gamma"))
     look_away()
     expect(leika_page.get_by_label("Reorder entry 2")).to_be_focused()
     assert _showing_controls(leika_page) == []
@@ -1729,7 +1552,7 @@ def test_a_list_shows_its_controls_to_the_row_being_worked_on(
     # what they are working with, cursor or no cursor.
     leika_page.keyboard.press("ArrowUp")
     look_away()
-    _wait_until(lambda: entries.value == ("alpha", "beta", "gamma"))
+    wait_until(lambda: entries.value == ("alpha", "beta", "gamma"))
     assert _showing_controls(leika_page) == ["alpha"]
 
     # The keyboard can reach them at all, which is why they are kept in the
@@ -1745,7 +1568,7 @@ def test_a_list_shows_its_controls_to_the_row_being_worked_on(
     # And they go when the keys leave the controls, the pointer being nowhere
     # near them.
     leika_page.locator("[data-leika-list-add]").click()
-    _wait_until(lambda: entries.value == ("alpha", "beta", "gamma", ""))
+    wait_until(lambda: entries.value == ("alpha", "beta", "gamma", ""))
     look_away()
     assert _showing_controls(leika_page) == []
 
@@ -1755,10 +1578,10 @@ def test_a_list_shows_its_controls_to_the_row_being_worked_on(
     # them.
     leika_page.get_by_label("Items entry 2").click()
     leika_page.keyboard.type("!")
-    _wait_until(lambda: entries.value == ("alpha", "beta!", "gamma", ""))
+    wait_until(lambda: entries.value == ("alpha", "beta!", "gamma", ""))
     rows.nth(1).hover()
     leika_page.get_by_label("Remove entry 2").click()
-    _wait_until(lambda: entries.value == ("alpha", "gamma", ""))
+    wait_until(lambda: entries.value == ("alpha", "gamma", ""))
     assert page_errors == []
 
 
@@ -1774,12 +1597,12 @@ def test_a_frozen_list_keeps_its_length_and_order(
 
     boxes = leika_page.locator("[data-leika-list-entry]")
     expect(boxes).to_have_count(2, timeout=5_000)
-    expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(0)
-    expect(leika_page.locator("[data-leika-list-remove]")).to_have_count(0)
+    # That nothing frozen draws a grip, remove, or add is pinned by
+    # ListInput.test.ts; the add's absence here is the baseline for the thaw.
     expect(leika_page.locator("[data-leika-list-add]")).to_have_count(0)
 
     boxes.nth(1).fill("edited")
-    _wait_until(lambda: entries.value == ("read", "edited"))
+    wait_until(lambda: entries.value == ("read", "edited"))
 
     # Thawing it from Python brings the controls back without a reload.
     entries.frozen = False

@@ -27,62 +27,44 @@ def wait_until_closed(modal: leika.GuiModalHandle, timeout: float = 5.0) -> None
         time.sleep(0.01)
 
 
-@pytest.fixture()
-def modal(leika_server: leika.Server, leika_page: Page) -> leika.GuiModalHandle:
-    handle = leika_server.gui.add_modal("Details")
+def open_modal(server: leika.Server, page: Page) -> leika.GuiModalHandle:
+    handle = server.gui.add_modal("Details")
     with handle:
-        leika_server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.5)
-    expect(dialog(leika_page)).to_be_visible(timeout=5_000)
+        server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.5)
+    expect(dialog(page)).to_be_visible(timeout=5_000)
     return handle
 
 
-def test_close_button_dismisses_the_modal(
-    leika_page: Page, modal: leika.GuiModalHandle, page_errors: list[str]
+def test_each_dismissal_gesture_closes_and_tears_down(
+    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
+    """Close button, outside click, and Escape all drive the same round trip."""
+    # Close button, followed all the way down to server-side teardown.
+    modal = open_modal(leika_server, leika_page)
     leika_page.locator('[data-slot="dialog-close"]').click()
-
     expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
     assert modal.closed
-    assert page_errors == []
-
-
-def test_clicking_outside_dismisses_the_modal(
-    leika_page: Page, modal: leika.GuiModalHandle, page_errors: list[str]
-) -> None:
-    # The backdrop covers the viewport, so a click at its top-left corner lands
-    # outside the popup without hitting any other control.
-    leika_page.locator('[data-slot="dialog-overlay"]').click(position={"x": 5, "y": 5})
-
-    expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
-    wait_until_closed(modal)
-    assert modal.closed
-    assert page_errors == []
-
-
-def test_escape_dismisses_the_modal(
-    leika_page: Page, modal: leika.GuiModalHandle, page_errors: list[str]
-) -> None:
-    leika_page.keyboard.press("Escape")
-
-    expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
-    wait_until_closed(modal)
-    assert modal.closed
-    assert page_errors == []
-
-
-def test_dismissing_removes_the_contained_components(
-    leika_server: leika.Server, leika_page: Page, modal: leika.GuiModalHandle
-) -> None:
-    """Teardown is the server's, so dismissing must not strand the children."""
-    leika_page.locator('[data-slot="dialog-close"]').click()
-    wait_until_closed(modal)
-
     assert modal._children == {}
     assert modal.id not in leika_server.gui._modal_handle_from_uuid
     # A closed modal is not a container that can still be filled.
     with pytest.raises(RuntimeError, match="closed modal"):
         modal.add_button("Too late")
+
+    # The backdrop covers the viewport, so a click at its top-left corner lands
+    # outside the popup without hitting any other control.
+    modal = open_modal(leika_server, leika_page)
+    leika_page.locator('[data-slot="dialog-overlay"]').click(position={"x": 5, "y": 5})
+    expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
+    wait_until_closed(modal)
+    assert modal.closed
+
+    modal = open_modal(leika_server, leika_page)
+    leika_page.keyboard.press("Escape")
+    expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
+    wait_until_closed(modal)
+    assert modal.closed
+    assert page_errors == []
 
 
 def test_dismissing_closes_the_modal_for_every_client(

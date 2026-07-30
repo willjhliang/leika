@@ -1609,35 +1609,13 @@ describe("bringToFront", () => {
 });
 
 // ===========================================================================
-// Tree normalization invariants (exercised end-to-end through the ops):
-//   - same-axis split flattening
-//   - single-child split collapse (weight promoted)
-//   - cleanup of empty splits/regions
-//   - cleanup of empty floating windows on detach
+// Tree normalization. Most invariants -- same-axis flattening, empty-region
+// and empty-window cleanup, immutability -- are already asserted by the
+// per-op tests above and by the fuzz suite's structural checks after every
+// step. The one thing neither covers is weight VALUES through a collapse.
 // ===========================================================================
 
 describe("normalization invariants", () => {
-  it("flattens same-axis nesting when docking onto a same-axis edge", () => {
-    // Right edge already a row; dropping to the right of the rightmost leaf
-    // should stay a flat row, not a nested one.
-    const layout = makeLayout({
-      right: row([leaf("a"), leaf("b")]),
-      floating: [{ id: "w1", stack: ["c"] }],
-    });
-    const loc = findGroupLocation(layout, "b")!;
-    const out = dropOnDockedLeaf(
-      layout,
-      ["c"],
-      "right",
-      (loc as { nodeId: string }).nodeId,
-      "right",
-    );
-    expect(shapeOf(out.docked.right)).toEqual({
-      dir: "row",
-      children: [{ leaf: "a" }, { leaf: "b" }, { leaf: "c" }],
-    });
-  });
-
   it("collapses a single-child split and promotes the split's weight", () => {
     // A weighted row [a(?)|b] inside a column; float a out -> b promoted with
     // the parent split's weight.
@@ -1652,48 +1630,6 @@ describe("normalization invariants", () => {
         { leaf: "b", weight: 5 }, // promoted, keeps inner split's weight
       ],
     });
-  });
-
-  it("empties the whole region to null when its last group leaves", () => {
-    const layout = makeLayout({
-      left: leaf("a"),
-      floating: [{ id: "w1", stack: ["z"] }],
-    });
-    const out = snapToWindowStack(layout, ["a"], "w1");
-    expect(out.docked.left).toBeNull();
-  });
-
-  it("removes a floating window when its last group is detached", () => {
-    const layout = makeLayout({
-      left: leaf("dock"),
-      floating: [{ id: "w1", stack: ["a"] }],
-    });
-    const out = dockToEdge(layout, ["a"], "left");
-    expect(out.floating).toHaveLength(0);
-  });
-
-  it("keeps a floating window when it still has other groups after detach", () => {
-    const layout = makeLayout({ floating: [{ id: "w1", stack: ["a", "b"] }] });
-    const out = dockToEdge(layout, ["a"], "left");
-    expect(out.floating).toHaveLength(1);
-    expect(out.floating[0].stack).toEqual(["b"]);
-  });
-
-  it("does not mutate the input layout (immutability)", () => {
-    const layout = makeLayout({
-      left: leaf("a"),
-      floating: [{ id: "w1", stack: ["b"] }],
-    });
-    const snapshot = structuredClone(layout);
-    dockToEdge(layout, ["b"], "left");
-    dropOnDockedLeaf(
-      layout,
-      ["b"],
-      "left",
-      (layout.docked.left as DockNode).id,
-      "left",
-    );
-    expect(layout).toEqual(snapshot);
   });
 });
 

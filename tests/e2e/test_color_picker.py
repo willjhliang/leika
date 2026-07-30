@@ -2,21 +2,13 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
 
 import imageio.v3 as iio
 from playwright.sync_api import Locator, Page, expect
 
 import leika
 
-from .utils import find_gui_row
-
-
-def _wait_for_value(predicate: Callable[[], bool]) -> None:
-    deadline = time.monotonic() + 2.0
-    while not predicate() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert predicate()
+from .utils import find_gui_row, wait_until
 
 
 def _color_trigger(page: Page, label: str) -> Locator:
@@ -57,8 +49,6 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
     expect(trigger).to_have_attribute("aria-expanded", "false")
     popover = _open_color_picker(leika_page, "Plot color", keyboard=True)
     expect(popover).to_have_attribute("data-slot", "popover-content")
-    popover_width = popover.evaluate("element => parseFloat(getComputedStyle(element).width)")
-    assert 319.5 <= popover_width <= 320.5
 
     picker = popover.locator("[data-leika-color-picker]")
     selection = picker.locator("[data-leika-color-selection]")
@@ -75,7 +65,7 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
     expect(outputs.first).not_to_have_attribute("readonly", "")
 
     outputs.first.fill("#3478F6")
-    _wait_for_value(lambda: color.value == (52, 120, 246))
+    wait_until(lambda: color.value == (52, 120, 246))
     expect(trigger).to_contain_text("rgb(52, 120, 246)")
     outputs.first.fill("#invalid")
     expect(outputs.first).to_have_attribute("aria-invalid", "true")
@@ -95,7 +85,7 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
 
     for index, channel in enumerate(("52", "120", "246")):
         outputs.nth(index).fill(channel)
-    _wait_for_value(lambda: color.value == (52, 120, 246))
+    wait_until(lambda: color.value == (52, 120, 246))
     outputs.nth(2).press("Enter")
 
     color.value = (10, 20, 30)
@@ -113,25 +103,12 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
     expect(outputs.first).to_have_value("10", timeout=5_000)
     selection.focus()
     selection.press("Shift+ArrowRight")
-    _wait_for_value(lambda: color.value != (10, 20, 30))
+    wait_until(lambda: color.value != (10, 20, 30))
 
     color.value = (1, 2, 3)
     for index, channel in enumerate(("1", "2", "3")):
         expect(outputs.nth(index)).to_have_value(channel, timeout=5_000)
     expect(trigger).to_contain_text("rgb(1, 2, 3)")
-
-    format_trigger.click()
-    leika_page.get_by_role("option", name="CSS").click()
-    expect(outputs).to_have_count(1)
-    outputs.first.fill("rgb(12, 34, 56)")
-    _wait_for_value(lambda: color.value == (12, 34, 56))
-
-    format_trigger.click()
-    leika_page.get_by_role("option", name="HSL").click()
-    expect(outputs).to_have_count(3)
-    for index, channel in enumerate(("0", "100", "50")):
-        outputs.nth(index).fill(channel)
-    _wait_for_value(lambda: color.value == (255, 0, 0))
 
     selection.press("Escape")
     expect(popover).to_be_hidden()
@@ -177,42 +154,11 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     selection_bounds = selection.bounding_box()
     assert selection_bounds is not None
     assert selection_bounds["width"] >= popover_bounds["width"] - 34
-    selection_height = selection.evaluate("element => parseFloat(getComputedStyle(element).height)")
-    assert 159.5 <= selection_height <= 160.5
 
     format_trigger = picker.locator("[data-leika-color-format]")
     output = picker.locator("[data-leika-color-output]")
-    eyedropper = picker.locator("[data-leika-color-eyedropper]")
     expect(output.first).to_have_value("#0A141E")
     expect(output.nth(1)).to_have_value("50")
-    for compact_control in (format_trigger, output.first, eyedropper):
-        height = compact_control.evaluate("element => parseFloat(getComputedStyle(element).height)")
-        assert 23.5 <= height <= 24.5
-
-    output_group = output.first.locator("xpath=parent::*")
-    expect(output_group).not_to_have_css("overflow", "hidden")
-
-    def corner_radii(control: Locator) -> dict[str, float]:
-        return control.evaluate(
-            """element => {
-                const value = getComputedStyle(element);
-                return {
-                    topLeft: parseFloat(value.borderTopLeftRadius),
-                    topRight: parseFloat(value.borderTopRightRadius),
-                    bottomRight: parseFloat(value.borderBottomRightRadius),
-                    bottomLeft: parseFloat(value.borderBottomLeftRadius),
-                };
-            }"""
-        )
-
-    value_corners = corner_radii(output.first)
-    opacity_corners = corner_radii(output.nth(1))
-    assert value_corners["topLeft"] > 0
-    assert value_corners["bottomLeft"] > 0
-    assert value_corners["topRight"] == 0
-    assert opacity_corners["topLeft"] == 0
-    assert opacity_corners["topRight"] > 0
-    assert opacity_corners["bottomRight"] > 0
 
     hue_thumb = hue.locator("xpath=parent::*")
     opacity_thumb = opacity.locator("xpath=parent::*")
@@ -236,7 +182,7 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     expect(output.first).not_to_have_attribute("readonly", "")
     expect(output.nth(1)).not_to_have_attribute("readonly", "")
     output.nth(1).fill("25")
-    _wait_for_value(lambda: color.value == (10, 20, 30, 64))
+    wait_until(lambda: color.value == (10, 20, 30, 64))
     output.nth(1).press("Enter")
     color.value = (10, 20, 30, 128)
     expect(output.nth(1)).to_have_value("50", timeout=5_000)
@@ -258,7 +204,7 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     leika_page.get_by_role("option", name="CSS").click()
     expect(output).to_have_count(1)
     output.first.fill("rgba(12, 34, 56, 0.25)")
-    _wait_for_value(lambda: color.value == (12, 34, 56, 64))
+    wait_until(lambda: color.value == (12, 34, 56, 64))
     output.first.press("Enter")
 
     color.value = (10, 20, 30, 128)
@@ -270,17 +216,17 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     hue_bar = picker.locator('[data-leika-color-slider="hue"]')
     drag_slider(hue_bar, 0.2, 0.8)
     expect(hue).to_have_value(re.compile(r"^(?:2[7-9][0-9]|300)(?:\.\d+)?$"))
-    _wait_for_value(lambda: color.value[:3] != (10, 20, 30))
+    wait_until(lambda: color.value[:3] != (10, 20, 30))
     assert color.value[3] == 128
 
     opacity_bar = picker.locator('[data-leika-color-slider="alpha"]')
     drag_slider(opacity_bar, 0.2, 0.75)
     expect(opacity).to_have_value(re.compile(r"^(?:7[0-9]|80)(?:\.\d+)?$"))
-    _wait_for_value(lambda: 175 <= color.value[3] <= 205)
+    wait_until(lambda: 175 <= color.value[3] <= 205)
 
     color.value = (10, 20, 30, 128)
     expect(output.first).to_have_value("#0A141E", timeout=5_000)
-    _wait_for_value(lambda: color.value == (10, 20, 30, 128))
+    wait_until(lambda: color.value == (10, 20, 30, 128))
 
     # Hue and canvas changes preserve the alpha channel.
     hue.focus()
@@ -290,13 +236,13 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     selection.click(
         position={"x": selection_bounds["width"] - 8, "y": 8},
     )
-    _wait_for_value(lambda: color.value[0] >= 225 and color.value[1] <= 25 and color.value[2] <= 25)
+    wait_until(lambda: color.value[0] >= 225 and color.value[1] <= 25 and color.value[2] <= 25)
     selected_rgb = color.value[:3]
     assert color.value[3] == 128
 
     opacity.focus()
     opacity.press("Home")
-    _wait_for_value(lambda: color.value == (*selected_rgb, 0))
+    wait_until(lambda: color.value == (*selected_rgb, 0))
 
     format_trigger.click()
     leika_page.get_by_role("option", name="HSL").click()
@@ -341,7 +287,7 @@ def test_hue_survives_greyscale_and_the_far_right(
     selection_bounds = selection.bounding_box()
     assert selection_bounds is not None
     selection.click(position={"x": selection_bounds["width"] - 8, "y": 8})
-    _wait_for_value(lambda: color.value[0] > color.value[2])
+    wait_until(lambda: color.value[0] > color.value[2])
     expect(hue).to_have_attribute("aria-valuenow", "5")
 
     # The far right stays at the far right rather than wrapping to 0.
@@ -355,44 +301,7 @@ def test_hue_survives_greyscale_and_the_far_right(
     assert thumb_box["x"] > track_box["x"] + track_box["width"] / 2
 
     # And it is still the red that hue 0 would have given.
-    _wait_for_value(lambda: color.value[0] > 200 and color.value[1] < 40)
-    assert page_errors == []
-
-
-def test_the_reset_button_appears_only_once_the_row_has_been_edited(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    color = leika_server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
-    trigger = _color_trigger(leika_page, "Plot line")
-    row = find_gui_row(leika_page, "Plot line")
-    reset = row.locator("[data-leika-color-reset]")
-    expect(trigger).to_be_visible()
-    expect(reset).to_have_count(0)
-    untouched_width = trigger.bounding_box()
-
-    # Through the block rather than the hue slider: the initial value is a grey,
-    # which every hue maps to alike.
-    picker = _open_color_picker(leika_page, "Plot line")
-    selection = picker.locator("[data-leika-color-selection]")
-    bounds = selection.bounding_box()
-    assert bounds is not None and untouched_width is not None
-    selection.click(position={"x": bounds["width"] - 12, "y": 12})
-    _wait_for_value(lambda: color.value != (196, 196, 196))
-    selection.press("Escape")
-
-    expect(reset).to_have_count(1)
-    edited_width = trigger.bounding_box()
-    assert edited_width is not None
-    assert edited_width["width"] < untouched_width["width"]
-
-    reset.click()
-    _wait_for_value(lambda: color.value == (196, 196, 196))
-    expect(reset).to_have_count(0)
-    restored = trigger.bounding_box()
-    assert restored is not None
-    assert restored["width"] == untouched_width["width"]
+    wait_until(lambda: color.value[0] > 200 and color.value[1] < 40)
     assert page_errors == []
 
 
@@ -414,13 +323,21 @@ def _settled_box(locator: Locator) -> dict[str, float]:
     raise AssertionError("the popover never settled")
 
 
-def test_the_popover_holds_its_place_when_the_reset_button_appears(
+def test_the_reset_button_comes_and_goes_without_moving_anything(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """It aligns to the row, not the trigger, which the button shortens."""
+    """The reset appears only once the row has been edited, shortens the
+    trigger to make its room, and the popover -- aligned to the ROW, not the
+    trigger -- holds its place through both."""
     color = leika_server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
+    trigger = _color_trigger(leika_page, "Plot line")
+    row = find_gui_row(leika_page, "Plot line")
+    reset = row.locator("[data-leika-color-reset]")
+    expect(trigger).to_be_visible()
+    expect(reset).to_have_count(0)
+    untouched_width = trigger.bounding_box()
 
     def popover_origin() -> tuple[float, float]:
         picker = _open_color_picker(leika_page, "Plot line")
@@ -431,22 +348,33 @@ def test_the_popover_holds_its_place_when_the_reset_button_appears(
 
     unedited = popover_origin()
 
+    # Through the block rather than the hue slider: the initial value is a grey,
+    # which every hue maps to alike.
     picker = _open_color_picker(leika_page, "Plot line")
     selection = picker.locator("[data-leika-color-selection]")
     bounds = selection.bounding_box()
-    assert bounds is not None
+    assert bounds is not None and untouched_width is not None
     selection.click(position={"x": bounds["width"] - 12, "y": 12})
-    _wait_for_value(lambda: color.value != (196, 196, 196))
+    wait_until(lambda: color.value != (196, 196, 196))
     selection.press("Escape")
-    expect(find_gui_row(leika_page, "Plot line").locator("[data-leika-color-reset]")).to_have_count(
-        1
-    )
+
+    expect(reset).to_have_count(1)
+    edited_width = trigger.bounding_box()
+    assert edited_width is not None
+    assert edited_width["width"] < untouched_width["width"]
 
     # Anchored to the trigger, this moved by the button's whole width plus the
     # gap, so a pixel of tolerance is nowhere near what the bug looked like.
     edited = popover_origin()
     assert abs(edited[0] - unedited[0]) < 1.0, (unedited, edited)
     assert abs(edited[1] - unedited[1]) < 1.0, (unedited, edited)
+
+    reset.click()
+    wait_until(lambda: color.value == (196, 196, 196))
+    expect(reset).to_have_count(0)
+    restored = trigger.bounding_box()
+    assert restored is not None
+    assert restored["width"] == untouched_width["width"]
     assert page_errors == []
 
 

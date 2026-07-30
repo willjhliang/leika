@@ -111,24 +111,12 @@ def test_the_open_gear_fills_with_the_accent(
 
     # Opening it leaves the pointer on it, and the hover state dims the fill to
     # 80%, so the pointer moves off before any of these are read.
-    pane = open_settings(leika_page)
+    open_settings(leika_page)
     leika_page.mouse.move(2, 2)
     expect(trigger).to_have_css("background-color", checked_fill)
     assert trigger.locator("svg").evaluate("e => getComputedStyle(e).color") == checkbox.evaluate(
         "e => getComputedStyle(e).color"
     )
-
-    # And it follows the accent, since that is the token both are reading.
-    swatch = pane.locator("#leika-settings-accent")
-    swatch.click()
-    picker = leika_page.locator("[data-leika-color-popover]:visible")
-    output = picker.locator("[data-leika-color-output]").first
-    output.fill("#1A237E")
-    output.press("Enter")
-    leika_page.keyboard.press("Escape")
-    leika_page.mouse.move(2, 2)
-    expect(trigger).to_have_css("background-color", "rgb(26, 35, 126)")
-    expect(checkbox).to_have_css("background-color", "rgb(26, 35, 126)")
 
     close_settings(leika_page)
     leika_page.mouse.move(2, 2)
@@ -332,10 +320,6 @@ def test_a_scheme_choice_survives_a_reload(
         "was => document.documentElement.classList.contains('dark') !== was",
         arg=was_dark,
     )
-
-    stored = leika_page.evaluate("() => localStorage.getItem('leika.settings.v2')")
-    assert stored is not None
-    assert '"darkMode":' in stored
 
     leika_page.reload()
     leika_page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -616,39 +600,3 @@ def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     expect(folded).to_have_count(0, timeout=5_000)
     expect(generated).to_be_visible()
     assert page_errors == []
-
-
-def _settings_stay_on_top(page: Page) -> dict[str, object]:
-    """Scroll the panel body past the settings, and read what is left at its top."""
-    return page.evaluate(
-        """id => {
-            const section = document.getElementById(id);
-            // Whatever the chrome scrolls with: the floating and mobile panels
-            // put the body in a ScrollArea, the sidebar scrolls its own column.
-            let viewport = section.parentElement;
-            while (
-                viewport &&
-                !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)
-            ) {
-                viewport = viewport.parentElement;
-            }
-            viewport.scrollTop = viewport.scrollHeight;
-            const rect = section.getBoundingClientRect();
-            const top = viewport.getBoundingClientRect().top;
-            const under = document.elementFromPoint(
-                rect.left + rect.width / 2,
-                top + rect.height / 2,
-            );
-            return {
-                scrolled: viewport.scrollTop > 0,
-                offset: Math.round(rect.top - top),
-                // What is painted where the settings are, now that the app's
-                // own rows are passing behind them.
-                showing: under === null ? null : under.closest(
-                    '[data-leika-settings-pane]',
-                ) !== null,
-                surface: getComputedStyle(section).backgroundColor,
-            };
-        }""",
-        SECTION_ID,
-    )

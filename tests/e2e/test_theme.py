@@ -11,6 +11,7 @@ Playwright's media emulation rather than inspecting rendered colors.
 
 from __future__ import annotations
 
+import pytest
 from playwright.sync_api import Page
 
 import leika
@@ -44,23 +45,15 @@ def test_unconfigured_theme_follows_the_browser_preference(
     assert page_errors == []
 
 
-def test_auto_theme_follows_a_light_browser_preference(
+def test_auto_theme_tracks_the_browser_preference(
     leika_server: leika.Server, page: Page, page_errors: list[str]
 ) -> None:
+    """An explicit "auto" follows the OS, and keeps following it live."""
     leika_server.gui.configure_theme(dark_mode="auto")
-    open_page(page, leika_server, prefers="light")
-
-    wait_for_scheme(page, "light")
-    assert page_errors == []
-
-
-def test_auto_theme_tracks_a_mid_session_preference_change(
-    leika_server: leika.Server, page: Page, page_errors: list[str]
-) -> None:
-    """Switching the OS to light repaints the open page, without a reload."""
     open_page(page, leika_server, prefers="dark")
     wait_for_scheme(page, "dark")
 
+    # Switching the OS repaints the open page, without a reload.
     page.emulate_media(color_scheme="light")
     wait_for_scheme(page, "light")
 
@@ -69,24 +62,23 @@ def test_auto_theme_tracks_a_mid_session_preference_change(
     assert page_errors == []
 
 
-def test_explicit_dark_mode_overrides_a_light_browser_preference(
-    leika_server: leika.Server, page: Page, page_errors: list[str]
-) -> None:
-    leika_server.gui.configure_theme(dark_mode=True)
-    open_page(page, leika_server, prefers="light")
-
-    wait_for_scheme(page, "dark")
-    assert page_errors == []
-
-
-def test_explicit_light_mode_overrides_a_dark_browser_preference(
-    leika_server: leika.Server, page: Page, page_errors: list[str]
+@pytest.mark.parametrize(
+    "choice",
+    [(True, "light", "dark"), (False, "dark", "light")],
+    ids=["dark-overrides-light", "light-overrides-dark"],
+)
+def test_explicit_choice_overrides_the_browser_preference(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+    choice: tuple[bool, str, str],
 ) -> None:
     """`dark_mode=False` is a decision, not an absence of one."""
-    leika_server.gui.configure_theme(dark_mode=False)
-    open_page(page, leika_server, prefers="dark")
+    dark_mode, prefers, expected = choice
+    leika_server.gui.configure_theme(dark_mode=dark_mode)
+    open_page(page, leika_server, prefers=prefers)
 
-    wait_for_scheme(page, "light")
+    wait_for_scheme(page, expected)
     assert page_errors == []
 
 

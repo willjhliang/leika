@@ -370,6 +370,7 @@ def test_two_floating_windows_snap_into_one_stack(dock_page: Page, page_errors: 
 def test_dropping_below_a_docked_panel_splits_the_region(
     dock_page: Page, page_errors: list[str]
 ) -> None:
+    """The drop previews as a line, splits into a column, and gains a divider."""
     page = dock_page
     dock_control_panel_left(page)
     torn = tear_out_tab(page, "Beta")
@@ -400,42 +401,21 @@ def test_dropping_below_a_docked_panel_splits_the_region(
     assert top["y"] + top["height"] <= bottom["y"] + 0.5
     assert top["width"] == pytest.approx(bottom["width"], abs=1.0)
     assert canvas_inset(page) == pytest.approx(top["width"], abs=1.0)
-    # Two stacked leaves make the region a pure column, which gains a handle.
+    # Two stacked leaves make the region a pure column, which gains a handle,
+    # and its divider redistributes the heights.
     expect(page.locator("[data-dock-column-handle]")).to_have_count(1)
-    assert page_errors == []
-
-
-def test_split_divider_redistributes_height_between_docked_panels(
-    dock_page: Page, page_errors: list[str]
-) -> None:
-    page = dock_page
-    dock_control_panel_left(page)
-    torn = tear_out_tab(page, "Beta")
-    leaf = bounds(page.locator("[data-dock-leaf]"))
-    drag(
-        page,
-        center(grip_of(torn)),
-        CANVAS,
-        (leaf["x"] + leaf["width"] / 2, leaf["y"] + leaf["height"] - 25.0),
-    )
-    leaves = page.locator("[data-dock-leaf]")
-    expect(leaves).to_have_count(2, timeout=5_000)
-    before = bounds(leaves.nth(0))["height"]
-
+    before = top["height"]
     divider = page.locator("[data-dock-divider='column']")
     expect(divider).to_have_count(1)
     grip = center(divider)
     drag(page, grip, (grip[0], grip[1] - 90.0))
-
     after = bounds(leaves.nth(0))["height"]
     assert after == pytest.approx(before - 90.0, abs=3.0)
     assert page_errors == []
 
 
-def test_column_handle_floats_the_whole_docked_column(
-    dock_page: Page, page_errors: list[str]
-) -> None:
-    page = dock_page
+def split_control_panel_below(page: Page) -> None:
+    """Dock the control panel left, then split Beta into a band below it."""
     dock_control_panel_left(page)
     torn = tear_out_tab(page, "Beta")
     leaf = bounds(page.locator("[data-dock-leaf]"))
@@ -446,6 +426,13 @@ def test_column_handle_floats_the_whole_docked_column(
         (leaf["x"] + leaf["width"] / 2, leaf["y"] + leaf["height"] - 25.0),
     )
     expect(page.locator("[data-dock-leaf]")).to_have_count(2, timeout=5_000)
+
+
+def test_column_handle_floats_the_whole_docked_column(
+    dock_page: Page, page_errors: list[str]
+) -> None:
+    page = dock_page
+    split_control_panel_below(page)
 
     # The column handle drags the whole column out as one stacked window.
     drag(page, center(page.locator("[data-dock-column-handle]")), (500.0, 200.0))

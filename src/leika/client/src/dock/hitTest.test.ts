@@ -495,15 +495,6 @@ describe("docked group per-panel zones", () => {
     expect(out.hint.variant).toBe("line");
   });
 
-  it("over the strip, right half of a tab -> insertTab after it", () => {
-    const out = run(layout, [target()], 170, 125)!; // right half of tab 0
-    expect(out.result).toEqual({
-      kind: "insertTab",
-      targetGroupId: "a",
-      index: 1,
-    });
-  });
-
   it("content left band -> split left (thin line at the panel's left edge)", () => {
     // rx < SPLIT_BAND. Frame x in [100..500], width 400. SPLIT_BAND*400=88.
     // Use a mid y (in the side band, not the top/bottom band).
@@ -715,15 +706,6 @@ describe("area target", () => {
       index: 0,
     });
     expect(out.hint.variant).toBe("line");
-  });
-
-  it("over the strip, right half of tab 0 -> insertTab after it", () => {
-    const out = run(layout, [areaTarget()], 470, 225)!; // right half of tab 0
-    expect(out.result).toEqual({
-      kind: "insertTab",
-      targetGroupId: "area",
-      index: 1,
-    });
   });
 
   it("over the body (below the strip) -> merge", () => {

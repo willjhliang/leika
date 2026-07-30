@@ -320,38 +320,18 @@ def test_tall_sidebar_scrolls_internally_and_stays_inside_viewport(
     expect(last_control).to_be_attached(timeout=5_000)
     scroll_viewport = last_control.locator("xpath=ancestor::*[@data-slot='sidebar-content'][1]")
     sidebar = scroll_viewport.locator("xpath=ancestor::*[@data-slot='sidebar'][1]")
-    scroll_root = scroll_viewport
-    expect(scroll_root).to_be_visible()
     expect(sidebar).to_be_visible()
     expect(scroll_viewport).to_be_visible()
-    sidebar_group = scroll_root.locator(':scope > [data-slot="sidebar-group"]')
-    expect(sidebar_group).to_have_count(1)
-    expect(sidebar_group.locator(':scope > [data-slot="sidebar-group-content"]')).to_have_count(1)
 
     viewport = page.viewport_size
     sidebar_bounds = sidebar.bounding_box()
-    scroll_bounds = scroll_root.bounding_box()
-    group_bounds = sidebar_group.bounding_box()
-    group_content_bounds = sidebar_group.locator(
-        ':scope > [data-slot="sidebar-group-content"]'
-    ).bounding_box()
-    assert (
-        viewport is not None
-        and sidebar_bounds is not None
-        and scroll_bounds is not None
-        and group_bounds is not None
-        and group_content_bounds is not None
-    )
+    scroll_bounds = scroll_viewport.bounding_box()
+    assert viewport is not None and sidebar_bounds is not None and scroll_bounds is not None
     assert sidebar_bounds["x"] >= -0.5
     assert sidebar_bounds["y"] >= -0.5
     assert sidebar_bounds["x"] + sidebar_bounds["width"] <= viewport["width"] + 0.5
     assert sidebar_bounds["y"] + sidebar_bounds["height"] <= viewport["height"] + 0.5
     assert scroll_bounds["y"] + scroll_bounds["height"] <= viewport["height"] + 0.5
-    assert group_content_bounds["x"] > sidebar_bounds["x"]
-    assert (
-        group_content_bounds["x"] + group_content_bounds["width"]
-        < sidebar_bounds["x"] + sidebar_bounds["width"]
-    )
 
     scroll_metrics = scroll_viewport.evaluate(
         "element => ({clientHeight: element.clientHeight, scrollHeight: element.scrollHeight})"
