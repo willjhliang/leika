@@ -37,6 +37,7 @@ from ._gui_handles import (
     GuiButtonGroupHandle,
     GuiButtonHandle,
     GuiCheckboxHandle,
+    GuiChecklistHandle,
     GuiContainer,
     GuiContainerProtocol,
     GuiDividerHandle,
@@ -69,6 +70,7 @@ from ._gui_handles import (
     PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
+    _checklist_items,
     _colors_to_int_tuple,
     _CommandHandleState,
     _GuiHandleState,
@@ -438,17 +440,8 @@ class GuiApi(GuiContainer):
             return
         prop_value = message.updates["value"]
 
-        # Cast to the shape the handle holds: JavaScript sends integers where
-        # floats are expected, and lists where tuples are.
-        if isinstance(handle_state.value, tuple):
-            if len(handle_state.value) > 0:
-                # Tuple contents are assumed homogeneous.
-                typ = type(handle_state.value[0])
-                prop_value = tuple(typ(new) for new in prop_value)
-            else:
-                prop_value = tuple(prop_value)
-        else:
-            prop_value = type(handle_state.value)(prop_value)
+        # Cast to the shape the handle holds, which is the handle's own to know.
+        prop_value = handle._coerce_client_value(prop_value)
 
         has_changed = handle_state.value != prop_value
         if has_changed:
@@ -2268,6 +2261,83 @@ class GuiApi(GuiContainer):
                     uuid=uuid,
                     container_uuid=self._get_container_uuid(),
                     props=_messages.GuiListProps(
+                        order=order,
+                        label=label,
+                        hint=hint,
+                        disabled=disabled,
+                        visible=visible,
+                        frozen=frozen,
+                    ),
+                ),
+            )
+        )
+
+    def add_checklist(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiChecklistHandle:
+        """Add a checklist to the GUI: entries with a box each to tick.
+
+        A list whose rows carry an answer. The value is one ``(text, checked)``
+        pair per item, in the order they are shown, so it reads back the way it
+        is written::
+
+            for text, checked in items.value:
+                ...
+
+        An item given as a bare string is one nobody has ticked yet, which
+        saves a ``False`` per line and is what makes ``items.value +=
+        ("Lights",)`` work::
+
+            items = server.gui.add_checklist("Preflight",
+                                             ["Fuel", ("Doors", True)])
+            items.checked  # ("Doors",)
+
+        Everything a viewer can do -- ticking a box, typing in an entry, adding
+        one, removing one, dragging one somewhere else -- reports the whole
+        tuple, and a row's tick travels with the words it is against.
+
+        Args:
+            label: Optional label for the row. Left unset, the checklist takes
+                the whole width of the panel, which a stack of rows usually
+                wants; given one, the label takes the left column and the items
+                sit beside it, like every other labelled control.
+            initial_value: The items the checklist starts with, each a string or
+                a ``(text, checked)`` pair. An empty checklist is one with
+                nothing on it yet, not an error.
+            frozen: Fix the items: their words, their number, and their order.
+                Frozen, a row is the words rather than a box to type them in,
+                and all the viewer does is tick -- which is the checklist that
+                is a checklist rather than a list to write. Stronger than a
+                list's ``frozen``, which leaves the typing alone: here the
+                answer being asked for is the ticks. Use ``disabled`` to stop
+                those too.
+            disabled: Whether the checklist is disabled.
+            visible: Whether the checklist is visible.
+            hint: Optional hint to display on hover.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+        items = _checklist_items(initial_value)
+        uuid = _make_uuid()
+        order = _apply_default_order(order)
+        return GuiChecklistHandle(
+            self._create_gui_input(
+                items,
+                message=_messages.GuiChecklistMessage(
+                    value=items,
+                    uuid=uuid,
+                    container_uuid=self._get_container_uuid(),
+                    props=_messages.GuiChecklistProps(
                         order=order,
                         label=label,
                         hint=hint,

@@ -22,6 +22,9 @@ Inputs
 .. autoclass:: GuiListHandle
    :members:
 
+.. autoclass:: GuiChecklistHandle
+   :members:
+
 .. autoclass:: GuiNumberHandle
    :members:
 

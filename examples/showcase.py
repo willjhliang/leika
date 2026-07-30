@@ -471,6 +471,23 @@ def main() -> None:
             hint="Drag an entry to reorder it.",
         )
         watching = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
+        # The same stack with an answer on each row: the value is the
+        # (text, checked) pairs, so a tick arrives with the words it is
+        # against -- and stays with them when the entry is dragged elsewhere.
+        todo = server.gui.add_checklist(
+            "To do",
+            (("Sweep the offset", True), "Log the ringing", "Export the run"),
+            hint="Drag an entry to reorder it; its tick goes with it.",
+        )
+        # Frozen, the words are fixed too and all there is to do is work
+        # through them, which is the checklist a list cannot be. The rows stop
+        # being fields and become what they say.
+        preflight = server.gui.add_checklist(
+            "Before a run",
+            ("Warm up the source", ("Zero the offset", True), "Clear the log"),
+            frozen=True,
+        )
+        progress = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
 
     state: dict[str, Any] = {
         "phase": 0.0,
@@ -583,6 +600,17 @@ def main() -> None:
         # was changed -- typed in, added to, removed from, or dragged about.
         kept = [entry.strip() for entry in watchlist.value if entry.strip()]
         watching.value = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
+
+    def show_progress(_: Any = None) -> None:
+        # `checked` is the question a checklist is usually asked, without the
+        # comprehension over the pairs.
+        done = len(todo.checked) + len(preflight.checked)
+        total = len(todo.value) + len(preflight.value)
+        progress.value = f"_{done} of {total} ticked._"
+
+    show_progress()
+    todo.on_update(show_progress)
+    preflight.on_update(show_progress)
 
     @broadcast.on_submit
     def _(_) -> None:

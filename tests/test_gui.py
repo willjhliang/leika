@@ -466,3 +466,40 @@ def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> No
     # str() applied behind the caller's back.
     with pytest.raises(ValueError, match="sequence of strings"):
         server.gui.add_list("Bad", ("fine", 3))  # type: ignore[arg-type]
+
+
+def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
+    """The value is (text, checked) per item, so it reads back the way it is
+    written -- and a bare string is an item nobody has ticked yet."""
+    items = server.gui.add_checklist("Preflight", ["Fuel", ("Doors", True), "Lights"])
+    assert items.value == (("Fuel", False), ("Doors", True), ("Lights", False))
+    assert [text for text, _ in items.value] == ["Fuel", "Doors", "Lights"]
+    assert items.checked == ("Doors",)
+    assert items.frozen is False
+
+    # Assigning takes the same latitude the constructor does, which is what
+    # lets a bare string be appended to a list of pairs.
+    items.value += ("Chocks",)
+    assert items.value[-1] == ("Chocks", False)
+
+    seen: list[tuple[tuple[str, bool], ...]] = []
+    items.on_update(lambda event: seen.append(event.target.value))
+    items.value = [("Fuel", True), ("Doors", True)]
+    _wait_for(lambda: seen == [(("Fuel", True), ("Doors", True))])
+    assert items.checked == ("Fuel", "Doors")
+
+    # An empty checklist is one with nothing on it yet, and starts that way.
+    assert server.gui.add_checklist().value == ()
+
+    # Frozen fixes the items -- their words as well as their number and their
+    # order, since what a checklist is asked for is the ticks.
+    fixed = server.gui.add_checklist("Fixed", ("read", "only"), frozen=True)
+    assert fixed.frozen is True
+    fixed.frozen = False
+    assert fixed.frozen is False
+
+    # Pairs, so anything that is not one is a mistake worth naming.
+    with pytest.raises(ValueError, match="strings or"):
+        server.gui.add_checklist("Bad", [("fine", True), 3])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="item's text is a string"):
+        server.gui.add_checklist("Bad", [(3, True)])  # type: ignore[list-item]

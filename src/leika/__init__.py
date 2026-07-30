@@ -6,6 +6,7 @@ from ._gui_handles import FileContent as FileContent
 from ._gui_handles import GuiButtonGroupHandle as GuiButtonGroupHandle
 from ._gui_handles import GuiButtonHandle as GuiButtonHandle
 from ._gui_handles import GuiCheckboxHandle as GuiCheckboxHandle
+from ._gui_handles import GuiChecklistHandle as GuiChecklistHandle
 from ._gui_handles import GuiContainer as GuiContainer
 from ._gui_handles import GuiDividerHandle as GuiDividerHandle
 from ._gui_handles import GuiDownloadButtonHandle as GuiDownloadButtonHandle

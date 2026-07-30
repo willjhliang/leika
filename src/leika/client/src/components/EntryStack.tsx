@@ -80,6 +80,40 @@ function moved<T>(entries: T[], from: number, to: number): T[] {
   return next;
 }
 
+/** An id per entry, kept with the entry as the stack shuffles them.
+ *
+ * The entries themselves cannot say which is which: they are the caller's, and
+ * two of them may be equal -- a list holding "Write" twice is a list holding
+ * two different entries that read the same. So the stack numbers them, and
+ * every move it makes to the entries it makes to the numbers in the same
+ * breath.
+ *
+ * What it cannot do is follow a change it did not make. Entries arriving from
+ * the server -- assigned in Python, or edited by somebody else's browser --
+ * come with no account of where each one came from, so a list that has changed
+ * length is renumbered from scratch. Guessing would be worse than admitting
+ * it: the point of an id is that it is only ever handed out when this stack
+ * knows the answer.
+ */
+function useEntryIds(count: number) {
+  const ids = React.useRef<number[]>([]);
+  const minted = React.useRef(0);
+  if (ids.current.length !== count) {
+    ids.current = Array.from(
+      { length: count },
+      (_, place) => ids.current[place] ?? minted.current++,
+    );
+  }
+  return {
+    ids: ids.current,
+    /** Do to the ids what is about to be done to the entries. */
+    follow: (move: (ids: number[]) => number[]) => {
+      ids.current = move(ids.current);
+    },
+    mint: () => minted.current++,
+  };
+}
+
 /** A stack of entries the viewer can add to, throw away from, and reorder.
  *
  * What an entry IS belongs to the caller: the stack holds an array of them,
@@ -110,6 +144,21 @@ export function EntryStack<T>({
   frozen: boolean;
   children: (item: T, row: EntryRow) => React.ReactNode;
 }) {
+  const { ids, follow, mint } = useEntryIds(items.length);
+  /** Reorder, remove, add: the entries and their ids, always together. */
+  const reorder = (from: number, to: number) => {
+    follow((order) => moved(order, from, to));
+    commit(moved(items, from, to));
+  };
+  const discard = (place: number) => {
+    follow((order) => order.filter((_, other) => other !== place));
+    commit(items.filter((_, other) => other !== place));
+  };
+  const append = () => {
+    follow((order) => [...order, mint()]);
+    commit([...items, blank()]);
+  };
+
   const rowsRef = React.useRef<HTMLDivElement>(null);
   const [drag, setDrag] = React.useState<Drag | null>(null);
   // The row still on its way to where its entry now belongs. Cleared by the
@@ -185,7 +234,7 @@ export function EntryStack<T>({
     if (step === 0 || to < 0 || to >= items.length) return;
     event.preventDefault();
     const { stride } = geometryOf(rows());
-    commit(moved(items, place, to));
+    reorder(place, to);
     // The two entries change places, so each is seen to come from the other's.
     slideIn(place, step * stride);
     land(to, -step * stride, true);
@@ -214,7 +263,7 @@ export function EntryStack<T>({
       // Cancelled is not dropped: the gesture was taken away rather than
       // finished, so the entry goes back where it came from.
       const place = landed ? landing : drag.entry;
-      if (place !== drag.entry) commit(moved(items, drag.entry, place));
+      if (place !== drag.entry) reorder(drag.entry, place);
       land(place, lift - (place - drag.entry) * drag.stride, false);
     };
     const drop = () => release(true);
@@ -295,7 +344,13 @@ export function EntryStack<T>({
               data-leika-list-item
               data-leika-list-carried={inHand || undefined}
             >
-              {children(item, { place, slot, aloft, count: items.length })}
+              {children(item, {
+                place,
+                id: ids[place],
+                slot,
+                aloft,
+                count: items.length,
+              })}
               {/* Inside the box, at its end: they are what to do with this
                   entry, not further controls in the column. `z-20` beats the
                   focused box's own lift, which would otherwise sit on top of
@@ -329,9 +384,7 @@ export function EntryStack<T>({
                     aria-label={`Remove entry ${place + 1}`}
                     title="Remove"
                     disabled={disabled}
-                    onClick={() =>
-                      commit(items.filter((_, other) => other !== place))
-                    }
+                    onClick={() => discard(place)}
                     data-leika-list-remove
                   >
                     <XIcon className="size-3.5" />
@@ -350,7 +403,7 @@ export function EntryStack<T>({
           variant="outline"
           className="w-full"
           disabled={disabled}
-          onClick={() => commit([...items, blank()])}
+          onClick={append}
           data-leika-button
           data-leika-button-color="secondary"
           data-leika-list-add

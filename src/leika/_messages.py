@@ -864,6 +864,25 @@ class GuiListMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiChecklistProps(GuiBaseProps):
+    frozen: bool
+    """Whether the ITEMS are fixed: their words, their number, and their order.
+    Frozen, a row is the words rather than a box to type them in, and what the
+    viewer does with the list is tick it. Separate from ``disabled``, which
+    stops the ticking too. Stronger than a list's ``frozen``, which leaves the
+    typing alone, because on a checklist the answer being asked for is the
+    ticks and the words are only what they are against."""
+
+
+@dataclasses.dataclass
+class GuiChecklistMessage(_CreateGuiComponentMessage):
+    value: Tuple[Tuple[str, bool], ...]
+    """One (text, checked) pair per item, in the order they are shown."""
+    container_uuid: str
+    props: GuiChecklistProps
+
+
+@dataclasses.dataclass
 class GuiDropdownProps(GuiBaseProps):
     # This will actually be manually overridden for better types.
     options: Tuple[str, ...]

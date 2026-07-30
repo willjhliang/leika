@@ -588,6 +588,24 @@ export interface GuiListMessage {
     frozen: boolean;
   };
 }
+/** GuiChecklistMessage(uuid: 'str', value: 'Tuple[Tuple[str, bool], ...]', container_uuid: 'str', props: 'GuiChecklistProps')
+ *
+ * (automatically generated)
+ */
+export interface GuiChecklistMessage {
+  type: "GuiChecklistMessage";
+  uuid: string;
+  value: [string, boolean][];
+  container_uuid: string;
+  props: {
+    order: number;
+    label: string | null;
+    hint: string | null;
+    visible: boolean;
+    disabled: boolean;
+    frozen: boolean;
+  };
+}
 /** GuiDropdownMessage(uuid: 'str', value: 'str', container_uuid: 'str', props: 'GuiDropdownProps')
  *
  * (automatically generated)
@@ -1016,6 +1034,7 @@ export type Message =
   | GuiVector3Message
   | GuiTextMessage
   | GuiListMessage
+  | GuiChecklistMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage
   | GuiRemoveMessage
@@ -1068,6 +1087,7 @@ export type GuiComponentMessage =
   | GuiVector3Message
   | GuiTextMessage
   | GuiListMessage
+  | GuiChecklistMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage;
 const typeSetGuiComponentMessage = new Set([
@@ -1094,6 +1114,7 @@ const typeSetGuiComponentMessage = new Set([
   "GuiVector3Message",
   "GuiTextMessage",
   "GuiListMessage",
+  "GuiChecklistMessage",
   "GuiDropdownMessage",
   "GuiButtonGroupMessage",
 ]);

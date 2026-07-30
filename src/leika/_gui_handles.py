@@ -38,6 +38,7 @@ from ._messages import (
     GuiButtonGroupProps,
     GuiButtonProps,
     GuiCheckboxProps,
+    GuiChecklistProps,
     GuiCloseModalMessage,
     GuiDividerProps,
     GuiDropdownProps,
@@ -294,6 +295,23 @@ class _GuiInputHandle(
         is identity; rgb/rgba handles override this to normalize colors."""
         return value
 
+    def _coerce_client_value(self, value: Any) -> Any:
+        """Cast a value the browser sent to the shape this handle holds.
+
+        JavaScript sends integers where floats are expected, and arrays where
+        tuples are, so the value already here is what says what the new one
+        should be. A handle whose value has more structure than that -- a tuple
+        of pairs rather than of numbers -- overrides this.
+        """
+        current = self._impl.value
+        if not isinstance(current, tuple):
+            return type(current)(value)
+        if len(current) == 0:
+            return tuple(value)
+        # Tuple contents are assumed homogeneous.
+        typ = type(current[0])
+        return tuple(typ(new) for new in value)
+
     @value.setter
     def value(self, value: T | np.ndarray) -> None:
         value = self._coerce_assigned_value(value)
@@ -465,6 +483,91 @@ class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
        Assigning one sets the list to exactly those entries, which is how
        Python adds, removes, and reorders: ``handle.value += ("next",)``.
     """
+
+
+def _checklist_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
+    """The ``(text, checked)`` pairs a checklist holds, from what was given.
+
+    A bare string is an item nobody has ticked yet, which is what a checklist
+    usually starts as: ``["Fuel", ("Doors", True)]`` says what it means without
+    a ``False`` per line, and it is what lets ``handle.value += ("Lights",)``
+    read the way it does on a list.
+    """
+    items: list[Tuple[str, bool]] = []
+    for item in value:
+        if isinstance(item, str):
+            items.append((item, False))
+            continue
+        try:
+            text, checked = item
+        except (TypeError, ValueError):
+            raise ValueError(
+                "A checklist holds (text, checked) pairs, so its items are strings or"
+                f" two-item pairs; got {item!r}."
+            ) from None
+        if not isinstance(text, str):
+            raise ValueError(
+                f"A checklist item's text is a string; got {text!r}. Pass str(...) for"
+                " anything else."
+            )
+        items.append((text, bool(checked)))
+    return tuple(items)
+
+
+class GuiChecklistHandle(GuiInputHandle[Tuple[Tuple[str, bool], ...]], GuiChecklistProps):
+    """Handle for a checklist: entries with a box each to tick.
+
+    .. attribute:: value
+       :type: tuple[tuple[str, bool], ...]
+
+       One ``(text, checked)`` pair per item, in the order they are shown, so
+       ``for text, checked in handle.value`` reads the list as it stands.
+       Ticking a box reports it, and so does every one of the things a list can
+       do to its entries -- editing one, adding one, removing one, dragging one
+       somewhere else -- since a row's tick travels with the words it is
+       against. Assigning sets the checklist to exactly those items, and a bare
+       string among them is an item nobody has ticked: ``handle.value +=
+       ("Lights",)``.
+    """
+
+    @property
+    def value(self) -> Tuple[Tuple[str, bool], ...]:
+        """The items, as pairs.
+
+        :meta private:
+        """
+        # Read as pairs, written with the same latitude the constructor gives:
+        # what comes back is always normalized, so `handle.value += ("Lights",)`
+        # is an expression a type checker can follow rather than one that only
+        # happens to work.
+        return self._impl.value
+
+    @value.setter
+    def value(self, value: Sequence[str | Tuple[str, bool]] | np.ndarray) -> None:
+        # `np.ndarray` only because the base setter takes one everywhere; a
+        # checklist has no use for one, and it goes through the same normalizer.
+        _GuiInputHandle.value.fset(self, value)  # type: ignore[attr-defined]
+
+    @property
+    def checked(self) -> Tuple[str, ...]:
+        """The text of the ticked items, in the order they are shown.
+
+        The question a checklist is usually asked, without the comprehension
+        over the pairs. Read-only: what an item says and whether it is ticked
+        are one thing, and ``value`` is where both are set.
+        """
+        return tuple(text for text, checked in self.value if checked)
+
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        return _checklist_items(value)
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        # The browser sends `[[text, checked], ...]`, which the base would turn
+        # into a tuple of LISTS -- and into nothing at all when the checklist is
+        # empty and there is no item to take the shape from.
+        return _checklist_items(value)
 
 
 class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):

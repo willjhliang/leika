@@ -5,6 +5,13 @@ import { cn } from "@/lib/utils";
 export type EntryRow = {
   /** The entry's own place in the list. */
   place: number;
+  /** What the entry IS, as opposed to where it currently sits: a number the
+   * stack keeps with it while the entries are shuffled. Rows are keyed by
+   * their place and rewritten where they stand, so anything inside a row that
+   * carries state of its own -- a control that eases between colours, say --
+   * needs this to tell "the same thing, changed" from "a different thing,
+   * arrived". Two entries reading the same still have ids of their own. */
+  id: number;
   /** The place the row is DRAWN in, which is not the place it holds while an
    * entry is being carried over it. */
   slot: number;
