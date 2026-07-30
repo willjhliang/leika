@@ -8,6 +8,7 @@ import {
   showNotification,
   updateNotification,
 } from "./notifications";
+import { notePlotlyMaybeLoaded } from "./plotlyReady";
 import { ViewerContext } from "./ViewerContext";
 import {
   FileTransferPart,
@@ -44,6 +45,7 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
         return;
       case "RunJavascriptMessage":
         new Function(message.source)();
+        notePlotlyMaybeLoaded();
         return;
       case "NotificationShowMessage":
         showNotification(message.uuid, message.props);

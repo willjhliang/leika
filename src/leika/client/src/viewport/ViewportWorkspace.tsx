@@ -6,6 +6,7 @@ import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
 
 import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
+import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
 import { ViewerContext } from "../ViewerContext";
 import { motionExceedsThreshold } from "../dragUtils";
 import { prefersReducedMotion } from "../utils/motion";
@@ -1138,38 +1139,15 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
       : (themeTemplates[colorScheme] ?? themeTemplates.light));
 
   const [plotlyMissing, setPlotlyMissing] = React.useState(false);
-  // The retry budget lives outside the effect so streamed figure updates and
-  // resizes, which re-run it, cannot restart the clock indefinitely.
-  const plotlyRetriesRef = React.useRef(200); // ~10 seconds at 50ms.
   React.useEffect(() => {
     if (plotJson === null || width === 0 || height === 0) return;
     // Plotly is loaded globally by a RunJavascriptMessage that the server
-    // queues before any Plotly pane; poll briefly in case a render races it.
-    // If it never arrives (blocked or failed eval), stop polling and show a
-    // fallback instead of spinning forever.
+    // queues before any Plotly pane; a render that races it waits on the
+    // ready promise. If it never arrives (blocked or failed eval), show a
+    // fallback rather than a blank pane.
     let cancelled = false;
-    const render = () => {
+    const render = (plotly: PlotlyGlobal) => {
       if (cancelled || plotRef.current === null) return;
-      const plotly = (
-        window as unknown as {
-          Plotly?: {
-            react(
-              node: HTMLElement,
-              data: unknown,
-              layout: unknown,
-              config: unknown,
-            ): unknown;
-          };
-        }
-      ).Plotly;
-      if (plotly === undefined) {
-        if (plotlyRetriesRef.current-- <= 0) {
-          setPlotlyMissing(true);
-          return;
-        }
-        setTimeout(render, 50);
-        return;
-      }
       setPlotlyMissing(false);
       // A malformed figure must not take down the workspace; Plotly.react
       // reports errors both synchronously and as a rejected promise.
@@ -1192,9 +1170,15 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
         console.error("Plotly render failed:", error);
       }
     };
-    render();
+    plotlyReady.then((plotly) => {
+      if (!cancelled) render(plotly);
+    });
+    const fallback = window.setTimeout(() => {
+      if (!cancelled && getPlotly() === undefined) setPlotlyMissing(true);
+    }, 10_000);
     return () => {
       cancelled = true;
+      clearTimeout(fallback);
     };
   }, [plotJson, layoutTemplate, width, height]);
 
@@ -1203,9 +1187,7 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
   React.useEffect(() => {
     const node = plotRef.current;
     return () => {
-      const plotly = (
-        window as unknown as { Plotly?: { purge(n: HTMLElement): void } }
-      ).Plotly;
+      const plotly = getPlotly();
       if (node !== null && plotly !== undefined) {
         plotly.purge(node);
       }
