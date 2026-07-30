@@ -174,7 +174,7 @@ def main() -> None:
         pane_id="field",
         title="Live NumPy field",
         fit="fill",
-        image_format="jpeg",
+        format="jpeg",
         jpeg_quality=82,
     )
     detail_pane = grid.add_image(
@@ -184,7 +184,7 @@ def main() -> None:
         # No `fit`: this pane follows whatever the viewer picked under
         # Settings. The field pane above pins its own, so the two show the
         # override and the default side by side.
-        image_format="png",
+        format="png",
     )
     plot_figure = make_plot()
     plot_pane = grid.add_plotly(
@@ -347,8 +347,8 @@ def main() -> None:
         # every one of those arrives as the list now reads. Labelled, so it
         # takes the controls column with its label beside the first entry.
         watchlist = server.gui.add_list(
+            "Watch for",
             ("phase drift", "edge ringing"),
-            label="Watch for",
             hint="Drag an entry to reorder it.",
         )
         watching = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)

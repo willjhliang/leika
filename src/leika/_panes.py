@@ -219,7 +219,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
         self.image = image
 
     @property
-    def image_format(self) -> Literal["auto", "jpeg", "png"]:
+    def format(self) -> Literal["auto", "jpeg", "png"]:
         """Encoding requested when this pane was created."""
 
         return self._impl.requested_format
@@ -327,8 +327,8 @@ class PaneGroup:
         *,
         pane_id: str | None = None,
         title: str = "Image",
-        image_format: Literal["auto", "png", "jpeg"] = "auto",
-        jpeg_quality: int = 85,
+        format: Literal["auto", "png", "jpeg"] = "auto",
+        jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
     ) -> ImagePaneHandle:
@@ -342,7 +342,7 @@ class PaneGroup:
                 image,
                 pane_id=pane_id,
                 title=title,
-                image_format=image_format,
+                format=format,
                 jpeg_quality=jpeg_quality,
                 fit=fit,
                 visible=visible,
@@ -430,8 +430,8 @@ class PaneGrid:
         *,
         pane_id: str | None = None,
         title: str = "Image",
-        image_format: Literal["auto", "png", "jpeg"] = "auto",
-        jpeg_quality: int = 85,
+        format: Literal["auto", "png", "jpeg"] = "auto",
+        jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
     ) -> ImagePaneHandle:
@@ -445,7 +445,7 @@ class PaneGrid:
                 image,
                 pane_id=pane_id,
                 title=title,
-                image_format=image_format,
+                format=format,
                 jpeg_quality=jpeg_quality,
                 fit=fit,
                 visible=visible,
@@ -566,8 +566,8 @@ class Panes:
         *,
         pane_id: str | None = None,
         title: str = "Image",
-        image_format: Literal["auto", "png", "jpeg"] = "auto",
-        jpeg_quality: int = 85,
+        format: Literal["auto", "png", "jpeg"] = "auto",
+        jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
         placement: Placement = "right",
@@ -585,7 +585,7 @@ class Panes:
                 default a UUID is generated. Set this explicitly to restore a
                 pane's position after a server restart.
             title: Pane corner-label title.
-            image_format: Transport encoding. "auto" chooses PNG for RGBA and JPEG
+            format: Transport encoding. "auto" chooses PNG for RGBA and JPEG
                 for RGB.
             jpeg_quality: JPEG encoder quality from 0 to 100.
             fit: Image sizing policy within the pane. By default the viewer's
@@ -602,7 +602,7 @@ class Panes:
             image,
             pane_id=pane_id,
             title=title,
-            image_format=image_format,
+            format=format,
             jpeg_quality=jpeg_quality,
             fit=fit,
             visible=visible,
@@ -617,7 +617,7 @@ class Panes:
         *,
         pane_id: str | None,
         title: str,
-        image_format: Literal["auto", "png", "jpeg"],
+        format: Literal["auto", "png", "jpeg"],
         jpeg_quality: int | None,
         fit: ImageFit | None,
         visible: bool,
@@ -629,16 +629,8 @@ class Panes:
         title = str(title)
         visible = bool(visible)
         pane_id = self._validate_pane_declaration(pane_id, placement)
-        if image_format not in ("auto", "png", "jpeg"):
-            raise ValueError("image_format must be 'auto', 'png', or 'jpeg'.")
-        if jpeg_quality is not None and (
-            isinstance(jpeg_quality, bool)
-            or not isinstance(jpeg_quality, int)
-            or not 0 <= jpeg_quality <= 100
-        ):
-            raise ValueError("jpeg_quality must be an integer from 0 to 100.")
         fit = _validate_fit(fit)
-        if image_format == "jpeg" and image.shape[2] == 4:
+        if format == "jpeg" and image.shape[2] == 4:
             warnings.warn(
                 "Encoding an RGBA pane image as JPEG discards its alpha channel.",
                 # Both public entry points (add_image, group add_image) are
@@ -646,7 +638,7 @@ class Panes:
                 stacklevel=3,
             )
 
-        resolved_format, data = encode_image_binary(image, image_format, jpeg_quality=jpeg_quality)
+        resolved_format, data = encode_image_binary(image, format, jpeg_quality=jpeg_quality)
         props = _messages.ViewportImageProps(
             _data=data,
             _format=resolved_format,
@@ -660,7 +652,7 @@ class Panes:
                 props=copy.deepcopy(props),
                 api=self,
                 image=image,
-                requested_format=image_format,
+                requested_format=format,
                 jpeg_quality=jpeg_quality,
             )
         )

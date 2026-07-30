@@ -32,7 +32,7 @@ def main() -> None:
             pane_id="live-image",
             title="Live NumPy image",
             fit="fill",
-            image_format="jpeg",
+            format="jpeg",
             jpeg_quality=85,
         )
 

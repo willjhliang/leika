@@ -40,7 +40,7 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
         pane_id="camera",
         title="Camera",
         fit="fill",
-        image_format="png",
+        format="png",
     )
     assert pane.pane_id == "camera"
     assert pane.title == "Camera"

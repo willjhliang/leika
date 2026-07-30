@@ -16,10 +16,17 @@ def encode_image_binary(
     """Normalize and encode an RGB or RGBA image for browser transport.
 
     Raises:
-        ValueError: If the image is not (height, width, 3|4), or the format is
-            not one of the three named in the signature.
+        ValueError: If the image is not (height, width, 3|4), the format is
+            not one of the three named in the signature, or the quality is
+            outside 0..100.
     """
 
+    if jpeg_quality is not None and (
+        isinstance(jpeg_quality, bool)
+        or not isinstance(jpeg_quality, int)
+        or not 0 <= jpeg_quality <= 100
+    ):
+        raise ValueError("jpeg_quality must be an integer from 0 to 100.")
     image = colors_to_uint8(image)
     if image.ndim != 3 or image.shape[2] not in (3, 4):
         raise ValueError(f"Expected an image with shape (height, width, 3|4), got {image.shape}.")
@@ -43,7 +50,7 @@ def cv2_imencode_with_fallback(
     the strict dependencies, since it can be annoying to install.
     """
     if jpeg_quality is None:
-        jpeg_quality = 75  # Default JPEG quality if not specified.
+        jpeg_quality = 85
 
     try:
         import cv2  # type: ignore[import-not-found]
