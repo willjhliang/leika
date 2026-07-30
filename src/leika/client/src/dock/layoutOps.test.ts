@@ -23,7 +23,6 @@ import { describe, it, expect } from "vitest";
 import {
   DockEdge,
   DockLayout,
-  DockNode,
   GroupId,
   MIN_PANEL_WIDTH_PX,
   emptyLayout,
