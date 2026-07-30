@@ -55,6 +55,9 @@ Inputs
 .. autoclass:: GuiDownloadButtonHandle
    :members:
 
+.. autoclass:: GuiPreviewButtonHandle
+   :members:
+
 Colors and vectors
 ------------------
 

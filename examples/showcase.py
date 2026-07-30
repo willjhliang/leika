@@ -9,8 +9,11 @@ Install the optional dependency and run from the repository root::
 from __future__ import annotations
 
 import io
+import struct
 import time
+import zlib
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +37,34 @@ PLOTLY_TEMPLATES = (
     "gridon",
     "none",
 )
+
+# The one thing here that is a file before it is a preview. Everything else
+# the showcase shows is made up as it runs.
+ASSETS = Path(__file__).resolve().parent / "assets"
+
+# A file with no file behind it: bytes made up on the spot and previewed as
+# markdown, which the dialog renders the way `add_text(markdown=True)` does.
+NOTES_MD = """\
+# Showcase notes
+
+The controls on the left drive four panes: a NumPy field, a crop of it, a live
+Plotly chart and a 3D surface.
+
+## Files
+
+| Button | What it does |
+| --- | --- |
+| Download signal CSV | Saves the chart's history as a file |
+| Preview signal CSV | Shows those same rows here instead |
+| Preview the field | The frame the pane is showing, as a PNG |
+| Watch the ripple | A clip of the same field, read off disk |
+
+Every viewer opens the same window: writing is set in a column like this
+one, data runs the full width, and pictures sit in the middle of it.
+
+A preview holds the whole file in the tab, so anything past **64 MiB** is
+declined with a notification rather than opened.
+"""
 
 # uPlot ships no equivalent, so the showcase names its own line styles. Each
 # maps to the series options uPlot already understands; the first is what the
@@ -75,6 +106,34 @@ Y, X = np.mgrid[-1.0 : 1.0 : complex(HEIGHT), -1.5 : 1.5 : complex(WIDTH)]
 SURFACE_AXIS = np.linspace(-2.0, 2.0, 40)
 SURFACE_X, SURFACE_Y = np.meshgrid(SURFACE_AXIS, SURFACE_AXIS)
 SURFACE_RADIUS = np.sqrt(SURFACE_X**2 + SURFACE_Y**2)
+
+
+def png_bytes(frame: np.ndarray) -> bytes:
+    """Encode an RGB array as a PNG, with nothing but the standard library.
+
+    Leika takes NumPy arrays directly, so the showcase has no image library
+    of its own; a preview wants a file, and this is the shortest bridge
+    between the two. Each row is prefixed with a zero -- PNG's "no filter" --
+    and the lot is deflated into a single data chunk.
+    """
+    height, width, _ = frame.shape
+    rows = b"".join(b"\x00" + frame[row].tobytes() for row in range(height))
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + tag
+            + payload
+            + struct.pack(">I", zlib.crc32(tag + payload))
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        # 8 bits per sample, color type 2: RGB, no palette and no alpha.
+        + chunk(b"IHDR", struct.pack(">2I5B", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
 
 
 def render_field(
@@ -334,6 +393,53 @@ def main() -> None:
             signal_csv,
             filename="leika-signal.csv",
             icon=leika.Icon.DOWNLOAD,
+            color="secondary",
+        )
+        # The same contents, shown instead of saved: worth a look before it is
+        # worth a file. One producer serves both buttons.
+        server.gui.add_preview_button(
+            "Preview signal CSV",
+            signal_csv,
+            filename="leika-signal.csv",
+            icon=leika.Icon.EYE,
+            color="secondary",
+        )
+        server.gui.add_preview_button(
+            "Read the notes",
+            NOTES_MD.encode(),
+            filename="notes.md",
+            icon=leika.Icon.BOOK_OPEN,
+            color="secondary",
+        )
+
+        # The field as a file: the same frame the pane is showing, encoded
+        # when the button is pressed, so the preview is of the animation as
+        # it stands rather than as it started.
+        def field_png(event: leika.GuiEvent[Any]) -> bytes:
+            return png_bytes(
+                render_field(
+                    state["phase"],
+                    float(frequency.value),
+                    palette.value[0],
+                    offset.value,
+                    tint.value,
+                )
+            )
+
+        server.gui.add_preview_button(
+            "Preview the field",
+            field_png,
+            filename="leika-field.png",
+            icon=leika.Icon.IMAGE,
+            color="secondary",
+        )
+        # A file on disk rather than bytes made up on the spot -- the path is
+        # read when the button is pressed, and its own name is what the
+        # preview is titled with.
+        server.gui.add_preview_button(
+            "Watch the ripple",
+            ASSETS / "ripple.mp4",
+            icon=leika.Icon.FILM,
             color="secondary",
         )
         # A form: a note is worth reading once it is finished, not at every

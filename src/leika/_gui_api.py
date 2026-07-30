@@ -30,6 +30,7 @@ from typing_extensions import (
 
 from . import _messages, theme, uplot
 from ._gui_handles import (
+    PREVIEW_MAX_BYTES,
     CommandEvent,
     CommandHandle,
     DownloadContent,
@@ -51,6 +52,7 @@ from ._gui_handles import (
     GuiMultiSliderHandle,
     GuiNumberHandle,
     GuiPlotlyHandle,
+    GuiPreviewButtonHandle,
     GuiProgressBarHandle,
     GuiRgbaHandle,
     GuiRgbHandle,
@@ -64,6 +66,7 @@ from ._gui_handles import (
     GuiUplotHandle,
     GuiVector2Handle,
     GuiVector3Handle,
+    PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
     _colors_to_int_tuple,
@@ -133,6 +136,25 @@ def _validate_button_color(color: str) -> None:
         raise ValueError(
             f"Button color must be 'primary' or 'secondary', not {color!r}. Buttons take"
             " a role rather than a color; the accent itself is a viewer setting."
+        )
+
+
+def _validate_file_content(content: object, filename: str | None, factory: str) -> None:
+    """Reject the two ways a file button can be asked for at creation.
+
+    What is left -- a function that turns out to return unnamed bytes -- can
+    only be caught once it has run, and is raised from the handle.
+    """
+    if isinstance(content, str):
+        raise TypeError(
+            "content= must be bytes, a Path, or a function returning one of"
+            " those; a str is neither a file's contents (encode it) nor a"
+            " path we would guess at (wrap it in Path)."
+        )
+    if filename is None and isinstance(content, bytes):
+        raise ValueError(
+            f"filename= is required when the contents are bytes, which carry"
+            f" no name of their own. Passed to {factory}."
         )
 
 
@@ -1721,19 +1743,7 @@ class GuiApi(GuiContainer):
         """
 
         _validate_button_color(color)
-        if isinstance(content, str):
-            raise TypeError(
-                "content= must be bytes, a Path, or a function returning one of"
-                " those; a str is neither a file's contents (encode it) nor a"
-                " path we would guess at (wrap it in Path)."
-            )
-        if filename is None and isinstance(content, bytes):
-            # Only bytes can be ruled out this early: a callable has said
-            # nothing yet about which of the two it will return.
-            raise ValueError(
-                "filename= is required when the contents are bytes, which carry"
-                " no name to save under."
-            )
+        _validate_file_content(content, filename, "add_download_button()")
 
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -1763,6 +1773,92 @@ class GuiApi(GuiContainer):
         )
         # Registered ahead of any `on_click` the caller adds, so the file is on
         # its way before whatever else the press was meant to do.
+        handle._impl.update_cb.append(handle._send)
+        return handle
+
+    def add_preview_button(
+        self,
+        text: str,
+        content: PreviewContent,
+        *,
+        filename: str | None = None,
+        label: str | None = None,
+        color: Literal["primary", "secondary"] = "primary",
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        icon: IconName | None = None,
+        max_bytes: int = PREVIEW_MAX_BYTES,
+        order: float | None = None,
+    ) -> GuiPreviewButtonHandle:
+        """Add a button that opens a file in a dialog on the client that presses it.
+
+        The download button's twin, shown rather than saved. Which viewer the
+        dialog reaches for follows from the file's type: text as itself,
+        markdown rendered, images, audio and video in players, PDFs in a frame,
+        and anything else as a card naming the file and offering to download it
+        instead. The type is read off `filename`, so an extension is worth
+        having even when the contents are bytes.
+
+        Args:
+            text: Text on the button's face.
+            content: What to show, as in :meth:`add_download_button`: bytes, a
+                :class:`~pathlib.Path` read when the button is pressed, or a
+                function of the click event returning either.
+            filename: Name the file is shown under. Optional only when the
+                contents come from a path, whose own name is then used.
+            label: Optional label for the row; see :meth:`add_button`.
+            color: Colorway for the button. ``"primary"`` fills with the accent,
+                which is what a panel's main action wants; ``"secondary"``
+                outlines instead, for the ones that sit beside it.
+            visible: Whether the button is visible.
+            disabled: Whether the button is disabled.
+            hint: Optional hint to display on hover.
+            icon: Optional icon to display on the button.
+            max_bytes: Size past which the file is not sent at all and the
+                client is told why; showing a file means holding it whole in
+                the browser. Defaults to 64 MiB.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Note:
+            Markdown is rendered the way :meth:`add_text` renders it, which
+            evaluates expressions in the document. Previewing markdown that
+            arrived from somewhere you do not trust runs it in the viewer's
+            browser.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+
+        _validate_button_color(color)
+        _validate_file_content(content, filename, "add_preview_button()")
+
+        uuid = _make_uuid()
+        order = _apply_default_order(order)
+        message = _messages.GuiButtonMessage(
+            value=False,
+            uuid=uuid,
+            container_uuid=self._get_container_uuid(),
+            props=_messages.GuiButtonProps(
+                order=order,
+                label=label,
+                text=text,
+                hint=hint,
+                color=color,
+                _icon_html=None if icon is None else svg_from_icon(icon),
+                _hold_callback_freqs=(),
+                disabled=disabled,
+                visible=visible,
+            ),
+        )
+
+        handle = GuiPreviewButtonHandle(
+            self._create_gui_input(False, message, is_button=True),
+            _icon=icon,
+            _content=content,
+            _filename=filename,
+            _max_bytes=max_bytes,
+        )
         handle._impl.update_cb.append(handle._send)
         return handle
 

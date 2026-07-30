@@ -85,12 +85,6 @@ def _make_uuid() -> str:
     return str(uuid.uuid4())
 
 
-PREVIEW_MAX_BYTES = 64 * 1024 * 1024
-"""Past this, a preview is refused rather than sent. Generous for the text and
-images most previews are, and short of the size at which holding a whole file
-in a tab becomes the browser's problem."""
-
-
 class GuiContainerProtocol(Protocol):
     _children: dict[str, SupportsRemoveProtocol] = dataclasses.field(default_factory=dict)
 
@@ -802,14 +796,111 @@ class GuiUploadButtonHandle(_GuiInputHandle[UploadedFile], GuiUploadButtonProps)
         return func
 
 
-DownloadContent = Union[
-    bytes, Path, Callable[["GuiEvent[GuiDownloadButtonHandle]"], Union[bytes, Path]]
-]
-"""What a download button sends: the bytes themselves, a path to read them
-from, or a function called at click time returning either."""
+PREVIEW_MAX_BYTES = 64 * 1024 * 1024
+"""Past this, a preview is refused rather than sent. Generous for the text and
+images most previews are, and short of the size at which holding a whole file
+in a tab becomes the browser's problem."""
+
+FileContent = Union[bytes, Path, Callable[["GuiEvent[Any]"], Union[bytes, Path]]]
+"""What a file button sends: the bytes themselves, a path to read them from, or
+a function called at click time returning either."""
+
+DownloadContent = FileContent
+"""What a download button sends. See :data:`FileContent`."""
+
+PreviewContent = FileContent
+"""What a preview button shows. See :data:`FileContent`."""
 
 
-class GuiDownloadButtonHandle(GuiButtonHandle):
+class _GuiFileButtonHandle(GuiButtonHandle):
+    """A button that hands one file to the client that pressed it.
+
+    Subclasses say what becomes of the file; everything before that -- what to
+    send, what to call it, and not sending it twice at once -- is the same
+    whether the browser saves it or shows it.
+    """
+
+    #: Named in the errors this raises, so each subclass points at the method
+    #: the caller actually used.
+    _factory = "add_download_button()"
+    #: Completes "A <verb> of bytes has no name...".
+    _noun = "download"
+
+    def __init__(
+        self,
+        _impl: _GuiHandleState[bool],
+        _icon: IconName | None,
+        _content: FileContent,
+        _filename: str | None,
+    ):
+        super().__init__(_impl=_impl, _icon=_icon)
+        self._content = _content
+        self._filename = _filename
+
+    @property
+    def content(self) -> FileContent:
+        """What the button sends: bytes, a path to read at click time, or a
+        function of the click event returning one of those."""
+        return self._content
+
+    @content.setter
+    def content(self, content: FileContent) -> None:
+        self._content = content
+
+    @property
+    def filename(self) -> str | None:
+        """Name the file is sent under, or None to take it from the path that
+        the contents were read from."""
+        return self._filename
+
+    @filename.setter
+    def filename(self, filename: str | None) -> None:
+        self._filename = filename
+
+    def _resolve(self, event: GuiEvent[Any]) -> Tuple[str, bytes | Path]:
+        """The name and contents to send for one press."""
+        content = self._content(event) if callable(self._content) else self._content
+        if self._filename is not None:
+            return self._filename, content
+        if isinstance(content, Path):
+            return content.name, content
+        # Bytes name nothing, so there is nothing to fall back to. Raised here
+        # rather than at creation because a callable's return type is only
+        # known once it has run.
+        raise ValueError(
+            f"A {self._noun} of bytes has no name to save under; pass filename="
+            f" to {self._factory}, or return a Path to take the name from."
+        )
+
+    def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
+        """Hand the resolved file to the client that pressed."""
+        raise NotImplementedError
+
+    def _send(self, event: GuiEvent[Any]) -> None:
+        """Send the file to whoever pressed the button."""
+        if event.client is None:
+            return
+        # Held down for the length of the transfer, not just the production of
+        # the contents: the click that starts a second copy of a large file is
+        # the one made while the first is still going out.
+        self._set_disabled_if_present(True)
+        try:
+            filename, content = self._resolve(event)
+            self._deliver(event.client, filename, content)
+        finally:
+            self._set_disabled_if_present(False)
+
+    def _set_disabled_if_present(self, disabled: bool) -> None:
+        """Assign `disabled`, unless the button has been removed underneath us.
+
+        Assigning to a removed handle raises, which would replace whatever the
+        callback was really doing with an error about the button.
+        """
+        if not self._impl.removed:
+            self.disabled = disabled
+
+
+class GuiDownloadButtonHandle(_GuiFileButtonHandle):
     """Handle for a download button in our visualizer.
 
     A button that sends a file to the client that pressed it. The press is an
@@ -825,78 +916,47 @@ class GuiDownloadButtonHandle(GuiButtonHandle):
        Value of the button. Set to `True` when the button is pressed. Can be manually set back to `False`.
     """
 
+    _factory = "add_download_button()"
+    _noun = "download"
+
+    @override
+    def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
+        # A press is already the ask, so the file saves rather than arriving as
+        # a link to press again. Offering the link is for the sends nobody
+        # asked for -- `send_file_download` at a moment that is not a click.
+        client.send_file_download(filename, content, save_immediately=True)
+
+
+class GuiPreviewButtonHandle(_GuiFileButtonHandle):
+    """Handle for a preview button in our visualizer.
+
+    The download button's twin, shown rather than saved: the file goes to the
+    client that pressed and opens there in a dialog, in whichever viewer its
+    type calls for.
+
+    .. attribute:: value
+       :type: bool
+
+       Value of the button. Set to `True` when the button is pressed. Can be manually set back to `False`.
+    """
+
+    _factory = "add_preview_button()"
+    _noun = "preview"
+
     def __init__(
         self,
         _impl: _GuiHandleState[bool],
         _icon: IconName | None,
-        _content: DownloadContent,
+        _content: FileContent,
         _filename: str | None,
+        _max_bytes: int,
     ):
-        super().__init__(_impl=_impl, _icon=_icon)
-        self._content = _content
-        self._filename = _filename
+        super().__init__(_impl=_impl, _icon=_icon, _content=_content, _filename=_filename)
+        self._max_bytes = _max_bytes
 
-    @property
-    def content(self) -> DownloadContent:
-        """What the button sends: bytes, a path to read at click time, or a
-        function of the click event returning one of those."""
-        return self._content
-
-    @content.setter
-    def content(self, content: DownloadContent) -> None:
-        self._content = content
-
-    @property
-    def filename(self) -> str | None:
-        """Name the file is saved under, or None to take it from the path that
-        the contents were read from."""
-        return self._filename
-
-    @filename.setter
-    def filename(self, filename: str | None) -> None:
-        self._filename = filename
-
-    def _resolve(self, event: GuiEvent[GuiDownloadButtonHandle]) -> Tuple[str, bytes | Path]:
-        """The name and contents to send for one press."""
-        content = self._content(event) if callable(self._content) else self._content
-        if self._filename is not None:
-            return self._filename, content
-        if isinstance(content, Path):
-            return content.name, content
-        # Bytes name nothing, so there is nothing to fall back to. Raised here
-        # rather than at creation because a callable's return type is only
-        # known once it has run.
-        raise ValueError(
-            "A download of bytes has no name to save under; pass filename= to"
-            " add_download_button(), or return a Path to take the name from."
-        )
-
-    def _send(self, event: GuiEvent[GuiDownloadButtonHandle]) -> None:
-        """Send the file to whoever pressed the button."""
-        if event.client is None:
-            return
-        # Held down for the length of the transfer, not just the production of
-        # the contents: the click that starts a second copy of a large file is
-        # the one made while the first is still going out.
-        self._set_disabled_if_present(True)
-        try:
-            filename, content = self._resolve(event)
-            # A press is already the ask, so the file saves rather than
-            # arriving as a link to press again. Offering the link is for the
-            # sends nobody asked for -- `send_file_download` at a moment that
-            # is not a click.
-            event.client.send_file_download(filename, content, save_immediately=True)
-        finally:
-            self._set_disabled_if_present(False)
-
-    def _set_disabled_if_present(self, disabled: bool) -> None:
-        """Assign `disabled`, unless the button has been removed underneath us.
-
-        Assigning to a removed handle raises, which would replace whatever the
-        callback was really doing with an error about the button.
-        """
-        if not self._impl.removed:
-            self.disabled = disabled
+    @override
+    def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
+        client.send_file_preview(filename, content, max_bytes=self._max_bytes)
 
 
 class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
