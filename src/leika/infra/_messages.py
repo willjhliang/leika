@@ -175,11 +175,12 @@ class Message(abc.ABC):
         message_type = type(self)
         hints = get_type_hints_cached(message_type)
         # Filter to type-hinted fields only -- excludes dynamic attributes
-        # like cached values that shouldn't be serialized.
+        # like cached values that shouldn't be serialized. The exclusion
+        # marker is routing metadata for the buffer, not wire content.
         out = {
             k: _prepare_for_serialization(v, hints[k], binary_buffers)
             for k, v in vars(self).items()
-            if k in hints
+            if k in hints and k != "excluded_self_client"
         }
         out["type"] = message_type.__name__
         return out

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
-import os
 import threading
 import time
-import warnings
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -16,7 +14,7 @@ import numpy as np
 from . import _client_autobuild, _messages, infra
 from ._gui_api import GuiApi
 from ._gui_handles import _make_uuid
-from ._notification_handle import NotificationHandle, _NotificationHandleState
+from ._notification_handle import NotificationHandle
 from ._panes import Panes
 from ._threadpool_exceptions import print_threadpool_errors
 
@@ -134,21 +132,13 @@ class ClientHandle:
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        handle = NotificationHandle(
-            _NotificationHandleState(
-                websock_interface=self._websock_connection,
-                uuid=_make_uuid(),
-                props=_messages.NotificationProps(
-                    title=title,
-                    body=body,
-                    loading=loading,
-                    with_close_button=with_close_button,
-                    auto_close_seconds=auto_close_seconds,
-                ),
-            )
+        return self.gui.add_notification(
+            title,
+            body,
+            loading=loading,
+            with_close_button=with_close_button,
+            auto_close_seconds=auto_close_seconds,
         )
-        handle._show()
-        return handle
 
 
 class Server:
@@ -165,16 +155,6 @@ class Server:
     ) -> None:
         if not workspace_id:
             raise ValueError("workspace_id must not be empty.")
-        port_override = os.environ.get("_LEIKA_PORT_OVERRIDE")
-        if port_override is not None:
-            try:
-                port = int(port_override)
-            except ValueError:
-                warnings.warn(
-                    f"Invalid _LEIKA_PORT_OVERRIDE value {port_override!r}; using {port}.",
-                    stacklevel=2,
-                )
-
         self.host = host
         self.workspace_id = workspace_id
         self.verbose = verbose
@@ -235,7 +215,6 @@ class Server:
         )
         server.queue_message(_messages.WorkspaceConfigurationMessage(workspace_id=workspace_id))
         self.panes = Panes(self)
-        self.gui.reset()
         self.gui.set_panel_label(label)
         if verbose:
             print(f"Leika listening at {self.url}")
@@ -279,14 +258,14 @@ class Server:
         webbrowser.open(self.url)
         return None
 
-    def _run_garbage_collector(self, force: bool = False) -> None:
+    def _run_garbage_collector(self) -> None:
         """Purge tombstones and updates for removed persistent entities."""
         buffer = self._websock_server._broadcast_buffer
         with buffer.buffer_lock:
             # Skip GC while there are messages queued but not yet processed by
             # the window generators. Without this, we could cull messages
             # before they reach existing clients.
-            if not force and self._websock_server._broadcast_buffer.message_event.is_set():
+            if buffer.message_event.is_set():
                 return
 
             # First pass: collect every tombstone's entity id.
@@ -366,7 +345,8 @@ class Server:
 
         Using async functions can be useful for reducing race conditions.
         """
-        self._client_disconnect_cb.append(cb)
+        with self._client_lock:
+            self._client_disconnect_cb.append(cb)
         return cb
 
     def flush(self) -> None:

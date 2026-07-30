@@ -139,7 +139,7 @@ def _build_leika_client(out_dir: Path, cached: bool = True) -> None:
         args=[str(npm_path), "install"],
         env=subprocess_env,
         cwd=client_dir,
-        check=False,
+        check=True,
     )
     subprocess.run(
         args=[
@@ -154,7 +154,9 @@ def _build_leika_client(out_dir: Path, cached: bool = True) -> None:
         ],
         env=subprocess_env,
         cwd=client_dir,
-        check=False,
+        # A failed build must fail HERE: with check=False the server would
+        # quietly serve whatever was built last.
+        check=True,
     )
 
 
@@ -164,12 +166,12 @@ def build_client_entrypoint() -> None:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument(
         "--no-cached",
+        dest="cached",
         action="store_false",
-        help="If set, skip the build if the client is already built.",
+        help="Force a rebuild even when a client build already exists.",
     )
     args = parser.parse_args()
-    out_dir = Path(args.out_dir) if args.out_dir else build_dir
-    _build_leika_client(out_dir=out_dir, cached=args.no_cached)
+    _build_leika_client(out_dir=Path(args.out_dir), cached=args.cached)
 
 
 def _install_sandboxed_node() -> Path:
@@ -212,4 +214,4 @@ def _install_sandboxed_node() -> Path:
 
 def _modified_time_recursive(dir: Path) -> float:
     """Recursively get the last time a file was modified in a directory."""
-    return max([f.stat().st_mtime for f in dir.glob("**/*")])
+    return max((f.stat().st_mtime for f in dir.glob("**/*")), default=0.0)

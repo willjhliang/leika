@@ -10,13 +10,12 @@ import hashlib
 import http
 import logging
 import mimetypes
-import queue
 import threading
 import time
 from asyncio.events import AbstractEventLoop
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, Callable, Generator, NewType, TypeVar
+from typing import Callable, Generator, NewType, TypeVar
 from urllib.parse import unquote as _url_unquote
 
 import msgspec.msgpack
@@ -37,7 +36,6 @@ from ._messages import Message
 @dataclasses.dataclass
 class _ClientHandleState:
     # Internal state for ClientConnection objects.
-    # message_buffer: asyncio.Queue
     message_buffer: AsyncMessageBuffer
     event_loop: AbstractEventLoop
 
@@ -53,8 +51,6 @@ class WebsockMessageHandler:
         self._incoming_handlers: dict[
             type[Message], list[Callable[[ClientId, Message], None | Coroutine]]
         ] = {}
-        self._queued_messages: queue.Queue = queue.Queue()
-        self._locked_thread_id = -1
 
     def register_handler(
         self,
@@ -192,6 +188,7 @@ class WebsockServer(WebsockMessageHandler):
         """Start the server."""
 
         # Start server thread.
+        self._start_error: Exception | None = None
         ready_sem = threading.Semaphore(value=1)
         ready_sem.acquire()
         self._server_thread = threading.Thread(
@@ -202,6 +199,8 @@ class WebsockServer(WebsockMessageHandler):
 
         # Wait for ready signal from the background thread.
         ready_sem.acquire()
+        if self._start_error is not None:
+            raise self._start_error
 
         # Exit the server thread when the main process exits. This would happen
         # automatically, but is nice to do explicitly to avoid some nanobind
@@ -338,6 +337,8 @@ class WebsockServer(WebsockMessageHandler):
 
             if reason is not None:
                 rich.print(f"[bold red](leika)[/bold red] Connection rejected. {reason}{detail}")
+                async with count_lock:
+                    total_connections -= 1
                 await connection.close(1002, reason[:123])
                 return  # Exit handler to prevent further processing.
 
@@ -615,6 +616,12 @@ class WebsockServer(WebsockMessageHandler):
                 except OSError:  # Port not available.
                     port_attempt += 1
                     continue
+            # Every attempt failed: wake the waiting `start()` with the error
+            # rather than leaving it blocked on the semaphore forever.
+            self._start_error = RuntimeError(
+                f"Could not bind a port: tried {port} through {port_attempt - 1}."
+            )
+            ready_sem.release()
 
         event_loop.run_until_complete(start_server())
         rich.print("[bold](leika)[/bold] Server stopped")
@@ -710,21 +717,3 @@ async def _message_consumer(
         assert isinstance(raw, bytes)
         message = message_class.deserialize(raw)
         handle_message(message)
-
-
-def error_print_wrapper(inner: Callable[[], Any]) -> Callable[[], None]:
-    """Wrap a Callable to print error messages when they happen.
-
-    This can be helpful for jobs submitted to ThreadPoolExecutor instances, which, by
-    default, will suppress error messages until returned futures are awaited.
-    """
-
-    def wrapped() -> None:
-        try:
-            inner()
-        except Exception as e:
-            import traceback as tb
-
-            tb.print_exception(type(e), e, e.__traceback__, limit=100)
-
-    return wrapped
