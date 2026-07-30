@@ -136,8 +136,13 @@ function PlotComponent({
   uuid,
   props,
   onExpand,
+  registerTestpoint = false,
 }: GuiUplotMessage & {
   onExpand?: () => void;
+  /** Only the inline copy owns the `__leikaTestpoints` entry: the expand
+   * dialog mounts a second chart with the same uuid, and letting it register
+   * would overwrite the entry on open and delete it on close. */
+  registerTestpoint?: boolean;
 }) {
   const { ref: containerSizeRef, width: containerWidth } = useElementSize();
   const colorScheme = useColorScheme();
@@ -258,16 +263,10 @@ function PlotComponent({
     props.focus,
   ]);
 
-  // Somewhat experimental: manual scale reset logic. When the plot data is
-  // updated, uPlot's default behavior will either:
-  // - Persist the absolute x bounds (resetScales=false)
-  //     - Unideal because new data can be rendered off the plot.
-  // -Reset x bounds to the min/max of the data (resetScales=true)
-  //     - Unideal because any manual zooming from the user is lost.
-  //
-  // Here: we instead persist the relative x bounds, which are proportional to the
-  // xMin/xMax of the data. This makes the plot resilient to data updates,
-  // without losing user zooming.
+  // On a data update, persist the RELATIVE x bounds rather than uPlot's own
+  // two options: absolute bounds (new data can land off the plot) or a full
+  // reset to the data's min/max (the user's zoom is lost). Applies only to
+  // auto-scaled x; a tuple-ranged x is `transformScales`' business.
   const [plotObj, setPlotObj] = useState<uPlot>();
   const xScaleState = useRef({
     relMin: 0.0,
@@ -312,22 +311,20 @@ function PlotComponent({
       ref={containerSizeRef}
       onExpand={onExpand}
     >
-      {plotOptions && (
-        <UplotReact
-          key={colorScheme}
-          resetScales={false}
-          onCreate={(chart) => {
-            setPlotObj(chart);
-            registerUplotTestpoint(uuid, chart);
-          }}
-          onDelete={() => {
-            setPlotObj(undefined);
-            unregisterUplotTestpoint(uuid);
-          }}
-          options={plotOptions}
-          data={data}
-        />
-      )}
+      <UplotReact
+        key={colorScheme}
+        resetScales={false}
+        onCreate={(chart) => {
+          setPlotObj(chart);
+          if (registerTestpoint) registerUplotTestpoint(uuid, chart);
+        }}
+        onDelete={() => {
+          setPlotObj(undefined);
+          if (registerTestpoint) unregisterUplotTestpoint(uuid);
+        }}
+        options={plotOptions}
+        data={data}
+      />
     </MediaSurface>
   );
 }
@@ -336,7 +333,11 @@ export default function UplotComponent(message: GuiUplotMessage) {
   const [opened, setOpened] = useState(false);
   return (
     <>
-      <PlotComponent {...message} onExpand={() => setOpened(true)} />
+      <PlotComponent
+        {...message}
+        registerTestpoint
+        onExpand={() => setOpened(true)}
+      />
       <MediaDialog
         open={opened}
         onOpenChange={setOpened}
