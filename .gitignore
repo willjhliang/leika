@@ -16,6 +16,7 @@ dist/
 docs/_build/
 htmlcov/
 node_modules/
+src/leika/client/.leika-build.lock
 src/leika/client/.nodeenv/
 src/leika/client/build/
 test-results/
