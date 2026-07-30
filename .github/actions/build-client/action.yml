@@ -11,6 +11,16 @@ runs:
         path: src/leika/client/build
         key: leika-client-${{ runner.os }}-${{ hashFiles('src/leika/client/**') }}
 
+    - name: Date the restored build to now
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      # The key is a hash of the client sources, so a hit means this build was
+      # made from the sources in the tree. Restoring it keeps the archived
+      # mtimes, which read as older than the just-checked-out sources, and
+      # `ensure_client_is_built` then calls the build stale and rebuilds it --
+      # without Node, which is only installed on a miss.
+      run: find src/leika/client/build -exec touch {} +
+
     - name: Set up Node.js
       if: steps.cache.outputs.cache-hit != 'true'
       uses: actions/setup-node@v6
