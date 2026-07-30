@@ -1,17 +1,12 @@
 import React from "react";
 
 import { Slider } from "@/components/ui/slider";
-import { SliderAnnotations, type SliderMark } from "./SliderAnnotations";
+import { SliderAnnotations } from "./SliderAnnotations";
+import { defaultMarks } from "./sliderValues";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { usePointerDrag } from "../hooks/usePointerDrag";
 import { GuiSliderMessage } from "../WebsocketMessages";
 import { NumericInput, GuiInputRow } from "./common";
-
-function defaultMarks(min: number, max: number): SliderMark[] {
-  return [min, max].map((value) => ({
-    value,
-    label: value.toFixed(6).replace(/\.?0+$/, ""),
-  }));
-}
 
 export default function SliderComponent({
   uuid,
@@ -29,24 +24,12 @@ export default function SliderComponent({
   },
 }: GuiSliderMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  const [dragging, setDragging] = React.useState(false);
+  const [dragging, startDrag] = usePointerDrag();
   const controlledValue = React.useMemo(() => [value], [value]);
   // The protocol allows an unlabelled row; a slider's Python API does not, so
   // this fallback is a floor rather than a case that happens.
-  const getThumbAriaLabel = React.useCallback(() => label ?? "Value", [label]);
-
-  React.useEffect(() => {
-    if (!dragging) return;
-    const stop = () => setDragging(false);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-    return () => {
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-    };
-  }, [dragging]);
-
-  const renderedMarks = marks === null ? defaultMarks(min, max) : marks;
+  const ariaLabel = label ?? "Value";
+  const getThumbAriaLabel = React.useCallback(() => ariaLabel, [ariaLabel]);
 
   return (
     <GuiInputRow
@@ -65,31 +48,32 @@ export default function SliderComponent({
             value={controlledValue}
             min={min}
             max={max}
-            step={step ?? 1}
+            step={step}
             disabled={disabled}
-            onPointerDown={() => setDragging(true)}
-            onPointerCancel={() => setDragging(false)}
-            onPointerUp={() => setDragging(false)}
+            onPointerDown={startDrag}
             onValueChange={(next) => {
               const scalar = Array.isArray(next) ? next[0] : next;
               if (scalar !== undefined) setValue(uuid, scalar);
             }}
-            onValueCommitted={() => setDragging(false)}
           />
-          <SliderAnnotations marks={renderedMarks} min={min} max={max} />
+          <SliderAnnotations
+            marks={marks ?? defaultMarks(min, max)}
+            min={min}
+            max={max}
+          />
         </div>
         {/* Absent, the track takes the row on its own: the annotations below
             still name the range, so the number is an addition rather than the
             only reading of the value. */}
         {showValue ? (
           <NumericInput
-            aria-label={`${label} value`}
+            aria-label={`${ariaLabel} value`}
             className="w-16"
             value={value}
             onValueChange={(next) => setValue(uuid, next)}
             min={min}
             max={max}
-            step={step ?? undefined}
+            step={step}
             precision={precision}
             disabled={disabled}
           />
