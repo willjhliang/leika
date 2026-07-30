@@ -11,9 +11,10 @@ const message: GuiTabGroupMessage = {
   uuid: "tabs",
   container_uuid: "root",
   props: {
-    _tab_labels: ["First", "Second"],
-    _tab_icons_html: [null, null],
-    _tab_container_ids: ["first", "second"],
+    _tabs: [
+      { label: "First", icon_html: null, container_id: "first" },
+      { label: "Second", icon_html: null, container_id: "second" },
+    ],
     order: 0,
     visible: true,
   },

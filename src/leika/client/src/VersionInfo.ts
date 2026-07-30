@@ -4,4 +4,4 @@ export const LEIKA_VERSION = "0.1.0";
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "974ab929ca93";
+export const LEIKA_PROTOCOL = "52023d718cf6";

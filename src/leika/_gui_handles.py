@@ -54,6 +54,7 @@ from ._messages import (
     GuiRgbaProps,
     GuiRgbProps,
     GuiSliderProps,
+    GuiTab,
     GuiTabGroupProps,
     GuiTextProps,
     GuiToggleGroupProps,
@@ -885,11 +886,13 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
         out = GuiTabHandle(_parent=self, _id=uuid, _label=label, _icon=icon)
 
         self._tab_handles.append(out)
-        self._tab_labels = self._tab_labels + (label,)
-        self._tab_icons_html = self._tab_icons_html + (
-            None if icon is None else svg_from_icon(icon),
+        self._tabs = self._tabs + (
+            GuiTab(
+                label=label,
+                icon_html=None if icon is None else svg_from_icon(icon),
+                container_id=uuid,
+            ),
         )
-        self._tab_container_ids = tuple(handle._id for handle in self._tab_handles)
         return out
 
     def remove(self) -> None:
@@ -903,9 +906,9 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
             return
 
         # Remove tabs first. Each tab.remove() writes back to this group's
-        # tab-list props (_tab_labels / _tab_icons_html / _tab_container_ids), so
-        # we must NOT mark the group removed until afterwards -- otherwise the
-        # removed-handle guard in AssignablePropsBase raises on those writes, leaving
+        # `_tabs` prop, so we must NOT mark the group removed until afterwards
+        # -- otherwise the removed-handle guard in AssignablePropsBase raises
+        # on those writes, leaving
         # the group half-removed (still in its parent's _children with
         # removed=True). A subsequent gui.reset() then spins forever, since its
         # `while root._children: child.remove()` loop hits that group whose
@@ -955,12 +958,11 @@ class GuiTabHandle(GuiContainer):
     @icon.setter
     def icon(self, icon: IconName | None) -> None:
         self._icon = icon
-        # Find the index of this tab in the parent's tab list.
-        tab_index = self._parent._tab_handles.index(self)
-        # Update the icon HTML in the parent's tuple.
-        icons_list = list(self._parent._tab_icons_html)
-        icons_list[tab_index] = None if icon is None else svg_from_icon(icon)
-        self._parent._tab_icons_html = tuple(icons_list)
+        icon_html = None if icon is None else svg_from_icon(icon)
+        self._parent._tabs = tuple(
+            dataclasses.replace(tab, icon_html=icon_html) if tab.container_id == self._id else tab
+            for tab in self._parent._tabs
+        )
 
     def __post_init__(self) -> None:
         self._parent._impl.gui_api._container_handle_from_uuid[self._id] = self
@@ -977,27 +979,11 @@ class GuiTabHandle(GuiContainer):
             return
         self.removed = True
 
-        found_index = -1
-        for i, tab in enumerate(self._parent._tab_handles):
-            if tab is self:
-                found_index = i
-                break
-        assert found_index != -1, "Tab already removed!"
-
-        self._parent._tab_labels = (
-            self._parent._tab_labels[:found_index] + self._parent._tab_labels[found_index + 1 :]
+        assert self in self._parent._tab_handles, "Tab already removed!"
+        self._parent._tab_handles = [tab for tab in self._parent._tab_handles if tab is not self]
+        self._parent._tabs = tuple(
+            tab for tab in self._parent._tabs if tab.container_id != self._id
         )
-        self._parent._tab_icons_html = (
-            self._parent._tab_icons_html[:found_index]
-            + self._parent._tab_icons_html[found_index + 1 :]
-        )
-        self._parent._tab_handles = (
-            self._parent._tab_handles[:found_index] + self._parent._tab_handles[found_index + 1 :]
-        )
-        # Keep the container-id list in sync with the handles. Otherwise the
-        # client receives mismatched `_tab_labels` / `_tab_container_ids`
-        # lengths and renders a stale (orphaned) tab panel.
-        self._parent._tab_container_ids = tuple(handle._id for handle in self._parent._tab_handles)
 
         for child in tuple(self._children.values()):
             child.remove()

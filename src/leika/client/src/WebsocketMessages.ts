@@ -299,9 +299,7 @@ export interface GuiTabGroupMessage {
   uuid: string;
   container_uuid: string;
   props: {
-    _tab_labels: string[];
-    _tab_icons_html: (string | null)[];
-    _tab_container_ids: string[];
+    _tabs: { label: string; icon_html: string | null; container_id: string }[];
     order: number;
     visible: boolean;
   };

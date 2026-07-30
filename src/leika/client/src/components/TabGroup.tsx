@@ -17,15 +17,13 @@ export default function TabGroupComponent(message: GuiTabGroupMessage) {
   return <PlainTabGroup {...message} />;
 }
 
-function DockableTabGroup({
-  uuid,
-  props: { _tab_container_ids: tabContainerIds },
-}: GuiTabGroupMessage) {
+function DockableTabGroup({ uuid, props: { _tabs: tabs } }: GuiTabGroupMessage) {
   const dock = useDock();
   const guiDock = React.useContext(GuiDockContext)!;
   const areaId = `gui-tabs-${uuid}`;
 
   React.useEffect(() => guiDock.registerTabGroup(uuid), [uuid, guiDock]);
+  const tabContainerIds = tabs.map((tab) => tab.container_id);
   const ready = tabContainerIds.every((id) => dock.panels[id] !== undefined);
   const orderKey = tabContainerIds.join("\n");
   React.useEffect(() => {
@@ -42,21 +40,15 @@ function DockableTabGroup({
   return <DockArea areaId={areaId} minHeight="2.4em" inheritContentPadding />;
 }
 
-function PlainTabGroup({
-  props: {
-    _tab_labels: tabLabels,
-    _tab_icons_html: tabIconsHtml,
-    _tab_container_ids: tabContainerIds,
-  },
-}: GuiTabGroupMessage) {
+function PlainTabGroup({ props: { _tabs: tabs } }: GuiTabGroupMessage) {
   const { GuiContainer } = React.useContext(GuiComponentContext)!;
   // Derived rather than corrected in an effect: when the server drops the
   // selected tab, the first tab takes over on the same render.
   const [selected, setSelected] = React.useState<string | null>(null);
   const activeTab =
-    selected !== null && tabContainerIds.includes(selected)
+    selected !== null && tabs.some((tab) => tab.container_id === selected)
       ? selected
-      : (tabContainerIds[0] ?? null);
+      : (tabs[0]?.container_id ?? null);
 
   if (activeTab === null) return null;
   return (
@@ -65,23 +57,21 @@ function PlainTabGroup({
         className="no-scrollbar w-full min-w-0 justify-start overflow-x-auto"
         data-leika-tabs-list
       >
-        {tabLabels.map((label, index) => (
+        {tabs.map((tab) => (
           <TabsTrigger
             data-leika-tab
             className="min-w-fit"
-            value={tabContainerIds[index]}
-            key={tabContainerIds[index]}
+            value={tab.container_id}
+            key={tab.container_id}
           >
-            {tabIconsHtml[index] === null ? null : (
-              <IconHtml html={tabIconsHtml[index]!} />
-            )}
-            {label}
+            {tab.icon_html === null ? null : <IconHtml html={tab.icon_html} />}
+            {tab.label}
           </TabsTrigger>
         ))}
       </TabsList>
-      {tabContainerIds.map((containerUuid) => (
-        <TabsContent value={containerUuid} key={containerUuid} keepMounted>
-          <GuiContainer containerUuid={containerUuid} />
+      {tabs.map((tab) => (
+        <TabsContent value={tab.container_id} key={tab.container_id} keepMounted>
+          <GuiContainer containerUuid={tab.container_id} />
         </TabsContent>
       ))}
     </Tabs>

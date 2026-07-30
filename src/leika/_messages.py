@@ -128,6 +128,15 @@ class GuiSliderMark:
     label: Optional[str]
 
 
+@dataclasses.dataclass(frozen=True)
+class GuiTab:
+    """One tab of a tab group: its label, its icon, and the container it shows."""
+
+    label: str
+    icon_html: Optional[str]
+    container_id: str
+
+
 TagLiteral = Literal["GuiComponentMessage"]
 
 # Entity lifecycle markers, which drive coalescing and garbage collection.
@@ -535,12 +544,9 @@ class GuiImageMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiTabGroupProps:
-    _tab_labels: Tuple[str, ...]
-    """(Private) Tuple of labels for each tab."""
-    _tab_icons_html: Tuple[Union[str, None], ...]
-    """(Private) Tuple of HTML strings for icons of each tab, or None if no icon."""
-    _tab_container_ids: Tuple[str, ...]
-    """(Private) Tuple of container IDs for each tab."""
+    _tabs: Tuple[GuiTab, ...]
+    """(Private) One record per tab. A single field, so any change to the tabs
+    is one atomic update: a label can never arrive without its container."""
     order: float
     """Order value for arranging GUI elements. """
     visible: bool

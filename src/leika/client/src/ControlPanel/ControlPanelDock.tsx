@@ -159,14 +159,7 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
       // The config store fires for ANY prop change on this uuid; only rebuild
       // the specs (new objects + icon elements, which re-renders every tab
       // panel) when the tab CONTENT actually changed.
-      const sig =
-        tabConf === null
-          ? ""
-          : JSON.stringify([
-              tabConf.props._tab_container_ids,
-              tabConf.props._tab_labels,
-              tabConf.props._tab_icons_html,
-            ]);
+      const sig = tabConf === null ? "" : JSON.stringify(tabConf.props._tabs);
       if (tabConf !== null && sig === entry.sig) return;
       entry.sig = sig;
       const ownedBefore = new Set(entry.panelIds);
@@ -174,7 +167,7 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
         entry.unsubscribe();
         registry.current.delete(uuid);
       } else {
-        entry.panelIds = [...tabConf.props._tab_container_ids];
+        entry.panelIds = tabConf.props._tabs.map((tab) => tab.container_id);
       }
       setGuiPanels((prev) => {
         const next: PanelRegistry = {};
@@ -182,11 +175,12 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
           if (!ownedBefore.has(pid)) next[pid] = spec;
         }
         if (tabConf === null) return next;
-        tabConf.props._tab_container_ids.forEach((cid: string, i: number) => {
-          const iconHtml = tabConf.props._tab_icons_html[i];
+        tabConf.props._tabs.forEach((tab) => {
+          const cid = tab.container_id;
+          const iconHtml = tab.icon_html;
           next[cid] = {
             id: cid,
-            title: tabConf.props._tab_labels[i] ?? "Tab",
+            title: tab.label,
             icon:
               iconHtml == null ? undefined : (
                 <div

@@ -1098,10 +1098,8 @@ class GuiApi(GuiContainer):
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiTabGroupProps(
                 order=order,
-                _tab_labels=(),
+                _tabs=(),
                 visible=visible,
-                _tab_icons_html=(),
-                _tab_container_ids=(),
             ),
         )
         self._websock_interface.queue_message(message)
