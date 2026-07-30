@@ -5,7 +5,7 @@ help: ## Show available development commands
 
 install: ## Install Python and browser-development dependencies
 	python -m pip install -e ".[dev]"
-	cd src/leika/client && npm ci
+	leika-build-client
 
 test: ## Run Python unit tests
 	pytest --ignore=tests/e2e
@@ -24,7 +24,7 @@ client-test: ## Type-check, lint, and unit-test the browser client
 	cd src/leika/client && npm run typecheck && npm run lint && npm test
 
 build-client: ## Build the single-file browser client
-	cd src/leika/client && npm ci && npm run build
+	leika-build-client
 
 docs: ## Build the HTML documentation into docs/_build/html
 	sphinx-build -b html -W --keep-going docs docs/_build/html

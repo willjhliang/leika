@@ -4,21 +4,44 @@
 
 ```bash
 python -m pip install -e ".[dev]"
-cd src/leika/client
-npm ci
-npm run build
+leika-build-client
 ```
 
-The Python package serves `src/leika/client/build/index.html`. Use
-`leika-build-client` or `make build-client` after changing browser source.
+The Python package serves `src/leika/client/build/index.html`.
 
-Node is pinned in `.nvmrc`, which CI reads through `setup-node`'s
-`node-version-file`. Use that same version locally (`nvm use`, or point
-`nodeenv` at it) before running any command that rewrites
+## Building the client
+
+`leika-build-client` -- equivalently `make build-client` -- is the only way the
+client is built. CI runs it, the bootstrap above runs it, and a server that
+finds no usable build runs it for you. What a build *is* stays in the client's
+`package.json`; the entry point only invokes `npm ci && npm run build`, so
+there is no second definition to drift.
+
+A build records the hash of the sources it came from in
+`build/.leika-sources`, and is rebuilt when that no longer matches the tree.
+Timestamps are not consulted: checkouts, cache restores, and pip all rewrite
+them. The stamp is written only after a successful build, so an interrupted
+one is rebuilt rather than served.
+
+Set `LEIKA_CLIENT_BUILD` to control this from a script:
+
+| Value | Effect |
+| --- | --- |
+| `auto` (default) | Build when the stamp does not match, unless `npm run dev` is running |
+| `never` | Never build; serve whatever is in `build/` |
+| `always` | Build unconditionally |
+
+Node is pinned in `src/leika/client/.nvmrc`, beside the `package.json` it
+applies to, and CI reads the same file through `setup-node`'s
+`node-version-file`. If that exact version is already on your `PATH` the build
+uses it; otherwise it downloads a private copy with `nodeenv`.
+
+Use that same version (`nvm use`) before running any command that rewrites
 `package-lock.json`. npm versions disagree about which optional transitive
 packages belong in a lockfile, so regenerating it on an older npm silently
 drops entries that CI's npm then rejects with a confusing
-`npm ci` "package.json and package-lock.json are not in sync" error.
+`npm ci` "package.json and package-lock.json are not in sync" error. Builds
+themselves use `npm ci` and never rewrite the lockfile.
 
 ## Checks
 

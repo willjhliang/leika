@@ -11,28 +11,19 @@ runs:
         path: src/leika/client/build
         key: leika-client-${{ runner.os }}-${{ hashFiles('src/leika/client/**') }}
 
-    - name: Date the restored build to now
-      if: steps.cache.outputs.cache-hit == 'true'
-      shell: bash
-      # The key is a hash of the client sources, so a hit means this build was
-      # made from the sources in the tree. Restoring it keeps the archived
-      # mtimes, which read as older than the just-checked-out sources, and
-      # `ensure_client_is_built` then calls the build stale and rebuilds it --
-      # without Node, which is only installed on a miss.
-      run: find src/leika/client/build -exec touch {} +
-
     - name: Set up Node.js
       if: steps.cache.outputs.cache-hit != 'true'
       uses: actions/setup-node@v6
       with:
-        node-version-file: .nvmrc
+        node-version-file: src/leika/client/.nvmrc
         cache: npm
         cache-dependency-path: src/leika/client/package-lock.json
 
     - name: Build client
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      run: |
-        cd src/leika/client
-        npm ci
-        npm run build
+      # The entry point the runtime and `make build-client` also use, so every
+      # client is built the same way. It runs as a plain script: it imports only
+      # the standard library, and finds the Node that setup-node just pinned
+      # rather than downloading its own.
+      run: python3 src/leika/_client_autobuild.py

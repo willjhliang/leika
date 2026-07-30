@@ -72,6 +72,7 @@ path = "src/leika/__init__.py"
 ignore-vcs = true
 exclude = [
   "**/__pycache__/**",
+  "src/leika/client/.leika-build.lock",
   "src/leika/client/.nodeenv/**",
   "src/leika/client/node_modules/**",
 ]
@@ -97,6 +98,7 @@ exclude = [
   "src/leika/client/node_modules/**",
   "src/leika/client/src/**",
   "src/leika/client/.eslintrc.js",
+  "src/leika/client/.nvmrc",
   "src/leika/client/.gitignore",
   "src/leika/client/components.json",
   "src/leika/client/dock_test.html",
