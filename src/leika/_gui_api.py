@@ -716,7 +716,13 @@ class GuiApi(GuiContainer):
 
         self._websock_interface.queue_message(
             _messages.ThemeConfigurationMessage(
-                titlebar_content=titlebar_content,
+                # Icon names resolve to SVG here, so the client never needs to
+                # know an icon name.
+                titlebar_content=(
+                    None
+                    if titlebar_content is None
+                    else theme._resolve_titlebar_icons(titlebar_content)
+                ),
                 control_layout=control_layout,
                 dark_mode=dark_mode,
             ),

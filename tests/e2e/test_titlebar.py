@@ -15,8 +15,8 @@ import leika
 
 TITLEBAR: leika.theme.TitlebarConfig = {
     "buttons": (
-        {"text": "Docs", "icon": "Description", "href": "https://example.com/docs"},
-        {"text": "Source", "icon": "GitHub", "href": "https://example.com/src"},
+        {"text": "Docs", "icon": leika.Icon.FILE_TEXT, "href": "https://example.com/docs"},
+        {"text": "Source", "icon": "github", "href": "https://example.com/src"},
     ),
     "image": None,
 }

@@ -997,7 +997,7 @@ class WorkspaceConfigurationMessage(Message):
 class ThemeConfigurationMessage(Message):
     """Message from server->client to configure parts of the GUI."""
 
-    titlebar_content: Optional[theme.TitlebarConfig]
+    titlebar_content: Optional[theme._TitlebarConfigData]
     control_layout: Literal["floating", "collapsible", "fixed"]
     dark_mode: Union[bool, Literal["auto"]]
     """``True``/``False`` pin the scheme; ``"auto"`` defers to the browser's

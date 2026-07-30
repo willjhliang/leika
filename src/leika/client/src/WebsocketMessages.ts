@@ -816,11 +816,7 @@ export interface ThemeConfigurationMessage {
   type: "ThemeConfigurationMessage";
   titlebar_content: {
     buttons:
-      | {
-          text: string | null;
-          icon: "GitHub" | "Description" | "Keyboard" | null;
-          href: string | null;
-        }[]
+      | { text: string | null; icon_html: string | null; href: string | null }[]
       | null;
     image: {
       image_url_light: string;
