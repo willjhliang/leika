@@ -10,19 +10,14 @@ import { GuiInputRow } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 /** How tall an editable box is when no height was asked for. Fixed rather than
- * fitted, because it is being typed into: a box that grew with the typing would
- * push the rest of the panel down a line at a time. */
+ * fitted: a box that grew with the typing would push the panel down a line at
+ * a time. */
 const EDITABLE_ROWS = 3;
 
-/** Text the viewer reads rather than writes. Tinted, because a surface that
- * looks like the panel's other boxes but takes no caret reads as one that is
- * broken -- and tinted rather than disabled-looking, since nothing here is
- * disabled: there was never anything to type into.
- *
- * `bg-muted`, which is what the inactive length of a slider's track wears: the
- * panel already has a tone for "this part is not yours to work", and a second
- * one at some other strength would only be a near-miss of it. At two fifths of
- * it the box was four values off the panel behind it, which is to say invisible. */
+/** Text the viewer reads rather than writes. `bg-muted` is the tone the panel
+ * already uses for a part that is not the viewer's to work -- the inactive
+ * length of a slider's track -- as opposed to the disabled tone: nothing here
+ * is disabled, there was never anything to type into. */
 const READING = "min-w-0 rounded-lg bg-muted px-2.5 text-sm";
 
 export default function TextInputComponent({
@@ -45,9 +40,8 @@ export default function TextInputComponent({
     return (
       <GuiInputRow
         {...{ uuid, hint, label, disabled }}
-        // A div takes no caret, so a `<label for>` on it would promise
-        // something to focus; and a block beside a label starts at its first
-        // line rather than halfway down.
+        // A div takes no caret, so a `<label for>` would promise something to
+        // focus; and a block beside a label aligns to its first line.
         associateLabel={false}
         alignLabelToFirstRow={multiline}
       >
@@ -58,24 +52,18 @@ export default function TextInputComponent({
             multiline
               ? cn(
                   "py-2 leading-snug",
-                  // A height was asked for: keep it and scroll the text inside
-                  // it. Left out, the box is as tall as what it holds --
-                  // nothing is being typed here, so there is no typing for
-                  // growth to push around.
+                  // An asked-for height scrolls; left out, the box fits its text.
                   rows !== null && "overflow-y-auto",
-                  // Only the characters carry their own newlines; markdown's
-                  // blocks bring their own spacing, and preserving the source's
-                  // whitespace as well would open a blank line between each.
+                  // Markdown's blocks bring their own spacing; keeping the
+                  // source's newlines too would blank-line between each.
                   !markdown && "whitespace-pre-wrap",
                 )
-              : // One line, high as the panel's other rows, ending in an
-                // ellipsis rather than at a cut letter.
-                "flex h-6 items-center truncate",
+              : "flex h-6 items-center truncate",
           )}
           style={
             multiline && rows !== null
-              ? // In the box's OWN lines: `lh` is its line-height, so the
-                // height follows the leading instead of restating it.
+              ? // `lh` is the box's own line-height, so the height follows
+                // the leading instead of restating it.
                 { height: `calc(${rows} * 1lh + 1rem)` }
               : undefined
           }
@@ -107,11 +95,8 @@ export default function TextInputComponent({
           onChange={(event) => setValue(uuid, event.currentTarget.value)}
           disabled={disabled}
           rows={rows ?? EDITABLE_ROWS}
-          // `rows` only means anything to a box that is not sizing itself:
-          // the stock textarea grows with its content from a floor of its
-          // own, which overrode the attribute at every value and left a
-          // pasted page of text pushing the rest of the panel off the screen.
-          // Fixed, the field is the height it was asked for and scrolls.
+          // The stock textarea sizes itself to its content, which overrides
+          // `rows`; fixed, the field is the asked-for height and scrolls.
           className="field-sizing-fixed min-h-0"
         />
       ) : (

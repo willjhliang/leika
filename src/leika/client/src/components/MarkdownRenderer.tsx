@@ -64,7 +64,9 @@ const HEADING_SIZE = {
 function mdxHeading(tag: keyof typeof HEADING_SIZE) {
   const Heading = (props: React.ComponentPropsWithoutRef<"h1">) => {
     const Tag = tag;
-    return <Tag {...props} className={`${HEADING_CLASS} ${HEADING_SIZE[tag]}`} />;
+    return (
+      <Tag {...props} className={`${HEADING_CLASS} ${HEADING_SIZE[tag]}`} />
+    );
   };
   Heading.displayName = `Mdx${tag.toUpperCase()}`;
   return Heading;
@@ -88,7 +90,6 @@ function mdxList(tag: "ol" | "ul") {
   return List;
 }
 
-// A possible improvement is to add syntax highlighting support.
 function MdxCode({
   block,
   children,
@@ -99,7 +100,10 @@ function MdxCode({
       <code {...props}>{children}</code>
     </pre>
   ) : (
-    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm" {...props}>
+    <code
+      className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm"
+      {...props}
+    >
       {children}
     </code>
   );
