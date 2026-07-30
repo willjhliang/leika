@@ -367,13 +367,9 @@ function buildOp(
       const gs = pickGroups(rng, groups);
       const edge = pick(rng, edges);
       const side = pick(rng, sides);
-      const useW = rng() < 0.5;
-      const weights = useW
-        ? { existing: int(rng, 1, 5), dragged: int(rng, 1, 5) }
-        : undefined;
       return {
-        desc: `dockToRegionEdge([${gs}], ${edge}, ${side}, ${JSON.stringify(weights)})`,
-        apply: (x) => dockToRegionEdge(x, gs, edge, side, weights),
+        desc: `dockToRegionEdge([${gs}], ${edge}, ${side})`,
+        apply: (x) => dockToRegionEdge(x, gs, edge, side),
       };
     }
     case "dropOnDockedLeaf": {
@@ -385,14 +381,9 @@ function buildOp(
       // BUG #2 is FIXED: a non-center self-drop (dragged set includes the target
       // leaf's group) is now a safe no-op. We deliberately DO exercise this
       // shape to confirm it never loses a panel.
-      const weights =
-        rng() < 0.5
-          ? { dragged: int(rng, 1, 5), target: int(rng, 1, 5) }
-          : undefined;
       return {
-        desc: `dropOnDockedLeaf([${gs}], ${t.edge}, ${t.nodeId}, ${region}, ${JSON.stringify(weights)})`,
-        apply: (x) =>
-          dropOnDockedLeaf(x, gs, t.edge, t.nodeId, region, weights),
+        desc: `dropOnDockedLeaf([${gs}], ${t.edge}, ${t.nodeId}, ${region})`,
+        apply: (x) => dropOnDockedLeaf(x, gs, t.edge, t.nodeId, region),
       };
     }
     case "insertTabsInto": {

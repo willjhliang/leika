@@ -374,44 +374,6 @@ describe("dockToRegionEdge", () => {
     });
   });
 
-  it("applies explicit weights (existing/dragged) to the wrapping split's children", () => {
-    const layout = makeLayout({
-      left: leaf("a"),
-      floating: [{ id: "w1", stack: ["b"] }],
-    });
-    const out = dockToRegionEdge(layout, ["b"], "left", "right", {
-      existing: 3,
-      dragged: 1,
-    });
-    expect(shapeOf(out.docked.left, true)).toEqual({
-      dir: "row",
-      weight: 1,
-      children: [
-        { leaf: "a", weight: 3 },
-        { leaf: "b", weight: 1 },
-      ],
-    });
-  });
-
-  it("weights also apply on the dragged-first side (left)", () => {
-    const layout = makeLayout({
-      left: leaf("a"),
-      floating: [{ id: "w1", stack: ["b"] }],
-    });
-    const out = dockToRegionEdge(layout, ["b"], "left", "left", {
-      existing: 2,
-      dragged: 5,
-    });
-    expect(shapeOf(out.docked.left, true)).toEqual({
-      dir: "row",
-      weight: 1,
-      children: [
-        { leaf: "b", weight: 5 },
-        { leaf: "a", weight: 2 },
-      ],
-    });
-  });
-
   it("docks a multi-group stack as a column band, preserving order", () => {
     const layout = makeLayout({
       left: leaf("x"),
@@ -517,17 +479,14 @@ describe("dropOnDockedLeaf", () => {
     });
   });
 
-  it("the new split inherits the target leaf's weight; children get drag/target weights", () => {
+  it("the new split inherits the target leaf's weight", () => {
     const layout = makeLayout({
       left: row([leaf("a", 4), leaf("t", 7)]),
       floating: [{ id: "w1", stack: ["b"] }],
     });
     const id = leafIdOf(layout, "left", "t");
     // Drop "b" above "t" -> a column split replacing the "t" leaf, weight 7.
-    const out = dropOnDockedLeaf(layout, ["b"], "left", id, "top", {
-      dragged: 1,
-      target: 3,
-    });
+    const out = dropOnDockedLeaf(layout, ["b"], "left", id, "top");
     expect(shapeOf(out.docked.left, true)).toEqual({
       dir: "row",
       weight: 1,
@@ -538,7 +497,7 @@ describe("dropOnDockedLeaf", () => {
           weight: 7, // inherited from the replaced target leaf
           children: [
             { leaf: "b", weight: 1 },
-            { leaf: "t", weight: 3 },
+            { leaf: "t", weight: 1 },
           ],
         },
       ],

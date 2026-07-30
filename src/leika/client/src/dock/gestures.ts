@@ -146,22 +146,6 @@ export function tryRelease(el: Element, pointerId: number): void {
   }
 }
 
-/** Activate a role=button element from the keyboard (Enter or Space), matching
- * the native <button> contract for our minimize/expand controls. Structurally
- * typed so it accepts React's synthetic KeyboardEvent without a React import. */
-export function keyActivate(action: () => void) {
-  return (event: {
-    key: string;
-    preventDefault: () => void;
-    stopPropagation: () => void;
-  }) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    event.stopPropagation();
-    action();
-  };
-}
-
 // Monotonic id counter. Module-scoped so ids are unique across the whole client
 // session without needing Math.random()/Date.now().
 let idCounter = 0;

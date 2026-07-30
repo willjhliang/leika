@@ -92,7 +92,7 @@ export function reconcileRegionWidths(
     // after a top/bottom dock produces column[C, row[A,B]]: topColumns would
     // see one "column" (the whole stack) and squash the region to a single
     // column's width, whereas widthColumns surfaces the inner row's [A,B] so
-    // the side-by-side widths are preserved (LEAD 1).
+    // the side-by-side widths are preserved.
     const prevCols = prevTree ? widthColumns(prevTree) : [];
     const nextCols = widthColumns(nextTree);
     const sameSet =
@@ -212,9 +212,8 @@ export function reconcileRegionWidths(
 }
 
 /** The on-every-commit invariant: an edge's width is never below its expanded
- * columns' summed minimum. Subsumes the old auto-grow effect (which watched
- * for this after the fact) -- with the floor applied here, a too-narrow
- * region is unrepresentable in committed state. */
+ * columns' summed minimum, so a too-narrow region is unrepresentable in
+ * committed state. */
 function applyMinFloor(
   rw: Record<DockEdge, number>,
   edge: DockEdge,

@@ -1,13 +1,10 @@
 // A nested "dockable area": a flat tab group embedded in a panel's body.
 //
-// Unlike the old standalone version (which used native HTML5 drag-and-drop and
-// its own local state), this is a FIRST-CLASS participant in the dock model: its
-// tab group lives in the shared layout, so dropping panels in, reordering tabs,
-// tearing a panel out (to float, or to merge with the host/parent panel), and
-// dropping a whole snapped stack (which collapses into a series of tabs) all
-// reuse the exact same layout ops, hit-testing, and pointer-drag controller as
-// everything else -- there is no difference between "standard" and "nested"
-// panels.
+// A FIRST-CLASS participant in the dock model: its tab group lives in the
+// shared layout, so dropping panels in, reordering tabs, tearing a panel out,
+// and dropping a whole snapped stack all reuse the exact same layout ops,
+// hit-testing, and pointer-drag controller as everything else -- there is no
+// difference between "standard" and "nested" panels.
 //
 // Placement: put <DockArea areaId="..."/> in a panel's render(). The area's
 // group and its initial panels are seeded in the layout (layout.areas + a

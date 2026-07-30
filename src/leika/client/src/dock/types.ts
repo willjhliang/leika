@@ -48,6 +48,11 @@ export const SPLIT_DIVIDER_PX = 7;
  * before the user resizes it. */
 export const DEFAULT_REGION_PX = 300;
 
+/** How long a reordered tab glides to its slot. The reorder settle in
+ * DockManager is derived from this: it must outlast the glide, or FLIP takes
+ * the tab back mid-flight. */
+export const TAB_GLIDE_MS = 160;
+
 /** How close two handle clicks must fall to count as a double-click. Matches
  * the interval desktop environments use, which is what a viewer's hands are
  * already tuned to. */

@@ -192,7 +192,7 @@ export function topColumns(tree: DockNode): DockNode[] {
  * horizontal extent (the nested row) and use ITS columns. A leaf is its own
  * single column. This is what lets a top/bottom dock (which wraps the region in
  * a column split) preserve the underlying side-by-side widths rather than
- * collapsing the whole stack to one column's worth (the LEAD 1 bug). */
+ * collapsing the whole stack to one column's worth. */
 export function widthColumns(tree: DockNode): DockNode[] {
   if (tree.type === "leaf" || tree.dir === "row") return topColumns(tree);
   // Column (stacked) root: the width-bearing child is the widest one. Pick by
@@ -558,14 +558,12 @@ export function dockToEdge(
 /** Dock a stack of groups as a full-span band across the whole region, on the
  * given outer side of everything already docked there. top/bottom wrap the
  * region's tree in a column split (full-width row); left/right wrap it in a row
- * split (full-height column). Optional weights preserve the existing content's
- * size (used by left/right, which grow the region rather than resizing). */
+ * split (full-height column). */
 export function dockToRegionEdge(
   layout: DockLayout,
   groupIds: GroupId[],
   edge: DockEdge,
   side: "top" | "bottom" | "left" | "right",
-  weights?: { existing: number; dragged: number },
 ): DockLayout {
   groupIds = withoutAreaGroups(layout, groupIds);
   if (groupIds.length === 0) return layout;
@@ -580,22 +578,16 @@ export function dockToRegionEdge(
   const dir: "row" | "column" =
     side === "top" || side === "bottom" ? "column" : "row";
   const draggedFirst = side === "top" || side === "left";
-  // Without explicit weights, start the new split 50/50. The existing subtree's
-  // root weight is meaningful only in its OLD context: for a row-rooted region it
-  // may be a leftover pixel value from horizontal width reconciliation, which
-  // must NOT leak in as a vertical proportion here (a column split) -- otherwise
-  // the freshly-docked panel (weight 1) collapses next to a sibling weighted in
-  // the hundreds. (For row/left-right docks applyOp rewrites these to px anyway;
-  // for column/top-bottom docks it can't, so equalizing here is what keeps the
-  // new band at ~50% height.)
-  const subtreeW =
-    weights !== undefined
-      ? { ...subtree, weight: weights.dragged }
-      : { ...subtree, weight: 1 };
-  const existingW =
-    weights !== undefined
-      ? { ...existing, weight: weights.existing }
-      : { ...existing, weight: 1 };
+  // Start the new split 50/50. The existing subtree's root weight is
+  // meaningful only in its OLD context: for a row-rooted region it may be a
+  // leftover pixel value from horizontal width reconciliation, which must NOT
+  // leak in as a vertical proportion here (a column split) -- otherwise the
+  // freshly-docked panel (weight 1) collapses next to a sibling weighted in
+  // the hundreds. (For row/left-right docks applyOp rewrites these to px
+  // anyway; for column/top-bottom docks it can't, so equalizing here is what
+  // keeps the new band at ~50% height.)
+  const subtreeW = { ...subtree, weight: 1 };
+  const existingW = { ...existing, weight: 1 };
   const children = draggedFirst ? [subtreeW, existingW] : [existingW, subtreeW];
   draft.docked[edge] = normalizeTree({
     type: "split",
@@ -616,9 +608,6 @@ export function dropOnDockedLeaf(
   edge: DockEdge,
   targetNodeId: NodeId,
   region: DropRegion,
-  /** Optional child weights so callers can preserve absolute sizes (e.g. a
-   * left/right split that grows the region keeps the existing panel's width). */
-  weights?: { dragged: number; target: number },
 ): DockLayout {
   draggedGroupIds = withoutAreaGroups(layout, draggedGroupIds);
   if (draggedGroupIds.length === 0) return layout;
@@ -642,13 +631,11 @@ export function dropOnDockedLeaf(
   const liveTarget = treeFindLeaf(liveTree, targetNodeId);
   if (liveTarget === null) return layout;
 
-  const dw = weights?.dragged ?? 1;
-  const tw = weights?.target ?? 1;
   const subtree: DockNode = {
     ...buildColumnSubtree(draggedGroupIds),
-    weight: dw,
+    weight: 1,
   };
-  const keptTarget: DockNode = { ...liveTarget, weight: tw };
+  const keptTarget: DockNode = { ...liveTarget, weight: 1 };
   const dir: "row" | "column" =
     region === "left" || region === "right" ? "row" : "column";
   const draggedFirst = region === "left" || region === "top";
@@ -1100,8 +1087,6 @@ export function bringToFront(
   return draft;
 }
 
-/** Set the flex weights of a split node's children (used by split resizers).
- * `weights` must match the child count; mismatches are ignored. */
 /** Move `panelId` to `insertIndex` within its group's tab order. Returns the
  * input layout unchanged (same reference) when the order wouldn't change, so
  * callers can skip the re-render on no-op drag frames. */

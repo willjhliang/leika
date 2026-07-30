@@ -680,7 +680,6 @@ export function ViewportWorkspace() {
   const canvasWidth = grid.columns * grid.cellSize;
   const canvasHeight = grid.rows * grid.cellSize;
   const visiblePaneIds = collectViewportPaneIds(displayLayout);
-  const mountedPaneIds = visiblePaneIds;
 
   return (
     <div
@@ -709,7 +708,7 @@ export function ViewportWorkspace() {
           background: "var(--border)",
         }}
       >
-        {mountedPaneIds.map((paneId) => {
+        {visiblePaneIds.map((paneId) => {
           const rect = geometry.panes[paneId] ?? null;
           if (rect === null && paneId !== VIEWPORT_ROOT_PANE_ID) {
             return null;

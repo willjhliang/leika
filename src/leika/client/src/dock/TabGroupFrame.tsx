@@ -22,7 +22,7 @@ import {
 } from "./cardInset";
 import { GripPill, HandleIconButton } from "./handles";
 import { toggleGroupVisibility, useDock } from "./DockContext";
-import { DOUBLE_CLICK_MS, PanelSpec, TabGroup } from "./types";
+import { DOUBLE_CLICK_MS, PanelSpec, TAB_GLIDE_MS, TabGroup } from "./types";
 
 const PanelBody = React.memo(function PanelBody({
   panel,
@@ -181,7 +181,7 @@ export function TabGroupFrame({
       tab.style.transition = "none";
       tab.style.transform = `translateX(${previous - left}px)`;
       requestAnimationFrame(() => {
-        tab.style.transition = "transform 160ms ease";
+        tab.style.transition = `transform ${TAB_GLIDE_MS}ms ease`;
         tab.style.transform = "";
       });
     });

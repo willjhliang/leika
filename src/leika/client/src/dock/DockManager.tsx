@@ -40,7 +40,6 @@ import {
   translationOf,
 } from "./windowAnchor";
 import {
-  DEFAULT_REGION_PX,
   DropHint,
   DropResult,
   DropTargets,
@@ -51,6 +50,8 @@ import {
 } from "./hitTest";
 import {
   clamp,
+  DEFAULT_REGION_PX,
+  TAB_GLIDE_MS,
   DockEdge,
   DockLayout,
   GroupId,
@@ -159,9 +160,8 @@ export function DockManager({
     [],
   );
 
-  // ONE region plan per edge per layout (fix: previously re-planned in the
-  // render body AND the auto-grow effect AND metrics, several walks per frame
-  // during a region resize). Shared by all three consumers below.
+  // ONE region plan per edge per layout, shared by every consumer below:
+  // planning is several tree walks, and a region resize commits once a frame.
   const plans = React.useMemo(
     () => ({
       left:
@@ -178,9 +178,9 @@ export function DockManager({
 
   // Apply a layout op, reconciling docked region widths (written into
   // next.regionWidth) so panels keep their pixel widths across structural
-  // changes (see widthReconciliation.ts). The old auto-grow effect is gone:
-  // the reconciler enforces the min-width floor on every commit, so a
-  // too-narrow region is unrepresentable in committed state.
+  // changes (see widthReconciliation.ts). The reconciler enforces the
+  // min-width floor on every commit, so a too-narrow region is
+  // unrepresentable in committed state.
   const applyOp = React.useCallback((next: DockLayout) => {
     if (next === layoutRef.current) return; // no-op op: nothing to commit.
     reconcileRegionWidths(layoutRef.current, next);
@@ -509,7 +509,6 @@ export function DockManager({
     windowId: WindowId,
     groupIdForDim: GroupId | null,
     pointerId: number,
-    pointerType: string,
     grabX: number,
     grabY: number,
     /** Pre-drag layout for drags that COMMIT an op up front (float a group/
@@ -737,7 +736,6 @@ export function DockManager({
       params.windowId,
       params.groupIdForDim,
       e.pointerId,
-      e.pointerType,
       params.grabX,
       params.grabY,
       before,
@@ -846,7 +844,6 @@ export function DockManager({
         windowId,
         null,
         e.pointerId,
-        e.pointerType,
         pressX - crect.left - win.x,
         pressY - crect.top - win.y,
       );
@@ -895,14 +892,7 @@ export function DockManager({
                 return { windowId, groupIdForDim: null, grabX, grabY };
               });
             } else {
-              beginWindowDrag(
-                windowId,
-                null,
-                e.pointerId,
-                e.pointerType,
-                grabX,
-                grabY,
-              );
+              beginWindowDrag(windowId, null, e.pointerId, grabX, grabY);
             }
           },
           onClick,
@@ -1068,7 +1058,7 @@ export function DockManager({
         tabEl.style.transition = "none";
         tabEl.style.transform = `translateX(${cursorX - restCenter}px)`;
         requestAnimationFrame(() => {
-          tabEl.style.transition = "transform 160ms ease";
+          tabEl.style.transition = `transform ${TAB_GLIDE_MS}ms ease`;
           tabEl.style.transform = "";
         });
       }
@@ -1079,7 +1069,7 @@ export function DockManager({
       } else {
         settleTimer.current = window.setTimeout(
           () => setDraggingTabId(null),
-          180,
+          TAB_GLIDE_MS + 20,
         );
       }
     };
@@ -1217,7 +1207,6 @@ export function DockManager({
                 win.id,
                 groupId,
                 e0.pointerId,
-                e0.pointerType,
                 e0.clientX - crect.left - win.x,
                 e0.clientY - crect.top - win.y,
               );

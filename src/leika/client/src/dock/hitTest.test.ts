@@ -21,12 +21,18 @@ import {
   hitTest,
   tabInsertion,
   inside,
-  DEFAULT_REGION_PX,
   GroupTarget,
   ContainerRect,
   DropTargets,
 } from "./hitTest";
-import { DockEdge, DockLayout, DockNode, GroupId, emptyLayout } from "./types";
+import {
+  DEFAULT_REGION_PX,
+  DockEdge,
+  DockLayout,
+  DockNode,
+  GroupId,
+  emptyLayout,
+} from "./types";
 import {
   rect,
   leaf,

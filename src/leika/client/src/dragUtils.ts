@@ -8,19 +8,6 @@ export type KeyModifier =
   | "alt+shift"
   | "cmd/ctrl+alt+shift";
 
-export function keyModifierFromEvent(event: {
-  ctrlKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-  altKey: boolean;
-}): KeyModifier | null {
-  const parts: string[] = [];
-  if (event.ctrlKey || event.metaKey) parts.push("cmd/ctrl");
-  if (event.altKey) parts.push("alt");
-  if (event.shiftKey) parts.push("shift");
-  return parts.length === 0 ? null : (parts.join("+") as KeyModifier);
-}
-
 /** Pointer travel (px, per axis) before a press counts as a drag. Shared by
  * every drag gesture -- the dock's panel/tab drags and the viewport's pane
  * drags -- so "moved enough to be a drag" means the same thing everywhere. */

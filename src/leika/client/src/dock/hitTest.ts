@@ -18,9 +18,6 @@ import {
   WindowId,
 } from "./types";
 
-// Re-exported for existing consumers; the constant lives in types.ts now that
-// the region width is part of the layout MODEL (DockLayout.regionWidth).
-export { DEFAULT_REGION_PX } from "./types";
 import { DEFAULT_REGION_PX } from "./types";
 // Screen-edge zone width (only active on an empty edge).
 const EDGE_ZONE_PX = 48;
@@ -133,7 +130,7 @@ export const inside = (r: DOMRect, x: number, y: number) =>
  * horizontal inset slices the leftmost/rightmost tabs' insert zones at the top
  * corners and they become undroppable (the drop falls through to the host).
  * The body keeps the inset. */
-export const hitsTarget = (t: GroupTarget, x: number, y: number): boolean => {
+const hitsTarget = (t: GroupTarget, x: number, y: number): boolean => {
   if (
     t.hitRect !== undefined &&
     t.ctx.kind === "area" &&
@@ -280,10 +277,9 @@ export function hitTest(
     const regionLeft = edge === "left" ? 0 : crect.width - w;
     const regionRight = regionLeft + w;
     if (cx < regionLeft || cx > regionRight) continue;
-    // A region-edge span previews as a thin LINE along the edge it docks against,
-    // spanning the whole region -- the same insertion-line affordance as a
-    // per-panel split, just region-wide. (Previously a translucent half-region
-    // "ghost" rectangle, which read inconsistently next to the per-panel lines.)
+    // A region-edge span previews as a thin LINE along the edge it docks
+    // against, spanning the whole region -- the same insertion-line affordance
+    // as a per-panel split, just region-wide.
     const t = 3;
 
     // Top / bottom: full-width line above/below everything.
