@@ -25,8 +25,7 @@ import {
 
 const MIN_WIDTH_PX = MIN_PANEL_WIDTH_PX;
 const MAX_WIDTH_PX = MAX_PANEL_WIDTH_PX;
-// A width-resize always leaves this much canvas visible (the original
-// the container's padding).
+// A width-resize always leaves this much of the canvas visible.
 const RESIZE_KEEP_CANVAS_PX = 100;
 const MIN_HEIGHT_PX = 100;
 // Minimum height for one group in a resizable snap-stack.
@@ -703,7 +702,7 @@ function FloatingStackDivider({
   isFixed,
   pinHeight,
 }: {
-  stackRef: React.RefObject<HTMLDivElement>;
+  stackRef: React.RefObject<HTMLDivElement | null>;
   dividerIndex: number;
   stack: GroupId[];
   groups: Record<GroupId, TabGroup>;
