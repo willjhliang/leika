@@ -3,7 +3,7 @@ import functools
 import hashlib
 import types
 from collections import defaultdict
-from typing import Any, Type, Union, cast
+from typing import Any, Tuple, Type, Union, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -52,6 +52,18 @@ _numpy_dtype_to_ts_typed_array = {
     np.int16: "Int16Array",
     np.int32: "Int32Array",
 }
+
+
+def _type_args(typ: Any) -> Tuple[Any, ...]:
+    """The parameters of a generic, including numpy's own generic aliases.
+
+    numpy < 2.5 builds ``NDArray[dtype]`` out of a private alias class that
+    ``get_args()`` does not recognize and reports as unparameterized. Falling
+    back to ``__args__`` keeps the generated TypeScript -- and so the protocol
+    fingerprint -- identical across numpy versions, rather than silently
+    widening every typed array to the untyped byte buffer.
+    """
+    return get_args(typ) or tuple(getattr(typ, "__args__", ()))
 
 
 def _get_ts_type(typ: Type[Any]) -> str:
@@ -126,10 +138,10 @@ def _get_ts_type(typ: Type[Any]) -> str:
             # Extract the dtype from NDArray[dtype] annotation. Older numpy
             # parameterizes it as ndarray[Any, np.dtype[dt]]; numpy >= 2.5
             # exposes NDArray as a type alias whose args are (dt,) directly.
-            args = get_args(typ)
+            args = _type_args(typ)
             if args:
                 dtype_arg = args[-1]
-                dtype_args = get_args(dtype_arg)
+                dtype_args = _type_args(dtype_arg)
                 dtype = dtype_args[0] if dtype_args else dtype_arg
                 if dtype in _numpy_dtype_to_ts_typed_array:
                     return _numpy_dtype_to_ts_typed_array[dtype]
