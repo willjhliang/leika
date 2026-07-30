@@ -1,87 +1,12 @@
-import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
 import * as React from "react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
-import { prefersReducedMotion } from "../utils/motion";
 import { GuiListMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
-
-/** How long a row takes to travel, stepping aside or landing. */
-const SLIDE_MS = 150;
-
-/** An entry's controls, out of the way until the row is being worked on: the
- * pointer is over it, or the keyboard is on a control and showing it.
- * `:focus-visible` rather than `:focus` -- the difference between the keys
- * working a row and a drag having left them on it. Faded rather than
- * unmounted, which would take the buttons out of the tab order and out of
- * reach of the `focus()` that hands a reorder on. */
-const CONTROLS = cn(
-  "pointer-events-none opacity-0",
-  "group-hover/entry:pointer-events-auto group-hover/entry:opacity-100",
-  "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
-);
-
-/** One control: an icon filling its half of the end of the box, so the pair
- * tile it and the pointer never falls through between them. Focus darkens the
- * glyph, as hover does -- nothing in this panel rings itself with an outline. */
-const CONTROL = cn(
-  "flex h-full w-4 shrink-0 items-center justify-center rounded-sm",
-  "text-muted-foreground hover:text-foreground",
-  "outline-none focus-visible:text-foreground",
-  "disabled:pointer-events-none disabled:opacity-50",
-);
-
-/** An entry held by the pointer. Rows are uniform and the list does not move
- * under a drag, so the geometry is read once, when the grip goes down. */
-type Drag = {
-  /** The entry in hand, by its place in the list. */
-  entry: number;
-  /** The middle of the first row, and the distance from one row to the next
-   * (not the row height: hugging rows overlap by the border they share). */
-  origin: number;
-  stride: number;
-  /** Where the pointer is, and where in the row it took hold -- so the entry
-   * travels with the cursor instead of jumping its middle up to meet it. */
-  pointerY: number;
-  grab: number;
-};
-
-/** How far the entry is drawn from where its row rests, and the place it
- * would take if let go now. Both follow from one number, clamped to the ends
- * of the list, so the two can never disagree. */
-function carriedTo(drag: Drag, count: number) {
-  const restingAt = (place: number) => drag.origin + place * drag.stride;
-  const middle = Math.min(
-    Math.max(drag.pointerY - drag.grab, restingAt(0)),
-    restingAt(count - 1),
-  );
-  return {
-    entry: drag.entry,
-    stride: drag.stride,
-    landing: Math.round((middle - drag.origin) / drag.stride),
-    lift: middle - restingAt(drag.entry),
-  };
-}
-
-/** Where the rows sit, read off the document. */
-function geometryOf(rows: HTMLElement[]) {
-  const first = rows[0].getBoundingClientRect();
-  const next = rows[1]?.getBoundingClientRect();
-  return {
-    origin: first.top + first.height / 2,
-    stride: next === undefined ? first.height : next.top - first.top,
-  };
-}
-
-/** Move one entry to another place, as a new array. */
-function moved(entries: string[], from: number, to: number): string[] {
-  const next = [...entries];
-  next.splice(to, 0, ...next.splice(from, 1));
-  return next;
-}
+import { EntryStack } from "./EntryStack";
+import { ENTRY_BOX_CONTROLS, entryBoxClassName } from "./entryStackStyles";
 
 /** An editable list of text entries, stacked into one block.
  *
@@ -89,10 +14,6 @@ function moved(entries: string[], from: number, to: number): string[] {
  * one, add one, throw one away, move one -- reports the whole list as it now
  * reads. Frozen, the list is its entries and nothing else; the typing stays,
  * which `disabled` is for.
- *
- * A drag changes only where rows are DRAWN. The list is left as it is until
- * the entry lands, so the reorder is reported once, for the move the viewer
- * meant, rather than at every row the entry crossed on the way.
  */
 export default function ListInputComponent({
   uuid,
@@ -100,299 +21,31 @@ export default function ListInputComponent({
   props: { label, hint, disabled, frozen },
 }: GuiListMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
-  const rowsRef = React.useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = React.useState<Drag | null>(null);
-  // The row still on its way to where its entry now belongs. Cleared by the
-  // travel itself, and only if it is still the travel in the air -- a second
-  // move can start before the first has landed.
-  const [flying, setFlying] = React.useState<{
-    place: number;
-    travel: Animation;
-  } | null>(null);
-
   const commit = (next: string[]) => setValue(uuid, next);
-  const rows = () => [...(rowsRef.current?.children ?? [])] as HTMLElement[];
-
-  /** Hand the keyboard to the grip of the row an entry has moved into (rows
-   * are keyed by place, so a reorder rewrites their contents rather than
-   * moving them). `ringed` decides, through `:focus-visible`, whether the row
-   * keeps its controls out: the keys hand the grip on ringed because they will
-   * go on working it; a drag hands it on bare because the pointer is done. */
-  const followEntry = (place: number, ringed: boolean) => {
-    const row = rows()[place];
-    row?.querySelector<HTMLElement>("[data-leika-list-grip]")?.focus({
-      focusVisible: ringed,
-    });
-  };
-
-  /** Slide a row in from where its contents were drawn a moment ago -- the
-   * move itself is already done. */
-  const slideIn = (place: number, from: number) =>
-    from === 0 || prefersReducedMotion()
-      ? undefined
-      : rows()[place]?.animate(
-          [{ transform: `translateY(${from}px)` }, { transform: "none" }],
-          { duration: SLIDE_MS, easing: "ease" },
-        );
-
-  /** Send an entry to the row it now lives in: the keyboard follows it there,
-   * and the row stays aloft until it arrives -- otherwise it would finish its
-   * travel under the entries it is still crossing, wearing their lines. */
-  const land = (place: number, from: number, ringed: boolean) => {
-    followEntry(place, ringed);
-    const travel = slideIn(place, from);
-    if (travel === undefined) return;
-    setFlying({ place, travel });
-    const landed = () =>
-      setFlying((current) => (current?.travel === travel ? null : current));
-    travel.finished.then(landed, landed);
-  };
-
-  /** Take hold of an entry. The list is not touched until the drop. */
-  const takeHold = (
-    event: React.PointerEvent<HTMLButtonElement>,
-    entry: number,
-  ) => {
-    if (event.button !== 0) return;
-    // The default is the text selection a drag would paint -- and with it the
-    // focus a press gives the grip, which the arrow keys need afterwards.
-    event.preventDefault();
-    event.currentTarget.focus({ focusVisible: false });
-    const { origin, stride } = geometryOf(rows());
-    setDrag({
-      entry,
-      origin,
-      stride,
-      pointerY: event.clientY,
-      grab: event.clientY - (origin + entry * stride),
-    });
-  };
-
-  /** The same move from the keyboard, which cannot be asked to drag. */
-  const nudge = (event: React.KeyboardEvent, place: number) => {
-    const step =
-      event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-    const to = place + step;
-    if (step === 0 || to < 0 || to >= value.length) return;
-    event.preventDefault();
-    const { stride } = geometryOf(rows());
-    commit(moved(value, place, to));
-    // The two entries change places, so each is seen to come from the other's.
-    slideIn(place, step * stride);
-    land(to, -step * stride, true);
-  };
-
-  // The closed hand belongs to the whole document while an entry is in it: a
-  // cursor that turned into a text beam mid-drag would read as having let go.
-  const dragging = drag !== null;
-  React.useEffect(() => {
-    if (!dragging) return;
-    const root = document.documentElement;
-    root.classList.add("leika-carrying");
-    return () => root.classList.remove("leika-carrying");
-  }, [dragging]);
-
-  // A drag is the window's to follow: it carries on off the grip and out of
-  // the panel. Listened for afresh on each move, since letting go has to read
-  // the drag and the list as they stand at that moment.
-  React.useEffect(() => {
-    if (drag === null) return;
-    const move = (event: PointerEvent) =>
-      setDrag((held) => held && { ...held, pointerY: event.clientY });
-    const release = (landed: boolean) => {
-      setDrag(null);
-      const { landing, lift } = carriedTo(drag, value.length);
-      // Cancelled is not dropped: the gesture was taken away rather than
-      // finished, so the entry goes back where it came from.
-      const place = landed ? landing : drag.entry;
-      if (place !== drag.entry) commit(moved(value, drag.entry, place));
-      land(place, lift - (place - drag.entry) * drag.stride, false);
-    };
-    const drop = () => release(true);
-    const abandon = () => release(false);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", drop);
-    window.addEventListener("pointercancel", abandon);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", drop);
-      window.removeEventListener("pointercancel", abandon);
-    };
-  }, [drag, value]);
-
-  const carry = drag === null ? null : carriedTo(drag, value.length);
-
-  /** The place a row is DRAWN in, which is not the place it holds while an
-   * entry is being carried over it. */
-  const slotOf = (place: number) => {
-    if (carry === null) return place;
-    const { entry, landing } = carry;
-    if (place === entry) return landing;
-    if (place > entry && place <= landing) return place - 1;
-    if (place < entry && place >= landing) return place + 1;
-    return place;
-  };
-
-  /** How far from home a row is drawn: the entry in hand follows the pointer,
-   * and the rows between it and its landing place step aside by one. */
-  const offsetOf = (place: number) =>
-    carry === null
-      ? 0
-      : place === carry.entry
-        ? carry.lift
-        : (slotOf(place) - place) * carry.stride;
 
   const stack = (
-    <div className="flex w-full min-w-0 flex-col gap-1">
-      {/* No gap: the entries hug the way a merged row of buttons does, ends
-          rounded, insides square. Deaf to the pointer while an entry is in
-          hand -- the rows are moving out from under the cursor, so hover says
-          nothing about which row is being worked on. */}
-      <div
-        ref={rowsRef}
-        className={cn(
-          "flex w-full min-w-0 flex-col",
-          dragging && "pointer-events-none",
-        )}
-      >
-        {value.map((entry, place) => {
-          const inHand = carry !== null && place === carry.entry;
-          // Off the list, whether the pointer has it or it is still on its
-          // way to where the pointer left it.
-          const aloft = inHand || flying?.place === place;
-          const slot = slotOf(place);
-          const offset = offsetOf(place);
-          return (
-            // Keyed by place, since entries are strings and two of them may
-            // read the same. A reorder rewrites the boxes in place, which is
-            // what `followEntry` is for.
-            <div
-              key={place}
-              className={cn(
-                "group/entry relative min-w-0",
-                // The shared edge, taken out of the row below it.
-                place > 0 && "-mt-px",
-                aloft && "z-30",
-              )}
-              style={{
-                transform: offset === 0 ? undefined : `translateY(${offset}px)`,
-                // A row eases out of the way; the entry in hand answers to the
-                // pointer, which needs no easing. Dropped, the transition goes
-                // in the same breath as the offsets it would unwind on screen.
-                transition:
-                  inHand || carry === null || prefersReducedMotion()
-                    ? undefined
-                    : `transform ${SLIDE_MS}ms ease`,
-              }}
-              data-leika-list-item
-              data-leika-list-carried={inHand || undefined}
-            >
-              <Input
-                value={entry}
-                aria-label={`${label ?? "List"} entry ${place + 1}`}
-                className={cn(
-                  // Focused, it draws its own border over its neighbours'.
-                  "relative w-full focus-visible:z-10",
-                  // A cut-off entry ends in an ellipsis -- except while the
-                  // box has the caret, when the browser rightly shows where
-                  // the typing is going instead.
-                  "text-ellipsis",
-                  !frozen &&
-                    cn(
-                      // Room for the controls only while they are shown, on
-                      // the same two counts that bring them out.
-                      "group-hover/entry:pr-10",
-                      "group-has-[[data-leika-list-controls]_:focus-visible]/entry:pr-10",
-                      // Keys on a control light this border exactly as the
-                      // caret does; the z-lift goes with it, or the neighbour
-                      // below paints over the lit edge.
-                      "group-has-[[data-leika-list-controls]_:focus-visible]/entry:border-ring",
-                      "group-has-[[data-leika-list-controls]_:focus-visible]/entry:z-10",
-                    ),
-                  aloft
-                    ? // Aloft it is a box of its own: full rounding, opaque --
-                      // and opaque at once, or it is a see-through row for
-                      // most of the drag.
-                      "bg-(--leika-panel-surface) pr-10 transition-none"
-                    : // Otherwise it wears the shape of the place it is DRAWN
-                      // in: rows an entry displaces take over the ends it left.
-                      cn(
-                        slot > 0 && "rounded-t-none",
-                        slot < value.length - 1 && "rounded-b-none",
-                      ),
-                )}
-                disabled={disabled}
-                onChange={(event) => {
-                  const next = [...value];
-                  next[place] = event.currentTarget.value;
-                  commit(next);
-                }}
-                data-leika-list-entry
-              />
-              {/* Inside the box, at its end: they are what to do with this
-                  entry, not further controls in the column. `z-20` beats the
-                  focused box's own lift, which would otherwise sit on top of
-                  them and take their clicks. */}
-              {!frozen && (
-                <span
-                  className={cn(
-                    "absolute inset-y-0 right-1.5 z-20 flex items-center",
-                    // In hand, out for as long as the drag lasts.
-                    inHand ? "opacity-100" : CONTROLS,
-                  )}
-                  data-leika-list-controls
-                >
-                  <button
-                    type="button"
-                    className={cn(CONTROL, "cursor-grab")}
-                    // "Reorder", not "Move": "Remove entry 1" CONTAINS "Move
-                    // entry 1", and the two names would match by substring.
-                    aria-label={`Reorder entry ${place + 1}`}
-                    title="Drag to reorder"
-                    disabled={disabled}
-                    onPointerDown={(event) => takeHold(event, place)}
-                    onKeyDown={(event) => nudge(event, place)}
-                    data-leika-list-grip
-                  >
-                    <GripVerticalIcon className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    className={CONTROL}
-                    aria-label={`Remove entry ${place + 1}`}
-                    title="Remove"
-                    disabled={disabled}
-                    onClick={() =>
-                      commit(value.filter((_, other) => other !== place))
-                    }
-                    data-leika-list-remove
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {!frozen && (
-        // A new entry starts empty, which is where the viewer was going to
-        // type anyway.
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
+    <EntryStack
+      items={[...value]}
+      commit={commit}
+      blank={() => ""}
+      disabled={disabled}
+      frozen={frozen}
+    >
+      {(entry, row) => (
+        <Input
+          value={entry}
+          aria-label={`${label ?? "List"} entry ${row.place + 1}`}
+          className={cn(entryBoxClassName(row), !frozen && ENTRY_BOX_CONTROLS)}
           disabled={disabled}
-          onClick={() => commit([...value, ""])}
-          data-leika-button
-          data-leika-button-color="secondary"
-          data-leika-list-add
-        >
-          <PlusIcon data-icon="inline-start" />
-          Add
-        </Button>
+          onChange={(event) => {
+            const next = [...value];
+            next[row.place] = event.currentTarget.value;
+            commit(next);
+          }}
+          data-leika-list-entry
+        />
       )}
-    </div>
+    </EntryStack>
   );
 
   // Labelled, the stack sits beside its label like any other control, but the
