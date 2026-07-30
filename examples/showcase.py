@@ -215,11 +215,8 @@ def main() -> None:
             show_value=True,
             hint="Fast drags stay optimistic while Python catches up.",
         )
-        # The default the other way: no box, so the track takes the whole row.
-        # Trail length is a feel rather than a figure -- nobody types a number
-        # of samples -- which is the case `show_value` is off for.
-        # No `marks`, so the ends label themselves with the numbers -- the plain
-        # default, against `Speed` above naming its own ends instead.
+        # The default the other way: no box, so the track takes the whole
+        # row, and no `marks`, so the ends label themselves with the numbers.
         trail = server.gui.add_slider(
             "Trail",
             min=0.05,
@@ -242,13 +239,9 @@ def main() -> None:
         reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW)
 
     with server.gui.add_folder("Image appearance"):
-        # Toggles rather than buttons: the palette is a state the image is in,
-        # not an action, so the row shows which one is on. One at a time (the
-        # default), merged (also the default), and outlined -- a row this long
-        # in the accent would be the loudest thing in the panel.
-        # One at a time, which also means required: the row starts on its first
-        # option and the toggle that is on cannot be turned off, so the image
-        # always has a palette to render with.
+        # Toggles rather than buttons: the palette is a state the image is
+        # in, not an action. Single-select (the default) also means required,
+        # so the image always has a palette to render with.
         palette = server.gui.add_toggle(
             ("Ocean", "Magma", "Viridis"), label="Palette", color="secondary"
         )
@@ -330,11 +323,8 @@ def main() -> None:
         download = server.gui.add_button(
             "Download signal CSV", icon=leika.Icon.DOWNLOAD, color="secondary"
         )
-        # A form, for the one case the panel's live semantics are wrong: a note
-        # is worth reading once it is finished, not at every keystroke on the
-        # way there. A form does not take the live updates away -- each field
-        # still reports every edit -- it adds the commit that `on_submit` reads
-        # them on.
+        # A form: a note is worth reading once it is finished, not at every
+        # keystroke. Fields still report every edit; `on_submit` adds the commit.
         with server.gui.add_form(label="Annotation") as annotation:
             # Enter in a single-line text input submits the form, so this row
             # doubles as the fast path: type a title, press Enter.

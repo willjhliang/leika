@@ -31,6 +31,7 @@ from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import encode_image_binary
 from ._messages import (
+    ButtonColor,
     CommandProps,
     CommandUpdateMessage,
     GuiBaseProps,
@@ -218,16 +219,6 @@ class _GuiHandleState(Generic[T]):
     removed: bool = False
 
 
-@dataclasses.dataclass
-class _GuiButtonHandleState(_GuiHandleState[bool]):
-    """Internal API for button GUI elements with hold callback support."""
-
-    hold_cbs_from_freq: dict[float, list[Callable[[GuiEvent], None | Coroutine]]] = (
-        dataclasses.field(default_factory=dict)
-    )
-    """Mapping from frequency (Hz) to list of callbacks to call when button is held."""
-
-
 # Not exported: some GUI handles do not inherit from `_GuiHandle` -- notably
 # `GuiModalHandle` and `GuiTabHandle`, which are containers rather than
 # elements. Exporting it would invite isinstance checks that those fail.
@@ -293,9 +284,8 @@ class _GuiInputHandle(
 
         :meta private:
         """
-        # ^Note: we mark this property as private for Sphinx because I haven't
-        # been able to get it to resolve the TypeVar in a readable way.
-        # For the documentation's sake, we'll be manually adding ::attribute directives below.
+        # Private for Sphinx, which cannot resolve the TypeVar readably; the
+        # docs declare these attributes manually instead.
         return self._impl.value
 
     def _coerce_assigned_value(self, value: T | np.ndarray) -> T | np.ndarray:
@@ -407,9 +397,6 @@ class GuiToggleHandle(GuiInputHandle[bool], GuiToggleProps):
     """
 
 
-ButtonColor = Literal["primary", "secondary"]
-
-
 def _row_props(handle: Any) -> Union[GuiButtonGroupProps, GuiToggleGroupProps]:
     props = handle._impl.props
     assert isinstance(props, (GuiButtonGroupProps, GuiToggleGroupProps))
@@ -515,9 +502,13 @@ class GuiTextHandle(GuiInputHandle[str], GuiTextProps):
         """
         self._source = _parse_markdown(self.value, self._image_root)
 
-    @GuiInputHandle.value.setter  # type: ignore[attr-defined]
-    def value(self, value: str) -> None:
-        GuiInputHandle.value.fset(self, value)  # type: ignore[attr-defined]
+    @property
+    def value(self) -> str:
+        return _GuiInputHandle.value.fget(self)  # type: ignore[attr-defined]
+
+    @value.setter
+    def value(self, value: str | np.ndarray) -> None:
+        _GuiInputHandle.value.fset(self, value)  # type: ignore[attr-defined]
         self._refresh_source()
 
     def _on_prop_assigned(self, name: str) -> None:
@@ -646,8 +637,9 @@ class GuiEvent(Generic[TGuiHandle]):
 
     @property
     def value(self) -> Any:
-        """Compatibility view of the affected handle value."""
-        return getattr(self.target, "value", True)
+        """Value of the affected handle, or None for a handle that has no
+        value of its own (e.g. a form)."""
+        return getattr(self.target, "value", None)
 
 
 class GuiButtonHandle(_GuiInputHandle[bool], GuiButtonProps):
@@ -659,15 +651,11 @@ class GuiButtonHandle(_GuiInputHandle[bool], GuiButtonProps):
        Value of the button. Set to `True` when the button is pressed. Can be manually set back to `False`.
     """
 
-    def __init__(self, _impl: _GuiButtonHandleState, _icon: IconName | None):
+    def __init__(self, _impl: _GuiHandleState[bool], _icon: IconName | None):
         super().__init__(impl=_impl)
         self._icon = _icon
-
-    @property
-    def _button_impl(self) -> _GuiButtonHandleState:
-        """Access the button-specific implementation state."""
-        assert isinstance(self._impl, _GuiButtonHandleState)
-        return self._impl
+        # Callbacks to run while the button is held, by frequency (Hz).
+        self._hold_cbs_from_freq: dict[float, list[Callable[[GuiEvent], None | Coroutine]]] = {}
 
     @property
     def icon(self) -> IconName | None:
@@ -742,18 +730,13 @@ class GuiButtonHandle(_GuiInputHandle[bool], GuiButtonProps):
 
         Using async functions can be useful for reducing race conditions.
         """
-        button_impl = self._button_impl
 
         def register_callback(
             f: GuiButtonHandle._HoldCallback,
         ) -> GuiButtonHandle._HoldCallback:
-            # Add callback to the frequency-specific list.
-            if callback_hz not in button_impl.hold_cbs_from_freq:
-                button_impl.hold_cbs_from_freq[callback_hz] = []
-            button_impl.hold_cbs_from_freq[callback_hz].append(f)
-
+            self._hold_cbs_from_freq.setdefault(callback_hz, []).append(f)
             # Update the prop to notify client of new frequency.
-            self._hold_callback_freqs = tuple(button_impl.hold_cbs_from_freq.keys())
+            self._hold_callback_freqs = tuple(self._hold_cbs_from_freq.keys())
 
             return f
 
@@ -847,16 +830,6 @@ class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
     def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
         _set_row_colors(self, color)
 
-    @property
-    def disabled(self) -> bool:
-        """Button groups cannot be disabled."""
-        return False
-
-    @disabled.setter
-    def disabled(self, disabled: bool) -> None:  # type: ignore
-        """Button groups cannot be disabled."""
-        assert not disabled, "Button groups cannot be disabled."
-
 
 class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDropdownProps):
     """Handle for a dropdown-style GUI input in our visualizer.
@@ -909,7 +882,6 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
 
         uuid = _make_uuid()
 
-        # We may want to make this thread-safe in the future.
         out = GuiTabHandle(_parent=self, _id=uuid, _label=label, _icon=icon)
 
         self._tab_handles.append(out)
@@ -919,10 +891,6 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
         )
         self._tab_container_ids = tuple(handle._id for handle in self._tab_handles)
         return out
-
-    def __post_init__(self) -> None:
-        parent = self._impl.gui_api._container_handle_from_uuid[self._impl.parent_container_id]
-        parent._children[self._impl.uuid] = self
 
     def remove(self) -> None:
         """Remove this tab group and all contained GUI elements."""
@@ -1009,7 +977,6 @@ class GuiTabHandle(GuiContainer):
             return
         self.removed = True
 
-        # We may want to make this thread-safe in the future.
         found_index = -1
         for i, tab in enumerate(self._parent._tab_handles):
             if tab is self:
@@ -1041,11 +1008,10 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
     """Use as a context to place GUI elements into a folder."""
 
     def __init__(self, _impl: _GuiHandleState[None]) -> None:
+        # `_GuiHandle.__init__` already registered this handle with its parent.
         super().__init__(impl=_impl)
         self._impl.gui_api._container_handle_from_uuid[self._impl.uuid] = self
         self._children = {}
-        parent = self._impl.gui_api._container_handle_from_uuid[self._impl.parent_container_id]
-        parent._children[self._impl.uuid] = self
 
     @property
     def _child_gui_api(self) -> GuiApi:
@@ -1108,13 +1074,11 @@ class GuiFormHandle(GuiFolderHandle):
     by pressing Enter in a single-line text input inside the form.
 
     It takes ONE row in the panel: its ``label``, and a button that opens the
-    fields in a popout. A form is one question asked in several parts, and the
-    parts belong together and apart from the live controls around them -- so
-    they are somewhere else, and the row is the way in.
+    fields in a popout, keeping them apart from the live controls around them.
 
-    The popout ends in the form's two ways out, a Reset and a Submit added as
-    the form's last child and reachable as ``form.actions``: start the answer
-    again (:meth:`reset_form`), or give it (:meth:`submit_form`).
+    The popout ends in a Reset and a Submit, added as the form's last child
+    and reachable as ``form.actions`` (:meth:`reset_form` /
+    :meth:`submit_form`).
 
     A form built by :meth:`GuiApi.add_mini_form` holds one field and is drawn
     as that field's own row with a send button on the end of it -- no popout,

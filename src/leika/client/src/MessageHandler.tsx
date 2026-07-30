@@ -54,9 +54,6 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
       case "RemoveNotificationMessage":
         dismissNotification(message.uuid);
         return;
-      case "ResetGuiMessage":
-        viewer.guiActions.resetGui();
-        return;
       case "GuiModalMessage":
         viewer.guiActions.addModal(message);
         return;
@@ -132,6 +129,11 @@ export function MessageHandler() {
       const guiUpdates = new Map<string, Record<string, unknown>>();
 
       for (const message of batch) {
+        // Updates are deferred to the end of the batch while removes apply
+        // immediately, so an update whose component was removed later in the
+        // same batch is legitimate leftover, not an error.
+        if (message.type === "GuiRemoveMessage")
+          guiUpdates.delete(message.uuid);
         const result = handleMessage(message);
         if (result === undefined) continue;
         guiUpdates.set(result.uuid, {
@@ -168,6 +170,9 @@ export function MessageHandler() {
     const schedule = () => {
       if (stopped) return;
       if (document.visibilityState === "hidden") {
+        // rAF does not fire in hidden tabs. The nominal 16ms matches the
+        // visible cadence; browsers clamp hidden-tab timers to ~1s, which is
+        // plenty for a tab nobody is watching.
         timer = setTimeout(tick, 16);
       } else {
         animationFrame = requestAnimationFrame(tick);

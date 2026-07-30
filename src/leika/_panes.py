@@ -800,10 +800,9 @@ class Panes:
         ``add_plotly`` methods are placed along a shared row and re-divided
         equally on each addition, so three panes yield exact thirds. (Divisions
         snap to the workspace grid; in workspaces small enough that minimum
-        pane sizes dominate, they are as equal as the grid allows.) The
-        placement arguments position the group's first pane; like all
-        placement hints, they only apply when the browser has no saved
-        arrangement for these panes.
+        pane sizes dominate, they are as equal as the grid allows.) ``relative_to``
+        positions the group's first pane; like all placement hints, it only
+        applies when the browser has no saved arrangement for these panes.
 
         Args:
             relative_to: Visible pane used for the group's initial placement.

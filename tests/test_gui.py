@@ -344,7 +344,7 @@ def test_containers_mirror_every_container_scoped_add_method() -> None:
     }
     mirrored = {name for name in dir(GuiContainer) if name.startswith("add_")}
 
-    assert opted_out == {"add_notification", "add_command"}
+    assert opted_out == {"add_notification", "add_command", "add_modal"}
     assert mirrored == api_methods - opted_out
 
 

@@ -7,8 +7,6 @@ from typing import Any, Dict, Generic, Protocol, TypeVar, get_type_hints
 import numpy as np
 import numpy.typing as npt
 
-# Type variable for props.
-
 
 class HasProps(Protocol):
     props: Any  # One of the `*Props` objects in _messages.py.
@@ -45,17 +43,14 @@ class AssignablePropsBase(Generic[TImpl]):
         # Store the implementation object.
         self._impl = impl
 
-    def _cast_value_recursive(self, hint: Any, value: Any, prop_name: str) -> Any:
-        """Recursively cast values to match type hints, handling arrays and tuples."""
-        # Handle numpy arrays.
-        if hint == npt.NDArray[np.float16]:
-            return np.asarray(value).astype(np.float16)
-        elif hint == npt.NDArray[np.float32]:
-            return np.asarray(value).astype(np.float32)
-        elif hint == npt.NDArray[np.float64]:
+    def _cast_value_recursive(self, hint: Any, value: Any) -> Any:
+        """Recursively cast values to match type hints, handling arrays and tuples.
+
+        `float64` is the one array dtype the protocol contains (uplot chart
+        data); a new array-typed prop means extending this.
+        """
+        if hint == npt.NDArray[np.float64]:
             return np.asarray(value).astype(np.float64)
-        elif hint == npt.NDArray[np.uint8] and "color" in prop_name:
-            return colors_to_uint8(value)
         if isinstance(value, np.ndarray):
             return value
 
@@ -69,9 +64,7 @@ class AssignablePropsBase(Generic[TImpl]):
             and hint.__args__[1] is ...
         ):
             element_type = hint.__args__[0]
-            return tuple(
-                self._cast_value_recursive(element_type, item, prop_name) for item in value
-            )
+            return tuple(self._cast_value_recursive(element_type, item) for item in value)
 
         return value
 
@@ -112,7 +105,7 @@ class AssignablePropsBase(Generic[TImpl]):
         # Try to handle as a props field.
         if is_prop_hint:
             # Handle type casting (arrays, tuples of arrays, etc.).
-            value = self._cast_value_recursive(self._prop_hints[name], value, name)
+            value = self._cast_value_recursive(self._prop_hints[name], value)
             current_value = getattr(self._impl.props, name)
 
             # Skip update if value hasn't changed.

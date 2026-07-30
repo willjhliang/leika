@@ -130,7 +130,7 @@ class GuiSliderMark:
 
 TagLiteral = Literal["GuiComponentMessage"]
 
-# Entity lifecycle markers. See architecture_hardening.md for design rationale.
+# Entity lifecycle markers, which drive coalescing and garbage collection.
 EntityType: TypeAlias = Literal["gui", "command", "notification", "modal", "viewport"]
 """Kinds of removable entities in the protocol."""
 
@@ -203,11 +203,8 @@ class Message(infra.Message):
                 # per message type (so independent update message classes stay in separate slots).
                 key = f"{self.entity_type}:{entity_id}:update:{type(self).__name__}"
         else:
-            # Non-entity fallback: ClassName + any incidental name/uuid fields.
+            # Non-entity fallback: ClassName + any incidental uuid field.
             parts = [type(self).__name__]
-            node_name = getattr(self, "name", None)
-            if node_name is not None:
-                parts.append(node_name)
             uuid_val = getattr(self, "uuid", None)
             if uuid_val is not None:
                 parts.append(uuid_val)
@@ -302,7 +299,7 @@ class NotificationProps:
     """Whether to show a close button."""
     auto_close_seconds: Union[float, None]
     """Time in seconds after which the notification should auto-close, or
-    False to disable auto-close."""
+    None to keep it up until it is closed or removed."""
 
 
 @dataclasses.dataclass
@@ -312,9 +309,8 @@ class RemoveNotificationMessage(Message, entity=EntityLifecycle("notification", 
     uuid: str
 
 
-@dataclasses.dataclass
-class ResetGuiMessage(Message):
-    """Reset GUI."""
+ButtonColor = Literal["primary", "secondary"]
+"""The two roles a button or toggle can take."""
 
 
 @dataclasses.dataclass
@@ -324,11 +320,9 @@ class GuiBaseProps:
     order: float
     """Order value for arranging GUI elements. """
     label: Optional[str]
-    """Label for the element's row, or None for one that fills the row on its
-    own. Optional because a control can be self-describing -- a button says
-    what it does on its face -- and a label column beside one of those is a
-    fixed width of nothing. Most elements require one at the Python API and so
-    never send None."""
+    """Label for the element's row, or None for a self-describing control
+    (e.g. a button) that fills the row on its own. Most elements require one
+    at the Python API and so never send None."""
     hint: Optional[str]
     """Optional hint text for the GUI element."""
     visible: bool
@@ -407,7 +401,7 @@ class GuiHtmlProps:
     content: str
     """HTML content to be displayed."""
     visible: bool
-    """Visibility state of the markdown element."""
+    """Visibility state of the element."""
 
 
 @dataclasses.dataclass
@@ -583,7 +577,7 @@ class GuiButtonProps(GuiBaseProps):
     """Text on the button's own face. Distinct from `label`, which names the
     ROW the button sits in: a button says what it does on itself, so it is
     labelled only when it needs a caption beside it as well."""
-    color: Literal["primary", "secondary"]
+    color: ButtonColor
     """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
     """(Private) HTML string for the icon to be displayed on the button."""
@@ -613,7 +607,7 @@ class GuiButtonHoldMessage(Message):
 class GuiUploadButtonProps(GuiBaseProps):
     text: str
     """Text on the button's own face; see `GuiButtonProps.text`."""
-    color: Literal["primary", "secondary"]
+    color: ButtonColor
     """Colorway for the button: a filled accent, or an outlined companion."""
     _icon_html: Optional[str]
     """(Private) HTML string for the icon to be displayed on the upload button."""
@@ -722,7 +716,7 @@ class GuiRgbaMessage(_CreateGuiComponentMessage):
 class GuiToggleProps(GuiBaseProps):
     text: str
     """Text on the toggle's own face; see `GuiButtonProps.text`."""
-    color: Literal["primary", "secondary"]
+    color: ButtonColor
     """Colorway for the toggle. The same two roles a button takes, and the ON
     state is that button's own pressed appearance."""
     _icon_html: Optional[str]
@@ -738,7 +732,7 @@ class GuiToggleMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiToggleGroupProps(GuiBaseProps):
-    color: Tuple[Literal["primary", "secondary"], ...]
+    color: Tuple[ButtonColor, ...]
     """One colorway per toggle; see `GuiButtonGroupProps.color`."""
     options: Tuple[str, ...]
     """Tuple of toggles in the group."""
@@ -816,27 +810,20 @@ class GuiVector3Message(_CreateGuiComponentMessage):
 class GuiTextProps(GuiBaseProps):
     multiline: bool
     rows: Optional[int]
-    """How many lines of text the box shows, when ``multiline`` is set, or None
-    to leave the height to the field. Given, it is the box's HEIGHT rather than
-    a starting point: more text than that scrolls inside it, so the row keeps
-    its size however much goes into it. Left out, an editable box is three
-    lines -- a fixed height, since it is being typed into and the panel should
-    not reflow under the typing -- and one that is only being read fits itself
-    to what it holds. Ignored by a single-line field, which is one line by
-    definition."""
+    """The box's height in lines when ``multiline`` is set: more text scrolls
+    inside it. None leaves the height to the field -- three lines editable (a
+    fixed height, so the panel does not reflow under typing), fitted to its
+    text when read-only. Ignored by a single-line field."""
     editable: bool
-    """Whether the viewer can type in it. Read-only, it is not an input at all:
-    no box to click into, a tinted surface to say so, and the value changes
-    only when Python changes it."""
+    """Whether the viewer can type in it. Read-only, it is not an input at
+    all, and the value changes only when Python changes it."""
     markdown: bool
-    """Whether the value is drawn as markdown rather than as the characters it
-    is made of. Only for a field that is not editable: what is being edited is
-    the source, so an editable field always shows it."""
+    """Whether the value is drawn as markdown. Only for a read-only field: an
+    editable field is editing the source, so it always shows it."""
     _source: str
-    """(Private) The value with its relative image paths resolved to data URLs,
-    which is what a rendered field draws from -- the browser cannot read a path
-    on the server's disk. Kept in step with the value whenever a rendered field
-    could be looking at it."""
+    """(Private) The value with its relative image paths resolved to data URLs
+    -- the browser cannot read a path on the server's disk. Kept in step with
+    the value whenever a rendered field could be looking at it."""
 
 
 @dataclasses.dataclass
@@ -880,7 +867,7 @@ class GuiDropdownMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiButtonGroupProps(GuiBaseProps):
-    color: Tuple[Literal["primary", "secondary"], ...]
+    color: Tuple[ButtonColor, ...]
     """One colorway per option: filled with the accent, or outlined. The same
     two roles a single button takes -- these are buttons, so none of them is
     ever the selected one -- but taken per button, so a row can put its accent

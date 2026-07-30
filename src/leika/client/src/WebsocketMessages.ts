@@ -688,13 +688,6 @@ export interface RemoveNotificationMessage {
   type: "RemoveNotificationMessage";
   uuid: string;
 }
-/** Reset GUI.
- *
- * (automatically generated)
- */
-export interface ResetGuiMessage {
-  type: "ResetGuiMessage";
-}
 /** Bidirectional form submit signal.
  *
  * - Sent client->server when the user submits a form: its submit button, or
@@ -1036,7 +1029,6 @@ export type Message =
   | NotificationShowMessage
   | NotificationUpdateMessage
   | RemoveNotificationMessage
-  | ResetGuiMessage
   | GuiFormSubmitMessage
   | GuiModalMessage
   | GuiCloseModalMessage

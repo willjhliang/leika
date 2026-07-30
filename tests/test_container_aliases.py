@@ -42,7 +42,6 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_image": ((np.zeros((2, 3, 3), dtype=np.uint8),), {}),
     "add_list": ((("one", "two"),), {}),
     "add_mini_form": ((), {}),
-    "add_modal": (("Modal",), {}),
     "add_multi_slider": (("Multi", 0.0, 1.0, 0.1), {"initial_value": (0.2, 0.8)}),
     "add_number": (("Number", 1.0), {}),
     "add_plotly": ((), {}),  # Filled in below; needs the optional dependency.
@@ -77,7 +76,4 @@ def test_every_mirrored_add_method_places_its_element(server: leika.Server) -> N
     for name, (args, kwargs) in sorted(calls.items()):
         handle = getattr(folder, name)(*args, **kwargs)
         assert handle is not None, name
-        # Modals are their own container rather than a child of one, so they
-        # are the one element whose parent is not the folder.
-        if name != "add_modal":
-            assert folder._children.get(handle.id) is handle, name
+        assert folder._children.get(handle.id) is handle, name

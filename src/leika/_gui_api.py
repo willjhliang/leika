@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import builtins
 import dataclasses
-import functools
 import threading
 import time
 from asyncio import AbstractEventLoop
@@ -27,7 +26,6 @@ from typing_extensions import (
     LiteralString,
     TypedDict,
     assert_never,
-    get_type_hints,
 )
 
 from . import _messages, theme, uplot
@@ -68,7 +66,6 @@ from ._gui_handles import (
     UploadedFile,
     _colors_to_int_tuple,
     _CommandHandleState,
-    _GuiButtonHandleState,
     _GuiHandleState,
     _GuiInputHandle,
     _make_uuid,
@@ -79,7 +76,7 @@ from ._gui_handles import (
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import encode_image_binary
-from ._messages import FileTransferPartAck, GuiBaseProps, GuiSliderMark
+from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import NotificationHandle, _NotificationHandleState
 from ._threadpool_exceptions import print_threadpool_errors
 
@@ -94,10 +91,6 @@ IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 T = TypeVar("T")
-
-# The two roles a button or toggle can take. Named once here because it now
-# appears per element as well as per row.
-ButtonColor = Literal["primary", "secondary"]
 
 
 @overload
@@ -131,14 +124,9 @@ def _compute_step(x: float | None) -> float:  # type: ignore
 
 
 def _validate_button_color(color: str) -> None:
-    """Reject anything but the two button roles.
-
-    ``color`` once took arbitrary names like ``"blue"`` and was removed on
-    purpose; it is back as a choice between two roles, not a palette. This is
-    what keeps that distinction at runtime, where the ``Literal`` annotation
-    alone would let ``"blue"`` through and quietly draw a primary. Shared by
-    ``add_button`` and ``add_upload_button`` so the two can't diverge.
-    """
+    """Reject anything but the two button roles at runtime, where the
+    ``Literal`` annotation alone would let ``"blue"`` through and quietly draw
+    a primary. Shared by ``add_button`` and ``add_upload_button``."""
     if color not in ("primary", "secondary"):
         raise ValueError(
             f"Button color must be 'primary' or 'secondary', not {color!r}. Buttons take"
@@ -193,14 +181,9 @@ def _button_colors(
     *,
     noun: str = "button",
 ) -> tuple[ButtonColor, ...]:
-    """One colorway per BUTTON, the way ``_merge_flags`` gives one per gap.
-
-    A single role answers for the whole row, which is the common case and what
-    a row usually wants: same kind of thing, same weight. A sequence answers
-    one button at a time, for the row that holds a main action and something
-    quieter beside it -- a Submit and the Reset next to it, say, where giving
-    both the accent would put the same weight behind starting over.
-    """
+    """One colorway per BUTTON, the way ``_merge_flags`` gives one per gap: a
+    single role answers for the whole row, a sequence one button at a time
+    (a main action with something quieter beside it)."""
     if isinstance(color, str):
         _validate_button_color(color)
         return (color,) * count
@@ -309,11 +292,6 @@ def _apply_default_order(order: float | None) -> float:
     global _global_order_counter
     _global_order_counter += 1
     return _global_order_counter
-
-
-@functools.lru_cache(maxsize=None)
-def get_type_hints_cached(cls: type[Any]) -> dict[str, Any]:
-    return get_type_hints(cls)  # type: ignore
 
 
 class _FileUploadState(TypedDict):
@@ -429,36 +407,29 @@ class GuiApi(GuiContainer):
             return
         handle_state = handle._impl
 
-        has_changed = False
-        updates_cast = {}
-        for prop_name, prop_value in message.updates.items():
-            assert hasattr(handle_state, prop_name)
-            current_value = getattr(handle_state, prop_name)
+        # `value` is the one property a client is allowed to write. Anything
+        # else in the message is client-controlled data with no business on
+        # `_GuiHandleState`, whose other attributes include the callbacks.
+        if set(message.updates.keys()) != {"value"}:
+            return
+        prop_value = message.updates["value"]
 
-            # Do some type casting. This is brittle, but necessary (1) when we
-            # expect floats but the Javascript side gives us integers or (2)
-            # when we expect tuples but the Javascript side gives us lists.
-            if prop_name == "value":
-                if isinstance(handle_state.value, tuple):
-                    if len(handle_state.value) > 0:
-                        # We currently assume non-empty tuple types have length
-                        # greater than 0, and contents are all the same type.
-                        typ = type(handle_state.value[0])
-                        assert all([type(x) == typ for x in handle_state.value])
-                        prop_value = tuple([typ(new) for new in prop_value])
-                    else:
-                        # Empty tuple.
-                        prop_value = tuple(prop_value)
-                else:
-                    prop_value = type(handle_state.value)(prop_value)
+        # Cast to the shape the handle holds: JavaScript sends integers where
+        # floats are expected, and lists where tuples are.
+        if isinstance(handle_state.value, tuple):
+            if len(handle_state.value) > 0:
+                # Tuple contents are assumed homogeneous.
+                typ = type(handle_state.value[0])
+                prop_value = tuple(typ(new) for new in prop_value)
+            else:
+                prop_value = tuple(prop_value)
+        else:
+            prop_value = type(handle_state.value)(prop_value)
 
-            # Update handle property.
-            if current_value != prop_value:
-                has_changed = True
-                setattr(handle_state, prop_name, prop_value)
-
-            # Save value, which might have been cast.
-            updates_cast[prop_name] = prop_value
+        has_changed = handle_state.value != prop_value
+        if has_changed:
+            handle_state.value = prop_value
+        updates_cast = {"value": prop_value}
 
         # Only call update when value has actually changed.
         if not handle_state.is_button and not has_changed:
@@ -493,7 +464,7 @@ class GuiApi(GuiContainer):
             return
 
         # Get callbacks registered for this frequency.
-        callbacks = handle._button_impl.hold_cbs_from_freq.get(message.frequency, [])
+        callbacks = handle._hold_cbs_from_freq.get(message.frequency, [])
         if not callbacks:
             return
 
@@ -614,7 +585,9 @@ class GuiApi(GuiContainer):
     ) -> None:
         if message.transfer_uuid not in self._current_file_upload_states:
             return
-        assert message.source_component_uuid in self._gui_input_handle_from_uuid
+        # The upload button may have been removed mid-transfer; drop the part.
+        if message.source_component_uuid not in self._gui_input_handle_from_uuid:
+            return
 
         state = self._current_file_upload_states[message.transfer_uuid]
         state["parts"][message.part_index] = message.content
@@ -783,6 +756,22 @@ class GuiApi(GuiContainer):
             )
         )
         handle._show()
+
+        if auto_close_seconds is not None:
+            # Auto-close happens in each client, so nothing server-side would
+            # ever retire the notification: without this, every auto-closed
+            # toast is replayed to each newly connecting client, forever. The
+            # tombstone replaces the show message in the broadcast buffer; the
+            # handle is left usable, so this is not a `remove()`.
+            def _expire() -> None:
+                if not handle._impl.removed:
+                    self._websock_interface.queue_message(
+                        _messages.RemoveNotificationMessage(handle._impl.uuid)
+                    )
+
+            self._event_loop.call_soon_threadsafe(
+                self._event_loop.call_later, auto_close_seconds, _expire
+            )
         return handle
 
     @not_container_scoped
@@ -946,12 +935,8 @@ class GuiApi(GuiContainer):
             A handle that can be used as a context to populate the form.
         """
         handle = self._create_form(label=label, order=order, visible=visible, mini=False)
-        # The form's two ways out, as one row at the bottom of its popout:
-        # start the answer again, or give it. Parted, because they are opposite
-        # moves rather than one control with two ends -- joining them would
-        # invite the wrong one, which for a Reset is the answer thrown away.
-        # The accent goes behind the Submit alone: giving it is what the form
-        # is for, and starting over should not ask for the eye as loudly.
+        # Reset parted from Submit -- they are opposite moves, and joining
+        # them would invite the wrong one -- with the accent behind Submit alone.
         with handle:
             handle.actions = self.add_button(
                 ("Reset", "Submit"), color=("secondary", "primary"), merge=False
@@ -1059,6 +1044,7 @@ class GuiApi(GuiContainer):
         )
         return handle
 
+    @not_container_scoped
     def add_modal(
         self,
         title: str,
@@ -1416,16 +1402,15 @@ class GuiApi(GuiContainer):
         """
 
         # Validate data structure.
-        assert len(data) >= 2, (
-            "data must have at least 2 arrays (x-data + at least one y-data series)"
-        )
-        assert all(isinstance(arr, np.ndarray) for arr in data), (
-            "all data elements must be numpy arrays"
-        )
-
-        # Validate data dimensions and shapes.
+        if len(data) < 2:
+            raise ValueError(
+                "data must have at least 2 arrays (x-data + at least one y-data series)"
+            )
+        if not all(isinstance(arr, np.ndarray) for arr in data):
+            raise ValueError("all data elements must be numpy arrays")
         for i, arr in enumerate(data):
-            assert arr.ndim == 1, f"data[{i}] must be a 1D array, got shape {arr.shape}"
+            if arr.ndim != 1:
+                raise ValueError(f"data[{i}] must be a 1D array, got shape {arr.shape}")
 
         # Check that all arrays have the same length.
         lengths = [len(arr) for arr in data]
@@ -1433,7 +1418,8 @@ class GuiApi(GuiContainer):
             raise ValueError(f"All data arrays must have the same length. Got lengths: {lengths}")
 
         # Validate series configuration.
-        assert len(series) > 0, "series must not be empty"
+        if len(series) == 0:
+            raise ValueError("series must not be empty")
         if len(series) != len(data):
             raise ValueError(
                 f"Length of series ({len(series)}) must match length of data ({len(data)}). "
@@ -1615,24 +1601,7 @@ class GuiApi(GuiContainer):
             props=props,
         )
 
-        # Send the message.
-        self._websock_interface.queue_message(message)
-
-        # Construct button-specific handle state with hold callback support.
-        handle_state = _GuiButtonHandleState(
-            props=props,
-            gui_api=self,
-            value=False,
-            update_timestamp=time.time(),
-            parent_container_id=self._get_container_uuid(),
-            update_cb=[],
-            is_button=True,
-            sync_cb=None,
-            uuid=uuid,
-            hold_cbs_from_freq={},
-        )
-
-        return GuiButtonHandle(handle_state, _icon=icon)
+        return GuiButtonHandle(self._create_gui_input(False, message, is_button=True), _icon=icon)
 
     def add_upload_button(
         self,
@@ -1938,7 +1907,8 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
         value = initial_value
-        assert isinstance(value, bool)
+        if not isinstance(value, bool):
+            raise ValueError(f"initial_value must be a bool, not {type(value).__name__}.")
         uuid = _make_uuid()
         order = _apply_default_order(order)
         return GuiCheckboxHandle(
@@ -2011,7 +1981,8 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
         value = initial_value
-        assert isinstance(value, str)
+        if not isinstance(value, str):
+            raise ValueError(f"initial_value must be a string, not {type(value).__name__}.")
         if rows is not None and rows < 1:
             raise ValueError(f"rows= is a height in lines, so it starts at 1; got {rows}.")
         uuid = _make_uuid()
@@ -2140,14 +2111,19 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value = initial_value
+        value: IntOrFloat = initial_value
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"initial_value must be a number, not {type(value).__name__}.")
 
-        assert isinstance(value, (int, float))
+        # Incoming client edits are cast to the type of the stored value, so an
+        # int value with float bounds would truncate every edit. Promote it.
+        if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
+            value = float(value)  # type: ignore
 
         if step is None:
             # It's ok that `step` is always a float, even if the value is an integer,
             # because things all become `number` types after serialization.
-            step = float(  # type: ignore
+            step = float(
                 np.min(
                     [
                         _compute_step(value),
@@ -2155,9 +2131,8 @@ class GuiApi(GuiContainer):
                         _compute_step(max),
                     ]
                 )
-            )
-
-        assert step is not None
+            )  # type: ignore[assignment]
+        assert step is not None  # Narrowing for the type checker.
 
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -2416,7 +2391,8 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        assert value >= 0 and value <= 100
+        if not 0 <= value <= 100:
+            raise ValueError(f"value= is a percentage, so it lives in [0, 100]; got {value}.")
         message = _messages.GuiProgressBarMessage(
             value=value,
             uuid=_make_uuid(),
@@ -2477,21 +2453,16 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
         value: IntOrFloat = initial_value
-        assert max >= min
+        if max < min:
+            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
         step = builtins.min(step, max - min)
-        assert max >= value >= min
+        if not (min <= value <= max):
+            raise ValueError(f"initial_value {value} is outside [{min}, {max}].")
 
-        # GUI callbacks cast incoming values to match the type of the initial value. If
-        # the min, max, or step is a float, we should cast to a float.
-        #
-        # This should also match what the IntOrFloat TypeVar resolves to.
+        # Incoming client edits are cast to the type of the stored value, so an
+        # int value with float bounds would truncate every edit. Promote it.
         if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
             value = float(value)  # type: ignore
-
-        # TODO: this assert is disabled because callers historically passed mixed
-        # numeric types here.
-        #
-        # assert type(min) == type(max) == type(step) == type(value)
 
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -2557,9 +2528,11 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        assert max >= min
+        if max < min:
+            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
         step = builtins.min(step, max - min)
-        assert all(max >= x >= min for x in initial_value)
+        if not all(min <= x <= max for x in initial_value):
+            raise ValueError(f"initial_value {initial_value} has entries outside [{min}, {max}].")
 
         # GUI callbacks cast incoming values to match the type of the initial value. If
         # any of the arguments are floats, we should always use a float value.
