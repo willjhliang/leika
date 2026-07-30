@@ -15,6 +15,7 @@ import { ViewerContext } from "../ViewerContext";
 import { GuiFormMessage } from "../WebsocketMessages";
 import { useContainerIsEmpty } from "./GuiSection";
 import { GuiInputRow } from "./common";
+import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
 
 /** A form: values committed together rather than reported as they are typed.
  *
@@ -134,7 +135,7 @@ function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
       )}
       <PopoverContent
         align="end"
-        className="w-[min(20rem,calc(100vw-1rem))]"
+        className={POPOUT_WIDTH_CLASS}
         data-leika-form-popover
       >
         {/* The row already says the name out loud; this is for the popup's own

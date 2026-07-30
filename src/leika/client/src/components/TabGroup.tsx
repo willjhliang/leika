@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiDockContext } from "../ControlPanel/GuiDockContext";
 import { GuiTabGroupMessage } from "../WebsocketMessages";
+import { IconHtml } from "./common";
 import { DockArea } from "../dock/DockArea";
 import { DockContext, useDock } from "../dock/DockContext";
 import * as layoutOps from "../dock/layoutOps";
@@ -49,22 +50,17 @@ function PlainTabGroup({
   },
 }: GuiTabGroupMessage) {
   const { GuiContainer } = React.useContext(GuiComponentContext)!;
-  const [activeTab, setActiveTab] = React.useState<string | null>(
-    tabContainerIds[0] ?? null,
-  );
-
-  React.useEffect(() => {
-    if (activeTab === null || !tabContainerIds.includes(activeTab)) {
-      setActiveTab(tabContainerIds[0] ?? null);
-    }
-  }, [tabContainerIds, activeTab]);
+  // Derived rather than corrected in an effect: when the server drops the
+  // selected tab, the first tab takes over on the same render.
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const activeTab =
+    selected !== null && tabContainerIds.includes(selected)
+      ? selected
+      : (tabContainerIds[0] ?? null);
 
   if (activeTab === null) return null;
   return (
-    <Tabs
-      value={activeTab}
-      onValueChange={(next) => setActiveTab(String(next))}
-    >
+    <Tabs value={activeTab} onValueChange={(next) => setSelected(String(next))}>
       <TabsList
         className="no-scrollbar w-full min-w-0 justify-start overflow-x-auto"
         data-leika-tabs-list
@@ -77,11 +73,7 @@ function PlainTabGroup({
             key={tabContainerIds[index]}
           >
             {tabIconsHtml[index] === null ? null : (
-              <span
-                data-icon="inline-start"
-                className="size-3.5 [&_svg]:size-full"
-                dangerouslySetInnerHTML={{ __html: tabIconsHtml[index]! }}
-              />
+              <IconHtml html={tabIconsHtml[index]!} />
             )}
             {label}
           </TabsTrigger>

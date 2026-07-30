@@ -59,12 +59,14 @@ export default function PlotlyComponent({
   props: { _plotly_json_str: plotlyJsonString, aspect },
 }: GuiPlotlyMessage) {
   const [opened, setOpened] = React.useState(false);
+  // Stable, so the memo above can actually skip re-renders of the inline copy.
+  const expand = React.useCallback(() => setOpened(true), []);
   return (
     <>
       <PlotWithAspect
         jsonStr={plotlyJsonString}
         aspect={aspect}
-        onExpand={() => setOpened(true)}
+        onExpand={expand}
       />
       <MediaDialog
         open={opened}

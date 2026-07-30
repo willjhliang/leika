@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonMessage } from "../WebsocketMessages";
-import { GuiInputRow, HintTooltip } from "./common";
+import { GuiButtonRow, IconHtml } from "./common";
 
 export default function ButtonComponent({
   uuid,
@@ -84,37 +84,13 @@ export default function ButtonComponent({
       onPointerUp={stopHoldTimers}
       onPointerCancel={stopHoldTimers}
       onLostPointerCapture={stopHoldTimers}
-      disabled={disabled ?? false}
+      disabled={disabled}
     >
-      {iconHtml === null ? null : (
-        <span
-          data-icon="inline-start"
-          className="size-3.5 [&_svg]:size-full"
-          dangerouslySetInnerHTML={{ __html: iconHtml }}
-        />
-      )}
+      {iconHtml === null ? null : <IconHtml html={iconHtml} />}
       {text}
     </Button>
   );
-  // Labelled, the button is an ordinary control in the right-hand column, and
-  // the row owns the label and the hint. Unlabelled -- the default -- it takes
-  // the whole width instead: the text on its face is what a label would have
-  // said, so a column beside it would be one fixed width of nothing.
-  if (label !== null) {
-    return (
-      <GuiInputRow
-        {...{ uuid, hint, label }}
-        disabled={disabled ?? false}
-        associateLabel={false}
-      >
-        {button}
-      </GuiInputRow>
-    );
-  }
-  if (hint === null) return button;
   return (
-    <HintTooltip hint={hint}>
-      <span className="block w-full">{button}</span>
-    </HintTooltip>
+    <GuiButtonRow {...{ uuid, label, hint, disabled }}>{button}</GuiButtonRow>
   );
 }

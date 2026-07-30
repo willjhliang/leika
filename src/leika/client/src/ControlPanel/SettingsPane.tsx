@@ -6,7 +6,10 @@ import { ImageFit } from "../ClientSettings";
 import { LEIKA_VERSION } from "../VersionInfo";
 import { ViewerContext } from "../ViewerContext";
 import { ColorRow } from "../components/ColorPicker";
-import { guiLabelClassName } from "../components/guiLabelStyles";
+import {
+  guiLabelClassName,
+  guiRowGridClassName,
+} from "../components/guiLabelStyles";
 import { Button } from "../components/ui/button";
 import {
   Popover,
@@ -28,6 +31,7 @@ import {
 import { Switch } from "../components/ui/switch";
 import { cn } from "@/lib/utils";
 import { settingsPanel, useSettingsPanelOpen } from "./SettingsPanelController";
+import { POPOUT_WIDTH_CLASS } from "./controlWidth";
 
 /** Names the popout the gear opens, for assistive technology. */
 const SETTINGS_SECTION_ID = "leika-settings";
@@ -51,10 +55,7 @@ function SettingsRow({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      className="grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center gap-2"
-      data-leika-settings-row
-    >
+    <div className={cn(guiRowGridClassName, "gap-2")} data-leika-settings-row>
       <Label
         htmlFor={htmlFor}
         className={cn("w-full min-w-0 truncate", guiLabelClassName)}
@@ -219,7 +220,7 @@ function AboutRow() {
  * the side it is plainly a thing apart, the way a color picker or a form is,
  * and the panel underneath is left whole.
  */
-export function SettingsRows() {
+function SettingsRows() {
   const viewer = React.useContext(ViewerContext)!;
   const darkMode = viewer.useSettings((state) => state.darkMode);
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
@@ -342,7 +343,7 @@ export function SettingsButton() {
           anchor={() =>
             gear.current?.closest("[data-leika-panel-header]") ?? gear.current
           }
-          className="w-[min(20rem,calc(100vw-1rem))]"
+          className={POPOUT_WIDTH_CLASS}
           data-leika-settings-popover
         >
           {/* Named out loud. A popout that arrives beside the panel rather

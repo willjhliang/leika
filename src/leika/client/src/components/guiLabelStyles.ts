@@ -7,3 +7,9 @@
  * components, which is what fast refresh needs to swap them in place. */
 export const guiLabelClassName =
   "text-muted-foreground font-normal leading-tight";
+
+/** The row geometry that goes with it: a fixed label column beside the
+ * controls, both vertically centered against the panel's 24px row. Shared so
+ * the settings rows and the GUI rows cannot drift apart. */
+export const guiRowGridClassName =
+  "grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center";

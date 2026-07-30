@@ -1,5 +1,7 @@
 import GeneratedGuiContainer from "./Generated";
 import { ViewerContext } from "../ViewerContext";
+import { guiLabelClassName } from "../components/guiLabelStyles";
+import { cn } from "../lib/utils";
 
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Status, StatusIndicator, StatusLabel } from "../components/ui/status";
@@ -93,10 +95,7 @@ const CONNECTION_STATUS = {
 
 /** The panel header's contents: the visualization's title on the left, the
  * websocket connection status on the right, and whatever the chrome around it
- * wants between the two.
- *
- * The title and status used to share one slot, with the title displacing the
- * status text whenever a server set one, so neither was reliably visible. */
+ * wants between the two. */
 export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
   const { useGui } = React.useContext(ViewerContext)!;
   const websocketState = useGui((state) => state.websocketState);
@@ -120,7 +119,7 @@ export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
           empty until one is set. Typed like a GUI row's field label, so the
           panel reads with one voice from its header down. */}
       <span
-        className="min-w-0 flex-1 truncate text-sm font-normal text-muted-foreground leading-tight"
+        className={cn("min-w-0 flex-1 truncate text-sm", guiLabelClassName)}
         data-dock-peek-fade
       >
         {label}

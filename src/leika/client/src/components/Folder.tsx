@@ -20,7 +20,6 @@ export default function FolderComponent({
     <GuiSection
       uuid={uuid}
       label={label}
-      kind="folder"
       expandByDefault={expandByDefault}
       isEmpty={isEmpty}
     >

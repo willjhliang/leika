@@ -9,7 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { guiLabelClassName } from "./guiLabelStyles";
+import { guiLabelClassName, guiRowGridClassName } from "./guiLabelStyles";
 import { finiteNumberOrNull } from "./numberInputUtils";
 
 /** Keep the tooltip tree mounted while it is disabled so pointer gestures on
@@ -40,7 +40,6 @@ export function GuiInputRow({
   hint,
   hintDisabled,
   disabled = false,
-  invalid = false,
   associateLabel = true,
   alignLabelToFirstRow = false,
   children,
@@ -54,7 +53,6 @@ export function GuiInputRow({
   hint?: string | null;
   hintDisabled?: boolean;
   disabled?: boolean;
-  invalid?: boolean;
   /** Whether the label names the control through `htmlFor`. Off for a button:
    * a `<label for>` would both take over its accessible name -- so it would
    * announce as the row's label instead of the word on its face -- and fire it
@@ -67,7 +65,6 @@ export function GuiInputRow({
 }) {
   const fieldState = {
     "data-disabled": disabled || undefined,
-    "data-invalid": invalid || undefined,
   };
 
   if (label === undefined || label === null) {
@@ -92,7 +89,8 @@ export function GuiInputRow({
       // variant top-aligns any row that holds a FieldContent, which is the
       // stacked-description layout rather than this one.
       className={cn(
-        "grid min-h-6 grid-cols-[6rem_minmax(0,1fr)] items-center has-[>[data-slot=field-content]]:items-center",
+        guiRowGridClassName,
+        "has-[>[data-slot=field-content]]:items-center",
         alignLabelToFirstRow &&
           "items-start has-[>[data-slot=field-content]]:items-start",
       )}
@@ -120,6 +118,50 @@ export function GuiInputRow({
         </HintTooltip>
       )}
     </Field>
+  );
+}
+
+/** Server-rendered icon markup, sized to sit inline before a control's text. */
+export function IconHtml({ html }: { html: string }) {
+  return (
+    <span
+      data-icon="inline-start"
+      className="size-3.5 [&_svg]:size-full"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/** The two forms a button-shaped control takes. Labelled, it is an ordinary
+ * control in the right-hand column, and the row owns the label and the hint.
+ * Unlabelled -- the default -- it takes the whole width instead: the text on
+ * its face is what a label would have said, so a column beside it would be one
+ * fixed width of nothing. */
+export function GuiButtonRow({
+  uuid,
+  label,
+  hint,
+  disabled = false,
+  children,
+}: {
+  uuid: string;
+  label: string | null;
+  hint: string | null;
+  disabled?: boolean;
+  children: React.ReactElement;
+}) {
+  if (label !== null) {
+    return (
+      <GuiInputRow {...{ uuid, hint, label, disabled }} associateLabel={false}>
+        {children}
+      </GuiInputRow>
+    );
+  }
+  if (hint === null) return children;
+  return (
+    <HintTooltip hint={hint}>
+      <span className="block w-full">{children}</span>
+    </HintTooltip>
   );
 }
 
@@ -163,39 +205,26 @@ export function NumericInput({
         if (Number.isFinite(next)) onValueChange(next);
       }}
       onBlur={(event) => {
-        const parsed = finiteNumberOrNull(event.currentTarget.value);
-        if (parsed === null) setDraft(String(value));
+        // Whatever the draft held -- unparseable text or extra precision the
+        // commit rounded away -- the field shows the committed value again.
+        setDraft(String(value));
         onBlur?.(event);
       }}
     />
   );
 }
 
-export function VectorInput(
-  props:
-    | {
-        uuid: string;
-        n: 2;
-        value: [number, number];
-        min: [number, number] | null;
-        max: [number, number] | null;
-        step: number;
-        precision: number;
-        onChange: (value: number[]) => void;
-        disabled: boolean;
-      }
-    | {
-        uuid: string;
-        n: 3;
-        value: [number, number, number];
-        min: [number, number, number] | null;
-        max: [number, number, number] | null;
-        step: number;
-        precision: number;
-        onChange: (value: number[]) => void;
-        disabled: boolean;
-      },
-) {
+export function VectorInput(props: {
+  uuid: string;
+  n: 2 | 3;
+  value: readonly number[];
+  min: readonly number[] | null;
+  max: readonly number[] | null;
+  step: number;
+  precision: number;
+  onChange: (value: number[]) => void;
+  disabled: boolean;
+}) {
   return (
     <ButtonGroup className="w-full min-w-0">
       {[...Array(props.n).keys()].map((index) => (

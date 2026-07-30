@@ -19,19 +19,16 @@ export function useContainerIsEmpty(containerUuid: string): boolean {
   return guiIdSet === undefined || Object.keys(guiIdSet).length === 0;
 }
 
-/** Collapsible chrome shared by folders and forms. */
+/** A folder's collapsible chrome. */
 export function GuiSection({
   uuid,
   label,
-  kind,
   expandByDefault,
   isEmpty,
   children,
 }: {
   uuid: string;
   label: string;
-  /** Applied as `data-leika-section` unless the caller marks its own root. */
-  kind?: "folder";
   expandByDefault: boolean;
   isEmpty: boolean;
   children: React.ReactNode;
@@ -41,7 +38,7 @@ export function GuiSection({
     <Accordion
       value={opened && !isEmpty ? [uuid] : []}
       onValueChange={(next) => setOpened(next.includes(uuid))}
-      data-leika-section={kind}
+      data-leika-section="folder"
     >
       <AccordionItem value={uuid} disabled={isEmpty}>
         {/* Header and contents both run a step tighter than the stock 2.5:

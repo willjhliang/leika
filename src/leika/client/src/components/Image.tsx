@@ -35,6 +35,8 @@ function ImageComponent({ props }: GuiImageMessage) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageWidth, setImageWidth] = useState<number | null>(null);
   const [opened, setOpened] = useState(false);
+  // Stable, so the memo above can actually skip re-renders of the inline copy.
+  const expand = React.useCallback(() => setOpened(true), []);
 
   useEffect(() => {
     const nextUrl = URL.createObjectURL(
@@ -58,7 +60,7 @@ function ImageComponent({ props }: GuiImageMessage) {
       <ImageWithExpand
         imageUrl={imageUrl}
         label={props.label}
-        onExpand={() => setOpened(true)}
+        onExpand={expand}
       />
       <MediaDialog
         open={opened}

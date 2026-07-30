@@ -9,6 +9,7 @@ import {
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
+import { CONTROL_MAX_WIDTH_CLASS } from "./controlWidth";
 
 const BottomPanelContext = React.createContext<null | {
   expanded: boolean;
@@ -25,7 +26,8 @@ export default function BottomPanel({
     <BottomPanelContext.Provider value={{ expanded }}>
       <Card
         className={cn(
-          "fixed right-0 bottom-0 z-10 w-full max-w-80 gap-0 shadow-md",
+          "fixed right-0 bottom-0 z-10 w-full gap-0 shadow-md",
+          CONTROL_MAX_WIDTH_CLASS,
           expanded && "h-[60vh]",
         )}
       >

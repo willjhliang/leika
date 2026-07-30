@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
 
 type ColorFormat = "hex" | "rgb" | "css" | "hsl";
 
@@ -164,7 +165,7 @@ function OutputInput({
   );
 }
 
-export function ColorPicker({
+function ColorPicker({
   value,
   format,
   disabled = false,
@@ -565,12 +566,8 @@ export function ColorPicker({
   );
 }
 
-/** A color swatch that opens the picker in a popover.
- *
- * Not exported: `ColorRow` below is how a color is placed, and a swatch put
- * anywhere on its own would be one more copy of the geometry that row spent
- * two rounds of bugs getting right.
- */
+/** A color swatch that opens the picker in a popover. Not exported:
+ * `ColorRow` below is the one way a color is placed. */
 function ColorPickerPopover({
   id,
   value,
@@ -628,7 +625,7 @@ function ColorPickerPopover({
       <PopoverContent
         align="end"
         anchor={anchor}
-        className="w-[min(20rem,calc(100vw-1rem))]"
+        className={POPOUT_WIDTH_CLASS}
         initialFocus={(interactionType) =>
           interactionType === "touch" ? true : selectionRef.current
         }
