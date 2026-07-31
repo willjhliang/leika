@@ -1,4 +1,4 @@
-.PHONY: help install test test-e2e lint typecheck client-test build-client docs package
+.PHONY: help install install-docs test test-e2e lint typecheck client-test build-client docs docs-serve package
 
 help: ## Show available development commands
 	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -6,6 +6,9 @@ help: ## Show available development commands
 install: ## Install Python and browser-development dependencies
 	python -m pip install -e ".[dev]"
 	leika-build-client
+
+install-docs: ## Install the documentation toolchain (Sphinx, Furo, live reload)
+	python -m pip install -e ".[docs]"
 
 test: ## Run Python unit tests
 	pytest --ignore=tests/e2e
@@ -28,6 +31,10 @@ build-client: ## Build the single-file browser client
 
 docs: ## Build the HTML documentation into docs/_build/html
 	sphinx-build -b html -W --keep-going docs docs/_build/html
+
+docs-serve: ## Serve the documentation on :8000, rebuilding as files change
+	sphinx-autobuild -b html -W --keep-going docs docs/_build/html \
+	  --watch README.md --open-browser
 
 package: ## Build distributions and enforce the wheel-size ceiling
 	python -m build

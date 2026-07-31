@@ -59,6 +59,11 @@ docs = [
   "furo>=2024.8.6",
   "myst-parser>=3,<5",
   "sphinx>=7,<9",
+  # The live-reload server is a development convenience, not part of the CI
+  # docs build; the marker keeps the extra resolvable under uv's universal
+  # resolution, which must satisfy every Python the package itself supports
+  # -- sphinx-autobuild has no release for 3.8.
+  "sphinx-autobuild>=2024.2.4; python_version >= '3.9'",
   "sphinx-copybutton>=0.5.2",
 ]
 
