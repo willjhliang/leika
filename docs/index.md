@@ -17,5 +17,6 @@ development
 :caption: Reference
 :hidden:
 
+gallery
 api/index
 ```

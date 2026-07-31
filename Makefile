@@ -32,6 +32,9 @@ build-client: ## Build the single-file browser client
 docs: ## Build the HTML documentation into docs/_build/html
 	sphinx-build -b html -W --keep-going docs docs/_build/html
 
+gallery: ## Regenerate the docs component gallery (screenshots + page)
+	python scripts/gallery.py
+
 docs-serve: ## Serve the documentation on :8000, rebuilding as files change
 	sphinx-autobuild -b html -W --keep-going docs docs/_build/html \
 	  --watch README.md --open-browser
