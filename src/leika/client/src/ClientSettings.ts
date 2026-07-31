@@ -38,7 +38,10 @@ export interface ClientSettings {
 }
 
 export interface ClientSettingsActions {
-  setDarkMode: (darkMode: boolean) => void;
+  /** `null` hands the scheme back to the server and the OS. A viewer who has
+   * pinned one has to be able to stop, or the first flip of the switch is a
+   * one-way door out of `dark_mode="auto"`. */
+  setDarkMode: (darkMode: boolean | null) => void;
   setShowPaneTitles: (showPaneTitles: boolean) => void;
   setAccentColor: (accentColor: string | null) => void;
   setImageFit: (imageFit: ImageFit) => void;

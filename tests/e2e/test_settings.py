@@ -273,6 +273,12 @@ def test_the_gear_reaches_the_sidebar_and_mobile_chromes(
     assert page_errors == []
 
 
+def choose_scheme(page: Page, pane: Locator, name: str) -> None:
+    """Pick one of Auto, Light or Dark from the color scheme dropdown."""
+    pane.locator("[data-leika-settings-color-scheme]").click()
+    page.get_by_role("option", name=name, exact=True).click()
+
+
 def test_dark_mode_outranks_the_server_and_the_browser(
     leika_server: leika.Server,
     page: Page,
@@ -290,19 +296,56 @@ def test_dark_mode_outranks_the_server_and_the_browser(
     light_background = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
 
     pane = open_settings(page)
-    switch = pane.get_by_role("switch", name="Dark mode")
-    # The switch starts where the page already is, not at some default.
-    expect(switch).to_have_attribute("aria-checked", "false")
-    switch.click()
+    # The dropdown starts on the choice nobody has made yet, not on the scheme
+    # that choice happens to resolve to.
+    expect(pane.locator("[data-leika-settings-color-scheme]")).to_contain_text("Auto")
+    choose_scheme(page, pane, "Dark")
 
     page.wait_for_function("() => document.documentElement.classList.contains('dark')")
     assert (
         page.evaluate("() => getComputedStyle(document.body).backgroundColor") != light_background
     )
-    expect(switch).to_have_attribute("aria-checked", "true")
 
-    switch.click()
+    choose_scheme(page, pane, "Light")
     page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
+    assert page_errors == []
+
+
+def test_auto_hands_the_scheme_back_to_the_browser(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """A pinned scheme has to be unpinnable.
+
+    Otherwise the first visit to these settings is a one-way door out of
+    `dark_mode="auto"`: whatever the viewer picks -- including the scheme the
+    page was already showing -- outranks the OS from then on, and the page
+    stops following it with nothing on screen to say why.
+    """
+    page.emulate_media(color_scheme="light")
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+
+    pane = open_settings(page)
+    # Pin light -- the scheme it is already on, which is the case that used to
+    # look like nothing had happened.
+    choose_scheme(page, pane, "Light")
+    page.emulate_media(color_scheme="dark")
+    page.wait_for_timeout(250)
+    assert not is_dark(page), "a pinned scheme must ignore the OS"
+
+    choose_scheme(page, pane, "Auto")
+    page.wait_for_function("() => document.documentElement.classList.contains('dark')")
+
+    # And it keeps following it, rather than having simply resolved once.
+    page.emulate_media(color_scheme="light")
+    page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
+    stored = page.evaluate("() => localStorage.getItem('leika.settings.v2')")
+    assert '"darkMode":null' in stored
     assert page_errors == []
 
 
@@ -312,10 +355,8 @@ def test_a_scheme_choice_survives_a_reload(
     page_errors: list[str],
 ) -> None:
     del leika_server
-    pane = open_settings(leika_page)
-    switch = pane.get_by_role("switch", name="Dark mode")
     was_dark = is_dark(leika_page)
-    switch.click()
+    choose_scheme(leika_page, open_settings(leika_page), "Light" if was_dark else "Dark")
     leika_page.wait_for_function(
         "was => document.documentElement.classList.contains('dark') !== was",
         arg=was_dark,

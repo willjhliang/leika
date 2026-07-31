@@ -162,6 +162,18 @@ describe("useClientSettings", () => {
     expect(createSettingsHarness(storage).getState().darkMode).toBe(false);
   });
 
+  it("gives a pinned scheme back to the server and the OS", () => {
+    // The way out of a pinned scheme: what was stored is not a scheme at all
+    // but the absence of one, which is what `dark_mode: "auto"` needs to
+    // reach the browser again.
+    const storage = new MemoryStorage();
+    const { actions, getState } = createSettingsHarness(storage);
+    actions.setDarkMode(true);
+    actions.setDarkMode(null);
+    expect(getState().darkMode).toBeNull();
+    expect(readClientSettings(storage).darkMode).toBeNull();
+  });
+
   it("stores a reset accent as the default rather than dropping the key", () => {
     const storage = new MemoryStorage();
     const { actions } = createSettingsHarness(storage);

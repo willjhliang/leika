@@ -93,6 +93,85 @@ function AccentColorRow() {
   );
 }
 
+/** One labelled row holding a dropdown, for the preferences with more than two
+ * states. Written once because there are two of them and they differ only in
+ * their names and their values. */
+function SettingsSelectRow<T extends string>({
+  id,
+  label,
+  items,
+  value,
+  onValueChange,
+  attrs,
+}: {
+  id: string;
+  label: string;
+  items: { value: T; label: string }[];
+  value: T;
+  onValueChange: (value: T) => void;
+  attrs: Record<string, string>;
+}) {
+  return (
+    <SettingsRow htmlFor={id} label={label}>
+      <div className="gui-row-controls flex min-w-0 items-center">
+        <Select
+          items={items}
+          value={value}
+          onValueChange={(next) => next !== null && onValueChange(next)}
+        >
+          <SelectTrigger id={id} className="w-full" {...attrs}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {items.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+    </SettingsRow>
+  );
+}
+
+/** The scheme a viewer can pin, and the choice not to.
+ *
+ * Three states rather than a switch, because the third is the one worth
+ * having: "Auto" is the absence of a decision, which is what lets the server's
+ * `dark_mode` -- itself "auto" unless an app says otherwise -- reach the
+ * browser's `prefers-color-scheme`. A switch can only write a boolean, so
+ * touching it once, even to put it back, pins the scheme for good and quietly
+ * stops the page following the OS. */
+type ColorScheme = "auto" | "light" | "dark";
+
+const COLOR_SCHEME_ITEMS: { value: ColorScheme; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
+function ColorSchemeRow() {
+  const viewer = React.useContext(ViewerContext)!;
+  const darkMode = viewer.useSettings((state) => state.darkMode);
+  const { setDarkMode } = viewer.settingsActions;
+
+  return (
+    <SettingsSelectRow
+      id="leika-settings-color-scheme"
+      label="Color scheme"
+      items={COLOR_SCHEME_ITEMS}
+      value={darkMode === null ? "auto" : darkMode ? "dark" : "light"}
+      onValueChange={(next) =>
+        setDarkMode(next === "auto" ? null : next === "dark")
+      }
+      attrs={{ "data-leika-settings-color-scheme": "true" }}
+    />
+  );
+}
+
 /** How an image pane sizes itself, for panes whose app left it open. The same
  * three names Python's `fit` takes, capitalized. */
 const IMAGE_FIT_LABELS: Record<ImageFit, string> = {
@@ -111,32 +190,14 @@ function ImageFitRow() {
   const { setImageFit } = viewer.settingsActions;
 
   return (
-    <SettingsRow htmlFor="leika-settings-image-fit" label="Image fit">
-      <div className="gui-row-controls flex min-w-0 items-center">
-        <Select
-          items={IMAGE_FIT_ITEMS}
-          value={imageFit}
-          onValueChange={(next) => next !== null && setImageFit(next)}
-        >
-          <SelectTrigger
-            id="leika-settings-image-fit"
-            className="w-full"
-            data-leika-settings-image-fit
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {IMAGE_FIT_ITEMS.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
-    </SettingsRow>
+    <SettingsSelectRow
+      id="leika-settings-image-fit"
+      label="Image fit"
+      items={IMAGE_FIT_ITEMS}
+      value={imageFit}
+      onValueChange={setImageFit}
+      attrs={{ "data-leika-settings-image-fit": "true" }}
+    />
   );
 }
 
@@ -222,13 +283,8 @@ function AboutRow() {
  */
 function SettingsRows() {
   const viewer = React.useContext(ViewerContext)!;
-  const darkMode = viewer.useSettings((state) => state.darkMode);
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
-  const { setDarkMode, setShowPaneTitles } = viewer.settingsActions;
-  // The switch shows the scheme in force, which until it is touched is the one
-  // the server or the OS chose.
-  const resolvedDarkMode =
-    darkMode ?? document.documentElement.classList.contains("dark");
+  const { setShowPaneTitles } = viewer.settingsActions;
   // The palette renders nothing without commands, and closes itself when the
   // last one goes away, so opening it from here would look like a dead button.
   const commandCount = viewer.useGui(
@@ -237,14 +293,7 @@ function SettingsRows() {
 
   return (
     <div className="flex flex-col gap-2" data-leika-settings-pane>
-      <SettingsRow htmlFor="leika-settings-dark-mode" label="Dark mode">
-        <Switch
-          id="leika-settings-dark-mode"
-          className="justify-self-start"
-          checked={resolvedDarkMode}
-          onCheckedChange={setDarkMode}
-        />
-      </SettingsRow>
+      <ColorSchemeRow />
       <SettingsRow htmlFor="leika-settings-pane-titles" label="Pane titles">
         <Switch
           id="leika-settings-pane-titles"
