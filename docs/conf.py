@@ -15,7 +15,7 @@ from leika import __version__  # noqa: E402
 
 project = "Leika"
 author = "Will Liang"
-copyright = "2026, Will Liang"  # noqa: A001
+copyright = "2026 Leika"  # noqa: A001
 release = __version__
 version = __version__
 
@@ -42,6 +42,12 @@ source_suffix = {
 # options that MyST would only pass through an eval-rst block anyway.
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
 myst_heading_anchors = 3
+# The homepage is the README, whose H1 is the centered logo-and-wordmark lockup
+# -- raw HTML, because neither GitHub nor PyPI will center a Markdown heading.
+# MyST cannot see a heading it did not parse, so it reads the page as starting
+# at `## Quickstart` and warns; under the `-W` the docs build uses, that warning
+# is fatal. The H1 is there, so the check is answering about the wrong thing.
+suppress_warnings = ["myst.header"]
 
 autosummary_generate = True
 autodoc_member_order = "bysource"
@@ -66,6 +72,12 @@ intersphinx_mapping = {
 html_theme = "furo"
 html_title = project
 html_static_path = ["_static"]
+html_css_files = ["leika.css"]
+# The sidebar brand becomes the same lockup the homepage heads with. The
+# wordmark beside it is `html_title`, which `leika.css` sets in Almarai and
+# lowercases to match the mark -- the title itself stays capitalized, since it
+# is also what the browser tab and the search index read.
+html_logo = "_static/leika.svg"
 
 
 def _drop_icon_attribute_list(app, what, name, obj, options, lines):

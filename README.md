@@ -1,4 +1,12 @@
-# Leika
+<h1 align="center">
+  <img
+    src="https://raw.githubusercontent.com/willjhliang/leika/main/docs/_static/leika.svg"
+    alt=""
+    width="44"
+    align="absmiddle"
+  />
+  leika
+</h1>
 
 Leika is a lightweight canvas for interactive Python visualizations.
 

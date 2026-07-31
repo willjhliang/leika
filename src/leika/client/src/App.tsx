@@ -27,6 +27,7 @@ import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useAccentColor } from "./hooks/useAccentColor";
 import { useMobileView, usePrefersDarkMode } from "./hooks/useMediaQuery";
+import { useThemeColor } from "./hooks/useThemeColor";
 import { useViewportState } from "./viewport/ViewportState";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
@@ -95,6 +96,7 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
     (configuredDarkMode === "auto" ? prefersDarkMode : configuredDarkMode);
   const controlLayout = viewer.useGui((state) => state.theme.control_layout);
   useAccentColor(viewer.useSettings((state) => state.accentColor));
+  useThemeColor();
 
   return (
     // The scheme is resolved above rather than handed to `enableSystem`, so

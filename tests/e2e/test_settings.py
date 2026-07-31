@@ -642,3 +642,60 @@ def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     expect(generated).to_be_visible()
     assert page_errors == []
 
+
+def _theme_color(page: Page) -> str:
+    return page.evaluate("() => document.querySelector('meta[name=\"theme-color\"]').content")
+
+
+def _panel_surface(page: Page) -> str:
+    return page.evaluate(
+        """() => getComputedStyle(document.documentElement)
+             .getPropertyValue("--leika-panel-surface").trim()"""
+    )
+
+
+def test_the_browser_chrome_is_tinted_like_the_dock(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """`theme-color` follows the scheme the viewer is actually in.
+
+    The OS is asked for light throughout, so the Dark leg also pins the reason
+    this is resolved in JS rather than declared with a `prefers-color-scheme`
+    media query on the tag: the viewer's choice outranks the OS, and a media
+    query would go on answering to the OS.
+    """
+    page.emulate_media(color_scheme="light")
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+    pane = open_settings(page)
+
+    for scheme, dark in (("Dark", True), ("Light", False)):
+        choose_scheme(page, pane, scheme)
+        page.wait_for_function(
+            "dark => document.documentElement.classList.contains('dark') === dark",
+            arg=dark,
+        )
+        surface = _panel_surface(page)
+        # The dock's own surface, not a second copy of it that could drift.
+        page.wait_for_function(
+            """surface => document.querySelector('meta[name="theme-color"]')
+                 .content === surface""",
+            arg=surface,
+            timeout=5_000,
+        )
+        assert _theme_color(page) == surface
+
+    # The two schemes must not agree, or the assertions above would hold for a
+    # tag nobody was updating.
+    choose_scheme(page, pane, "Dark")
+    page.wait_for_function("() => document.documentElement.classList.contains('dark')")
+    in_dark = _theme_color(page)
+    choose_scheme(page, pane, "Light")
+    page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
+    assert in_dark != _theme_color(page)
+    assert page_errors == []
