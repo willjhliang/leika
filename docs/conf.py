@@ -72,7 +72,168 @@ intersphinx_mapping = {
 html_theme = "furo"
 html_title = project
 html_static_path = ["_static"]
-html_css_files = ["leika.css"]
+# shadcn.css defines the client's design tokens and the chrome overrides;
+# leika.css is the brand lockup, which consumes those tokens.
+html_css_files = ["shadcn.css", "leika.css"]
+
+# Furo's defaults, pinned explicitly. Both are contrast-audited palettes that
+# read neutral once the bridge below moves the code surface onto the client's
+# muted gray; syntax stays chromatic, as it does in any shadcn app.
+pygments_style = "a11y-light"
+pygments_dark_style = "native"
+
+# Furo's own variables, re-pointed at the client's design tokens (defined in
+# shadcn.css). Values are var() references, so light and dark need no separate
+# dicts -- the tokens flip themselves. The SAME dict is deliberately assigned
+# to both slots: furo's dark stylesheet re-declares every variable at
+# `body[data-theme="dark"]` specificity, so a bridge present only in the light
+# slot would be clobbered the moment the reader switches schemes.
+_shadcn_bridge = {
+    # Type: Geist, the client's one face, with the client's literal 13px/11px
+    # component sizes pinned absolute so they cannot compound off the article
+    # font size set in shadcn.css.
+    "font-stack": '"Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif',
+    "font-stack--headings": "var(--font-stack)",
+    "font-stack--monospace": (
+        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", '
+        '"Courier New", monospace'
+    ),
+    "code-font-size": "0.8125rem",
+    "api-font-size": "0.8125rem",
+    "sidebar-item-font-size": "0.8125rem",
+    "sidebar-search-input-font-size": "0.8125rem",
+    "admonition-font-size": "0.8125rem",
+    "admonition-title-font-size": "0.8125rem",
+    "toc-font-size": "0.75rem",
+    "sidebar-caption-font-size": "0.6875rem",
+    "toc-title-font-size": "0.6875rem",
+    # Foregrounds and surfaces.
+    "color-foreground-primary": "var(--foreground)",
+    "color-foreground-secondary": "var(--muted-foreground)",
+    "color-foreground-muted": "var(--muted-foreground)",
+    "color-foreground-border": "var(--border)",
+    "color-background-primary": "var(--background)",
+    "color-background-secondary": "var(--muted)",
+    "color-background-hover": "var(--accent)",
+    "color-background-hover--transparent": "transparent",
+    "color-background-border": "var(--border)",
+    "color-background-item": "var(--muted)",
+    "color-content-foreground": "var(--foreground)",
+    # Links behave like the client's icon buttons: muted at rest, the full
+    # foreground on hover. No brand blue, no visited purple; the underline
+    # travels with the text.
+    "color-brand-primary": "var(--foreground)",
+    "color-brand-content": "var(--foreground)",
+    "color-brand-visited": "var(--foreground)",
+    "color-link": "var(--muted-foreground)",
+    "color-link--hover": "var(--foreground)",
+    "color-link--visited": "var(--muted-foreground)",
+    "color-link--visited--hover": "var(--foreground)",
+    "color-link-underline": "currentColor",
+    "color-link-underline--hover": "currentColor",
+    "color-link-underline--visited": "currentColor",
+    "color-link-underline--visited--hover": "currentColor",
+    # Code sits on the client's muted surface. These two override the values
+    # furo injects from the pygments palettes, which are emitted earlier in
+    # the same inline style block.
+    "color-inline-code-background": "var(--muted)",
+    "color-code-background": "var(--muted)",
+    "color-code-foreground": "var(--foreground)",
+    # Search-match marks. Jump targets are furo's own (`#ffc` light,
+    # `#333300` dark) -- deliberately not bridged.
+    "color-highlighted-background": "var(--border)",
+    "color-highlighted-text": "var(--foreground)",
+    # API signatures: flat muted chips, names in foreground rather than
+    # furo's red, everything structural in muted-foreground. Deprecation and
+    # removal keep the palette's one chroma.
+    "color-problematic": "var(--foreground)",
+    "color-api-background": "var(--muted)",
+    "color-api-background-hover": "var(--muted)",
+    "color-api-overall": "var(--muted-foreground)",
+    "color-api-name": "var(--foreground)",
+    "color-api-pre-name": "var(--muted-foreground)",
+    "color-api-paren": "var(--muted-foreground)",
+    "color-api-keyword": "var(--muted-foreground)",
+    "color-api-added": "var(--foreground)",
+    "color-api-added-border": "var(--border)",
+    "color-api-changed": "var(--foreground)",
+    "color-api-changed-border": "var(--border)",
+    "color-api-deprecated": "var(--destructive)",
+    "color-api-deprecated-border": "color-mix(in oklch, var(--destructive) 40%, transparent)",
+    "color-api-removed": "var(--destructive)",
+    "color-api-removed-border": "color-mix(in oklch, var(--destructive) 40%, transparent)",
+    # Admonitions as shadcn alerts: no filled title bars, icon and title in
+    # foreground -- except the warning family, which stays destructive.
+    "color-admonition-background": "var(--card)",
+    "color-admonition-title": "var(--foreground)",
+    "color-admonition-title-background": "transparent",
+    "color-admonition-title--note": "var(--foreground)",
+    "color-admonition-title--hint": "var(--foreground)",
+    "color-admonition-title--tip": "var(--foreground)",
+    "color-admonition-title--important": "var(--foreground)",
+    "color-admonition-title--seealso": "var(--foreground)",
+    "color-admonition-title--admonition-todo": "var(--foreground)",
+    "color-admonition-title--warning": "var(--destructive)",
+    "color-admonition-title--caution": "var(--destructive)",
+    "color-admonition-title--danger": "var(--destructive)",
+    "color-admonition-title--attention": "var(--destructive)",
+    "color-admonition-title--error": "var(--destructive)",
+    "color-admonition-title-background--note": "transparent",
+    "color-admonition-title-background--hint": "transparent",
+    "color-admonition-title-background--tip": "transparent",
+    "color-admonition-title-background--important": "transparent",
+    "color-admonition-title-background--seealso": "transparent",
+    "color-admonition-title-background--admonition-todo": "transparent",
+    "color-admonition-title-background--warning": "transparent",
+    "color-admonition-title-background--caution": "transparent",
+    "color-admonition-title-background--danger": "transparent",
+    "color-admonition-title-background--attention": "transparent",
+    "color-admonition-title-background--error": "transparent",
+    "color-topic-title": "var(--foreground)",
+    "color-topic-title-background": "transparent",
+    # Tables: horizontal hairlines only.
+    "color-table-header-background": "transparent",
+    "color-table-border": "var(--border)",
+    # Cards carry the client's ring-foreground/10 border.
+    "color-card-background": "var(--card)",
+    "color-card-border": "color-mix(in oklch, var(--foreground) 10%, transparent)",
+    "color-card-marginals-background": "var(--muted)",
+    # Header, sidebar, and toc chrome. A flat accent in the hover slot
+    # replaces furo's linear-gradient trick outright.
+    "color-header-background": "var(--background)",
+    "color-header-border": "var(--border)",
+    "color-header-text": "var(--foreground)",
+    "color-sidebar-background": "var(--sidebar)",
+    "color-sidebar-background-border": "var(--sidebar-border)",
+    "color-sidebar-brand-text": "var(--foreground)",
+    "color-sidebar-caption-text": "var(--muted-foreground)",
+    "color-sidebar-link-text": "var(--muted-foreground)",
+    "color-sidebar-link-text--top-level": "var(--muted-foreground)",
+    "color-sidebar-item-background--current": "var(--accent)",
+    "color-sidebar-item-background--hover": "var(--accent)",
+    "color-sidebar-item-expander-background--hover": "var(--accent)",
+    "color-sidebar-search-text": "var(--foreground)",
+    "color-sidebar-search-background": "transparent",
+    "color-sidebar-search-background--focus": "transparent",
+    "color-sidebar-search-border": "var(--input)",
+    "color-sidebar-search-icon": "var(--muted-foreground)",
+    "color-toc-background": "var(--background)",
+    "color-toc-title-text": "var(--muted-foreground)",
+    "color-toc-item-text": "var(--muted-foreground)",
+    "color-toc-item-text--hover": "var(--foreground)",
+    "color-toc-item-text--active": "var(--foreground)",
+    # GUI labels as muted badge chips.
+    "color-guilabel-background": "var(--muted)",
+    "color-guilabel-border": "var(--border)",
+    "color-guilabel-text": "var(--foreground)",
+}
+html_theme_options = {
+    "light_css_variables": _shadcn_bridge,
+    "dark_css_variables": _shadcn_bridge,
+    # No view/edit buttons floating over the article. The theme toggle that
+    # shared that corner moves to the footer via _templates/page.html.
+    "top_of_page_buttons": [],
+}
 # The sidebar brand becomes the same lockup the homepage heads with. The
 # wordmark beside it is `html_title`, which `leika.css` sets in Almarai and
 # lowercases to match the mark -- the title itself stays capitalized, since it

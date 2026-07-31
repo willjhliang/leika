@@ -1,0 +1,726 @@
+/* The client's design system, ported onto Furo.
+ *
+ * The GUI is shadcn (neutral base) with a handful of deliberate deviations --
+ * Geist a weight-step lighter than stock, a 4px radius, even glow shadows,
+ * focus as a border-color change rather than a ring. The docs should read as
+ * the same product, so this file carries three layers:
+ *
+ *   1. the client's tokens, copied from src/leika/client/src/index.css and
+ *      rescoped to Furo's theme switch;
+ *   2. hand-written overrides for everything Furo hardcodes (radii, shadows,
+ *      component chrome);
+ *   3. and conf.py bridges Furo's own ~150 variables onto these tokens via
+ *      html_theme_options, because that inline style is the only thing that
+ *      outranks furo.css in dark mode.
+ *
+ * Furo loads user stylesheets BEFORE its own, so nothing here can win a
+ * specificity tie -- every override selector is prefixed with `body` to add
+ * one type selector and break the tie deliberately. If a rule "doesn't take",
+ * out-specify it; never !important.
+ */
+
+/* ------------------------------------------------------------------ fonts */
+
+/* Geist Variable, the client's one face for everything, self-hosted for the
+ * same reasons Almarai is: no third-party request, identical offline. The
+ * two subsets and their unicode-range lines are copied from the fontsource
+ * package the client itself loads. No italic file ships -- the client never
+ * loads one either, so a synthesized oblique is already the house style.
+ * See geist-OFL.txt, which the license requires travel with it. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("geist-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("geist-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ----------------------------------------------------------------- tokens */
+
+/* The client's palette, verbatim from index.css (minus the app-only panel
+ * plumbing). Stock shadcn neutral in oklch -- achromatic except destructive
+ * -- plus the deviations: 4px base radius on a multiplicative scale, and
+ * glow shadows whose color deliberately does not change in dark mode. */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+
+  --radius: 0.25rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  --shadow-color: oklch(0 0 0 / 0.16);
+  --shadow-sm: 0 0 4px var(--shadow-color);
+  --shadow-md: 0 0 8px var(--shadow-color);
+  --shadow-lg: 0 0 16px var(--shadow-color);
+
+  /* Not client tokens: the keyword and string colors of the pygments pair
+   * the code blocks use (a11y-light here, native in dark). API signatures
+   * sit outside `.highlight`, where the pygments sheet cannot reach, and
+   * these let them read as the same code. */
+  --code-keyword: #8045e5;
+  --code-string: #163;
+}
+
+/* Dark values on Furo's switch: an explicit `data-theme`, or the OS
+ * preference when the reader has left it on auto. Radius and shadow are
+ * absent on purpose -- the client keeps both identical across schemes. */
+@media not print {
+  body[data-theme="dark"] {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --code-keyword: #6ebf26;
+    --code-string: #ed9d13;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) {
+      --background: oklch(0.145 0 0);
+      --foreground: oklch(0.985 0 0);
+      --card: oklch(0.205 0 0);
+      --card-foreground: oklch(0.985 0 0);
+      --primary: oklch(0.922 0 0);
+      --primary-foreground: oklch(0.205 0 0);
+      --secondary: oklch(0.269 0 0);
+      --secondary-foreground: oklch(0.985 0 0);
+      --muted: oklch(0.269 0 0);
+      --muted-foreground: oklch(0.708 0 0);
+      --accent: oklch(0.269 0 0);
+      --accent-foreground: oklch(0.985 0 0);
+      --destructive: oklch(0.704 0.191 22.216);
+      --border: oklch(1 0 0 / 10%);
+      --input: oklch(1 0 0 / 15%);
+      --ring: oklch(0.556 0 0);
+      --sidebar: oklch(0.205 0 0);
+      --sidebar-foreground: oklch(0.985 0 0);
+      --sidebar-border: oklch(1 0 0 / 10%);
+      --code-keyword: #6ebf26;
+      --code-string: #ed9d13;
+    }
+  }
+}
+
+/* ------------------------------------------------------------- typography */
+
+/* The client's remapped weight scale: normal is 300, medium is 400. Geist
+ * is a true variable face, so these are real axis positions. */
+body {
+  font-weight: 300;
+}
+
+/* Full 16px body -- long-form prose earns the readable size even though the
+ * client's panels sit at 13px. The surrounding chrome is still pinned to the
+ * client's literal 13px/11px through the conf.py bridge, so nothing
+ * compounds off this. The weight rides half a step above the client's 300 --
+ * a real axis position on the variable face -- because light text that holds
+ * up in a 13px panel gets thin at reading size. */
+body article {
+  font-size: 1rem;
+  font-weight: 350;
+  line-height: 1.65;
+}
+
+/* The client heads at semibold with tracking-tight; Furo's 700 reads a full
+ * step heavier in Geist. The radius keeps the `:target` highlight pill on
+ * the house scale. */
+body h1,
+body h2,
+body h3,
+body h4,
+body h5,
+body h6 {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  border-radius: var(--radius);
+}
+
+/* The client's heading scale (text-3xl down), in rem so the 14px article
+ * base above does not shrink them through Furo's em sizes. */
+body article h1 {
+  font-size: 1.875rem;
+}
+body article h2 {
+  font-size: 1.5rem;
+}
+body article h3 {
+  font-size: 1.25rem;
+}
+body article h4 {
+  font-size: 1.125rem;
+}
+body article h5 {
+  font-size: 1rem;
+}
+body article h6 {
+  font-size: 0.875rem;
+}
+
+/* Space above a heading exceeds the paragraph gap, as in the client's
+ * prose. margin-top only -- the negative horizontal margins Furo pairs with
+ * heading padding power the `:target` highlight and must survive. */
+body article h2,
+body article h3,
+body article h4,
+body article h5,
+body article h6 {
+  margin-top: 1.5rem;
+}
+
+/* The client marks emphasis at medium (400), one step over its 300 body.
+ * Against long-form prose that single step disappears, so bold here is the
+ * heading weight instead -- the one deliberate departure from the client. */
+body article strong,
+body article b {
+  font-weight: 600;
+}
+
+/* Prose links: the client's font-medium underline underline-offset-4. The
+ * link colors themselves collapse to foreground through the conf.py bridge,
+ * so weight and offset are what distinguish a link. */
+body article a {
+  font-weight: 400;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+
+/* The client's controls animate their color changes (transition-colors:
+ * 150ms, the same easing); every link, icon button, and hover surface does
+ * the same, so the muted-to-foreground hover glides instead of snapping. */
+/* Children that carry a link's color themselves are listed too: an
+ * inherited color change does not animate on the child without its own
+ * transition (the next/prev titles, the [source] spans). */
+body a,
+body .theme-toggle,
+body .theme-toggle svg,
+body .sidebar-tree label,
+body .sidebar-tree label .icon,
+body .nav-overlay-icon .icon,
+body .toc-overlay-icon .icon,
+body .related-pages a svg.furo-related-icon,
+body .related-pages a .page-info .title,
+body .viewcode-link,
+body .viewcode-back {
+  transition:
+    color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body a,
+  body .theme-toggle,
+  body .theme-toggle svg,
+  body .sidebar-tree label,
+  body .sidebar-tree label .icon,
+  body .nav-overlay-icon .icon,
+  body .toc-overlay-icon .icon,
+  body .related-pages a svg.furo-related-icon,
+  body .related-pages a .page-info .title,
+  body .viewcode-link,
+  body .viewcode-back {
+    transition: none;
+  }
+}
+
+/* Furo's `muted-link` (the back-to-top pill, skip-to-content, footer
+ * credits) inherits the full foreground at rest; it belongs on the same
+ * muted-to-foreground ramp as everything else. Furo's own hover rule
+ * already lands on the bridged foreground. */
+body a.muted-link {
+  color: var(--muted-foreground);
+}
+
+/* Images rounded on the house radius, as the client's markdown renderer
+ * draws them. The lockup logo is transparent SVG, so the radius is inert
+ * there. */
+body article img {
+  border-radius: var(--radius);
+}
+
+/* The client's blockquote: a 2px border and italics, no filled surface. */
+body blockquote {
+  background: transparent;
+  border-left: 2px solid var(--border);
+  margin: 1rem 0;
+  padding: 0.125rem 0 0.125rem 1rem;
+  font-style: italic;
+}
+
+/* -------------------------------------------------------------- sidebar */
+
+/* The search box becomes a shadcn input: hairline border, small radius,
+ * transparent surface, and focus that swaps the border to `ring` -- no halo,
+ * matching the client's focus treatment everywhere. */
+body .sidebar-search-container {
+  margin: var(--sidebar-search-space-above) 0.5rem 0;
+  background: transparent;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+}
+
+body .sidebar-search-container:hover,
+body .sidebar-search-container:focus-within {
+  background: transparent;
+  border-color: var(--ring);
+}
+
+body .sidebar-search {
+  border-top: none;
+  border-bottom: none;
+  padding-left: calc(0.5rem + var(--sidebar-search-icon-size) + 0.375rem);
+}
+
+body .sidebar-search::placeholder {
+  color: var(--muted-foreground);
+}
+
+body .sidebar-search-container::before {
+  left: 0.5rem;
+}
+
+/* Navigation entries as shadcn sidebar items: inset from the edge and
+ * rounded, so the hover/current fill reads as a chip rather than a full-bleed
+ * bar. The expander stays absolutely positioned at the row's right edge and
+ * only needs the matching radius. */
+body .sidebar-tree .reference {
+  margin: 0 0.5rem;
+  width: calc(100% - 1rem);
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  border-radius: var(--radius-md);
+}
+
+body .sidebar-tree label {
+  border-radius: var(--radius-md);
+}
+
+/* The client marks the active item with a surface plus full-strength text,
+ * not a weight jump; medium is as far as the weight goes. */
+body .sidebar-tree .current-page > .reference {
+  font-weight: 400;
+  color: var(--foreground);
+}
+
+/* Hover darkens to foreground, as the client's icon buttons do; furo pins
+ * the hover color to the resting variable. The expander arrows and the
+ * mobile header's drawer icons follow the same ramp. */
+body .sidebar-tree .reference:hover {
+  color: var(--foreground);
+}
+
+body .sidebar-tree label:hover .icon {
+  color: var(--foreground);
+}
+
+body .nav-overlay-icon:hover .icon,
+body .toc-overlay-icon:hover .icon {
+  color: var(--foreground);
+}
+
+body .sidebar-tree .caption,
+body .sidebar-tree :not(.caption) > .caption-text {
+  font-weight: 400;
+  letter-spacing: 0.05em;
+}
+
+/* ------------------------------------------------------------------- toc */
+
+body .toc-tree li.scroll-current > .reference {
+  font-weight: 400;
+}
+
+/* Furo defines the hover color for toc entries but never applies it; the
+ * headings darken like every other link. */
+body .toc-tree a.reference:hover {
+  color: var(--color-toc-item-text--hover);
+}
+
+/* -------------------------------------------------------- mobile header */
+
+/* Furo casts a directional drop shadow once scrolled; the house shadow is
+ * an even glow, and floating chrome keeps its hairline. */
+body .mobile-header.scrolled {
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+}
+
+/* ------------------------------------------------------------------ code */
+
+/* The client's code block: muted surface, 4px radius, 1rem padding. The
+ * surface is stated here as well as in the conf.py bridge because the
+ * pygments sheet paints `.highlight` with its palette's own hex directly,
+ * and nothing in furo re-links that to the variable -- without this, blocks
+ * and inline code sit on two different grays. This sheet loads after
+ * pygments.css, so the equal-specificity dark rules below win by order. The
+ * full-bleed highlighted-line rule follows the padding. */
+body .highlight,
+body pre.literal-block {
+  background-color: var(--muted);
+  border-radius: var(--radius);
+}
+
+@media not print {
+  body[data-theme="dark"] .highlight {
+    background-color: var(--muted);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) .highlight {
+      background-color: var(--muted);
+    }
+  }
+}
+
+body article .highlight pre,
+body pre.literal-block {
+  padding: 1rem;
+}
+
+body .highlight .hll {
+  margin-left: -1rem;
+  margin-right: -1rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+body .code-block-caption {
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+/* Inline code: the client rounds it and pads a touch more than Furo, and
+ * never draws a border around it in prose. */
+body code.literal,
+body .sig-inline {
+  border-radius: var(--radius);
+  padding: 0.125rem 0.375rem;
+}
+
+body p code.literal,
+body p .sig-inline {
+  border: none;
+}
+
+/* The copy button as a client icon button: muted when the block reveals it,
+ * foreground under the pointer, hairline chip, 1px press nudge. Everything
+ * here out-specifies furo's own copybutton skin (`.highlight button.copybtn`
+ * in furo-extensions.css, which loads after this sheet), or it silently
+ * loses -- the plain `button.copybtn` selectors this file first used did. */
+body .highlight button.copybtn {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  /* The color joins the hover glide; opacity restates sphinx-copybutton's
+   * own show/hide fade, which setting `transition` would otherwise drop. */
+  transition:
+    color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s;
+}
+
+/* Furo brightens the revealed button to the code foreground; revealed is
+ * the resting state of this control, and rest is muted. */
+body .highlight:hover button.copybtn {
+  color: var(--muted-foreground);
+}
+
+body .highlight button.copybtn:hover,
+body .highlight:hover button.copybtn:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* Furo confirms the copy in green; the palette stays achromatic. */
+body .highlight button.copybtn.success,
+body .highlight:hover button.copybtn.success {
+  color: var(--foreground);
+}
+
+body .highlight button.copybtn:active {
+  transform: translateY(1px);
+}
+
+/* ----------------------------------------------------------- admonitions */
+
+/* Admonitions as shadcn alerts: card surface, hairline border, no shadow,
+ * no filled title bar. The bridge keeps the icon + title in foreground --
+ * except the warning family, which stays destructive, the palette's only
+ * chroma, exactly as in the client. */
+body .admonition,
+body .topic {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  padding: 0.75rem 1rem;
+}
+
+body .admonition > p.admonition-title,
+body p.topic-title {
+  margin: 0 0 0.25rem;
+  padding: 0 0 0 1.5rem;
+  font-weight: 400;
+}
+
+body .admonition > p.admonition-title::before,
+body p.topic-title::before {
+  left: 0;
+  top: 0.125rem;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+/* shadcn tables: horizontal rules only, muted medium headers, and none of
+ * Furo's card shadow. */
+body table.docutils {
+  box-shadow: none;
+  border-radius: 0;
+}
+
+body table.docutils th {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  text-align: left;
+}
+
+body table.docutils td,
+body table.docutils th {
+  border-left: none;
+  border-right: none;
+  padding: 0.375rem 0.5rem;
+}
+
+/* ------------------------------------------------------------- api pages */
+
+/* Signatures as flat muted chips (surface and un-reddened colors come from
+ * the bridge): weight 300-scale like everything else, with only the object
+ * name at medium for scannability. Furo's negative side margins existed to
+ * align its full-bleed look; a chip sits flush with the prose instead. */
+body .sig:not(.sig-inline) {
+  border-radius: var(--radius);
+  font-weight: 400;
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0.625rem 0.875rem 0.625rem 3em;
+}
+
+body .sig-name {
+  font-weight: 500;
+}
+
+/* Signature tokens carry the same highlighting as a code block: parameter
+ * names in foreground, defaults as strings, `class`/`property` markers as
+ * keywords. Only the structural ink -- parens, commas, equals -- stays
+ * muted. */
+body .sig .n {
+  color: var(--foreground);
+}
+
+body .sig em.property {
+  color: var(--code-keyword);
+}
+
+body .sig .default_value {
+  color: var(--code-string);
+}
+
+body .viewcode-link,
+body .viewcode-back {
+  font-weight: 400;
+}
+
+/* ---------------------------------------------------------------- footer */
+
+/* Next/previous are links, so they ride the muted-to-foreground ramp too.
+ * Left alone, the bridge inverts furo's hover here: the title rests on the
+ * inherited foreground and furo's `:hover` rule assigns `--color-link`,
+ * which now resolves muted -- darker to lighter, backwards. The arrow also
+ * needs rescuing from `--color-foreground-border`, which the bridge turned
+ * into a hairline gray. */
+body .related-pages .page-info .title {
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+
+body .related-pages a:hover .page-info .title {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+
+body .related-pages a svg.furo-related-icon,
+body .related-pages a svg.furo-related-icon > use {
+  color: var(--muted-foreground);
+}
+
+body .related-pages a:hover svg.furo-related-icon,
+body .related-pages a:hover svg.furo-related-icon > use {
+  color: var(--foreground);
+}
+
+/* -------------------------------------------------------- floating chrome */
+
+/* Anything floating gets the house treatment: hairline border and the even
+ * glow the client puts on floating windows, instead of Furo's directional
+ * drop shadows. */
+body .back-to-top {
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  box-shadow: var(--shadow-md);
+  font-weight: 400;
+}
+
+body .skip-to-content {
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  box-shadow: var(--shadow-md);
+}
+
+/* kbd flat like the client's muted chips -- no embossing. */
+body kbd:not(.compound) {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  color: var(--foreground);
+}
+
+/* GUI labels as the client's badge pill. */
+body .guilabel {
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  padding: 0.0625rem 0.5rem;
+}
+
+body .theme-toggle {
+  padding: 0.25rem;
+  border-radius: var(--radius-md);
+}
+
+body .theme-toggle:hover {
+  background: var(--accent);
+}
+
+/* Both toggles -- footer and mobile header -- are icon buttons: muted at
+ * rest, foreground under the pointer. Furo paints the svg full foreground. */
+body .theme-toggle svg {
+  color: var(--muted-foreground);
+}
+
+body .theme-toggle:hover svg {
+  color: var(--foreground);
+}
+
+/* The toggle lives in the footer (see _templates/page.html); the one furo
+ * renders over the article top is hidden rather than removed, since it sits
+ * outside the footer template block. The mobile header keeps its own -- on a
+ * phone the footer is a long scroll away. */
+body .theme-toggle-container.theme-toggle-content {
+  display: none;
+}
+
+body .theme-toggle-footer .theme-toggle svg {
+  height: 1.125rem;
+  width: 1.125rem;
+}
+
+/* ----------------------------------------------------------------- focus */
+
+/* The client never draws focus halos; where there is no border to recolor,
+ * a 1px line keeps the keyboard affordance without the glow. The sidebar
+ * search input opts out -- its container's border carries focus. */
+body a:focus-visible,
+body button:focus-visible,
+body input:focus-visible,
+body label:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------ scrollbars */
+
+/* The client's scrollbar: a thin thumb painted in `border`. Furo already
+ * applies this shape to the sidebar, toc, and article scrollers (recolored
+ * through the bridge); this extends it to the page itself. Standard
+ * properties only -- Chrome ignores ::-webkit-scrollbar once scrollbar-color
+ * is set, and mixing the two produces inconsistent thumbs. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Tokens live on body (where Furo's theme switch is), which the viewport
+ * scrollbar on html cannot see -- so its dark value is restated literally.
+ * If `:has` is unsupported the page scrollbar merely stays light. */
+@media not print {
+  html:has(> body[data-theme="dark"]) {
+    scrollbar-color: oklch(1 0 0 / 10%) transparent;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    html:has(> body:not([data-theme="light"])) {
+      scrollbar-color: oklch(1 0 0 / 10%) transparent;
+    }
+  }
+}
+
+/* ----------------------------------------------------------- search page */
+
+body ul.search li {
+  padding: 0.75rem 0;
+}
+
+/* The "Hide Search Matches" link rests muted through furo's own variable
+ * but has no hover rule of its own. */
+body #searchbox .highlight-link a:hover {
+  color: var(--foreground);
+}

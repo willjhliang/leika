@@ -55,7 +55,14 @@ h1[align="center"],
   font-weight: 400;
   /* -8.4px at 280. */
   letter-spacing: -0.03em;
-  color: #171717;
+  color: var(--foreground);
+}
+
+/* Pinned: the article heading scale in shadcn.css sizes h1 for prose, and
+ * the homepage lockup is a masthead, not a heading. The logo and gap are
+ * em-proportioned, so they follow. */
+h1[align="center"] {
+  font-size: 2.25rem;
 }
 
 /* 357 tall against a 280px wordmark. The README asks for 44px, which is sized
@@ -103,23 +110,7 @@ h1[align="center"] img,
    * page it is on, so it is always `:visited`, and Furo's `a:visited` outranks
    * a plain class -- the wordmark would come up link-colored the moment a
    * reader had been to the homepage. A span is never a link, so its own
-   * declaration settles it. */
-  color: #171717;
-}
-
-/* Furo resolves its scheme onto `body[data-theme]`, defaulting to the OS
- * preference when the reader has not chosen; both paths are matched so the
- * wordmark inverts either way. */
-@media not print {
-  body[data-theme="dark"] h1[align="center"],
-  body[data-theme="dark"] .sidebar-brand-text {
-    color: #ffffff;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    body:not([data-theme="light"]) h1[align="center"],
-    body:not([data-theme="light"]) .sidebar-brand-text {
-      color: #ffffff;
-    }
-  }
+   * declaration settles it. The token flips itself in dark mode, so no
+   * inversion block is needed here. */
+  color: var(--foreground);
 }
