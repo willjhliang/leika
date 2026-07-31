@@ -13,6 +13,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "../components/ui/tabs";
+import { cn } from "../lib/utils";
 import { prefersReducedMotion } from "../utils/motion";
 import {
   CARD_INSET_BOTTOM,
@@ -63,11 +64,18 @@ const PanelBody = React.memo(function PanelBody({
   return (
     <ScrollArea
       data-dock-panel-scroll-body
-      className={
+      className={cn(
+        // A scroll viewport clips at its padding box, and a first row whose
+        // ink rides above its box -- a slider thumb on a track pushed up by
+        // its annotations -- would lose its crown. The room has to come from
+        // outside the viewport: the area slides up under the header's slack
+        // and pads its top by the same amount, so every row keeps its
+        // position while the clip edge moves above the overflowing ink.
+        "-mt-1 [&_[data-slot=scroll-area-viewport]]:pt-1",
         fill
           ? "min-h-0 w-full flex-1"
-          : "w-full [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
-      }
+          : "w-full [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]",
+      )}
       style={fill ? undefined : { maxHeight: maxContentHeight }}
     >
       {content}

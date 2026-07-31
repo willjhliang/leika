@@ -83,7 +83,9 @@ BottomPanel.Contents = function BottomPanelContents({
   return (
     <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Separator />
-      <ScrollArea className="h-0 min-h-0 flex-1">
+      {/* The same top-bleed the dock panels carry (see TabGroupFrame): room
+          for first-row ink above its box, at no change in layout. */}
+      <ScrollArea className="-mt-1 h-0 min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]]:pt-1">
         <CardContent>{children}</CardContent>
       </ScrollArea>
     </CollapsibleContent>
