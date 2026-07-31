@@ -12,6 +12,7 @@ export type WsWorkerIncoming =
   | { type: "send"; message: Message }
   | { type: "set_server"; server: string }
   | { type: "retry" }
+  | { type: "watch_stats"; watching: boolean }
   | { type: "close" };
 
 export type WsWorkerOutgoing =
@@ -21,13 +22,15 @@ export type WsWorkerOutgoing =
       versionMismatch?: boolean;
       closeReason?: string;
     }
-  | { type: "message_batch"; messages: Message[] };
+  | { type: "message_batch"; messages: Message[] }
+  | { type: "stats"; counters: ConnectionCounters };
 
 import {
   replaceBinaryPlaceholders,
   computeBinaryOffsets,
 } from "./BinaryMessageDecode";
 import { newPacingState, paceBatch } from "./pacing";
+import { ConnectionCounters, emptyCounters } from "./connectionStats";
 
 type SerializedStruct = {
   messages: Message[];
@@ -100,6 +103,78 @@ function decodeHybridMessage(
     self.postMessage(data, transferable);
   };
 
+  // -- What the connection is doing ----------------------------------------
+  //
+  // Counted here rather than on the main thread because this is where the
+  // socket is: bytes are weighed as frames arrive, and a round trip is timed
+  // from the moment the frame lands, before decoding, pacing and React have
+  // had their turn. Totals run for the life of the page, across reconnects.
+
+  /** How often a watched connection is pinged and reported on. */
+  const STATS_INTERVAL_MS = 1000;
+  /** Round trips kept for the median: half a minute of them at that rate. */
+  const ROUND_TRIP_WINDOW = 30;
+
+  const counters = emptyCounters(performance.now());
+  let connectionsOpened = 0;
+  let statsTimer: ReturnType<typeof setInterval> | null = null;
+
+  const recordRoundTrip = (ms: number) => {
+    counters.roundTripsMs.push(ms);
+    if (counters.roundTripsMs.length > ROUND_TRIP_WINDOW)
+      counters.roundTripsMs.shift();
+  };
+
+  /** Send one message, counting what it weighed. Nothing goes out on a socket
+   * that is not open; those are counted too, since a page quietly dropping the
+   * clicks it is given is exactly the kind of trouble this panel is for. */
+  const sendToServer = (message: Message) => {
+    if (ws === null || ws.readyState !== WebSocket.OPEN) {
+      counters.droppedSends += 1;
+      return;
+    }
+    const encoded = msgpack.encode(message);
+    ws.send(encoded);
+    counters.bytesSent += encoded.byteLength;
+    counters.messagesSent += 1;
+  };
+
+  /** Pull the answers to our own pings out of a batch, timing each one. They
+   * are the worker's business, not the app's, so they go no further. */
+  const takePongs = (messages: Message[], receivedMs: number): Message[] => {
+    if (!messages.some((message) => message.type === "ServerPongMessage"))
+      return messages;
+    const rest: Message[] = [];
+    for (const message of messages) {
+      if (message.type === "ServerPongMessage")
+        recordRoundTrip(receivedMs - message.sent_ms);
+      else rest.push(message);
+    }
+    return rest;
+  };
+
+  const reportStats = () => {
+    // Ping first: the reply lands between now and the next tick, so what is
+    // posted here is the round trip the last tick asked for.
+    sendToServer({ type: "ClientPingMessage", sent_ms: performance.now() });
+    counters.atMs = performance.now();
+    postOutgoing({ type: "stats", counters });
+  };
+
+  const setWatching = (watching: boolean) => {
+    if (watching === (statsTimer !== null)) return;
+    if (watching) {
+      reportStats();
+      statsTimer = setInterval(reportStats, STATS_INTERVAL_MS);
+      return;
+    }
+    clearInterval(statsTimer!);
+    statsTimer = null;
+    // Round trips are only measured while someone is looking, so the ones from
+    // the last look say nothing about the link now. The totals stay.
+    counters.roundTripsMs.length = 0;
+  };
+
   const tryConnect = () => {
     if (ws !== null) ws.close();
 
@@ -121,6 +196,11 @@ function decodeHybridMessage(
       clearTimeout(retryTimeout);
       console.log(`Connected! ${server}`);
 
+      connectionsOpened += 1;
+      counters.connectedSinceMs = performance.now();
+      // Every connection after the first is one the page lost and got back.
+      counters.reconnects = connectionsOpened - 1;
+
       // Just indicate that we're connected.
       postOutgoing({
         type: "connected",
@@ -130,6 +210,8 @@ function decodeHybridMessage(
     ws.onclose = (event) => {
       // Check for explicit close (code 1002 = protocol error, which we use for version mismatch).
       const versionMismatch = event.code === 1002;
+
+      counters.connectedSinceMs = null;
 
       // Send close notification.
       postOutgoing({
@@ -155,6 +237,9 @@ function decodeHybridMessage(
     // State for tracking message timing.
     const pacing = newPacingState();
     ws.onmessage = async (event) => {
+      // Weighed here, before the buffer is handed to the main thread: posting
+      // it transfers ownership away and leaves `byteLength` at zero.
+      counters.bytesReceived += (event.data as ArrayBuffer).byteLength;
       const dataPromise = (async () => {
         // binaryType="arraybuffer" ensures event.data is an ArrayBuffer directly
         // (skips the default Blob->ArrayBuffer async conversion).
@@ -174,6 +259,7 @@ function decodeHybridMessage(
         // (out of order) rather than calling release() on a lock we never
         // acquired -- that would release another waiter's hold and corrupt the
         // ordering state.
+        counters.outOfOrderBatches += 1;
         console.log("Order lock timed out; processing message out of order.");
       }
       // Once the lock is acquired the release happens in `sendFn` (which may
@@ -184,7 +270,8 @@ function decodeHybridMessage(
         const data = await dataPromise;
 
         // Function to send the message and release the order lock.
-        const messages = data.messages;
+        counters.messagesReceived += data.messages.length;
+        const messages = takePongs(data.messages, jsReceivedMs);
         // All typed array views point into the original WebSocket ArrayBuffer.
         // Transfer just that buffer instead of walking the entire message tree.
         const sendFn = () => {
@@ -231,9 +318,9 @@ function decodeHybridMessage(
       // The socket can be null (not yet connected) or closing/closed by the
       // time a send arrives; only send when it's actually open, otherwise drop
       // it rather than throwing in the worker.
-      if (ws !== null && ws.readyState === WebSocket.OPEN) {
-        ws.send(msgpack.encode(data.message));
-      }
+      sendToServer(data.message);
+    } else if (data.type === "watch_stats") {
+      setWatching(data.watching);
     } else if (data.type === "set_server") {
       server = data.server;
       tryConnect();

@@ -4,8 +4,8 @@ import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
-import { Status, StatusIndicator, StatusLabel } from "../components/ui/status";
 import React from "react";
+import { ConnectionBadge } from "./ConnectionPane";
 import BottomPanel from "./BottomPanel";
 import { CONTROL_WIDTH_CSS } from "./controlWidth";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
@@ -56,13 +56,21 @@ export default function ControlPanel(props: {
   // on the docking surface (see ControlPanelDock.tsx). This component covers
   // the mobile bottom sheet and the sidebar layouts.
   if (mobileView) {
-    /* Mobile layout. The whole handle is the collapse button, so the gear
-       cannot sit inside the header the way it does elsewhere; it goes beside
-       it instead. */
+    /* Mobile layout. The whole handle is the collapse button, so neither the
+       gear nor the connection badge -- both buttons of their own -- can sit
+       inside the header the way they do elsewhere; they go beside it, in the
+       order the header would have put them. */
     return (
       <BottomPanel>
-        <BottomPanel.Handle actions={<SettingsButton />}>
-          <PanelHeader />
+        <BottomPanel.Handle
+          actions={
+            <span className="flex items-center gap-2">
+              <ConnectionBadge />
+              <SettingsButton />
+            </span>
+          }
+        >
+          <PanelHeader badge={null} />
         </BottomPanel.Handle>
         <BottomPanel.Contents>{panelContents}</BottomPanel.Contents>
       </BottomPanel>
@@ -83,24 +91,20 @@ export default function ControlPanel(props: {
   }
 }
 
-/** Websocket states, as the Status component's vocabulary. Leika has nothing
- * that maps to "maintenance", which the server would have to be up to report.
- * The wording is load-bearing: the browser tests wait for "Connecting..." to
- * leave the page before they touch anything. */
-const CONNECTION_STATUS = {
-  connected: { status: "online", text: "Connected" },
-  reconnecting: { status: "degraded", text: "Connecting..." },
-  inactive: { status: "offline", text: "Inactive" },
-} as const;
-
 /** The panel header's contents: the visualization's title on the left, the
  * websocket connection status on the right, and whatever the chrome around it
  * wants between the two. */
-export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
+export function PanelHeader({
+  actions,
+  badge = <ConnectionBadge />,
+}: {
+  actions?: React.ReactNode;
+  /** The connection badge, or `null` where the header is itself inside a
+   * button and cannot hold one. */
+  badge?: React.ReactNode;
+}) {
   const { useGui } = React.useContext(ViewerContext)!;
-  const websocketState = useGui((state) => state.websocketState);
   const label = useGui((state) => state.label);
-  const { status, text } = CONNECTION_STATUS[websocketState];
 
   return (
     // Collapsed, the floating panel fades down to the one thing worth leaving
@@ -129,12 +133,10 @@ export function PanelHeader({ actions }: { actions?: React.ReactNode }) {
           {actions}
         </span>
       )}
-      {/* The badge keeps the Badge base's `shrink-0`, so a long title
-          truncates rather than squeezing the status. */}
-      <Status status={status} data-dock-peek>
-        <StatusIndicator />
-        <StatusLabel>{text}</StatusLabel>
-      </Status>
+      {/* The badge is a button onto what the connection is doing: it is the
+          one thing left on the canvas when the panel folds away, so it is
+          where a reader already looks when something feels wrong. */}
+      {badge}
     </div>
   );
 }

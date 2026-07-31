@@ -900,6 +900,25 @@ export interface FileTransferPartAck {
   transferred_bytes: number;
   total_bytes: number;
 }
+/** Message from client->server asking to be answered as soon as possible.
+ *
+ * The client is timing the round trip, so the server's only job is to hand
+ * the stamp straight back.
+ *
+ * (automatically generated)
+ */
+export interface ClientPingMessage {
+  type: "ClientPingMessage";
+  sent_ms: number;
+}
+/** Message from server->client answering one ping.
+ *
+ * (automatically generated)
+ */
+export interface ServerPongMessage {
+  type: "ServerPongMessage";
+  sent_ms: number;
+}
 /** Message from server->client to set the label of the GUI panel.
  *
  * (automatically generated)
@@ -1058,6 +1077,8 @@ export type Message =
   | FileTransferStartDownload
   | FileTransferPart
   | FileTransferPartAck
+  | ClientPingMessage
+  | ServerPongMessage
   | SetGuiPanelLabelMessage
   | RegisterCommandMessage
   | CommandUpdateMessage

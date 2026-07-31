@@ -1098,6 +1098,37 @@ class FileTransferPartAck(Message):
 
 
 @dataclasses.dataclass
+class ClientPingMessage(Message):
+    """Message from client->server asking to be answered as soon as possible.
+
+    The client is timing the round trip, so the server's only job is to hand
+    the stamp straight back."""
+
+    sent_ms: float
+    """The client's own clock when it sent this. Meaningless to the server --
+    it is echoed rather than read, so the two never have to agree on a clock."""
+
+    @override
+    def redundancy_key(self) -> str:
+        # Every ping is its own message. Under the name-based default, a second
+        # ping would replace the first in the buffer and the round trip it was
+        # timing would never be answered.
+        return type(self).__name__ + "-" + str(self.sent_ms)
+
+
+@dataclasses.dataclass
+class ServerPongMessage(Message):
+    """Message from server->client answering one ping."""
+
+    sent_ms: float
+    """The stamp that arrived on the ping, returned untouched."""
+
+    @override
+    def redundancy_key(self) -> str:
+        return type(self).__name__ + "-" + str(self.sent_ms)
+
+
+@dataclasses.dataclass
 class SetGuiPanelLabelMessage(Message):
     """Message from server->client to set the label of the GUI panel."""
 

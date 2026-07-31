@@ -294,6 +294,8 @@ class Server:
                         print_threadpool_errors
                     )
 
+        server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
+
         @server.on_client_disconnect
         async def _on_disconnect(conn: infra.WebsockClientConnection) -> None:
             with self._client_lock:
@@ -327,6 +329,24 @@ class Server:
     def url(self) -> str:
         display_host = "localhost" if self.host in ("0.0.0.0", "::") else self.host
         return f"http://{display_host}:{self.port}"
+
+    def _handle_client_ping(
+        self, client_id: infra.ClientId, message: _messages.ClientPingMessage
+    ) -> None:
+        """Answer one client's ping, and get out of the way.
+
+        Flushed rather than left to the outgoing window, which holds messages
+        for a frame before sending them: waiting would add that frame to every
+        reading and hide the very delays the client is measuring for.
+        """
+        with self._client_lock:
+            client = self._connected_clients.get(client_id)
+        if client is None:
+            return
+        client._websock_connection.queue_message(
+            _messages.ServerPongMessage(sent_ms=message.sent_ms)
+        )
+        client.flush()
 
     @property
     def clients(self) -> dict[int, ClientHandle]:

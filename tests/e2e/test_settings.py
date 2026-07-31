@@ -66,7 +66,9 @@ def test_the_gear_is_a_circle_the_size_of_the_status_pill(
     """It reads as one cluster with the pill, so it is measured against it."""
     del leika_server
     trigger = leika_page.locator(TRIGGER)
-    pill = leika_page.locator('[data-slot="badge"]', has_text="Connected").first
+    # The pill is a button of its own now -- it opens the connection popout --
+    # so it answers to that rather than to the badge slot it renders as.
+    pill = leika_page.locator("[data-leika-connection-trigger]")
     expect(trigger).to_be_visible(timeout=5_000)
     expect(pill).to_be_visible(timeout=5_000)
 
@@ -244,10 +246,8 @@ def test_the_gear_reaches_the_sidebar_and_mobile_chromes(
     cluster = page.evaluate(
         """(trigger) => {
             const gear = document.querySelector(trigger);
-            const pill = [...document.querySelectorAll('[data-slot="badge"]')].find(
-                (badge) => badge.textContent.includes("Connected"),
-            );
-            if (gear === null || pill === undefined) return null;
+            const pill = document.querySelector("[data-leika-connection-trigger]");
+            if (gear === null || pill === null) return null;
             return {
                 gearRight: gear.getBoundingClientRect().right,
                 pillLeft: pill.getBoundingClientRect().left,
@@ -641,3 +641,4 @@ def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     expect(folded).to_have_count(0, timeout=5_000)
     expect(generated).to_be_visible()
     assert page_errors == []
+

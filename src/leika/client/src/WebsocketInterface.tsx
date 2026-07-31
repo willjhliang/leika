@@ -1,5 +1,6 @@
 import React, { useContext } from "react";
 
+import { connectionStats } from "./ConnectionStatsController";
 import { ViewerContext } from "./ViewerContext";
 import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
 import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
@@ -40,10 +41,26 @@ export function WebsocketMessageProducer() {
       }
     };
 
+    // The worker measures only while something is watching, so it is told when
+    // that changes -- and only then, since the counters it reports arrive
+    // through this same store once a second.
+    let watching = false;
+    const updateWatching = () => {
+      const wanted = connectionStats.store.get().watchers > 0;
+      if (wanted === watching) return;
+      watching = wanted;
+      postToWorker({ type: "watch_stats", watching });
+    };
+    const unsubscribeWatchers = connectionStats.store.subscribe(updateWatching);
+
     window.addEventListener("focus", updateRetryInterval);
     window.addEventListener("blur", updateRetryInterval);
     worker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
       const data = event.data;
+      if (data.type === "stats") {
+        connectionStats.record(data.counters);
+        return;
+      }
       if (data.type === "connected") {
         isConnected = true;
         viewer.guiActions.resetGui();
@@ -85,7 +102,12 @@ export function WebsocketMessageProducer() {
     };
 
     postToWorker({ type: "set_server", server });
+    updateWatching();
     return () => {
+      unsubscribeWatchers();
+      // The counters belong to the worker that is about to be replaced, so
+      // they say nothing about the connection that follows.
+      connectionStats.forget();
       window.removeEventListener("focus", updateRetryInterval);
       window.removeEventListener("blur", updateRetryInterval);
       if (retryIntervalId !== null) clearInterval(retryIntervalId);
