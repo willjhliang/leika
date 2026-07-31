@@ -6,6 +6,7 @@ import {
 } from "../ConnectionStatsController";
 import { LEIKA_PROTOCOL } from "../VersionInfo";
 import { ViewerContext } from "../ViewerContext";
+import { usePeekHold } from "../dock/DockContext";
 import {
   QUALITY_LABELS,
   formatBytes,
@@ -191,6 +192,9 @@ export function ConnectionBadge() {
   const badge = React.useRef<HTMLButtonElement>(null);
 
   React.useEffect(() => (open ? connectionStats.watch() : undefined), [open]);
+  // Reaching for the popout means leaving the panel, which is what folds a
+  // collapsed one away to this badge. Not while it is up.
+  usePeekHold(open);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

@@ -7,7 +7,7 @@ import React from "react";
 import { cn } from "@/lib/utils";
 import { Card } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
-import { useDock } from "./DockContext";
+import { PeekHold, PeekHoldContext, useDock } from "./DockContext";
 import { dragGesture } from "./gestures";
 import { prefersReducedMotion } from "../utils/motion";
 import { cascadeResize, expandStack, minimizeStack } from "./layoutOps";
@@ -52,15 +52,22 @@ const OWNED_BODY_VIEWPORT_SELECTOR =
  * what makes coming BACK a matter of finding the badge rather than waving at
  * the empty rectangle around it.
  *
- * `focus-within` says the same thing in the keyboard's terms, and stays in CSS
+ * Keyboard focus says the same thing in the keyboard's terms, and stays in CSS
  * because the pointer state cannot see it: tabbing to the gear must not leave
- * a focus ring on something invisible. */
+ * a focus ring on something invisible.
+ *
+ * Focus-VISIBLE rather than focus: closing a popout hands focus back to the
+ * control that opened it, whether it was dismissed with a key or with a click
+ * out on the canvas. Under plain `:focus-within` that restored focus held the
+ * whole card open behind a pointer that had long since left -- the panel would
+ * not fold until something else was clicked. Only a reader who is actually
+ * driving from the keyboard needs to see where focus went. */
 const FADED_CLASSES = [
   "pointer-events-none bg-transparent shadow-none ring-0",
   "[&_[data-dock-peek]]:pointer-events-auto [&_[data-dock-peek]]:opacity-60",
   "[&_[data-dock-peek-fade]]:opacity-0",
-  "focus-within:pointer-events-auto focus-within:bg-card focus-within:shadow-md focus-within:ring-1",
-  "focus-within:[&_[data-dock-peek]]:opacity-100 focus-within:[&_[data-dock-peek-fade]]:opacity-100",
+  "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:bg-card has-[:focus-visible]:shadow-md has-[:focus-visible]:ring-1",
+  "has-[:focus-visible]:[&_[data-dock-peek]]:opacity-100 has-[:focus-visible]:[&_[data-dock-peek-fade]]:opacity-100",
 ].join(" ");
 
 /** The fade itself, on the window whenever it can peek -- so the card fades
@@ -147,7 +154,15 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   // double-click with it. Entering is still `:hover`'s job in effect (the peek
   // element is the only thing left to enter); leaving is what this tracks.
   const [pointerInside, setPointerInside] = React.useState(false);
-  const faded = peek && !pointerInside;
+  // Anything the panel put outside itself and still counts as itself -- a
+  // popout hung off its header -- holds the window here while it is up. See
+  // `usePeekHold`.
+  const [peekHolds, setPeekHolds] = React.useState(0);
+  const holdPeek = React.useCallback<PeekHold>(() => {
+    setPeekHolds((held) => held + 1);
+    return () => setPeekHolds((held) => held - 1);
+  }, []);
+  const faded = peek && !pointerInside && peekHolds === 0;
   const fixedHeight = win.height !== undefined && !collapsed;
   const [autoBodyMaxHeight, setAutoBodyMaxHeight] = React.useState<
     number | undefined
@@ -484,208 +499,210 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
     };
 
   return (
-    <Card
-      ref={paperRef}
-      data-floating-window={win.id}
-      data-testid={testId}
-      data-dock-side="none"
-      data-dock-peeking={faded ? "true" : undefined}
-      // Floating windows hover over the viewport, so they get a drop shadow to
-      // lift them off it. Docked and split cards stay flat -- they tile the
-      // surface rather than sitting on top of it.
-      // `py-0`: the window's vertical inset is carried by the handles at its
-      // top and bottom instead, so the whole band around them drags (see
-      // CARD_INSET_TOP in cardInset).
-      className={cn(
-        "box-border py-0 shadow-md",
-        peek && PEEK_TRANSITION_CLASSES,
-        faded && FADED_CLASSES,
-      )}
-      onPointerDownCapture={() => onFront(win.id)}
-      // Enter fires for the peek element too: entering a descendant from
-      // outside is entering the card. That is the way back in once the card
-      // itself has stopped taking the pointer.
-      onPointerEnter={() => setPointerInside(true)}
-      onPointerLeave={() => setPointerInside(false)}
-      style={{
-        position: "absolute",
-        ...horizontalPosition,
-        top: win.y,
-        width: win.width,
-        height: collapsed ? undefined : renderedHeight,
-        zIndex,
-        overflow: "visible",
-        // When height is fixed, lay the stack out as a flex column so groups
-        // share the height and scroll internally.
-        ...(fixedHeight
-          ? { display: "flex", flexDirection: "column" as const }
-          : {}),
-      }}
-    >
-      {/* Edge resize grips. */}
-      <ResizeGrip
-        edge="left"
-        testId={testId && `${testId}-resize-left`}
-        onPointerDown={widthResizeHandler("left")}
-      />
-      <ResizeGrip
-        edge="right"
-        testId={testId && `${testId}-resize-right`}
-        onPointerDown={widthResizeHandler("right")}
-      />
-      {/* No vertical / corner resize when minimized -- nothing to resize. */}
-      {!collapsed && (
-        <>
-          <ResizeGrip
-            edge="bottom"
-            onPointerDown={heightResizeHandler("bottom")}
-          />
-          <ResizeGrip edge="top" onPointerDown={heightResizeHandler("top")} />
-          <ResizeGrip
-            edge="bottom-left"
-            onPointerDown={cornerResizeHandler("left")}
-          />
-          <ResizeGrip
-            edge="bottom-right"
-            onPointerDown={cornerResizeHandler("right")}
-          />
-          <ResizeGrip
-            edge="top-left"
-            onPointerDown={cornerResizeHandler("left", "top")}
-          />
-          <ResizeGrip
-            edge="top-right"
-            onPointerDown={cornerResizeHandler("right", "top")}
-          />
-        </>
-      )}
-
-      <div
+    <PeekHoldContext.Provider value={holdPeek}>
+      <Card
+        ref={paperRef}
+        data-floating-window={win.id}
+        data-testid={testId}
+        data-dock-side="none"
+        data-dock-peeking={faded ? "true" : undefined}
+        // Floating windows hover over the viewport, so they get a drop shadow to
+        // lift them off it. Docked and split cards stay flat -- they tile the
+        // surface rather than sitting on top of it.
+        // `py-0`: the window's vertical inset is carried by the handles at its
+        // top and bottom instead, so the whole band around them drags (see
+        // CARD_INSET_TOP in cardInset).
+        className={cn(
+          "box-border py-0 shadow-md",
+          peek && PEEK_TRANSITION_CLASSES,
+          faded && FADED_CLASSES,
+        )}
+        onPointerDownCapture={() => onFront(win.id)}
+        // Enter fires for the peek element too: entering a descendant from
+        // outside is entering the card. That is the way back in once the card
+        // itself has stopped taking the pointer.
+        onPointerEnter={() => setPointerInside(true)}
+        onPointerLeave={() => setPointerInside(false)}
         style={{
-          overflow: "hidden",
+          position: "absolute",
+          ...horizontalPosition,
+          top: win.y,
+          width: win.width,
+          height: collapsed ? undefined : renderedHeight,
+          zIndex,
+          overflow: "visible",
+          // When height is fixed, lay the stack out as a flex column so groups
+          // share the height and scroll internally.
           ...(fixedHeight
-            ? {
-                flexGrow: 1,
-                minHeight: 0,
-                display: "flex",
-                flexDirection: "column" as const,
-              }
+            ? { display: "flex", flexDirection: "column" as const }
             : {}),
         }}
       >
-        {/* For a multi-group stack, a window header drags the whole window; each
-        group also keeps its own grip bar (which tears it out). A single group
-        needs no header -- its own grip bar moves the window. The header's
-        minimize-all button collapses every group at once (and restores the
-        previous min/max mix on expand). */}
-        {multi && (
-          <StackHandleBar
-            attrs={{ "data-floating-handle": win.id }}
-            insetTop
-            onPointerDown={(event) => dock.startWindowDrag(event, win.id)}
-            collapsed={collapsed}
-            onToggle={() =>
-              dock.api.apply((l) =>
-                collapsed
-                  ? expandStack(l, win.stack)
-                  : minimizeStack(l, win.stack),
-              )
-            }
-          />
+        {/* Edge resize grips. */}
+        <ResizeGrip
+          edge="left"
+          testId={testId && `${testId}-resize-left`}
+          onPointerDown={widthResizeHandler("left")}
+        />
+        <ResizeGrip
+          edge="right"
+          testId={testId && `${testId}-resize-right`}
+          onPointerDown={widthResizeHandler("right")}
+        />
+        {/* No vertical / corner resize when minimized -- nothing to resize. */}
+        {!collapsed && (
+          <>
+            <ResizeGrip
+              edge="bottom"
+              onPointerDown={heightResizeHandler("bottom")}
+            />
+            <ResizeGrip edge="top" onPointerDown={heightResizeHandler("top")} />
+            <ResizeGrip
+              edge="bottom-left"
+              onPointerDown={cornerResizeHandler("left")}
+            />
+            <ResizeGrip
+              edge="bottom-right"
+              onPointerDown={cornerResizeHandler("right")}
+            />
+            <ResizeGrip
+              edge="top-left"
+              onPointerDown={cornerResizeHandler("left", "top")}
+            />
+            <ResizeGrip
+              edge="top-right"
+              onPointerDown={cornerResizeHandler("right", "top")}
+            />
+          </>
         )}
 
         <div
-          ref={stackRef}
-          style={
-            fixedHeight
+          style={{
+            overflow: "hidden",
+            ...(fixedHeight
               ? {
                   flexGrow: 1,
                   minHeight: 0,
                   display: "flex",
-                  flexDirection: "column",
+                  flexDirection: "column" as const,
                 }
-              : {}
-          }
+              : {}),
+          }}
         >
-          {win.stack.map((groupId, index) => {
-            const group = dock.groups[groupId];
-            if (group === undefined) return null;
-            const collapsedCell = group.collapsed === true;
-            const weight = win.stackWeights?.[groupId] ?? 1;
-            const groupNode = (
-              <TabGroupFrame
-                group={group}
-                // Fixed-height windows: groups fill and share the height (the
-                // wrapper carries the per-group weight). Auto-height: size to
-                // content, capped to the dock container's height (minus a
-                // margin) -- falling back to a
-                // fixed cap before the first container measure.
-                fill={fixedHeight}
-                maxContentHeight={
-                  autoBodyMaxHeight ??
-                  (multi
-                    ? MULTI_GROUP_BODY_CAP_PX
-                    : containerHeight > 0
-                      ? Math.max(
-                          0,
-                          containerHeight - 2 * AUTO_HEIGHT_BOUNDARY_PAD_PX,
-                        )
-                      : FALLBACK_BODY_CAP_PX)
-                }
-                // The window's vertical inset belongs to whatever sits against
-                // each edge of the card: the stack's first and last groups,
-                // except at the top of a multi-group window, where the window
-                // header is already there to take it.
-                insetTop={!multi && index === 0}
-                insetBottom={index === win.stack.length - 1}
-                stripDragsGroup
-              />
-            );
-            return (
-              <React.Fragment key={groupId}>
-                {index > 0 && (
-                  // Draggable: redistribute height between the stacked groups
-                  // (same cascade as docked column splits). On an auto-height
-                  // window the first drag pins the current height so there is a
-                  // total to divide.
-                  <FloatingStackDivider
-                    stackRef={stackRef}
-                    dividerIndex={index - 1}
-                    stack={win.stack}
-                    groups={dock.groups}
-                    weightOf={(g) => win.stackWeights?.[g] ?? 1}
-                    onSetWeights={(weights) =>
-                      onSetStackWeights(win.id, weights)
-                    }
-                    isFixed={fixedHeight}
-                    pinHeight={() => {
-                      const p = paperRef.current;
-                      if (p) onResizeHeight(win.id, p.offsetHeight);
-                    }}
-                  />
-                )}
-                {fixedHeight ? (
-                  <div
-                    style={{
-                      flexGrow: collapsedCell ? 0 : weight,
-                      flexShrink: collapsedCell ? 0 : 1,
-                      flexBasis: collapsedCell ? "auto" : 0,
-                      minHeight: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
-                  >
-                    {groupNode}
-                  </div>
-                ) : (
-                  groupNode
-                )}
-              </React.Fragment>
-            );
-          })}
+          {/* For a multi-group stack, a window header drags the whole window; each
+        group also keeps its own grip bar (which tears it out). A single group
+        needs no header -- its own grip bar moves the window. The header's
+        minimize-all button collapses every group at once (and restores the
+        previous min/max mix on expand). */}
+          {multi && (
+            <StackHandleBar
+              attrs={{ "data-floating-handle": win.id }}
+              insetTop
+              onPointerDown={(event) => dock.startWindowDrag(event, win.id)}
+              collapsed={collapsed}
+              onToggle={() =>
+                dock.api.apply((l) =>
+                  collapsed
+                    ? expandStack(l, win.stack)
+                    : minimizeStack(l, win.stack),
+                )
+              }
+            />
+          )}
+
+          <div
+            ref={stackRef}
+            style={
+              fixedHeight
+                ? {
+                    flexGrow: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                  }
+                : {}
+            }
+          >
+            {win.stack.map((groupId, index) => {
+              const group = dock.groups[groupId];
+              if (group === undefined) return null;
+              const collapsedCell = group.collapsed === true;
+              const weight = win.stackWeights?.[groupId] ?? 1;
+              const groupNode = (
+                <TabGroupFrame
+                  group={group}
+                  // Fixed-height windows: groups fill and share the height (the
+                  // wrapper carries the per-group weight). Auto-height: size to
+                  // content, capped to the dock container's height (minus a
+                  // margin) -- falling back to a
+                  // fixed cap before the first container measure.
+                  fill={fixedHeight}
+                  maxContentHeight={
+                    autoBodyMaxHeight ??
+                    (multi
+                      ? MULTI_GROUP_BODY_CAP_PX
+                      : containerHeight > 0
+                        ? Math.max(
+                            0,
+                            containerHeight - 2 * AUTO_HEIGHT_BOUNDARY_PAD_PX,
+                          )
+                        : FALLBACK_BODY_CAP_PX)
+                  }
+                  // The window's vertical inset belongs to whatever sits against
+                  // each edge of the card: the stack's first and last groups,
+                  // except at the top of a multi-group window, where the window
+                  // header is already there to take it.
+                  insetTop={!multi && index === 0}
+                  insetBottom={index === win.stack.length - 1}
+                  stripDragsGroup
+                />
+              );
+              return (
+                <React.Fragment key={groupId}>
+                  {index > 0 && (
+                    // Draggable: redistribute height between the stacked groups
+                    // (same cascade as docked column splits). On an auto-height
+                    // window the first drag pins the current height so there is a
+                    // total to divide.
+                    <FloatingStackDivider
+                      stackRef={stackRef}
+                      dividerIndex={index - 1}
+                      stack={win.stack}
+                      groups={dock.groups}
+                      weightOf={(g) => win.stackWeights?.[g] ?? 1}
+                      onSetWeights={(weights) =>
+                        onSetStackWeights(win.id, weights)
+                      }
+                      isFixed={fixedHeight}
+                      pinHeight={() => {
+                        const p = paperRef.current;
+                        if (p) onResizeHeight(win.id, p.offsetHeight);
+                      }}
+                    />
+                  )}
+                  {fixedHeight ? (
+                    <div
+                      style={{
+                        flexGrow: collapsedCell ? 0 : weight,
+                        flexShrink: collapsedCell ? 0 : 1,
+                        flexBasis: collapsedCell ? "auto" : 0,
+                        minHeight: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      {groupNode}
+                    </div>
+                  ) : (
+                    groupNode
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </PeekHoldContext.Provider>
   );
 });
 

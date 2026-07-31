@@ -118,6 +118,32 @@ export function toggleGroupVisibility(
   return dock.panels[activeId]?.onHandleClick?.() === true;
 }
 
+/** Registers one reason a peeking window must stay where it is. Call it to
+ * take the hold; call what it returns to give it back. */
+export type PeekHold = () => () => void;
+
+export const PeekHoldContext = React.createContext<PeekHold | null>(null);
+
+/** Hold a peeking window open for as long as `active` -- for something that
+ * belongs to the panel but does not live inside it.
+ *
+ * A window that peeks fades to its `data-dock-peek` element when the pointer
+ * leaves. A popout opened from the panel's header is portaled to the body, so
+ * reaching for it IS the pointer leaving: without a hold, opening the settings
+ * folds the panel away behind them, and closing the popout leaves the reader
+ * looking at a badge. `focus-within` already says this for the keyboard, which
+ * a portaled popout is inside; the pointer needs telling.
+ *
+ * A no-op outside a floating window -- the sidebar and the bottom sheet have
+ * no state to be held out of. */
+export function usePeekHold(active: boolean): void {
+  const hold = React.useContext(PeekHoldContext);
+  React.useEffect(() => {
+    if (!active || hold === null) return;
+    return hold();
+  }, [active, hold]);
+}
+
 /** High-churn geometry, split out of DockContext so per-frame resize updates
  * don't invalidate the (memoized) main context and re-render every panel.
  * Consumed only by observers that genuinely track these values (e.g. the

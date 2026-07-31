@@ -5,6 +5,7 @@ import { commandPalette } from "../CommandPaletteController";
 import { ImageFit } from "../ClientSettings";
 import { LEIKA_VERSION } from "../VersionInfo";
 import { ViewerContext } from "../ViewerContext";
+import { usePeekHold } from "../dock/DockContext";
 import { ColorRow } from "../components/ColorPicker";
 import {
   guiLabelClassName,
@@ -326,6 +327,10 @@ export function SettingsButton() {
   const opened = useSettingsPanelOpen();
 
   const gear = React.useRef<HTMLSpanElement>(null);
+
+  // Reaching for the popout means leaving the panel, which is what folds a
+  // collapsed one away to the badge beside this. Not while it is up.
+  usePeekHold(opened);
 
   // Closed on the way down, not merely locked: leaving the popout open behind
   // a disabled gear would strand it, with nothing left that could close it.

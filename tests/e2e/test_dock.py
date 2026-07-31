@@ -656,3 +656,75 @@ def test_a_collapsed_panel_fades_down_to_its_status_badge(dock_page: Page) -> No
     # And leaving it fades the panel back down.
     page.mouse.move(*CANVAS)
     expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
+
+
+def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
+    """Both popouts in the header are portaled to the body, so reading one means
+    taking the pointer off the panel -- which is the gesture that folds a
+    collapsed panel down to its badge. It has to stay up while either is open,
+    or the reader is left with a badge and a popout hanging off nothing."""
+    page = dock_page
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+    page.mouse.move(*CANVAS)
+    expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
+
+    for trigger, popover in (
+        ("[data-leika-settings-trigger]", "[data-leika-settings-popover]"),
+        ("[data-leika-connection-trigger]", "[data-leika-connection-popover]"),
+    ):
+        # The badge is the only thing left to aim at, so the panel comes back
+        # first; opening from there is what the reader actually does.
+        control_panel(page).locator("[data-dock-peek]").hover()
+        page.locator(trigger).click()
+        expect(page.locator(popover)).to_be_visible(timeout=5_000)
+
+        # Pointer right away from both -- the popout itself does not need this
+        # (it is portaled, but React bubbles its pointer events back through
+        # the panel, so hovering it still counts as being on the panel). What
+        # needs it is a reader whose pointer has gone elsewhere with the popout
+        # still up: nothing holds the card then, and focus is inside the popout
+        # rather than the card, so the keyboard rule does not either.
+        page.mouse.move(*CANVAS)
+        page.wait_for_timeout(400)
+        held = _peek_state(page)
+        assert _draws_a_shadow(held["shadow"]), held
+        assert held["gear"] == "1", held
+        assert held["badge"] == "1", held
+
+        # Dismissed with a click out on the canvas, it folds straight back
+        # down. Closing hands focus to the control that opened it either way,
+        # so this is the case that used to sit open behind a pointer that had
+        # long since left.
+        page.mouse.click(*CANVAS)
+        expect(page.locator(popover)).to_have_count(0, timeout=5_000)
+        expect(control_panel(page)).to_have_css(
+            "background-color", "rgba(0, 0, 0, 0)", timeout=5_000
+        )
+
+
+def test_a_keyboard_dismissal_leaves_the_panel_where_focus_is(dock_page: Page) -> None:
+    """The other way out of a popout. Escape puts focus back on the control that
+    opened it -- and a control being driven from the keyboard has to be visible,
+    so this one case keeps the panel up with the pointer nowhere near it."""
+    page = dock_page
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+    page.mouse.move(*CANVAS)
+    expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
+
+    control_panel(page).locator("[data-dock-peek]").hover()
+    page.locator("[data-leika-settings-trigger]").click()
+    expect(page.locator("[data-leika-settings-popover]")).to_be_visible(timeout=5_000)
+    page.mouse.move(*CANVAS)
+    page.keyboard.press("Escape")
+    expect(page.locator("[data-leika-settings-popover]")).to_have_count(0, timeout=5_000)
+
+    page.wait_for_timeout(400)
+    kept = _peek_state(page)
+    assert _draws_a_shadow(kept["shadow"]), kept
+    assert kept["gear"] == "1", kept
+
+    # Once focus leaves too, there is nothing left holding it.
+    page.evaluate("() => document.activeElement?.blur()")
+    expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
