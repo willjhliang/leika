@@ -246,7 +246,11 @@ class ClientHandle:
 
 
 class Server:
-    """Run a Leika workspace and synchronize it with browser clients."""
+    """Run a Leika workspace and synchronize it with browser clients.
+
+    Set ``password`` to gate the dashboard behind a login page: both the web
+    client and the underlying websocket refuse unauthenticated requests.
+    """
 
     def __init__(
         self,
@@ -255,11 +259,13 @@ class Server:
         *,
         workspace_id: str = "default",
         label: str | None = None,
+        password: str | None = None,
         verbose: bool = True,
     ) -> None:
         if not workspace_id:
             raise ValueError("workspace_id must not be empty.")
         self.host = host
+        self.password = password
         self.workspace_id = workspace_id
         self.verbose = verbose
         self._stopped = False
@@ -276,6 +282,7 @@ class Server:
             message_class=_messages.Message,
             http_server_root=Path(__file__).resolve().parent / "client" / "build",
             verbose=verbose,
+            password=password,
         )
         self._websock_server = server
 

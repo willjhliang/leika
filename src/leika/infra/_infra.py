@@ -30,6 +30,7 @@ from websockets.http11 import Request, Response
 from websockets.typing import Subprotocol
 
 from ._async_message_buffer import AsyncMessageBuffer
+from ._auth import HttpPasswordGuard
 from ._messages import Message
 
 
@@ -156,6 +157,8 @@ class WebsockServer(WebsockMessageHandler):
             required in the future.
         http_server_root: Path to root for HTTP server.
         verbose: Toggle for print messages.
+        password: When set, every HTTP request and websocket handshake must
+            authenticate against it before anything is served.
     """
 
     def __init__(
@@ -165,6 +168,7 @@ class WebsockServer(WebsockMessageHandler):
         message_class: type[Message] = Message,
         http_server_root: Path | None = None,
         verbose: bool = True,
+        password: str | None = None,
     ):
         super().__init__()
 
@@ -176,6 +180,7 @@ class WebsockServer(WebsockMessageHandler):
         self._port = port
         self._message_class = message_class
         self._http_server_root = http_server_root
+        self._auth_guard = HttpPasswordGuard(password) if password is not None else None
         self._verbose = verbose
         self._background_event_loop: asyncio.AbstractEventLoop | None = None
 
@@ -270,6 +275,7 @@ class WebsockServer(WebsockMessageHandler):
         port = self._port
         message_class = self._message_class
         http_server_root = self._http_server_root
+        auth_guard = self._auth_guard
 
         # Need to make a new event loop for notebook compatbility.
         event_loop = asyncio.new_event_loop()
@@ -453,9 +459,21 @@ class WebsockServer(WebsockMessageHandler):
                 filter_added = True
             # </Hack>
 
+            # The password gate comes first: nothing -- static files or the
+            # websocket handshake -- is reachable without authenticating.
+            if auth_guard is not None:
+                guard_response = auth_guard.process(request)
+                if guard_response is not None:
+                    return guard_response
+
             # Ignore websocket packets.
             if request.headers.get("Upgrade") == "websocket":
                 return None
+
+            # No files to serve: only the websocket (and the guard above)
+            # live on this port.
+            if http_server_root is None:
+                return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
 
             # Strip out search params, get relative path. URL-decode so
             # percent-encoded traversal sequences (e.g. ``%2e%2e/``)
@@ -593,7 +611,9 @@ class WebsockServer(WebsockMessageHandler):
                         # Compression can be too slow for our use cases.
                         compression=None,
                         process_request=(
-                            leika_http_server if http_server_root is not None else None
+                            leika_http_server
+                            if http_server_root is not None or auth_guard is not None
+                            else None
                         ),
                         # Accept connections with version-based protocol and extract version in handler.
                         subprotocols=None,
