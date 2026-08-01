@@ -49,6 +49,7 @@ from ._panes import PaneId as PaneId
 from ._panes import Panes as Panes
 from ._panes import Placement as Placement
 from ._panes import PlotlyPaneHandle as PlotlyPaneHandle
+from ._panes import WandbPaneHandle as WandbPaneHandle
 from ._server import ClientHandle as ClientHandle
 from ._server import Server as Server
 

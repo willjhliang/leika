@@ -793,6 +793,18 @@ export interface ViewportPlotlyMessage {
     visible: boolean;
   };
 }
+/** Create an embedded Weights & Biases pane in the pane workspace.
+ *
+ * (automatically generated)
+ */
+export interface ViewportWandbMessage {
+  type: "ViewportWandbMessage";
+  pane_id: string;
+  placement: "left" | "right" | "top" | "bottom";
+  relative_to: string;
+  equalize_group: string[];
+  props: { _url: string; title: string; visible: boolean };
+}
 /** Update one or more properties of a pane.
  *
  * (automatically generated)
@@ -1068,6 +1080,7 @@ export type Message =
   | GuiUpdateMessage
   | ViewportImageMessage
   | ViewportPlotlyMessage
+  | ViewportWandbMessage
   | ViewportPaneUpdateMessage
   | ViewportPaneRemoveMessage
   | ViewportPaneSnapshotMessage

@@ -36,6 +36,13 @@ export interface ViewportPlotlyProps {
   visible: boolean;
 }
 
+export interface ViewportWandbProps {
+  /** Fully normalized embed URL; rendered verbatim. */
+  _url: string;
+  title: string;
+  visible: boolean;
+}
+
 export interface ViewportRootPane {
   kind: "root";
   paneId: typeof VIEWPORT_ROOT_PANE_ID;
@@ -54,8 +61,17 @@ export interface ViewportPlotlyPane {
   props: ViewportPlotlyProps;
 }
 
+export interface ViewportWandbPane {
+  kind: "wandb";
+  paneId: string;
+  props: ViewportWandbProps;
+}
+
 /** Server-declared panes that render content other than the 3D hidden root. */
-export type ViewportContentPane = ViewportImagePane | ViewportPlotlyPane;
+export type ViewportContentPane =
+  | ViewportImagePane
+  | ViewportPlotlyPane
+  | ViewportWandbPane;
 
 export type ViewportPane = ViewportRootPane | ViewportContentPane;
 
@@ -81,8 +97,16 @@ export interface ViewportPlotlyDeclaration {
   equalize_group: readonly string[];
 }
 
+export interface ViewportWandbDeclaration {
+  pane_id: string;
+  props: ViewportWandbProps;
+  placement: ViewportPanePlacement;
+  relative_to: string;
+  equalize_group: readonly string[];
+}
+
 export type ViewportPaneUpdates = Partial<
-  ViewportImageProps & ViewportPlotlyProps
+  ViewportImageProps & ViewportPlotlyProps & ViewportWandbProps
 >;
 
 export interface ViewportActions {
@@ -96,6 +120,7 @@ export interface ViewportActions {
   setPersistenceWorkspace: (workspaceId: string) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
+  addWandbPane: (message: ViewportWandbDeclaration) => void;
   updatePane: (paneId: string, updates: ViewportPaneUpdates) => void;
   removePane: (paneId: string) => void;
   setPaneSnapshot: (paneIds: readonly string[]) => void;
@@ -349,6 +374,14 @@ export function useViewportState(
       addPlotlyPane: (message) => {
         addContentPane(message, {
           kind: "plotly",
+          paneId: message.pane_id,
+          props: message.props,
+        });
+      },
+
+      addWandbPane: (message) => {
+        addContentPane(message, {
+          kind: "wandb",
           paneId: message.pane_id,
           props: message.props,
         });

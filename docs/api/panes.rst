@@ -27,6 +27,10 @@ Handles
    :members:
    :inherited-members:
 
+.. autoclass:: WandbPaneHandle
+   :members:
+   :inherited-members:
+
 Layout
 ------
 

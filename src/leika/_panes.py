@@ -1,4 +1,4 @@
-"""Native image and Plotly panes for a Leika workspace."""
+"""Native image, Plotly, and W&B panes for a Leika workspace."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import copy
 import dataclasses
 import json
 import threading
+import urllib.parse
 import uuid
 import warnings
 from collections.abc import Mapping
@@ -78,6 +79,105 @@ def _plotly_theme_templates_json() -> str:
     return _theme_templates_json
 
 
+_WANDB_DEFAULT_BASE_URL = "https://wandb.ai"
+
+
+def _wandb_embed_url(
+    target: str | Any,
+    *,
+    base_url: str | None = None,
+    panel: str | None = None,
+    panel_section: str | None = None,
+) -> str:
+    """Normalize a W&B target into an embeddable page URL.
+
+    Accepts ``"entity/project[/...]"`` paths, full URLs on the W&B host, and
+    objects exposing a ``url`` attribute (wandb Run, Sweep, Project, and
+    Report objects all do). Bare ``entity/project`` targets are rewritten to
+    the project workspace: W&B serves the bare project route with
+    frame-blocking headers, while the workspace, run, sweep, and report
+    routes embed. ``jupyter=true`` selects W&B's slim embed chrome. Existing
+    query parameters — notably ``accessToken`` on view-only report links —
+    are preserved.
+    """
+
+    if not isinstance(target, str):
+        url_attr = getattr(target, "url", None)
+        if not isinstance(url_attr, str) or not url_attr:
+            raise TypeError(
+                "target must be a W&B path like 'entity/project/runs/<id>', a W&B "
+                "URL, or an object with a url attribute (a wandb Run, Sweep, "
+                f"Project, or Report); got {target!r}."
+            )
+        target = url_attr
+
+    if base_url is not None:
+        base_parts = urllib.parse.urlsplit(base_url)
+        if base_parts.scheme not in ("http", "https") or not base_parts.netloc:
+            raise ValueError(f"base_url must be an absolute http(s) URL; got {base_url!r}.")
+        resolved_base = base_url.rstrip("/")
+    else:
+        resolved_base = _WANDB_DEFAULT_BASE_URL
+    base_parts = urllib.parse.urlsplit(resolved_base)
+    base_path = base_parts.path.rstrip("/")
+
+    parts = urllib.parse.urlsplit(target)
+    if parts.scheme and parts.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme in W&B target {target!r}.")
+    if parts.scheme:
+        on_base_host = parts.netloc == base_parts.netloc
+        on_wandb_host = base_url is None and (
+            parts.netloc == "wandb.ai" or parts.netloc.endswith(".wandb.ai")
+        )
+        if not (on_base_host or on_wandb_host):
+            raise ValueError(
+                f"add_wandb embeds Weights & Biases pages; got a URL on host "
+                f"{parts.netloc!r}. For a self-hosted W&B instance, pass its "
+                "address as base_url."
+            )
+        scheme, netloc = parts.scheme, parts.netloc
+        rel_path = parts.path
+        if on_base_host and base_path and rel_path.startswith(base_path):
+            rel_path = rel_path[len(base_path) :]
+    else:
+        scheme, netloc = base_parts.scheme, base_parts.netloc
+        rel_path = parts.path
+
+    segments = [segment for segment in rel_path.split("/") if segment]
+    if len(segments) < 2:
+        raise ValueError(
+            f"W&B target {target!r} is missing a project: expected at least 'entity/project'."
+        )
+    if len(segments) == 2:
+        segments.append("workspace")
+
+    if panel is not None or panel_section is not None:
+        if len(segments) != 3 or segments[2] != "workspace":
+            raise ValueError(
+                "panel and panel_section select a chart from a project "
+                "workspace; the target must be a project or workspace, not "
+                f"{'/'.join(segments)!r}."
+            )
+
+    params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    for key, value in (("panelDisplayName", panel), ("panelSectionName", panel_section)):
+        if value is not None:
+            params = [pair for pair in params if pair[0] != key]
+            params.append((key, value))
+    if not any(key == "jupyter" for key, _ in params):
+        params.append(("jupyter", "true"))
+
+    return urllib.parse.urlunsplit(
+        (
+            scheme,
+            netloc,
+            base_path + "/" + "/".join(segments),
+            urllib.parse.urlencode(params),
+            parts.fragment,
+        )
+    )
+
+
 @dataclasses.dataclass
 class _ImagePaneHandleState:
     pane_id: str
@@ -99,7 +199,18 @@ class _PlotlyPaneHandleState:
     removed: bool = False
 
 
-_PaneStateT = TypeVar("_PaneStateT", _ImagePaneHandleState, _PlotlyPaneHandleState)
+@dataclasses.dataclass
+class _WandbPaneHandleState:
+    pane_id: str
+    props: _messages.ViewportWandbProps
+    api: Panes
+    base_url: str | None
+    removed: bool = False
+
+
+_PaneStateT = TypeVar(
+    "_PaneStateT", _ImagePaneHandleState, _PlotlyPaneHandleState, _WandbPaneHandleState
+)
 
 
 class PaneHandle(Generic[_PaneStateT]):
@@ -273,6 +384,50 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
         self.figure = figure
 
 
+class WandbPaneHandle(PaneHandle[_WandbPaneHandleState]):
+    """Handle for updating or removing an embedded W&B pane."""
+
+    def __init__(self, state: _WandbPaneHandleState) -> None:
+        self._impl = state
+
+    @property
+    def url(self) -> str:
+        """Resolved embed URL currently shown in the pane. Assign a new
+        target — a W&B path, URL, or object with a ``url`` attribute — to
+        re-point the pane."""
+
+        return self._impl.props._url
+
+    @url.setter
+    def url(self, target: str | Any) -> None:
+        self.update(target)
+
+    def update(
+        self,
+        target: str | Any,
+        *,
+        panel: str | None = None,
+        panel_section: str | None = None,
+    ) -> None:
+        """Re-point the pane at another W&B target, keeping the base URL the
+        pane was created with. Accepts the same target and panel arguments as
+        :meth:`Panes.add_wandb`."""
+
+        self._check_not_removed()
+        url = _wandb_embed_url(
+            target,
+            base_url=self._impl.base_url,
+            panel=panel,
+            panel_section=panel_section,
+        )
+        with self._impl.api._lock:
+            self._check_not_removed()
+            if url == self._impl.props._url:
+                return
+            self._impl.props._url = url
+            self._queue_update({"_url": url})
+
+
 class PaneGroup:
     """Adds panes to an equally divided row or column.
 
@@ -381,6 +536,38 @@ class PaneGroup:
             self._members.append(handle)
         return handle
 
+    def add_wandb(
+        self,
+        target: str | Any,
+        *,
+        base_url: str | None = None,
+        panel: str | None = None,
+        panel_section: str | None = None,
+        pane_id: str | None = None,
+        title: str = "W&B",
+        visible: bool = True,
+    ) -> WandbPaneHandle:
+        """Add a W&B pane to the group. Accepts the same arguments as
+        :meth:`Panes.add_wandb`, minus placement, which the group
+        owns."""
+
+        with self._api._lock:
+            placement, relative_to, equalize_group = self._next_declaration()
+            handle = self._api._add_wandb(
+                target,
+                base_url=base_url,
+                panel=panel,
+                panel_section=panel_section,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            )
+            self._members.append(handle)
+        return handle
+
 
 class PaneGrid:
     """Adds panes to an equally divided grid.
@@ -478,9 +665,39 @@ class PaneGrid:
             self._track(group, handle)
         return handle
 
+    def add_wandb(
+        self,
+        target: str | Any,
+        *,
+        base_url: str | None = None,
+        panel: str | None = None,
+        panel_section: str | None = None,
+        pane_id: str | None = None,
+        title: str = "W&B",
+        visible: bool = True,
+    ) -> WandbPaneHandle:
+        """Add a W&B pane to the grid's next cell. Accepts the same
+        arguments as :meth:`Panes.add_wandb`, minus placement, which
+        the grid owns."""
+
+        with self._api._lock:
+            group = self._next_group()
+            handle = group.add_wandb(
+                target,
+                base_url=base_url,
+                panel=panel,
+                panel_section=panel_section,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+            )
+            self._track(group, handle)
+        return handle
+
 
 class Panes:
-    """Declare image and Plotly panes in the browser-managed workspace."""
+    """Declare image, Plotly, and W&B panes in the browser-managed
+    workspace."""
 
     _root_pane_id: Literal["__leika_root__"] = "__leika_root__"
     """Hidden layout sentinel used when no data pane can anchor a split."""
@@ -770,6 +987,120 @@ class Panes:
             pane_id,
             handle,
             _messages.ViewportPlotlyMessage(
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
+        )
+        return handle
+
+    def add_wandb(
+        self,
+        target: str | Any,
+        *,
+        base_url: str | None = None,
+        panel: str | None = None,
+        panel_section: str | None = None,
+        pane_id: str | None = None,
+        title: str = "W&B",
+        visible: bool = True,
+        placement: Placement = "right",
+        relative_to: str | None = None,
+    ) -> WandbPaneHandle:
+        """Add a pane embedding a live Weights & Biases page.
+
+        The pane shows W&B's own interactive UI — the same charts, tooltips,
+        and controls as wandb.ai — for a run, sweep, report, or project
+        workspace. Bare ``entity/project`` targets open the project
+        workspace. No ``wandb`` installation is required.
+
+        Viewers see private projects only if their own browser holds a
+        wandb.ai session (Chrome shares it with the embed; Safari and
+        Firefox block third-party cookies, showing W&B's login screen
+        instead). View-only report links keep their ``accessToken`` and need
+        no session. The embedded page keeps W&B's light theme regardless of
+        Leika's color scheme.
+
+        The browser owns pane arrangement and persists it locally. Placement
+        and relative_to are only used when the browser first encounters a
+        pane that is not already present in its saved layout.
+
+        Args:
+            target: What to embed: an ``"entity/project[/...]"`` path (e.g.
+                ``"acme/mnist/runs/abc123"``), a wandb.ai URL, or a wandb
+                object with a ``url`` attribute (Run, Sweep, Project, or
+                Report).
+            base_url: Address of a self-hosted W&B instance, e.g.
+                ``"http://localhost:8080"``. Defaults to wandb.ai.
+            panel: Chart title to open alone in W&B's fullscreen panel
+                viewer. Requires a project or workspace target.
+            panel_section: Workspace section containing ``panel``.
+            pane_id: Stable identifier for browser layout persistence. By
+                default a UUID is generated. Set this explicitly to restore a
+                pane's position after a server restart.
+            title: Pane corner-label title.
+            visible: Initial visibility.
+            placement: Initial split edge relative to relative_to.
+            relative_to: Visible pane used for initial placement.
+
+        Returns:
+            Handle for re-pointing or removing the W&B pane.
+        """
+
+        return self._add_wandb(
+            target,
+            base_url=base_url,
+            panel=panel,
+            panel_section=panel_section,
+            pane_id=pane_id,
+            title=title,
+            visible=visible,
+            placement=placement,
+            relative_to=relative_to,
+            equalize_group=(),
+        )
+
+    def _add_wandb(
+        self,
+        target: str | Any,
+        *,
+        base_url: str | None,
+        panel: str | None,
+        panel_section: str | None,
+        pane_id: str | None,
+        title: str,
+        visible: bool,
+        placement: Placement,
+        relative_to: str | None,
+        equalize_group: tuple[str, ...],
+    ) -> WandbPaneHandle:
+        title = str(title)
+        visible = bool(visible)
+        pane_id = self._validate_pane_declaration(pane_id, placement)
+
+        props = _messages.ViewportWandbProps(
+            _url=_wandb_embed_url(
+                target, base_url=base_url, panel=panel, panel_section=panel_section
+            ),
+            title=title,
+            visible=visible,
+        )
+        handle = WandbPaneHandle(
+            _WandbPaneHandleState(
+                pane_id=pane_id,
+                props=copy.deepcopy(props),
+                api=self,
+                base_url=base_url,
+            )
+        )
+        relative_to = self._resolve_relative_to(relative_to)
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportWandbMessage(
                 pane_id=pane_id,
                 props=props,
                 placement=placement,

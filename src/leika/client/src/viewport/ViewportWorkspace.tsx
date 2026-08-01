@@ -35,10 +35,12 @@ import {
   resizeLayoutAtGridLine,
 } from "./gridLayout";
 
+import { Spinner } from "../components/ui/spinner";
 import {
   ViewportImagePane,
   ViewportPane,
   ViewportPlotlyPane,
+  ViewportWandbPane,
 } from "./ViewportState";
 
 const PANE_BORDER_SIZE_PX = 1;
@@ -183,7 +185,7 @@ function paneTitle(pane: ViewportPane): string {
   return pane.kind === "root" ? "" : pane.props.title;
 }
 
-/** Auto-filling split workspace for native image and Plotly panes. */
+/** Auto-filling split workspace for native image, Plotly, and W&B panes. */
 export function ViewportWorkspace() {
   const viewer = React.useContext(ViewerContext)!;
   const layout = viewer.useViewport((state) => state.layout);
@@ -1092,6 +1094,7 @@ const paneRendererRegistry: {
   root: () => null,
   image: ({ pane }) => <ViewportImageRenderer pane={pane} />,
   plotly: ({ pane }) => <ViewportPlotlyRenderer pane={pane} />,
+  wandb: ({ pane }) => <ViewportWandbRenderer pane={pane} />,
 };
 
 function ViewportPaneRenderer(props: PaneRendererProps) {
@@ -1221,6 +1224,77 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Live W&B page embed. The iframe is keyed by URL, so re-pointing the pane
+ * remounts it rather than navigating it, which keeps the parent page's
+ * session history clean and resets the frame's loading state. */
+function ViewportWandbRenderer({ pane }: { pane: ViewportWandbPane }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        background: "var(--background)",
+      }}
+    >
+      <ViewportWandbFrame
+        key={pane.props._url}
+        url={pane.props._url}
+        title={pane.props.title}
+      />
+    </div>
+  );
+}
+
+function ViewportWandbFrame({ url, title }: { url: string; title: string }) {
+  const [loaded, setLoaded] = React.useState(false);
+  return (
+    <>
+      {/* No sandbox: W&B needs scripts, same-origin storage, and its own
+       * session cookie, and a sandbox loose enough to allow those confines
+       * nothing. Cross-origin frames emit load for error pages too and no
+       * signal at all for network failures, so the overlay below is
+       * best-effort: it clears on load and otherwise stays. */}
+      <iframe
+        src={url}
+        title={title}
+        referrerPolicy="strict-origin-when-cross-origin"
+        allow="fullscreen; clipboard-write"
+        onLoad={() => setLoaded(true)}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          border: 0,
+          display: "block",
+          // W&B keeps its light theme regardless of Leika's; a white
+          // backing avoids a dark flash while the page loads.
+          background: "#fff",
+        }}
+      />
+      {loaded ? null : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.5rem",
+            color: "var(--muted-foreground)",
+            fontSize: "var(--text-sm)",
+            background: "var(--background)",
+          }}
+        >
+          <Spinner />
+          Loading Weights &amp; Biases…
+        </div>
+      )}
+    </>
   );
 }
 

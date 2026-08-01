@@ -12,6 +12,7 @@ import {
   ViewportImageDeclaration,
   ViewportLayoutStorage,
   ViewportState,
+  ViewportWandbDeclaration,
   useViewportState,
   viewportLayoutStorageKey,
 } from "./ViewportState";
@@ -53,6 +54,24 @@ function imageDeclaration(
       title: paneId,
       visible: true,
       fit: "fit",
+    },
+    placement: "right",
+    relative_to: VIEWPORT_ROOT_PANE_ID,
+    equalize_group: [],
+    ...overrides,
+  };
+}
+
+function wandbDeclaration(
+  paneId: string,
+  overrides: Partial<ViewportWandbDeclaration> = {},
+): ViewportWandbDeclaration {
+  return {
+    pane_id: paneId,
+    props: {
+      _url: "https://wandb.ai/acme/proj/workspace?jupyter=true",
+      title: paneId,
+      visible: true,
     },
     placement: "right",
     relative_to: VIEWPORT_ROOT_PANE_ID,
@@ -105,6 +124,18 @@ describe("useViewportState hidden root lifecycle", () => {
       "updated",
     );
     expect(pane?.kind === "image" ? pane.props.fit : undefined).toBe("fill");
+    expect(getState().layout).toBe(layout);
+  });
+
+  it("re-points a wandb pane without layout churn", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addWandbPane(wandbDeclaration("wandb"));
+    expect(collectViewportPaneIds(getState().layout)).toEqual(["wandb"]);
+    const layout = getState().layout;
+    const url = "https://wandb.ai/acme/proj/runs/abc?jupyter=true";
+    actions.updatePane("wandb", { _url: url });
+    const pane = getState().panes.wandb;
+    expect(pane?.kind === "wandb" ? pane.props._url : undefined).toBe(url);
     expect(getState().layout).toBe(layout);
   });
 
