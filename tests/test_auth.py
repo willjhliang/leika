@@ -124,8 +124,7 @@ def test_password_gates_the_websocket() -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False, password=PASSWORD)
     url = server.url.replace("http://", "ws://")
     subprotocol = Subprotocol(
-        f"leika-v{leika.__version__}+p"
-        f"{infra.protocol_fingerprint(leika._messages.Message)}"
+        f"leika-v{leika.__version__}+p{infra.protocol_fingerprint(leika._messages.Message)}"
     )
     try:
         # No cookie: the handshake itself is refused, before the version

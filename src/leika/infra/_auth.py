@@ -205,7 +205,8 @@ def _plain_response(status: http.HTTPStatus, body: bytes) -> Response:
 # - The theme is decided the way the app decides it: the reader's stored
 #   `darkMode` choice (same-origin localStorage) outranks the OS preference,
 #   and lands as a `dark` class on <html>, not a media query.
-_LOGIN_PAGE = """<!doctype html>
+_LOGIN_PAGE = (
+    """<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -490,8 +491,9 @@ _LOGIN_PAGE = """<!doctype html>
     </script>
   </body>
 </html>
-""".replace("__FONT_PATH__", FONT_PATH).replace(
-    "__WORDMARK_FONT_PATH__", WORDMARK_FONT_PATH
-).replace("__AUTH_PATH__", AUTH_PATH).replace(
-    "__PASSWORD_HEADER__", PASSWORD_HEADER
-).encode()
+""".replace("__FONT_PATH__", FONT_PATH)
+    .replace("__WORDMARK_FONT_PATH__", WORDMARK_FONT_PATH)
+    .replace("__AUTH_PATH__", AUTH_PATH)
+    .replace("__PASSWORD_HEADER__", PASSWORD_HEADER)
+    .encode()
+)
