@@ -10,13 +10,6 @@ package runs on. It is importable, but it is not covered here and is generally
 only useful when building a web application from scratch rather than when using
 Leika.
 
-.. toctree::
-   :maxdepth: 2
-
-   server
-   panes
-   gui
-   gui_handles
-   icons
-   theme
-   uplot
+.. The section's pages are listed by the root toctree in index.md, which
+   names this page "Overview"; a second toctree here would double-reference
+   them, which -W turns fatal.
