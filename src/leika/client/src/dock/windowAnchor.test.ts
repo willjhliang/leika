@@ -90,6 +90,27 @@ describe("anchorFloatingWindow", () => {
       ).toEqual([0, 0]);
     });
 
+    it("does not anchor a window that fills the container's height", () => {
+      // The floating control panel: 15px top margin, height at the auto-height
+      // budget (700 - 2*15 = 670). Its center is EXACTLY the container's, so
+      // the half-test is decided by subpixel rounding of the measured height --
+      // 670 and 671 have to land in the same place.
+      expect(
+        anchorFloatingWindow(
+          win(625, 15, 320, 670),
+          size(960, 700),
+          size(1440, 900),
+        ),
+      ).toEqual([1105, 15]);
+      expect(
+        anchorFloatingWindow(
+          win(625, 15, 320, 671),
+          size(960, 700),
+          size(1440, 900),
+        ),
+      ).toEqual([1105, 15]);
+    });
+
     it("treats an unmeasured window as a zero-height point at its corner", () => {
       // height 0 = no DOM yet: its "center" is its own y, so a top-half corner
       // does not anchor...
@@ -149,6 +170,18 @@ describe("anchorFloatingWindow", () => {
           size(1000, 400),
         ),
       ).toEqual([50, 300]);
+    });
+
+    it("leaves a container-filling window on its top margin", () => {
+      // Its height re-derives from the new container, so pulling with the
+      // stale one would drag it off the 15px margin and flush to the edge.
+      expect(
+        anchorFloatingWindow(
+          win(1105, 15, 320, 870),
+          size(1440, 900),
+          size(800, 700),
+        ),
+      ).toEqual([465, 15]);
     });
 
     it("does not cancel deliberate overhang when the container grows", () => {

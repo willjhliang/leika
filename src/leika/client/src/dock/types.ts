@@ -48,6 +48,11 @@ export const SPLIT_DIVIDER_PX = 7;
  * before the user resizes it. */
 export const DEFAULT_REGION_PX = 300;
 
+/** Breathing room (px) an auto-height window keeps above and below itself: its
+ * height budget is the container's height less twice this. Shared with the
+ * anchoring rules, which have to recognise a window sitting at that budget. */
+export const AUTO_HEIGHT_BOUNDARY_PAD_PX = 15;
+
 /** How long a reordered tab glides to its slot. The reorder settle in
  * DockManager is derived from this: it must outlast the glide, or FLIP takes
  * the tab back mid-flight. */

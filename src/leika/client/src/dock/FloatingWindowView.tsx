@@ -14,6 +14,7 @@ import { cascadeResize, expandStack, minimizeStack } from "./layoutOps";
 import { StackHandleBar } from "./handles";
 import { TabGroupFrame } from "./TabGroupFrame";
 import {
+  AUTO_HEIGHT_BOUNDARY_PAD_PX,
   clamp,
   FloatingWindow,
   GroupId,
@@ -31,9 +32,9 @@ const MIN_HEIGHT_PX = 100;
 // Minimum height for one group in a resizable snap-stack.
 const MIN_STACK_CELL_PX = 60;
 // Auto-height windows keep the same boundary breathing room as the original
-// floating control panel. The budget applies to the WHOLE window -- headers,
-// tab strips, dividers, and scroll bodies together.
-const AUTO_HEIGHT_BOUNDARY_PAD_PX = 15;
+// floating control panel (AUTO_HEIGHT_BOUNDARY_PAD_PX, shared with the
+// anchoring rules). The budget applies to the WHOLE window -- headers, tab
+// strips, dividers, and scroll bodies together.
 const MULTI_GROUP_BODY_CAP_PX = 320;
 const FALLBACK_BODY_CAP_PX = 600;
 const OWNED_BODY_VIEWPORT_SELECTOR =

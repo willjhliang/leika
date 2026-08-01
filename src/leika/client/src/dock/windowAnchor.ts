@@ -6,7 +6,7 @@
 // React-bound and the rules could only be checked by hand. They are ordinary
 // arithmetic, so they live here and are covered by windowAnchor.test.ts.
 
-import { clamp } from "./types";
+import { AUTO_HEIGHT_BOUNDARY_PAD_PX, clamp } from "./types";
 
 /** Keep at least this much of a floating window's top-left corner on-screen so
  * its handle stays reachable (panels may otherwise overflow off-screen). */
@@ -34,7 +34,9 @@ export function clampCorner(
  * the right/bottom half keeps its distance to that edge, so e.g. a top-right
  * control panel stays in the top-right corner when the browser window grows.
  * A window larger than the container on an axis doesn't anchor on it (there is
- * no meaningful "nearer edge" -- it spans both).
+ * no meaningful "nearer edge" -- it spans both). Nor does one that fills the
+ * container's height at the auto-height budget, for the same reason and to the
+ * same end -- see fillsHeight.
  *
  * A container SHRINK additionally pulls windows fully on-screen when they fit:
  * overhang from a drag is the user's choice, but losing the far edge -- and its
@@ -60,18 +62,43 @@ export function anchorFloatingWindow(
   const deltaW = prev === null ? 0 : next.width - prev.width;
   const deltaH = prev === null ? 0 : next.height - prev.height;
   if (prev !== null && (deltaW !== 0 || deltaH !== 0)) {
+    const fullHeight = fillsHeight(win.height, prev.height);
     if (win.width <= prev.width && win.x + win.width / 2 > prev.width / 2) {
       x += deltaW;
     }
-    if (win.height <= prev.height && win.y + win.height / 2 > prev.height / 2) {
+    if (
+      !fullHeight &&
+      win.height <= prev.height &&
+      win.y + win.height / 2 > prev.height / 2
+    ) {
       y += deltaH;
     }
     if (deltaW < 0) x = Math.min(x, Math.max(0, next.width - win.width));
-    if (deltaH < 0 && win.height > 0) {
+    if (deltaH < 0 && win.height > 0 && !fullHeight) {
       y = Math.min(y, Math.max(0, next.height - win.height));
     }
   }
   return clampCorner(x, y, next.width, next.height);
+}
+
+/** Does this window take up the container's whole height -- i.e. is it sitting
+ * at the auto-height budget, `containerH - 2 * AUTO_HEIGHT_BOUNDARY_PAD_PX`?
+ *
+ * Such a window gets no vertical anchoring and no vertical pull. Both edges are
+ * the same margin away, so it has no nearer one, and its center lands exactly
+ * on the container's midpoint -- which makes the half-test above a coin flip
+ * decided by subpixel rounding of the measured height. Losing that flip used to
+ * add the container's growth to `y` and leave it there: the window then
+ * re-derived its height from the new container and hung off the bottom, so
+ * making the browser window TALLER pushed the control panel out of view.
+ *
+ * Skipping the pull matters for the same reason. A container-filling window's
+ * height is the container's, not its own, so the measured height is stale the
+ * moment the container changes -- pulling with it drags the window off its top
+ * margin and up against the edge. It needs no pull regardless: it re-derives a
+ * height that fits, which is what kept it on-screen in the first place. */
+function fillsHeight(height: number, containerH: number): boolean {
+  return height > 0 && height >= containerH - 2 * AUTO_HEIGHT_BOUNDARY_PAD_PX;
 }
 
 /** The translation component of a computed CSS `transform`, as [tx, ty].
