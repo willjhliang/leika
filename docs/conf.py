@@ -74,6 +74,9 @@ html_theme = "furo"
 # `project` stays capitalized for the places it is prose ("Leika documentation").
 html_title = "leika"
 html_static_path = ["_static"]
+# Without this, a browser falls back to /favicon.ico at the origin -- which on
+# GitHub Pages is the user site's icon, not this project's.
+html_favicon = "_static/leika.svg"
 # shadcn.css defines the client's design tokens and the chrome overrides;
 # leika.css is the brand lockup, which consumes those tokens.
 html_css_files = ["shadcn.css", "leika.css"]
