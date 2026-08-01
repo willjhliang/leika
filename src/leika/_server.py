@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import mimetypes
 import os
+import secrets
 import threading
 import time
 from collections.abc import Coroutine
@@ -16,6 +17,7 @@ from ._gui_api import GuiApi
 from ._gui_handles import PREVIEW_MAX_BYTES, _make_uuid
 from ._notification_handle import NotificationHandle
 from ._panes import Panes
+from ._share import CloudflaredTunnel, ShareTunnelError
 from ._threadpool_exceptions import print_threadpool_errors
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
@@ -250,6 +252,14 @@ class Server:
 
     Set ``password`` to gate the dashboard behind a login page: both the web
     client and the underlying websocket refuse unauthenticated requests.
+
+    Set ``share=True`` to also open a Cloudflare quick tunnel and print a
+    public ``https://....trycloudflare.com`` URL that reaches this server
+    from any machine, with no port forwarding. Sharing requires the
+    ``cloudflared`` binary on the PATH, a loopback ``host`` (so no
+    unencrypted network path exists beside the tunnel), and always requires
+    a password: if none is given, one is generated and printed alongside
+    the URL.
     """
 
     def __init__(
@@ -260,10 +270,28 @@ class Server:
         workspace_id: str = "default",
         label: str | None = None,
         password: str | None = None,
+        share: bool = False,
         verbose: bool = True,
     ) -> None:
         if not workspace_id:
             raise ValueError("workspace_id must not be empty.")
+        # Sharing means the dashboard carries data worth protecting, and a
+        # non-loopback bind would serve that same data as unencrypted HTTP to
+        # the local network -- where the password itself travels in the clear.
+        # With the tunnel open there is no reason for a second, weaker door.
+        if share and host not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError(
+                f"share=True reaches the dashboard through an encrypted tunnel, but"
+                f" host={host!r} would also serve unencrypted HTTP to the local network."
+                ' Bind host="127.0.0.1" so localhost and the tunnel are the only ways in.'
+            )
+        # A public tunnel without a password would hand the dashboard to
+        # anyone who sees the URL, so sharing always gets one.
+        if share and password is None:
+            password = secrets.token_urlsafe(9)
+            self._password_generated = True
+        else:
+            self._password_generated = False
         self.host = host
         self.password = password
         self.workspace_id = workspace_id
@@ -329,8 +357,26 @@ class Server:
         server.queue_message(_messages.WorkspaceConfigurationMessage(workspace_id=workspace_id))
         self.panes = Panes(self)
         self.gui.set_panel_label(label)
+
+        # Open the share tunnel last: it only matters once the server it
+        # forwards to is up. A tunnel failure is reported but not fatal --
+        # the dashboard itself still works locally.
+        self.share_url: str | None = None
+        self._share_tunnel: CloudflaredTunnel | None = None
+        if share:
+            try:
+                tunnel = CloudflaredTunnel(self.port)
+                self.share_url = tunnel.start()
+                self._share_tunnel = tunnel
+            except ShareTunnelError as e:
+                print(f"Leika share tunnel failed: {e}")
+
         if verbose:
             print(f"Leika listening at {self.url}")
+            if self.share_url is not None:
+                print(f"Leika share URL: {self.share_url}")
+            if self._password_generated:
+                print(f"Leika password (auto-generated): {password}")
 
     @property
     def url(self) -> str:
@@ -431,6 +477,9 @@ class Server:
         if self._stopped:
             return
         self._stopped = True
+        if self._share_tunnel is not None:
+            self._share_tunnel.close()
+            self.share_url = None
         self._websock_server.stop()
         self._thread_executor.shutdown(wait=False)
 
