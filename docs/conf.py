@@ -70,7 +70,9 @@ intersphinx_mapping = {
 }
 
 html_theme = "furo"
-html_title = project
+# Lowercase like the wordmark: the browser tab is a place the brand is drawn.
+# `project` stays capitalized for the places it is prose ("Leika documentation").
+html_title = "leika"
 html_static_path = ["_static"]
 # shadcn.css defines the client's design tokens and the chrome overrides;
 # leika.css is the brand lockup, which consumes those tokens.
@@ -235,9 +237,9 @@ html_theme_options = {
     "top_of_page_buttons": [],
 }
 # The sidebar brand becomes the same lockup the homepage heads with. The
-# wordmark beside it is `html_title`, which `leika.css` sets in Almarai and
-# lowercases to match the mark -- the title itself stays capitalized, since it
-# is also what the browser tab and the search index read.
+# wordmark beside it is `html_title`, set in Almarai by `leika.css` and
+# already lowercase, so the CSS lowercasing there is now a no-op kept for
+# anything else that renders the title.
 html_logo = "_static/leika.svg"
 
 

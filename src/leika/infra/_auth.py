@@ -210,7 +210,7 @@ _LOGIN_PAGE = """<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Leika</title>
+    <title>leika</title>
     <script>
       // Before the first paint: the same resolution the app performs, where
       // a viewer who has worked the settings switch outranks the OS.
