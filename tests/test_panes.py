@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import leika
-from leika._panes import _wandb_embed_url
+from leika._panes import _viser_embed_target, _wandb_embed_url
 
 
 def test_image_fit_defers_to_the_viewer_until_python_names_one(
@@ -243,6 +243,118 @@ def test_wandb_lifecycle(server: leika.Server) -> None:
     assert [item.pane_id for item in (first, second)] == ["row-wandb", "grid-wandb"]
     with pytest.raises(ValueError):
         server.panes.add_wandb("acme/proj", pane_id="row-wandb")
+
+
+def test_viser_target_normalization() -> None:
+    assert _viser_embed_target("http://viser.example.com:8080") == (
+        "http://viser.example.com:8080",
+        None,
+    )
+    assert _viser_embed_target("https://tunnel.example.com/scene") == (
+        "https://tunnel.example.com/scene",
+        None,
+    )
+
+    # ViserServer duck type: only the port is kept, since viser binds 0.0.0.0
+    # and the browser derives the host from the page's own hostname.
+    fake = SimpleNamespace(get_port=lambda: 8080, get_host=lambda: "0.0.0.0")
+    assert _viser_embed_target(fake) == (None, 8080)
+
+    with pytest.raises(ValueError, match="absolute http"):
+        _viser_embed_target("localhost:8080")
+    with pytest.raises(ValueError, match="absolute http"):
+        _viser_embed_target("ftp://viser.example.com")
+    with pytest.raises(ValueError, match="absolute http"):
+        _viser_embed_target("")
+    # Released viser reports 0 for ViserServer(port=0); the error explains it.
+    with pytest.raises(ValueError, match="port 0"):
+        _viser_embed_target(SimpleNamespace(get_port=lambda: 0, get_host=lambda: "0.0.0.0"))
+    with pytest.raises(ValueError, match="invalid port"):
+        _viser_embed_target(SimpleNamespace(get_port=lambda: 70_000, get_host=lambda: "0.0.0.0"))
+    with pytest.raises(TypeError, match="ViserServer"):
+        _viser_embed_target(object())
+    with pytest.raises(TypeError, match="ViserServer"):
+        _viser_embed_target(SimpleNamespace(get_port=8080, get_host=lambda: "0.0.0.0"))
+
+
+def _fake_viser_server(port: int = 8123) -> SimpleNamespace:
+    """Duck-typed stand-in for a viser server with the main_panel API,
+    recording the placement calls add_viser makes."""
+
+    calls: list[str] = []
+    main_panel = SimpleNamespace(
+        dock_right=lambda: calls.append("dock_right"),
+        minimize=lambda: calls.append("minimize"),
+    )
+    return SimpleNamespace(
+        get_port=lambda: port,
+        get_host=lambda: "0.0.0.0",
+        gui=SimpleNamespace(main_panel=main_panel),
+        calls=calls,
+    )
+
+
+def test_viser_gui_is_minimized_by_default(server: leika.Server) -> None:
+    fake = _fake_viser_server()
+    pane = server.panes.add_viser(fake, pane_id="minimized")
+    assert fake.calls == ["dock_right", "minimize"]
+
+    # Re-applying with the same server re-minimizes a viewer-expanded panel.
+    pane.update(fake)
+    assert fake.calls == ["dock_right", "minimize", "dock_right", "minimize"]
+
+    # URL targets are unreachable from Python, so nothing more is queued.
+    pane.update("http://viser.example.com:9000")
+    assert len(fake.calls) == 4
+
+    # Opting out leaves the viser server untouched, on add and on update.
+    untouched = _fake_viser_server(port=8200)
+    hands_off = server.panes.add_viser(untouched, pane_id="expanded", minimize_gui=False)
+    hands_off.update(untouched)
+    assert untouched.calls == []
+
+    # Servers without the main_panel API (viser <= 1.0.30) are a silent no-op.
+    old = SimpleNamespace(get_port=lambda: 8300, get_host=lambda: "0.0.0.0")
+    server.panes.add_viser(old, pane_id="old-viser")
+
+    # A failed add leaves the user's viser server untouched.
+    rejected = _fake_viser_server(port=8400)
+    with pytest.raises(ValueError, match="already exists"):
+        server.panes.add_viser(rejected, pane_id="minimized")
+    assert rejected.calls == []
+
+
+def test_viser_lifecycle(server: leika.Server) -> None:
+    fake = SimpleNamespace(get_port=lambda: 8123, get_host=lambda: "0.0.0.0")
+    pane = server.panes.add_viser(fake, pane_id="viser", title="Scene")
+    assert pane.pane_id == "viser"
+    assert pane.title == "Scene"
+    assert pane.url is None
+    assert pane.port == 8123
+
+    pane.update("http://viser.example.com:9000")
+    assert pane.url == "http://viser.example.com:9000"
+    assert pane.port is None
+    pane.update(SimpleNamespace(get_port=lambda: 8124, get_host=lambda: "0.0.0.0"))
+    assert pane.url is None
+    assert pane.port == 8124
+
+    pane.visible = False
+    assert pane.visible is False
+    pane.remove()
+    with pytest.raises(RuntimeError, match="removed"):
+        pane.update(fake)
+
+    with pytest.raises(TypeError, match="ViserServer"):
+        server.panes.add_viser(object())
+
+    row = server.panes.add_row()
+    first = row.add_viser(fake, pane_id="row-viser")
+    grid = server.panes.add_grid(columns=1, relative_to=first.pane_id)
+    second = grid.add_viser("http://viser.example.com:9000", pane_id="grid-viser")
+    assert [item.pane_id for item in (first, second)] == ["row-viser", "grid-viser"]
+    with pytest.raises(ValueError):
+        server.panes.add_viser(fake, pane_id="row-viser")
 
 
 def test_only_v1_pane_types_are_exposed(server: leika.Server) -> None:

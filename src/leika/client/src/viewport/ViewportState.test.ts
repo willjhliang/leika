@@ -12,6 +12,7 @@ import {
   ViewportImageDeclaration,
   ViewportLayoutStorage,
   ViewportState,
+  ViewportViserDeclaration,
   ViewportWandbDeclaration,
   useViewportState,
   viewportLayoutStorageKey,
@@ -80,6 +81,25 @@ function wandbDeclaration(
   };
 }
 
+function viserDeclaration(
+  paneId: string,
+  overrides: Partial<ViewportViserDeclaration> = {},
+): ViewportViserDeclaration {
+  return {
+    pane_id: paneId,
+    props: {
+      _url: null,
+      _port: 8080,
+      title: paneId,
+      visible: true,
+    },
+    placement: "right",
+    relative_to: VIEWPORT_ROOT_PANE_ID,
+    equalize_group: [],
+    ...overrides,
+  };
+}
+
 describe("useViewportState hidden root lifecycle", () => {
   it("uses a blank root only while there are no visible content panes", () => {
     const { actions, getState } = createViewportHarness();
@@ -136,6 +156,19 @@ describe("useViewportState hidden root lifecycle", () => {
     actions.updatePane("wandb", { _url: url });
     const pane = getState().panes.wandb;
     expect(pane?.kind === "wandb" ? pane.props._url : undefined).toBe(url);
+    expect(getState().layout).toBe(layout);
+  });
+
+  it("re-points a viser pane between port and URL targets", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addViserPane(viserDeclaration("viser"));
+    expect(collectViewportPaneIds(getState().layout)).toEqual(["viser"]);
+    const layout = getState().layout;
+    const url = "http://viser.example.com:9000";
+    actions.updatePane("viser", { _url: url, _port: null });
+    const pane = getState().panes.viser;
+    expect(pane?.kind === "viser" ? pane.props._url : undefined).toBe(url);
+    expect(pane?.kind === "viser" ? pane.props._port : undefined).toBeNull();
     expect(getState().layout).toBe(layout);
   });
 

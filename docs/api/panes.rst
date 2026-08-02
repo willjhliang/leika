@@ -31,6 +31,10 @@ Handles
    :members:
    :inherited-members:
 
+.. autoclass:: ViserPaneHandle
+   :members:
+   :inherited-members:
+
 Layout
 ------
 

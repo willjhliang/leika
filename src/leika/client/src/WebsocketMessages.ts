@@ -805,6 +805,23 @@ export interface ViewportWandbMessage {
   equalize_group: string[];
   props: { _url: string; title: string; visible: boolean };
 }
+/** Create an embedded viser pane in the pane workspace.
+ *
+ * (automatically generated)
+ */
+export interface ViewportViserMessage {
+  type: "ViewportViserMessage";
+  pane_id: string;
+  placement: "left" | "right" | "top" | "bottom";
+  relative_to: string;
+  equalize_group: string[];
+  props: {
+    _url: string | null;
+    _port: number | null;
+    title: string;
+    visible: boolean;
+  };
+}
 /** Update one or more properties of a pane.
  *
  * (automatically generated)
@@ -1081,6 +1098,7 @@ export type Message =
   | ViewportImageMessage
   | ViewportPlotlyMessage
   | ViewportWandbMessage
+  | ViewportViserMessage
   | ViewportPaneUpdateMessage
   | ViewportPaneRemoveMessage
   | ViewportPaneSnapshotMessage

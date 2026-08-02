@@ -43,6 +43,16 @@ export interface ViewportWandbProps {
   visible: boolean;
 }
 
+export interface ViewportViserProps {
+  /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
+  _url: string | null;
+  /** Viser server port; the host is derived from the page's hostname. Null
+   * for URL-based targets. Exactly one of _url/_port is set. */
+  _port: number | null;
+  title: string;
+  visible: boolean;
+}
+
 export interface ViewportRootPane {
   kind: "root";
   paneId: typeof VIEWPORT_ROOT_PANE_ID;
@@ -67,11 +77,18 @@ export interface ViewportWandbPane {
   props: ViewportWandbProps;
 }
 
+export interface ViewportViserPane {
+  kind: "viser";
+  paneId: string;
+  props: ViewportViserProps;
+}
+
 /** Server-declared panes that render content other than the 3D hidden root. */
 export type ViewportContentPane =
   | ViewportImagePane
   | ViewportPlotlyPane
-  | ViewportWandbPane;
+  | ViewportWandbPane
+  | ViewportViserPane;
 
 export type ViewportPane = ViewportRootPane | ViewportContentPane;
 
@@ -105,9 +122,22 @@ export interface ViewportWandbDeclaration {
   equalize_group: readonly string[];
 }
 
-export type ViewportPaneUpdates = Partial<
-  ViewportImageProps & ViewportPlotlyProps & ViewportWandbProps
->;
+export interface ViewportViserDeclaration {
+  pane_id: string;
+  props: ViewportViserProps;
+  placement: ViewportPanePlacement;
+  relative_to: string;
+  equalize_group: readonly string[];
+}
+
+// A union of Partials rather than a Partial of an intersection: wandb's
+// `_url: string` intersected with viser's `_url: string | null` would
+// collapse to `string` and reject valid viser updates.
+export type ViewportPaneUpdates =
+  | Partial<ViewportImageProps>
+  | Partial<ViewportPlotlyProps>
+  | Partial<ViewportWandbProps>
+  | Partial<ViewportViserProps>;
 
 export interface ViewportActions {
   /** Clear all temporal pane state, including layout (used by file playback). */
@@ -121,6 +151,7 @@ export interface ViewportActions {
   addImagePane: (message: ViewportImageDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
   addWandbPane: (message: ViewportWandbDeclaration) => void;
+  addViserPane: (message: ViewportViserDeclaration) => void;
   updatePane: (paneId: string, updates: ViewportPaneUpdates) => void;
   removePane: (paneId: string) => void;
   setPaneSnapshot: (paneIds: readonly string[]) => void;
@@ -382,6 +413,14 @@ export function useViewportState(
       addWandbPane: (message) => {
         addContentPane(message, {
           kind: "wandb",
+          paneId: message.pane_id,
+          props: message.props,
+        });
+      },
+
+      addViserPane: (message) => {
+        addContentPane(message, {
+          kind: "viser",
           paneId: message.pane_id,
           props: message.props,
         });

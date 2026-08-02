@@ -34,7 +34,7 @@ jobs:
         run: |
           python -m venv /tmp/leika-examples-smoke
           /tmp/leika-examples-smoke/bin/pip install "$(realpath dist/*.whl)[examples]"
-          /tmp/leika-examples-smoke/bin/python -c "import leika, plotly.graph_objects as go; assert go.Figure() is not None"
+          /tmp/leika-examples-smoke/bin/python -c "import leika, viser, plotly.graph_objects as go; assert go.Figure() is not None"
       - uses: actions/upload-artifact@v4
         with:
           name: distributions

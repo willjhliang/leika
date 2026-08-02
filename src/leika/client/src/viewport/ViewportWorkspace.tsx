@@ -40,6 +40,7 @@ import {
   ViewportImagePane,
   ViewportPane,
   ViewportPlotlyPane,
+  ViewportViserPane,
   ViewportWandbPane,
 } from "./ViewportState";
 
@@ -1095,6 +1096,7 @@ const paneRendererRegistry: {
   image: ({ pane }) => <ViewportImageRenderer pane={pane} />,
   plotly: ({ pane }) => <ViewportPlotlyRenderer pane={pane} />,
   wandb: ({ pane }) => <ViewportWandbRenderer pane={pane} />,
+  viser: ({ pane }) => <ViewportViserRenderer pane={pane} />,
 };
 
 function ViewportPaneRenderer(props: PaneRendererProps) {
@@ -1292,6 +1294,96 @@ function ViewportWandbFrame({ url, title }: { url: string; title: string }) {
         >
           <Spinner />
           Loading Weights &amp; Biases…
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Live viser scene embed: viser's own client in an iframe. The iframe is
+ * keyed by its resolved URL, so re-pointing the pane — and flipping Leika's
+ * theme, which changes the darkMode parameter — remounts it, resetting the
+ * scene connection and camera state rather than navigating in place. */
+function ViewportViserRenderer({ pane }: { pane: ViewportViserPane }) {
+  // Viser renders the darkMode URL flag, so the embed follows Leika's theme.
+  const colorScheme = useColorScheme();
+  const src = React.useMemo(() => {
+    // Port-based targets connect to the viser server on whatever hostname
+    // this page was loaded from; the Python-side host is unusable because
+    // viser binds 0.0.0.0. URL targets are used near-verbatim (new URL()
+    // normalizes, e.g. adding a trailing slash).
+    const base =
+      pane.props._url !== null
+        ? pane.props._url
+        : `${window.location.protocol}//${window.location.hostname}:${pane.props._port}/`;
+    try {
+      // Viser's darkMode flag is presence-based, so following Leika's theme
+      // means removing it as well as adding it.
+      const url = new URL(base);
+      if (colorScheme === "dark") url.searchParams.set("darkMode", "");
+      else url.searchParams.delete("darkMode");
+      return url.toString();
+    } catch {
+      // Python's URL validation is looser than the browser's; a string the
+      // browser cannot parse must not take down the workspace. As a plain
+      // iframe src it just fails to load, minus theme forwarding.
+      return base;
+    }
+  }, [pane.props._url, pane.props._port, colorScheme]);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        background: "var(--background)",
+      }}
+    >
+      <ViewportViserFrame key={src} src={src} title={pane.props.title} />
+    </div>
+  );
+}
+
+function ViewportViserFrame({ src, title }: { src: string; title: string }) {
+  const [loaded, setLoaded] = React.useState(false);
+  return (
+    <>
+      {/* No sandbox: viser's client needs scripts, web workers, and
+       * same-origin storage. Cross-origin frames emit load for error pages
+       * too and no signal at all for network failures, so the overlay below
+       * is best-effort: it clears on load and otherwise stays. */}
+      <iframe
+        src={src}
+        title={title}
+        referrerPolicy="strict-origin-when-cross-origin"
+        allow="fullscreen; clipboard-write"
+        onLoad={() => setLoaded(true)}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          border: 0,
+          display: "block",
+          background: "var(--background)",
+        }}
+      />
+      {loaded ? null : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.5rem",
+            color: "var(--muted-foreground)",
+            fontSize: "var(--text-sm)",
+            background: "var(--background)",
+          }}
+        >
+          <Spinner />
+          Loading viser…
         </div>
       )}
     </>

@@ -1,4 +1,4 @@
-"""Native image, Plotly, and W&B panes for a Leika workspace."""
+"""Native image, Plotly, W&B, and viser panes for a Leika workspace."""
 
 from __future__ import annotations
 
@@ -178,6 +178,63 @@ def _wandb_embed_url(
     )
 
 
+def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
+    """Normalize a viser target into ``(url, port)``, exactly one set.
+
+    Accepts an absolute http(s) URL, used near-verbatim, or a viser
+    ``ViserServer``-like object, duck-typed on callable ``get_port()`` and
+    ``get_host()``. Only the port is kept from server objects: viser binds
+    ``0.0.0.0`` by default, so its Python-side host is not something a
+    browser can connect to. The client instead combines the port with the
+    hostname the Leika page itself was loaded from.
+    """
+
+    if isinstance(target, str):
+        parts = urllib.parse.urlsplit(target)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ValueError(f"Viser target URLs must be absolute http(s) URLs; got {target!r}.")
+        return target, None
+
+    get_port = getattr(target, "get_port", None)
+    get_host = getattr(target, "get_host", None)
+    if callable(get_port) and callable(get_host):
+        port = int(cast("Any", get_port()))
+        if port == 0:
+            raise ValueError(
+                "Viser server reported port 0: released viser versions do not "
+                "report the bound port for ViserServer(port=0). Construct the "
+                "server with a concrete port instead; viser probes upward if "
+                "it is taken and get_port() then reports the real one."
+            )
+        if not 1 <= port <= 65535:
+            raise ValueError(f"Viser server reported an invalid port: {port!r}.")
+        return None, port
+
+    raise TypeError(
+        "target must be a viser ViserServer (an object with get_port() and "
+        f"get_host() methods) or an absolute http(s) URL; got {target!r}."
+    )
+
+
+def _minimize_viser_gui(target: Any) -> None:
+    """Best-effort: dock viser's control panel to the right viewport edge and
+    minimize it to a vertical rail, so Leika's own GUI is the one in charge.
+
+    Uses viser's ``gui.main_panel`` placement API, duck-typed so Leika never
+    imports viser. The commands are imperative and replayed to clients that
+    connect later, so calling this before the pane's iframe loads still
+    applies. Released viser (<= 1.0.30) predates ``main_panel``; there this
+    is a no-op and viser's panel stays visible.
+    """
+
+    main_panel = getattr(getattr(target, "gui", None), "main_panel", None)
+    dock_right = getattr(main_panel, "dock_right", None)
+    minimize = getattr(main_panel, "minimize", None)
+    if callable(dock_right) and callable(minimize):
+        dock_right()
+        minimize()
+
+
 @dataclasses.dataclass
 class _ImagePaneHandleState:
     pane_id: str
@@ -208,8 +265,21 @@ class _WandbPaneHandleState:
     removed: bool = False
 
 
+@dataclasses.dataclass
+class _ViserPaneHandleState:
+    pane_id: str
+    props: _messages.ViewportViserProps
+    api: Panes
+    minimize_gui: bool
+    removed: bool = False
+
+
 _PaneStateT = TypeVar(
-    "_PaneStateT", _ImagePaneHandleState, _PlotlyPaneHandleState, _WandbPaneHandleState
+    "_PaneStateT",
+    _ImagePaneHandleState,
+    _PlotlyPaneHandleState,
+    _WandbPaneHandleState,
+    _ViserPaneHandleState,
 )
 
 
@@ -428,6 +498,48 @@ class WandbPaneHandle(PaneHandle[_WandbPaneHandleState]):
             self._queue_update({"_url": url})
 
 
+class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
+    """Handle for re-pointing or removing an embedded viser pane."""
+
+    def __init__(self, state: _ViserPaneHandleState) -> None:
+        self._impl = state
+
+    @property
+    def url(self) -> str | None:
+        """Embed URL currently shown in the pane, or None for port-based
+        targets, where the browser derives the address itself."""
+
+        return self._impl.props._url
+
+    @property
+    def port(self) -> int | None:
+        """Viser server port for port-based targets, or None when the pane
+        was pointed at an explicit URL."""
+
+        return self._impl.props._port
+
+    def update(self, target: str | Any) -> None:
+        """Re-point the pane at another viser server or URL. Accepts the
+        same targets as :meth:`Panes.add_viser`, and re-applies the pane's
+        creation-time ``minimize_gui`` choice to server targets — including
+        the current one, so calling with the same server re-minimizes a
+        panel the viewer expanded."""
+
+        self._check_not_removed()
+        url, port = _viser_embed_target(target)
+        if port is not None and self._impl.minimize_gui:
+            _minimize_viser_gui(target)
+        with self._impl.api._lock:
+            self._check_not_removed()
+            if url == self._impl.props._url and port == self._impl.props._port:
+                return
+            self._impl.props._url = url
+            self._impl.props._port = port
+            # Both keys are always sent so the exactly-one-set invariant
+            # holds on the client after any update.
+            self._queue_update({"_url": url, "_port": port})
+
+
 class PaneGroup:
     """Adds panes to an equally divided row or column.
 
@@ -568,6 +680,34 @@ class PaneGroup:
             self._members.append(handle)
         return handle
 
+    def add_viser(
+        self,
+        target: str | Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "viser",
+        visible: bool = True,
+        minimize_gui: bool = True,
+    ) -> ViserPaneHandle:
+        """Add a viser pane to the group. Accepts the same arguments as
+        :meth:`Panes.add_viser`, minus placement, which the group
+        owns."""
+
+        with self._api._lock:
+            placement, relative_to, equalize_group = self._next_declaration()
+            handle = self._api._add_viser(
+                target,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                minimize_gui=minimize_gui,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            )
+            self._members.append(handle)
+        return handle
+
 
 class PaneGrid:
     """Adds panes to an equally divided grid.
@@ -694,9 +834,34 @@ class PaneGrid:
             self._track(group, handle)
         return handle
 
+    def add_viser(
+        self,
+        target: str | Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "viser",
+        visible: bool = True,
+        minimize_gui: bool = True,
+    ) -> ViserPaneHandle:
+        """Add a viser pane to the grid's next cell. Accepts the same
+        arguments as :meth:`Panes.add_viser`, minus placement, which
+        the grid owns."""
+
+        with self._api._lock:
+            group = self._next_group()
+            handle = group.add_viser(
+                target,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                minimize_gui=minimize_gui,
+            )
+            self._track(group, handle)
+        return handle
+
 
 class Panes:
-    """Declare image, Plotly, and W&B panes in the browser-managed
+    """Declare image, Plotly, W&B, and viser panes in the browser-managed
     workspace."""
 
     _root_pane_id: Literal["__leika_root__"] = "__leika_root__"
@@ -1109,6 +1274,137 @@ class Panes:
             ),
             relative_to,
         )
+        return handle
+
+    def add_viser(
+        self,
+        target: str | Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "viser",
+        visible: bool = True,
+        minimize_gui: bool = True,
+        placement: Placement = "right",
+        relative_to: str | None = None,
+    ) -> ViserPaneHandle:
+        """Add a pane embedding a live viser 3D scene.
+
+        The pane shows viser's own interactive client — orbit controls and
+        gizmos — for a viser server you create and own. Leika does not
+        require ``viser`` to be installed; the target is duck-typed. By
+        default viser's own control panel is docked to the pane's right
+        edge and minimized to a vertical rail (``minimize_gui``), leaving
+        Leika's GUI in charge; viewers can still expand it from the rail.
+        This uses viser's ``gui.main_panel`` API — on older viser without
+        it (through 1.0.30), the panel just stays visible.
+
+        The intended pattern is to build controls with Leika's
+        ``server.gui.add_*`` and mutate ``viser_server.scene`` in their
+        callbacks, so the Leika dock drives the 3D scene::
+
+            viser_server = viser.ViserServer()
+            server.panes.add_viser(viser_server)
+            slider = server.gui.add_slider("Size", min=1, max=10, step=1, initial_value=3)
+
+            @slider.on_update
+            def _(_) -> None:
+                viser_server.scene.add_icosphere("/ball", radius=slider.value)
+
+        For server-object targets, only the port is used: the viewer's
+        browser connects to that port on the same hostname it loaded the
+        Leika page from. Anyone viewing Leika remotely therefore needs the
+        viser port reachable too — over SSH, forward both ports. When that
+        doesn't hold (tunnels, reverse proxies), pass an explicit URL
+        instead. Note that a URL pane served over plain ``http://`` cannot
+        be embedded into an ``https://``-served Leika page (mixed content).
+
+        The embedded client follows Leika's light/dark theme. The browser
+        owns pane arrangement and persists it locally; placement and
+        relative_to are only used when the browser first encounters a pane
+        that is not already present in its saved layout.
+
+        Args:
+            target: What to embed: a ``viser.ViserServer`` (any object with
+                ``get_port()`` and ``get_host()`` methods), or an absolute
+                http(s) URL of a viser client.
+            pane_id: Stable identifier for browser layout persistence. By
+                default a UUID is generated. Set this explicitly to restore a
+                pane's position after a server restart.
+            title: Pane corner-label title.
+            visible: Initial visibility.
+            minimize_gui: Dock viser's own control panel to the right edge
+                and minimize it to a rail. Applies to server-object targets
+                on viser versions with ``gui.main_panel``; ignored for URL
+                targets, which Python cannot reach into.
+            placement: Initial split edge relative to relative_to.
+            relative_to: Visible pane used for initial placement.
+
+        Returns:
+            Handle for re-pointing or removing the viser pane.
+        """
+
+        return self._add_viser(
+            target,
+            pane_id=pane_id,
+            title=title,
+            visible=visible,
+            minimize_gui=minimize_gui,
+            placement=placement,
+            relative_to=relative_to,
+            equalize_group=(),
+        )
+
+    def _add_viser(
+        self,
+        target: str | Any,
+        *,
+        pane_id: str | None,
+        title: str,
+        visible: bool,
+        minimize_gui: bool,
+        placement: Placement,
+        relative_to: str | None,
+        equalize_group: tuple[str, ...],
+    ) -> ViserPaneHandle:
+        title = str(title)
+        visible = bool(visible)
+        minimize_gui = bool(minimize_gui)
+        pane_id = self._validate_pane_declaration(pane_id, placement)
+
+        url, port = _viser_embed_target(target)
+        props = _messages.ViewportViserProps(
+            _url=url,
+            _port=port,
+            title=title,
+            visible=visible,
+        )
+        handle = ViserPaneHandle(
+            _ViserPaneHandleState(
+                pane_id=pane_id,
+                props=copy.deepcopy(props),
+                api=self,
+                minimize_gui=minimize_gui,
+            )
+        )
+        relative_to = self._resolve_relative_to(relative_to)
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportViserMessage(
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
+        )
+        # Only after registration succeeds: a failed add (duplicate pane_id,
+        # bad relative_to) must leave the user's viser server untouched. The
+        # placement commands replay to late-joining clients, so applying
+        # them after the pane's create message changes nothing.
+        if port is not None and minimize_gui:
+            _minimize_viser_gui(target)
         return handle
 
     def add_row(

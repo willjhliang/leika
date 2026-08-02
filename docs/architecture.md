@@ -42,4 +42,5 @@ once visible panes are present.
 
 Leika is a simple data workspace. The client carries GUI, dock, layout, image,
 Plotly, and uPlot renderers, and CI checks that the shipped wheel and its
-browser dependencies stay within that surface.
+browser dependencies stay within that surface. External pages — W&B, viser 3D
+scenes — embed as iframes of their own clients; Leika ships no 3D code.

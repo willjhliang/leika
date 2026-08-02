@@ -8,6 +8,8 @@ Examples can be found on [Github](https://github.com/willjhliang/leika).
   surface), grouping, synchronized controls, callbacks, tabs, modal,
   upload, command palette, notifications, GUI image/uPlot/Plotly, and live
   updates; requires `leika[examples]`.
+- `python examples/viser_scene.py`: the Leika dock driving a live viser 3D
+  scene embedded as a pane; requires `leika[examples]`.
 
 Each example prints a local URL. If Leika runs on a remote host, forward the
 port over SSH and open the forwarded localhost URL.

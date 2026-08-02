@@ -1002,6 +1002,26 @@ class ViewportWandbMessage(_ViewportPaneCreateMessage):
 
 
 @dataclasses.dataclass
+class ViewportViserProps:
+    """Properties for an embedded viser pane."""
+
+    _url: Optional[str]
+    """Absolute embed URL, rendered near-verbatim. None for port-based targets."""
+    _port: Optional[int]
+    """Viser server port; the client derives the host from the page's hostname.
+    None for URL-based targets. Exactly one of _url/_port is set."""
+    title: str
+    visible: bool
+
+
+@dataclasses.dataclass
+class ViewportViserMessage(_ViewportPaneCreateMessage):
+    """Create an embedded viser pane in the pane workspace."""
+
+    props: ViewportViserProps
+
+
+@dataclasses.dataclass
 class ViewportPaneUpdateMessage(
     Message,
     entity=EntityLifecycle("viewport", "update_dict", "pane_id"),
