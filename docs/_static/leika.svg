@@ -1,9 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="2.5 0 357 357">
   <!--
-    The leika bloom. Six petals, each painted twice: once in the dark base,
-    then again in color with `screen`, so the overlaps mix additively. Red
-    over green reads yellow, and the center where all three meet goes white.
-    Paint order is what the blending composites through, so it matters.
+    The leika bloom. Six petals blended with `screen`, so the overlaps mix
+    additively. Red over green reads yellow, and the center where all three
+    meet goes white. Paint order is what the blending composites through, so
+    it matters.
+
+    Each petal is painted exactly once. Figma exports a dark copy of every
+    petal underneath, which the screened color hides in the interior but
+    only half covers along the antialiased edge, leaving a dark rim around
+    the whole mark: a sliver at logo size, a full pixel wide as a favicon.
 
     The box is square on the bloom's own height. The art is 318 wide by 357
     tall, so padding it out any further buys side margin that the top and
@@ -20,14 +25,6 @@
     <path id="p5" d="M195.008 186.614C209.571 161.389 183.626 119.145 137.058 92.2588C90.4897 65.3726 40.9327 64.0255 26.3693 89.25C11.8059 114.474 37.7511 156.719 84.3194 183.605C130.888 210.491 180.445 211.838 195.008 186.614Z"/>
   </defs>
   <g style="isolation:isolate">
-    <g fill="#171717">
-      <use href="#p0"/>
-      <use href="#p1"/>
-      <use href="#p2"/>
-      <use href="#p3"/>
-      <use href="#p4"/>
-      <use href="#p5"/>
-    </g>
     <use href="#p0" fill="#FF2D1F" style="mix-blend-mode:screen"/>
     <use href="#p1" fill="#22E06A" style="mix-blend-mode:screen"/>
     <use href="#p2" fill="#3B82FF" style="mix-blend-mode:screen"/>

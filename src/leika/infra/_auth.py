@@ -426,10 +426,10 @@ _LOGIN_PAGE = (
     <form id="form">
       <header>
         <div id="title">
-          <!-- The leika bloom (docs/_static/leika.svg): six petals painted
-               in a dark base then again in color with `screen`, so overlaps
-               mix additively. `isolation` keeps the blending self-contained,
-               so it renders the same on either theme's card. -->
+          <!-- The leika bloom (docs/_static/leika.svg): six petals blended
+               with `screen`, so overlaps mix additively. `isolation` keeps
+               the blending self-contained, so it renders the same on either
+               theme's card. -->
           <svg viewBox="2.5 0 357 357" aria-hidden="true">
             <defs>
               <path id="p0" d="M180.955 194.727C210.082 194.727 233.694 151.136 233.694 97.3637C233.694 43.5912 210.082 6.10352e-05 180.955 6.10352e-05C151.828 6.10352e-05 128.216 43.5912 128.216 97.3637C128.216 151.136 151.828 194.727 180.955 194.727Z"/>
@@ -440,14 +440,6 @@ _LOGIN_PAGE = (
               <path id="p5" d="M195.008 186.614C209.571 161.389 183.626 119.145 137.058 92.2588C90.4897 65.3726 40.9327 64.0255 26.3693 89.25C11.8059 114.474 37.7511 156.719 84.3194 183.605C130.888 210.491 180.445 211.838 195.008 186.614Z"/>
             </defs>
             <g style="isolation:isolate">
-              <g fill="#171717">
-                <use href="#p0"/>
-                <use href="#p1"/>
-                <use href="#p2"/>
-                <use href="#p3"/>
-                <use href="#p4"/>
-                <use href="#p5"/>
-              </g>
               <use href="#p0" fill="#FF2D1F" style="mix-blend-mode:screen"/>
               <use href="#p1" fill="#22E06A" style="mix-blend-mode:screen"/>
               <use href="#p2" fill="#3B82FF" style="mix-blend-mode:screen"/>
