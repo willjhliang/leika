@@ -1,4 +1,4 @@
-"""Comprehensive Leika image, Plotly, layout, and GUI showcase.
+"""Comprehensive Leika image, Plotly, viser, layout, and GUI showcase.
 
 Install the optional dependency and run from the repository root::
 
@@ -18,11 +18,12 @@ from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
+import viser
 
 import leika
 
 # Plotly's built-in named templates. Long enough to be a chore to scan by eye,
-# which is the case `searchable=True` exists for; the short `Detail region`
+# which is the case `searchable=True` exists for; the short `Cloud shape`
 # dropdown below is the plain default.
 PLOTLY_TEMPLATES = (
     "plotly",
@@ -47,8 +48,8 @@ ASSETS = Path(__file__).resolve().parent / "assets"
 NOTES_MD = """\
 # Showcase notes
 
-The controls on the left drive four panes: a NumPy field, a crop of it, a live
-Plotly chart and a 3D surface.
+The controls on the left drive four panes: a NumPy field, a live viser point
+cloud, a Plotly chart and a 3D surface.
 
 ## Files
 
@@ -66,13 +67,9 @@ A preview holds the whole file in the tab, so anything past **64 MiB** is
 declined with a notification rather than opened.
 """
 
-# Where the detail pane looks. Three named crops of the field, which is short
-# enough that a plain dropdown beats a search box.
-DETAIL_REGIONS: dict[str, tuple[slice, slice]] = {
-    "Center": (slice(70, 230), slice(120, 360)),
-    "Top left": (slice(0, 160), slice(0, 240)),
-    "Bottom right": (slice(140, 300), slice(240, 480)),
-}
+# Shapes the viser point cloud can take. Three of them, which is short enough
+# that a plain dropdown beats a search box.
+CLOUD_SHAPES = ("Gaussian", "Shell", "Spiral")
 
 
 HEIGHT = 300
@@ -154,6 +151,25 @@ def render_field(
     return np.clip(frame, 0.0, 255.0).astype(np.uint8)
 
 
+def cloud_points(shape: str, count: int) -> np.ndarray:
+    """Points for the viser scene. The 3D data is Leika's only in the sense
+    that Leika's controls choose it; viser owns the scene that draws it."""
+
+    rng = np.random.default_rng(0)
+    if shape == "Shell":
+        directions = rng.normal(size=(count, 3))
+        directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+        return (directions * rng.uniform(0.9, 1.0, (count, 1))).astype(np.float32)
+    if shape == "Spiral":
+        t = np.linspace(0.0, 6.0 * np.pi, count)
+        radius = np.linspace(0.15, 1.2, count)
+        return np.stack(
+            [radius * np.cos(t), radius * np.sin(t), np.linspace(-1.0, 1.0, count)],
+            axis=-1,
+        ).astype(np.float32)
+    return rng.normal(scale=0.5, size=(count, 3)).astype(np.float32)
+
+
 def make_plot() -> go.Figure:
     figure = go.Figure(
         go.Scatter(
@@ -214,15 +230,12 @@ def main() -> None:
         format="jpeg",
         jpeg_quality=82,
     )
-    detail_pane = grid.add_image(
-        initial[DETAIL_REGIONS["Center"]],
-        pane_id="detail",
-        title="Detail view",
-        # No `fit`: this pane follows whatever the viewer picked under
-        # Settings. The field pane above pins its own, so the two show the
-        # override and the default side by side.
-        format="png",
-    )
+    # viser owns the 3D scene and serves its own client; Leika embeds that
+    # client as a pane and supplies the controls. A concrete port, because
+    # released viser does not report the bound port for port=0 -- if this one
+    # is taken viser probes upward and get_port() reports the real one.
+    viser_server = viser.ViserServer(port=8081, verbose=False)
+    grid.add_viser(viser_server, pane_id="scene", title="Live viser scene")
     plot_figure = make_plot()
     plot_pane = grid.add_plotly(
         plot_figure,
@@ -282,18 +295,11 @@ def main() -> None:
         palette = server.gui.add_toggle(
             ("Ocean", "Magma", "Viridis"), label="Palette", color="secondary"
         )
-        # Three options, so no search box: the plain dropdown opens with the
-        # current one already under the cursor.
-        region = server.gui.add_dropdown(
-            "Detail region", options=tuple(DETAIL_REGIONS), initial_value="Center"
-        )
         # Buttons this time, because a nudge happens and is over. Parted, since
         # the two are opposite moves rather than one control with two ends.
         nudge = server.gui.add_button(
             ("Left", "Right"), label="Nudge", color="secondary", merge=False
         )
-        # A toggle with no label takes the row, exactly as a button does.
-        pin = server.gui.add_toggle("Pin the detail view", color="secondary")
         with server.gui.add_folder("Color adjustments"):
             offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
             tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
@@ -306,6 +312,22 @@ def main() -> None:
             format="jpeg",
             jpeg_quality=75,
         )
+
+    with server.gui.add_folder("3D scene"):
+        # Three options, so no search box: the plain dropdown opens with the
+        # current one already under the cursor.
+        cloud_shape = server.gui.add_dropdown(
+            "Cloud shape", options=CLOUD_SHAPES, initial_value="Gaussian"
+        )
+        cloud_count = server.gui.add_slider(
+            "Points", min=500, max=20_000, step=500, initial_value=6_000
+        )
+        cloud_size = server.gui.add_slider(
+            "Point size", min=0.005, max=0.06, step=0.005, initial_value=0.02
+        )
+        cloud_color = server.gui.add_rgb("Cloud color", initial_value=(230, 180, 80))
+        # A toggle with no label takes the row, exactly as a button does.
+        spin = server.gui.add_toggle("Spin the cloud", color="secondary")
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
@@ -525,6 +547,24 @@ def main() -> None:
         tint.value = (20, 90, 210, 45)
         plot_color.value = (196, 196, 196)
 
+    def rebuild_cloud(_: object = None) -> None:
+        points = cloud_points(cloud_shape.value, int(cloud_count.value))
+        colors = np.tile(np.asarray(cloud_color.value, dtype=np.uint8), (len(points), 1))
+        # Re-adding under the same name replaces the node, and the handle it
+        # returns is what the loop below spins.
+        state["cloud"] = viser_server.scene.add_point_cloud(
+            "/cloud",
+            points=points,
+            colors=colors,
+            point_size=float(cloud_size.value),
+        )
+
+    cloud_shape.on_update(rebuild_cloud)
+    cloud_count.on_update(rebuild_cloud)
+    cloud_size.on_update(rebuild_cloud)
+    cloud_color.on_update(rebuild_cloud)
+    rebuild_cloud()
+
     @nudge.on_click
     def _(event: leika.GuiEvent[Any]) -> None:
         step = 0.1 if event.target.value == "Right" else -0.1
@@ -635,10 +675,13 @@ def main() -> None:
                 )
                 with server.atomic():
                     field_pane.update(frame)
-                    if not pin.value:
-                        rows, columns = DETAIL_REGIONS[region.value]
-                        detail_pane.update(frame[rows, columns])
                     gui_preview.image = frame[::4, ::4]
+
+            if spin.value:
+                # Only the node's rotation changes, so the points themselves
+                # are not resent: a quaternion about z, wxyz as viser wants it.
+                half = state["phase"] * 0.5
+                state["cloud"].wxyz = (float(np.cos(half)), 0.0, 0.0, float(np.sin(half)))
 
             # How much of the buffered history the plots draw. Two points is
             # the least that is still a line.
@@ -664,6 +707,7 @@ def main() -> None:
                 next_frame = time.monotonic()
     except KeyboardInterrupt:
         server.stop()
+        viser_server.stop()
 
 
 if __name__ == "__main__":
