@@ -582,6 +582,18 @@ export interface ViewportImageMessage {
     fit: "fit" | "fill" | "stretch" | null;
   };
 }
+/** Create a native matplotlib pane in the pane workspace.
+ *
+ * (automatically generated)
+ */
+export interface ViewportMatplotlibMessage {
+  type: "ViewportMatplotlibMessage";
+  pane_id: string;
+  placement: "left" | "right" | "top" | "bottom";
+  relative_to: string;
+  equalize_group: string[];
+  props: { _svg: string; title: string; visible: boolean };
+}
 /** Create a native Plotly pane in the pane workspace.
  *
  * (automatically generated)
@@ -889,6 +901,7 @@ export type Message =
   | GuiButtonHoldMessage
   | GuiUpdateMessage
   | ViewportImageMessage
+  | ViewportMatplotlibMessage
   | ViewportPlotlyMessage
   | ViewportViserMessage
   | ViewportPaneUpdateMessage

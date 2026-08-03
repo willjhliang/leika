@@ -1,9 +1,10 @@
-"""Native image, Plotly, and viser panes for a Leika workspace."""
+"""Native image, matplotlib, Plotly, and viser panes for a Leika workspace."""
 
 from __future__ import annotations
 
 import copy
 import dataclasses
+import io
 import json
 import threading
 import urllib.parse
@@ -60,6 +61,25 @@ def _plotly_json_for_pane(figure: go.Figure, config: Mapping[str, Any] | None) -
         plot_dict.get("layout", {}).pop("template", None)
         json_str = json.dumps(plot_dict)
     return json_str
+
+
+def _matplotlib_svg(figure: Any) -> str:
+    """Serialize a matplotlib figure to SVG source.
+
+    SVG rather than pixels so a resized pane rescales the figure crisply
+    without a Python redraw. The figure is written exactly as composed --
+    no tight bounding box, no recoloring -- so what the pane shows is what
+    ``savefig`` would have written.
+    """
+
+    savefig = getattr(figure, "savefig", None)
+    if not callable(savefig):
+        raise TypeError(
+            f"figure must be a matplotlib Figure (an object with a savefig method); got {figure!r}."
+        )
+    buffer = io.BytesIO()
+    savefig(buffer, format="svg")
+    return buffer.getvalue().decode("utf-8")
 
 
 def _plotly_theme_templates_json() -> str:
@@ -148,6 +168,15 @@ class _ImagePaneHandleState:
 
 
 @dataclasses.dataclass
+class _MatplotlibPaneHandleState:
+    pane_id: str
+    props: _messages.ViewportMatplotlibProps
+    api: Panes
+    figure: Any
+    removed: bool = False
+
+
+@dataclasses.dataclass
 class _PlotlyPaneHandleState:
     pane_id: str
     props: _messages.ViewportPlotlyProps
@@ -169,6 +198,7 @@ class _ViserPaneHandleState:
 _PaneStateT = TypeVar(
     "_PaneStateT",
     _ImagePaneHandleState,
+    _MatplotlibPaneHandleState,
     _PlotlyPaneHandleState,
     _ViserPaneHandleState,
 )
@@ -313,6 +343,40 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
                 return
             self._impl.props.fit = value
             self._queue_update({"fit": value})
+
+
+class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
+    """Handle for updating or removing a native matplotlib pane."""
+
+    def __init__(self, state: _MatplotlibPaneHandleState) -> None:
+        self._impl = state
+
+    @property
+    def figure(self) -> Any:
+        """Current matplotlib figure. Assign a new figure to update the pane."""
+
+        return self._impl.figure
+
+    @figure.setter
+    def figure(self, figure: Any) -> None:
+        self._check_not_removed()
+        svg = _matplotlib_svg(figure)
+        with self._impl.api._lock:
+            # Serialization can be expensive. Recheck after taking the lock so
+            # a concurrent remove cannot queue an update for a reused pane ID.
+            self._check_not_removed()
+            self._impl.figure = figure
+            self._impl.props._svg = svg
+            self._queue_update({"_svg": svg})
+
+    def update(self, figure: Any) -> None:
+        """Replace the matplotlib figure while retaining the pane configuration.
+
+        Call this after redrawing to push a new frame; matplotlib mutates
+        figures in place, so re-passing the same figure is normal.
+        """
+
+        self.figure = figure
 
 
 class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
@@ -467,6 +531,32 @@ class PaneGroup:
             self._members.append(handle)
         return handle
 
+    def add_matplotlib(
+        self,
+        figure: Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "Figure",
+        visible: bool = True,
+    ) -> MatplotlibPaneHandle:
+        """Add a matplotlib pane to the group. Accepts the same arguments as
+        :meth:`Panes.add_matplotlib`, minus placement, which the group
+        owns."""
+
+        with self._api._lock:
+            placement, relative_to, equalize_group = self._next_declaration()
+            handle = self._api._add_matplotlib(
+                figure,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            )
+            self._members.append(handle)
+        return handle
+
     def add_plotly(
         self,
         figure: go.Figure,
@@ -595,6 +685,29 @@ class PaneGrid:
             self._track(group, handle)
         return handle
 
+    def add_matplotlib(
+        self,
+        figure: Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "Figure",
+        visible: bool = True,
+    ) -> MatplotlibPaneHandle:
+        """Add a matplotlib pane to the grid's next cell. Accepts the same
+        arguments as :meth:`Panes.add_matplotlib`, minus placement, which
+        the grid owns."""
+
+        with self._api._lock:
+            group = self._next_group()
+            handle = group.add_matplotlib(
+                figure,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+            )
+            self._track(group, handle)
+        return handle
+
     def add_plotly(
         self,
         figure: go.Figure,
@@ -647,7 +760,7 @@ class PaneGrid:
 
 
 class Panes:
-    """Declare image, Plotly, and viser panes in the browser-managed
+    """Declare image, matplotlib, Plotly, and viser panes in the browser-managed
     workspace."""
 
     _root_pane_id: Literal["__leika_root__"] = "__leika_root__"
@@ -829,6 +942,103 @@ class Panes:
             pane_id,
             handle,
             _messages.ViewportImageMessage(
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
+        )
+        return handle
+
+    def add_matplotlib(
+        self,
+        figure: Any,
+        *,
+        pane_id: str | None = None,
+        title: str = "Figure",
+        visible: bool = True,
+        placement: Placement = "right",
+        relative_to: str | None = None,
+    ) -> MatplotlibPaneHandle:
+        """Add a native matplotlib pane to the workspace.
+
+        The figure is relayed as SVG, so a resized pane rescales it crisply
+        without redrawing in Python. It is a picture of a figure: there is no
+        hover, zoom, or pan, and the axes do not reflow to the pane's shape.
+        Use :meth:`add_plotly` for a chart the viewer can interact with.
+
+        SVG suits the line and scatter plots figures usually hold. A figure
+        with very many marks -- a scatter of 100k points, a fine-grained
+        heatmap -- serializes one element per mark and is better sent as an
+        interactive Plotly figure, or rasterized and sent with
+        :meth:`add_image`.
+
+        The browser owns pane arrangement and persists it locally. Placement
+        and relative_to are only used when the browser first encounters a
+        pane that is not already present in its saved layout.
+
+        Args:
+            figure: matplotlib figure to display, e.g. from
+                ``plt.subplots()``. Duck-typed on ``savefig``, so matplotlib
+                is not a Leika dependency. Assign to the returned handle's
+                ``figure`` property to update it.
+            pane_id: Stable identifier for browser layout persistence. By
+                default a UUID is generated. Set this explicitly to restore a
+                pane's position after a server restart.
+            title: Pane corner-label title.
+            visible: Initial visibility.
+            placement: Initial split edge relative to relative_to.
+            relative_to: Visible pane used for initial placement.
+
+        Returns:
+            Handle for updating or removing the matplotlib pane.
+        """
+
+        return self._add_matplotlib(
+            figure,
+            pane_id=pane_id,
+            title=title,
+            visible=visible,
+            placement=placement,
+            relative_to=relative_to,
+            equalize_group=(),
+        )
+
+    def _add_matplotlib(
+        self,
+        figure: Any,
+        *,
+        pane_id: str | None,
+        title: str,
+        visible: bool,
+        placement: Placement,
+        relative_to: str | None,
+        equalize_group: tuple[str, ...],
+    ) -> MatplotlibPaneHandle:
+        title = str(title)
+        visible = bool(visible)
+        pane_id = self._validate_pane_declaration(pane_id, placement)
+
+        props = _messages.ViewportMatplotlibProps(
+            _svg=_matplotlib_svg(figure),
+            title=title,
+            visible=visible,
+        )
+        handle = MatplotlibPaneHandle(
+            _MatplotlibPaneHandleState(
+                pane_id=pane_id,
+                props=copy.deepcopy(props),
+                api=self,
+                figure=figure,
+            )
+        )
+        relative_to = self._resolve_relative_to(relative_to)
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportMatplotlibMessage(
                 pane_id=pane_id,
                 props=props,
                 placement=placement,

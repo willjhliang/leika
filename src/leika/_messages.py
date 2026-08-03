@@ -924,6 +924,24 @@ class ViewportPlotlyProps:
 
 
 @dataclasses.dataclass
+class ViewportMatplotlibProps:
+    """Properties for a native matplotlib pane."""
+
+    _svg: str
+    """The figure serialized as SVG source, rendered as-is. Vector, so the
+    pane scales it without asking Python to redraw."""
+    title: str
+    visible: bool
+
+
+@dataclasses.dataclass
+class ViewportMatplotlibMessage(_ViewportPaneCreateMessage):
+    """Create a native matplotlib pane in the pane workspace."""
+
+    props: ViewportMatplotlibProps
+
+
+@dataclasses.dataclass
 class ViewportPlotlyMessage(_ViewportPaneCreateMessage):
     """Create a native Plotly pane in the pane workspace."""
 

@@ -101,7 +101,7 @@ def test_no_3d_public_source_or_examples() -> None:
     # Viser examples legitimately drive viser's own .scene; the guard is
     # about leika's surface staying free of 3D APIs.
     example_text = "\n".join(text for text in example_texts if "import viser" not in text)
-    for forbidden in ("add_matplotlib", "add_url", ".scene"):
+    for forbidden in ("add_url", ".scene"):
         assert forbidden not in example_text
 
 

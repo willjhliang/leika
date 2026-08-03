@@ -38,6 +38,7 @@ import {
 import { Spinner } from "../components/ui/spinner";
 import {
   ViewportImagePane,
+  ViewportMatplotlibPane,
   ViewportPane,
   ViewportPlotlyPane,
   ViewportViserPane,
@@ -185,7 +186,8 @@ function paneTitle(pane: ViewportPane): string {
   return pane.kind === "root" ? "" : pane.props.title;
 }
 
-/** Auto-filling split workspace for native image, Plotly, and viser panes. */
+/** Auto-filling split workspace for native image, matplotlib, Plotly, and
+ * viser panes. */
 export function ViewportWorkspace() {
   const viewer = React.useContext(ViewerContext)!;
   const layout = viewer.useViewport((state) => state.layout);
@@ -1093,6 +1095,7 @@ const paneRendererRegistry: {
 } = {
   root: () => null,
   image: ({ pane }) => <ViewportImageRenderer pane={pane} />,
+  matplotlib: ({ pane }) => <ViewportMatplotlibRenderer pane={pane} />,
   plotly: ({ pane }) => <ViewportPlotlyRenderer pane={pane} />,
   viser: ({ pane }) => <ViewportViserRenderer pane={pane} />,
 };
@@ -1104,6 +1107,48 @@ function ViewportPaneRenderer(props: PaneRendererProps) {
     props.pane.kind
   ] as React.ComponentType<PaneRendererProps>;
   return <Renderer {...props} />;
+}
+
+/** Static matplotlib figure, relayed as SVG.
+ *
+ * Rendered through an `img` rather than inlined into the document: SVG can
+ * carry script, and an image context cannot run it. Vector scales for free,
+ * so a pane resize needs no redraw in Python. */
+function ViewportMatplotlibRenderer({ pane }: { pane: ViewportMatplotlibPane }) {
+  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const url = URL.createObjectURL(
+      new Blob([pane.props._svg], { type: "image/svg+xml" }),
+    );
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pane.props._svg]);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        background: "var(--background)",
+      }}
+    >
+      {objectUrl === null ? null : (
+        <img
+          src={objectUrl}
+          alt={pane.props.title}
+          draggable={false}
+          style={{
+            display: "block",
+            width: "100%",
+            height: "100%",
+            // The figure keeps the proportions it was composed with.
+            objectFit: "contain",
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 /** Interactive Plotly renderer that always fills its pane, tracking pane

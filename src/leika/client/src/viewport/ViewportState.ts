@@ -27,6 +27,13 @@ export interface ViewportImageProps {
   fit: ImageFit | null;
 }
 
+export interface ViewportMatplotlibProps {
+  /** Figure SVG source, rendered as-is and scaled to the pane. */
+  _svg: string;
+  title: string;
+  visible: boolean;
+}
+
 export interface ViewportPlotlyProps {
   _plotly_json_str: string;
   /** JSON string with "light"/"dark" template definitions, applied when the
@@ -58,6 +65,12 @@ export interface ViewportImagePane {
   props: ViewportImageProps;
 }
 
+export interface ViewportMatplotlibPane {
+  kind: "matplotlib";
+  paneId: string;
+  props: ViewportMatplotlibProps;
+}
+
 export interface ViewportPlotlyPane {
   kind: "plotly";
   paneId: string;
@@ -73,6 +86,7 @@ export interface ViewportViserPane {
 /** Server-declared panes that render content other than the 3D hidden root. */
 export type ViewportContentPane =
   | ViewportImagePane
+  | ViewportMatplotlibPane
   | ViewportPlotlyPane
   | ViewportViserPane;
 
@@ -87,6 +101,14 @@ export interface ViewportState {
 export interface ViewportImageDeclaration {
   pane_id: string;
   props: ViewportImageProps;
+  placement: ViewportPanePlacement;
+  relative_to: string;
+  equalize_group: readonly string[];
+}
+
+export interface ViewportMatplotlibDeclaration {
+  pane_id: string;
+  props: ViewportMatplotlibProps;
   placement: ViewportPanePlacement;
   relative_to: string;
   equalize_group: readonly string[];
@@ -112,6 +134,7 @@ export interface ViewportViserDeclaration {
 // same-named props with different types never collapse across pane kinds.
 export type ViewportPaneUpdates =
   | Partial<ViewportImageProps>
+  | Partial<ViewportMatplotlibProps>
   | Partial<ViewportPlotlyProps>
   | Partial<ViewportViserProps>;
 
@@ -125,6 +148,7 @@ export interface ViewportActions {
   /** Restore the workspace-specific persisted layout. */
   setPersistenceWorkspace: (workspaceId: string) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
+  addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
   addViserPane: (message: ViewportViserDeclaration) => void;
   updatePane: (paneId: string, updates: ViewportPaneUpdates) => void;
@@ -372,6 +396,14 @@ export function useViewportState(
       addImagePane: (message) => {
         addContentPane(message, {
           kind: "image",
+          paneId: message.pane_id,
+          props: message.props,
+        });
+      },
+
+      addMatplotlibPane: (message) => {
+        addContentPane(message, {
+          kind: "matplotlib",
           paneId: message.pane_id,
           props: message.props,
         });

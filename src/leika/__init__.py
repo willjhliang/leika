@@ -41,6 +41,7 @@ from ._icons_enum import Icon as Icon
 from ._icons_enum import IconName as IconName
 from ._panes import ImageFit as ImageFit
 from ._panes import ImagePaneHandle as ImagePaneHandle
+from ._panes import MatplotlibPaneHandle as MatplotlibPaneHandle
 from ._panes import PaneGrid as PaneGrid
 from ._panes import PaneGroup as PaneGroup
 from ._panes import PaneHandle as PaneHandle

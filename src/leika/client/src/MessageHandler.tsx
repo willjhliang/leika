@@ -83,6 +83,9 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
       case "ViewportImageMessage":
         viewer.viewportActions.addImagePane(message);
         return;
+      case "ViewportMatplotlibMessage":
+        viewer.viewportActions.addMatplotlibPane(message);
+        return;
       case "ViewportPlotlyMessage":
         viewer.viewportActions.addPlotlyPane(message);
         return;

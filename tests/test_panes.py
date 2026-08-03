@@ -122,6 +122,37 @@ def test_plotly_lifecycle(server: leika.Server) -> None:
         pane.figure = go.Figure()
 
 
+@pytest.mark.matplotlib
+def test_matplotlib_lifecycle(server: leika.Server) -> None:
+    plt = pytest.importorskip("matplotlib.pyplot")
+    figure, axes = plt.subplots()
+    axes.plot([0, 1, 2], [1, 3, 2], label="signal")
+    try:
+        pane = server.panes.add_matplotlib(figure, pane_id="figure", title="Signal")
+        assert pane.pane_id == "figure"
+        assert pane.title == "Signal"
+        assert pane.figure is figure
+        # Relayed as SVG source, so the pane can rescale it without a redraw.
+        assert pane._impl.props._svg.lstrip().startswith(("<?xml", "<svg"))
+        assert "<svg" in pane._impl.props._svg
+
+        # matplotlib mutates figures in place, so re-passing one is normal.
+        axes.set_title("Updated")
+        pane.update(figure)
+        assert "Updated" in pane._impl.props._svg
+
+        pane.visible = False
+        assert pane.visible is False
+        pane.remove()
+        with pytest.raises(RuntimeError, match="removed"):
+            pane.update(figure)
+    finally:
+        plt.close(figure)
+
+    with pytest.raises(TypeError, match="savefig"):
+        server.panes.add_matplotlib(object())
+
+
 def test_viser_target_normalization() -> None:
     assert _viser_embed_target("http://viser.example.com:8080") == (
         "http://viser.example.com:8080",
@@ -235,5 +266,8 @@ def test_viser_lifecycle(server: leika.Server) -> None:
 
 
 def test_only_v1_pane_types_are_exposed(server: leika.Server) -> None:
-    for name in ("add_matplotlib", "add_url", "add_scene"):
+    # add_matplotlib relays a figure the caller composed, which is what panes
+    # are for. A generic URL pane would make Leika a frame host for arbitrary
+    # pages, and a scene API would make it a 3D engine; both stay out.
+    for name in ("add_url", "add_scene"):
         assert not hasattr(server.panes, name)

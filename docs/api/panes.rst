@@ -23,10 +23,11 @@ Handles
    :members:
    :inherited-members:
 
-.. autoclass:: PlotlyPaneHandle
+.. autoclass:: MatplotlibPaneHandle
    :members:
    :inherited-members:
 
+.. autoclass:: PlotlyPaneHandle
    :members:
    :inherited-members:
 
