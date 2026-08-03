@@ -609,8 +609,9 @@ def main() -> None:
         )
 
     print(f"Open {server.url}")
+    frame_interval = 1.0 / 30.0
     last_tick = time.monotonic()
-    last_plot = 0.0
+    next_frame = last_tick
     try:
         while True:
             now = time.monotonic()
@@ -639,22 +640,28 @@ def main() -> None:
                         detail_pane.update(frame[rows, columns])
                     gui_preview.image = frame[::4, ::4]
 
-            if now - last_plot >= 0.2:
-                # How much of the buffered history the plots draw. Two points is
-                # the least that is still a line.
-                kept = max(2, round(len(history_t) * float(trail.value)))
-                trail_t = list(history_t)[-kept:]
-                trail_y = list(history_y)[-kept:]
-                plot_figure.data[0].x = trail_t
-                plot_figure.data[0].y = trail_y
-                plot_figure.update_yaxes(range=list(plot_range.value))
-                plot_pane.update(plot_figure)
-                gui_plot.figure = plot_figure
-                surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
-                surface_pane.update(surface_figure)
-                last_plot = now
+            # How much of the buffered history the plots draw. Two points is
+            # the least that is still a line.
+            kept = max(2, round(len(history_t) * float(trail.value)))
+            trail_t = list(history_t)[-kept:]
+            trail_y = list(history_y)[-kept:]
+            plot_figure.data[0].x = trail_t
+            plot_figure.data[0].y = trail_y
+            plot_figure.update_yaxes(range=list(plot_range.value))
+            plot_pane.update(plot_figure)
+            gui_plot.figure = plot_figure
+            surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
+            surface_pane.update(surface_figure)
 
-            time.sleep(1.0 / 30.0)
+            # Sleep to the next 30 Hz deadline rather than for a fixed
+            # interval, so frame work does not subtract from the frame rate.
+            # After an overrun, restart the schedule instead of bursting.
+            next_frame += frame_interval
+            delay = next_frame - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                next_frame = time.monotonic()
     except KeyboardInterrupt:
         server.stop()
 
