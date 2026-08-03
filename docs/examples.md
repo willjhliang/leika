@@ -6,7 +6,7 @@ Examples can be found on [Github](https://github.com/willjhliang/leika).
   base install.
 - `python examples/showcase.py`: image and Plotly panes (including a live 3D
   surface), grouping, synchronized controls, callbacks, tabs, modal,
-  upload, command palette, notifications, GUI image/uPlot/Plotly, and live
+  upload, command palette, notifications, GUI image/Plotly, and live
   updates; requires `leika[examples]`.
 - `python examples/viser_scene.py`: the Leika dock driving a live viser 3D
   scene embedded as a pane; requires `leika[examples]`.

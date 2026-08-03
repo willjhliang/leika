@@ -46,11 +46,9 @@ class AssignablePropsBase(Generic[TImpl]):
     def _cast_value_recursive(self, hint: Any, value: Any) -> Any:
         """Recursively cast values to match type hints, handling arrays and tuples.
 
-        `float64` is the one array dtype the protocol contains (uplot chart
-        data); a new array-typed prop means extending this.
+        No prop in the protocol is array-typed today; a new array-typed prop
+        means deciding its transport dtype here.
         """
-        if hint == npt.NDArray[np.float64]:
-            return np.asarray(value).astype(np.float64)
         if isinstance(value, np.ndarray):
             return value
 

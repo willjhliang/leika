@@ -11,18 +11,6 @@ import {
 import { cn } from "@/lib/utils";
 import { HintTooltip } from "./common";
 
-/** Corner the expand button is pinned to.
- *
- * Bottom-right is the default because the top of a media element is where
- * titles and legends usually sit. uPlot is the exception: it renders its
- * legend *below* the plot, so its button goes above instead. */
-type ExpandCorner = "bottom-right" | "top-right";
-
-const cornerClassName: Record<ExpandCorner, string> = {
-  "bottom-right": "right-2 bottom-2",
-  "top-right": "top-2 right-2",
-};
-
 /** The control that opens a media element's expanded view.
  *
  * Chrome for the media, not part of it: revealed on hover. Keyboard focus and
@@ -33,12 +21,10 @@ const cornerClassName: Record<ExpandCorner, string> = {
  */
 function ExpandButton({
   subject,
-  corner,
   onExpand,
 }: {
   /** What is being expanded, lowercase: completes "Expand ___". */
   subject: string;
-  corner: ExpandCorner;
   onExpand: () => void;
 }) {
   const label = `Expand ${subject}`;
@@ -51,10 +37,9 @@ function ExpandButton({
         // A 24px square, matching the height of a GUI row's controls.
         // `icon-sm` is 28px and there is no 24px icon variant between it and
         // `icon-xs`, which would also shrink the 14px glyph.
-        className={cn(
-          "absolute size-6 opacity-0 group-hover/media:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
-          cornerClassName[corner],
-        )}
+        // Bottom-right, because the top of a media element is where titles
+        // and legends usually sit.
+        className="absolute right-2 bottom-2 size-6 opacity-0 group-hover/media:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
         onClick={onExpand}
         aria-label={label}
       >
@@ -72,14 +57,12 @@ function ExpandButton({
  */
 export function MediaSurface({
   subject,
-  corner = "bottom-right",
   className,
   ref,
   onExpand,
   children,
 }: {
   subject: string;
-  corner?: ExpandCorner;
   className?: string;
   /** The surface is the media's measurable box, so callers that size
    * themselves from it observe this element rather than a nested one. */
@@ -91,7 +74,7 @@ export function MediaSurface({
     <div ref={ref} className={cn("group/media relative", className)}>
       {children}
       {onExpand === undefined ? null : (
-        <ExpandButton subject={subject} corner={corner} onExpand={onExpand} />
+        <ExpandButton subject={subject} onExpand={onExpand} />
       )}
     </div>
   );

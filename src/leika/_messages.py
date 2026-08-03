@@ -7,11 +7,9 @@ import dataclasses
 import uuid
 from typing import Any, ClassVar, Dict, Optional, Tuple, Union, cast
 
-import numpy as np
-import numpy.typing as npt
 from typing_extensions import Literal, TypeAlias, override
 
-from . import infra, theme, uplot
+from . import infra, theme
 
 KeyModifier = Literal[
     "cmd/ctrl",
@@ -466,7 +464,7 @@ class GuiPlotlyProps:
     """(Private) JSON string representation of the Plotly figure."""
     aspect: float
     """Width-to-height ratio for the plot display (width/height). 1.0 = square, >1.0 =
-    wider. Matches :class:`GuiUplotProps`'s field of the same name."""
+    wider."""
     visible: bool
     """Visibility state of the plot."""
 
@@ -475,58 +473,6 @@ class GuiPlotlyProps:
 class GuiPlotlyMessage(_CreateGuiComponentMessage):
     container_uuid: str
     props: GuiPlotlyProps
-
-
-@dataclasses.dataclass
-class GuiUplotProps:
-    order: float
-    """Order value for arranging GUI elements. """
-    data: Tuple[npt.NDArray[np.float64], ...]
-    """Tuple of 1D numpy arrays containing chart data. First array is x-axis data,
-    subsequent arrays are y-axis data for each series. All arrays must have matching
-    lengths. Minimum 2 arrays required."""
-    mode: Union[Literal[1, 2], None]
-    """Chart layout mode: 1 = aligned (all series share axes), 2 = faceted (each series
-    gets its own subplot panel). Defaults to 1."""
-    title: Union[str, None]
-    """Chart title displayed at the top of the plot."""
-    series: Tuple[uplot.Series, ...]
-    """Series configuration objects defining visual appearance (colors, line styles, labels)
-    and behavior for each data array. Must match data tuple length."""
-    bands: Union[Tuple[uplot.Band, ...], None]
-    """High/low range visualizations between adjacent series indices. Useful for confidence
-    intervals, error bounds, or min/max ranges."""
-    scales: Union[Dict[str, uplot.Scale], None]
-    """Scale definitions controlling data-to-pixel mapping and axis ranges. Enables features
-    like auto-ranging, manual bounds, time-based scaling, and logarithmic distributions.
-    Multiple scales support dual-axis charts."""
-    axes: Union[Tuple[uplot.Axis, ...], None]
-    """Axis configuration for positioning (top/right/bottom/left), tick formatting, grid
-    styling, and spacing. Controls visual appearance of chart axes."""
-    legend: Union[uplot.Legend, None]
-    """Legend display options including positioning, styling, and custom value formatting
-    for hover states."""
-    cursor: Union[uplot.Cursor, None]
-    """Interactive cursor behavior including hover detection, drag-to-zoom, and crosshair
-    appearance. Controls user interaction with the chart."""
-    focus: Union[uplot.Focus, None]
-    """Visual highlighting when hovering over series. Controls alpha transparency of
-    non-focused series to emphasize the active one."""
-    aspect: float
-    """Width-to-height ratio for chart display (width/height). 1.0 = square, >1.0 = wider.
-    Used when height is None."""
-    height: Union[int, None]
-    """Fixed height in pixels. Overrides aspect ratio when set."""
-    padding: Union[Tuple[int, int, int, int], None]
-    """Padding (top, right, bottom, left) in pixels."""
-    visible: bool
-    """Whether the chart is visible in the interface."""
-
-
-@dataclasses.dataclass
-class GuiUplotMessage(_CreateGuiComponentMessage):
-    container_uuid: str
-    props: GuiUplotProps
 
 
 @dataclasses.dataclass

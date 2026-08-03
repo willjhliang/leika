@@ -28,7 +28,7 @@ from typing_extensions import (
     assert_never,
 )
 
-from . import _messages, theme, uplot
+from . import _messages, theme
 from ._gui_handles import (
     PREVIEW_MAX_BYTES,
     CommandEvent,
@@ -64,7 +64,6 @@ from ._gui_handles import (
     GuiToggleGroupHandle,
     GuiToggleHandle,
     GuiUploadButtonHandle,
-    GuiUplotHandle,
     GuiVector2Handle,
     GuiVector3Handle,
     PreviewContent,
@@ -1302,10 +1301,6 @@ class GuiApi(GuiContainer):
         """Add a Plotly figure to the GUI. Requires the `plotly` package to be
         installed.
 
-        .. note::
-           Updates to Plotly figures can be slow when you have many plots or frequent updates. For real-time visualization, consider using
-           :meth:`add_uplot` instead.
-
         Args:
             figure: Plotly figure to display.
             config: Plotly config dict merged into the figure JSON. Controls
@@ -1314,7 +1309,6 @@ class GuiApi(GuiContainer):
                 https://plotly.com/javascript/configuration-options/
             aspect: Width-to-height ratio for the plot in the control panel.
                 1.0 creates a square plot, values > 1.0 create wider plots.
-                Read the same way as :meth:`add_uplot`'s ``aspect``.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
@@ -1349,138 +1343,6 @@ class GuiApi(GuiContainer):
             ),
             _figure=figure,
             _config=config,
-        )
-
-    def add_uplot(
-        self,
-        data: tuple[np.ndarray, ...],
-        series: tuple[uplot.Series, ...],
-        *,
-        mode: Literal[1, 2] | None = None,
-        title: str | None = None,
-        bands: tuple[uplot.Band, ...] | None = None,
-        scales: dict[str, uplot.Scale] | None = None,
-        axes: tuple[uplot.Axis, ...] | None = None,
-        legend: uplot.Legend | None = None,
-        cursor: uplot.Cursor | None = None,
-        focus: uplot.Focus | None = None,
-        aspect: float = 1.0,
-        height: int | None = None,
-        padding: tuple[int, int, int, int] | None = None,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiUplotHandle:
-        """Add a uPlot chart to the GUI for high-performance time-series visualization.
-
-        uPlot is optimized for plotting large datasets with smooth pan/zoom interactions.
-        All configuration options follow the standard uPlot API. For comprehensive
-        documentation, see: https://github.com/leeoniya/uPlot/tree/1.6.32/docs
-
-        .. note::
-           Configuration types are exposed under the :mod:`leika.uplot` module for convenience:
-           :class:`leika.uplot.Series`, :class:`leika.uplot.Scale`, :class:`leika.uplot.Axis`,
-           :class:`leika.uplot.Band`, :class:`leika.uplot.Legend`, :class:`leika.uplot.Cursor`,
-           and :class:`leika.uplot.Focus`. These are :py:class:`~typing.TypedDict` types;
-           standard dictionaries can also be used.
-
-        Args:
-            data: Tuple of 1D numpy arrays containing chart data. The first array provides
-                x-axis values, and subsequent arrays contain y-axis data for
-                each series. All arrays must have identical length. Minimum 2
-                arrays.
-            series: Series configuration objects defining visual appearance and behavior.
-                Must match the length of data tuple.
-            mode: Chart layout mode. 1 = aligned (default) where all series share axes,
-                2 = faceted where each series gets its own subplot panel.
-            title: Chart title displayed at the top.
-            bands: High/low range visualizations between data series. Useful for showing
-                confidence intervals, error bounds, or min/max ranges. Each band connects
-                two adjacent series indices.
-            scales: Scale definitions controlling data-to-pixel mapping and axis ranges.
-                Key features include auto-ranging, manual min/max, time-based scaling,
-                and logarithmic distributions. Multiple scales enable dual-axis charts.
-            axes: Axis configuration for labels, ticks, grids, and positioning.
-                Controls which side axes appear (top/right/bottom/left), tick formatting,
-                grid line styling, and spacing between tick marks.
-            legend: Legend display options including positioning, styling, and custom
-                value formatting functions for hover states.
-            cursor: Interactive cursor behavior including hover proximity detection,
-                drag-to-zoom, and crosshair appearance. Controls how users interact
-                with the chart through mouse/touch.
-            focus: Visual highlighting when hovering over series. Controls the alpha
-                transparency of non-focused series to emphasize the active one.
-            aspect: Width-to-height ratio for the chart display in the control panel.
-                1.0 creates a square chart, values > 1.0 create wider charts.
-                Used when height is None.
-            height: Fixed height in pixels. Overrides aspect ratio when set.
-            padding: Chart padding (top, right, bottom, left) in pixels. Defaults
-                to (0, 24, 0, 0) when omitted.
-            order: Display ordering relative to other GUI elements (lower values first).
-            visible: Whether the chart is visible in the interface.
-
-        Returns:
-            A handle for programmatically updating chart properties and data.
-        """
-
-        # Validate data structure.
-        if len(data) < 2:
-            raise ValueError(
-                "data must have at least 2 arrays (x-data + at least one y-data series)"
-            )
-        if not all(isinstance(arr, np.ndarray) for arr in data):
-            raise ValueError("all data elements must be numpy arrays")
-        for i, arr in enumerate(data):
-            if arr.ndim != 1:
-                raise ValueError(f"data[{i}] must be a 1D array, got shape {arr.shape}")
-
-        # Check that all arrays have the same length.
-        lengths = [len(arr) for arr in data]
-        if not all(length == lengths[0] for length in lengths):
-            raise ValueError(f"All data arrays must have the same length. Got lengths: {lengths}")
-
-        # Validate series configuration.
-        if len(series) == 0:
-            raise ValueError("series must not be empty")
-        if len(series) != len(data):
-            raise ValueError(
-                f"Length of series ({len(series)}) must match length of data ({len(data)}). "
-                f"Each array in data needs a corresponding series configuration."
-            )
-
-        # Convert arrays to float64 as expected by GuiUplotProps.
-        data_float64 = tuple(arr.astype(np.float64) for arr in data)
-
-        message = _messages.GuiUplotMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiUplotProps(
-                order=_apply_default_order(order),
-                data=data_float64,
-                mode=mode,
-                title=title,
-                series=series,
-                bands=bands,
-                scales=scales,
-                axes=axes,
-                legend=legend,
-                cursor=cursor,
-                focus=focus,
-                aspect=aspect,
-                height=height,
-                padding=padding,
-                visible=visible,
-            ),
-        )
-        self._websock_interface.queue_message(message)
-
-        return GuiUplotHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                value=None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-            ),
         )
 
     @overload

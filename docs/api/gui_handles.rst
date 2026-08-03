@@ -110,9 +110,6 @@ Display
 .. autoclass:: GuiPlotlyHandle
    :members:
 
-.. autoclass:: GuiUplotHandle
-   :members:
-
 .. autoclass:: GuiProgressBarHandle
    :members:
 

@@ -321,20 +321,6 @@ ENTRIES = [
                 code='gui.add_html("<b>Custom markup</b> rendered as-is")',
             ),
             Entry(
-                slug="uplot",
-                title="uPlot chart",
-                ref="add_uplot",
-                code="""\
-                x = np.linspace(0.0, 6.0, 120)
-                gui.add_uplot(
-                    (x, np.sin(x)),
-                    ({"label": "x"}, {"label": "sin", "stroke": "#3b82ff"}),
-                    scales={"x": {"time": False}},
-                    aspect=2.0,
-                )""",
-                settle=0.75,
-            ),
-            Entry(
                 slug="plotly",
                 title="Plotly figure",
                 ref="add_plotly",

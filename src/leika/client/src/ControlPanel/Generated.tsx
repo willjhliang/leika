@@ -20,7 +20,6 @@ import ButtonGroupComponent from "../components/ButtonGroup";
 import ToggleComponent from "../components/Toggle";
 import ToggleGroupComponent from "../components/ToggleGroup";
 import PlotlyComponent from "../components/PlotlyComponent";
-import UplotComponent from "../components/UplotComponent";
 import TabGroupComponent from "../components/TabGroup";
 import FolderComponent from "../components/Folder";
 import FormComponent from "../components/Form";
@@ -118,8 +117,6 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <DividerComponent />;
     case "GuiPlotlyMessage":
       return <PlotlyComponent {...conf} />;
-    case "GuiUplotMessage":
-      return <UplotComponent {...conf} />;
     case "GuiImageMessage":
       return <ImageComponent {...conf} />;
     case "GuiButtonMessage":

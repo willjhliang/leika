@@ -66,28 +66,6 @@ A preview holds the whole file in the tab, so anything past **64 MiB** is
 declined with a notification rather than opened.
 """
 
-# uPlot ships no equivalent, so the showcase names its own line styles. Each
-# maps to the series options uPlot already understands; the first is what the
-# chart starts with.
-UPLOT_THEMES: dict[str, dict[str, Any]] = {
-    "Slate": {"stroke": "#c4c4c4", "width": 2},
-    "Ember": {"stroke": "#f97316", "width": 2, "fill": "rgba(249,115,22,0.15)"},
-    "Ocean": {"stroke": "#38bdf8", "width": 2, "fill": "rgba(56,189,248,0.15)"},
-    "Meadow": {"stroke": "#4ade80", "width": 2, "fill": "rgba(74,222,128,0.15)"},
-    "Orchid": {"stroke": "#c084fc", "width": 2, "fill": "rgba(192,132,252,0.15)"},
-    "Sunbeam": {"stroke": "#facc15", "width": 2, "fill": "rgba(250,204,21,0.15)"},
-    "Rose": {"stroke": "#fb7185", "width": 2, "fill": "rgba(251,113,133,0.15)"},
-    "Hairline": {"stroke": "#c4c4c4", "width": 1},
-    "Dashed": {"stroke": "#c4c4c4", "width": 2, "dash": (6.0, 4.0)},
-}
-
-
-def uplot_series(theme: str) -> tuple[Any, ...]:
-    """uPlot's series tuple: the x series, then the styled signal."""
-
-    return ({}, {"label": "signal", **UPLOT_THEMES[theme]})
-
-
 # Where the detail pane looks. Three named crops of the field, which is short
 # enough that a plain dropdown beats a search box.
 DETAIL_REGIONS: dict[str, tuple[slice, slice]] = {
@@ -349,22 +327,9 @@ def main() -> None:
         )
         gui_plot = server.gui.add_plotly(
             plot_figure,
-            # Twice as wide as it is tall, matching the uPlot below.
+            # Twice as wide as it is tall.
             aspect=2.0,
             config={"displayModeBar": False, "staticPlot": True},
-        )
-        server.gui.add_divider()
-        uplot_theme = server.gui.add_dropdown(
-            "uPlot theme",
-            options=tuple(UPLOT_THEMES),
-            searchable=True,
-            hint="Type to filter the named line styles.",
-        )
-        x_data = np.linspace(0.0, 6.0, 120)
-        uplot = server.gui.add_uplot(
-            (x_data, np.sin(x_data)),
-            uplot_series(uplot_theme.value),
-            aspect=2.0,
         )
 
     with tabs.add_tab("Actions", icon=leika.Icon.BOLT):
@@ -511,12 +476,6 @@ def main() -> None:
         plot_figure.update_yaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
         plot_pane.update(plot_figure)
         gui_plot.figure = plot_figure
-
-    @uplot_theme.on_update
-    def _(_) -> None:
-        # Only the series styling changes; the loop keeps writing `data`, which
-        # is a separate prop and so is left alone here.
-        uplot.series = uplot_series(uplot_theme.value)
 
     @plot_color.on_update
     def _(_) -> None:
@@ -691,9 +650,6 @@ def main() -> None:
                 plot_figure.update_yaxes(range=list(plot_range.value))
                 plot_pane.update(plot_figure)
                 gui_plot.figure = plot_figure
-                data_x = np.asarray(trail_t, dtype=np.float64)
-                data_y = np.asarray(trail_y, dtype=np.float64)
-                uplot.data = (data_x, data_y)
                 surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
                 surface_pane.update(surface_figure)
                 last_plot = now

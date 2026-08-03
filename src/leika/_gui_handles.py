@@ -62,7 +62,6 @@ from ._messages import (
     GuiToggleProps,
     GuiUpdateMessage,
     GuiUploadButtonProps,
-    GuiUplotProps,
     GuiVector2Props,
     GuiVector3Props,
     RemoveCommandMessage,
@@ -1609,12 +1608,6 @@ class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
     def figure(self, figure: go.Figure) -> None:
         self._figure = figure
         self._plotly_json_str = _plotly_json_with_config(figure, self._config)
-
-
-class GuiUplotHandle(_GuiHandle[None], GuiUplotProps):
-    """Handle for updating and removing Uplot figures."""
-
-    pass
 
 
 class GuiImageHandle(_GuiHandle[None], GuiImageProps):

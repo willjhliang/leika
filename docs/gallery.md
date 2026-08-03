@@ -368,16 +368,6 @@ light or dark theme.
 <code>add_html()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_uplot">
-<span class="gallery-media">
-<img class="only-light" src="_static/gallery/uplot-light.png" alt="uPlot chart" loading="lazy">
-<img class="only-dark" src="_static/gallery/uplot-dark.png" alt="uPlot chart" loading="lazy">
-</span>
-<span class="gallery-caption">
-<span>uPlot chart</span>
-<code>add_uplot()</code>
-</span>
-</a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_plotly">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/plotly-light.png" alt="Plotly figure" loading="lazy">

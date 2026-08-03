@@ -56,13 +56,6 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_text": (("Text", "value"), {}),
     "add_toggle": (("Toggle",), {}),
     "add_upload_button": (("Upload",), {}),
-    "add_uplot": (
-        (
-            (np.linspace(0.0, 1.0, 4), np.zeros(4)),
-            ({}, {"label": "y"}),
-        ),
-        {},
-    ),
     "add_vector2": (("Vector2", (0.0, 0.0)), {}),
     "add_vector3": (("Vector3", (0.0, 0.0, 0.0)), {}),
 }

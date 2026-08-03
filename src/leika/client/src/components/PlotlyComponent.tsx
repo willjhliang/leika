@@ -10,7 +10,7 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
   onExpand,
 }: {
   jsonStr: string;
-  /** Width divided by height, read the same way as `GuiUplotProps.aspect`. */
+  /** Width divided by height. */
   aspect: number;
   onExpand?: () => void;
 }) {
