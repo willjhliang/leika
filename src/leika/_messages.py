@@ -931,23 +931,6 @@ class ViewportPlotlyMessage(_ViewportPaneCreateMessage):
 
 
 @dataclasses.dataclass
-class ViewportWandbProps:
-    """Properties for an embedded Weights & Biases pane."""
-
-    _url: str
-    """Fully normalized embed URL; the client renders it verbatim."""
-    title: str
-    visible: bool
-
-
-@dataclasses.dataclass
-class ViewportWandbMessage(_ViewportPaneCreateMessage):
-    """Create an embedded Weights & Biases pane in the pane workspace."""
-
-    props: ViewportWandbProps
-
-
-@dataclasses.dataclass
 class ViewportViserProps:
     """Properties for an embedded viser pane."""
 

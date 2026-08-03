@@ -86,9 +86,6 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
       case "ViewportPlotlyMessage":
         viewer.viewportActions.addPlotlyPane(message);
         return;
-      case "ViewportWandbMessage":
-        viewer.viewportActions.addWandbPane(message);
-        return;
       case "ViewportViserMessage":
         viewer.viewportActions.addViserPane(message);
         return;

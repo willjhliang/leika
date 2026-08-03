@@ -36,13 +36,6 @@ export interface ViewportPlotlyProps {
   visible: boolean;
 }
 
-export interface ViewportWandbProps {
-  /** Fully normalized embed URL; rendered verbatim. */
-  _url: string;
-  title: string;
-  visible: boolean;
-}
-
 export interface ViewportViserProps {
   /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
   _url: string | null;
@@ -71,12 +64,6 @@ export interface ViewportPlotlyPane {
   props: ViewportPlotlyProps;
 }
 
-export interface ViewportWandbPane {
-  kind: "wandb";
-  paneId: string;
-  props: ViewportWandbProps;
-}
-
 export interface ViewportViserPane {
   kind: "viser";
   paneId: string;
@@ -87,7 +74,6 @@ export interface ViewportViserPane {
 export type ViewportContentPane =
   | ViewportImagePane
   | ViewportPlotlyPane
-  | ViewportWandbPane
   | ViewportViserPane;
 
 export type ViewportPane = ViewportRootPane | ViewportContentPane;
@@ -114,14 +100,6 @@ export interface ViewportPlotlyDeclaration {
   equalize_group: readonly string[];
 }
 
-export interface ViewportWandbDeclaration {
-  pane_id: string;
-  props: ViewportWandbProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
 export interface ViewportViserDeclaration {
   pane_id: string;
   props: ViewportViserProps;
@@ -130,13 +108,11 @@ export interface ViewportViserDeclaration {
   equalize_group: readonly string[];
 }
 
-// A union of Partials rather than a Partial of an intersection: wandb's
-// `_url: string` intersected with viser's `_url: string | null` would
-// collapse to `string` and reject valid viser updates.
+// A union of Partials rather than a Partial of an intersection, so that
+// same-named props with different types never collapse across pane kinds.
 export type ViewportPaneUpdates =
   | Partial<ViewportImageProps>
   | Partial<ViewportPlotlyProps>
-  | Partial<ViewportWandbProps>
   | Partial<ViewportViserProps>;
 
 export interface ViewportActions {
@@ -150,7 +126,6 @@ export interface ViewportActions {
   setPersistenceWorkspace: (workspaceId: string) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
-  addWandbPane: (message: ViewportWandbDeclaration) => void;
   addViserPane: (message: ViewportViserDeclaration) => void;
   updatePane: (paneId: string, updates: ViewportPaneUpdates) => void;
   removePane: (paneId: string) => void;
@@ -405,14 +380,6 @@ export function useViewportState(
       addPlotlyPane: (message) => {
         addContentPane(message, {
           kind: "plotly",
-          paneId: message.pane_id,
-          props: message.props,
-        });
-      },
-
-      addWandbPane: (message) => {
-        addContentPane(message, {
-          kind: "wandb",
           paneId: message.pane_id,
           props: message.props,
         });

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import leika
-from leika._panes import _viser_embed_target, _wandb_embed_url
+from leika._panes import _viser_embed_target
 
 
 def test_image_fit_defers_to_the_viewer_until_python_names_one(
@@ -120,129 +120,6 @@ def test_plotly_lifecycle(server: leika.Server) -> None:
     pane.remove()
     with pytest.raises(RuntimeError, match="removed"):
         pane.figure = go.Figure()
-
-
-@pytest.mark.parametrize(
-    ("target", "kwargs", "expected"),
-    [
-        # Bare projects are rewritten to the workspace, the one project view
-        # W&B serves without frame-blocking headers.
-        ("acme/proj", {}, "https://wandb.ai/acme/proj/workspace?jupyter=true"),
-        ("/acme/proj/", {}, "https://wandb.ai/acme/proj/workspace?jupyter=true"),
-        (
-            "https://wandb.ai/acme/proj",
-            {},
-            "https://wandb.ai/acme/proj/workspace?jupyter=true",
-        ),
-        # Deeper routes pass through untouched.
-        (
-            "acme/proj/runs/abc123",
-            {},
-            "https://wandb.ai/acme/proj/runs/abc123?jupyter=true",
-        ),
-        (
-            "acme/proj/sweeps/s1",
-            {},
-            "https://wandb.ai/acme/proj/sweeps/s1?jupyter=true",
-        ),
-        (
-            "https://wandb.ai/acme/proj/groups/g1/workspace",
-            {},
-            "https://wandb.ai/acme/proj/groups/g1/workspace?jupyter=true",
-        ),
-        # View-only report links keep their access token, and an existing
-        # jupyter parameter is not duplicated.
-        (
-            "https://wandb.ai/acme/proj/reports/My-Report--VmlldzoX?accessToken=tok",
-            {},
-            "https://wandb.ai/acme/proj/reports/My-Report--VmlldzoX?accessToken=tok&jupyter=true",
-        ),
-        (
-            "acme/proj/runs/abc?jupyter=false",
-            {},
-            "https://wandb.ai/acme/proj/runs/abc?jupyter=false",
-        ),
-        # Panel selection opens W&B's fullscreen panel viewer.
-        (
-            "acme/proj",
-            {"panel": "val loss", "panel_section": "eval"},
-            "https://wandb.ai/acme/proj/workspace"
-            "?panelDisplayName=val+loss&panelSectionName=eval&jupyter=true",
-        ),
-        # Self-hosted instances via base_url, as a path or a full URL.
-        (
-            "acme/proj",
-            {"base_url": "http://localhost:8080/"},
-            "http://localhost:8080/acme/proj/workspace?jupyter=true",
-        ),
-        (
-            "http://localhost:8080/acme/proj/runs/r1",
-            {"base_url": "http://localhost:8080"},
-            "http://localhost:8080/acme/proj/runs/r1?jupyter=true",
-        ),
-    ],
-)
-def test_wandb_url_normalization(target: str, kwargs: dict[str, Any], expected: str) -> None:
-    assert _wandb_embed_url(target, **kwargs) == expected
-
-
-def test_wandb_url_accepts_objects_with_a_url_attribute() -> None:
-    run = SimpleNamespace(url="https://wandb.ai/acme/proj/runs/r1")
-    assert _wandb_embed_url(run) == "https://wandb.ai/acme/proj/runs/r1?jupyter=true"
-    with pytest.raises(TypeError, match="url attribute"):
-        _wandb_embed_url(object())
-    with pytest.raises(TypeError, match="url attribute"):
-        _wandb_embed_url(SimpleNamespace(url=""))
-
-
-def test_wandb_url_rejects_malformed_targets() -> None:
-    with pytest.raises(ValueError, match="missing a project"):
-        _wandb_embed_url("acme")
-    with pytest.raises(ValueError, match="base_url"):
-        _wandb_embed_url("https://evil.example.com/acme/proj")
-    with pytest.raises(ValueError, match="scheme"):
-        _wandb_embed_url("ftp://wandb.ai/acme/proj")
-    with pytest.raises(ValueError, match="base_url must be"):
-        _wandb_embed_url("acme/proj", base_url="localhost:8080")
-    with pytest.raises(ValueError, match="panel"):
-        _wandb_embed_url("acme/proj/runs/r1", panel="loss")
-
-
-def test_wandb_lifecycle(server: leika.Server) -> None:
-    pane = server.panes.add_wandb(
-        "acme/proj",
-        base_url="http://localhost:9090",
-        pane_id="wandb",
-        title="Training",
-    )
-    assert pane.pane_id == "wandb"
-    assert pane.title == "Training"
-    assert pane.url == "http://localhost:9090/acme/proj/workspace?jupyter=true"
-
-    # Re-pointing keeps the creation-time base URL.
-    pane.url = "acme/proj/runs/abc"
-    assert pane.url == "http://localhost:9090/acme/proj/runs/abc?jupyter=true"
-    pane.update("acme/proj", panel="loss")
-    assert (
-        pane.url == "http://localhost:9090/acme/proj/workspace?panelDisplayName=loss&jupyter=true"
-    )
-
-    pane.visible = False
-    assert pane.visible is False
-    pane.remove()
-    with pytest.raises(RuntimeError, match="removed"):
-        pane.url = "acme/proj"
-
-    with pytest.raises(ValueError, match="missing a project"):
-        server.panes.add_wandb("acme")
-
-    row = server.panes.add_row()
-    first = row.add_wandb("acme/proj", pane_id="row-wandb")
-    grid = server.panes.add_grid(columns=1, relative_to=first.pane_id)
-    second = grid.add_wandb("acme/proj/runs/r2", pane_id="grid-wandb")
-    assert [item.pane_id for item in (first, second)] == ["row-wandb", "grid-wandb"]
-    with pytest.raises(ValueError):
-        server.panes.add_wandb("acme/proj", pane_id="row-wandb")
 
 
 def test_viser_target_normalization() -> None:
