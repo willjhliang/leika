@@ -43,6 +43,9 @@ once visible panes are present.
 
 Leika is a simple data workspace. The client carries GUI, dock, layout, image,
 SVG, and Plotly renderers, and CI checks that the shipped wheel and its browser
-dependencies stay within that surface. External pages — viser 3D
-scenes — embed as iframes of their own clients; Leika ships no 3D code. Other
-tools' own applications are theirs to serve: Leika does not wrap them.
+dependencies stay within that surface. Those renderers back the four pane types
+in [Panes](panes.md): pixels, a matplotlib figure serialized to SVG, and a
+Plotly figure are each relayed as the caller composed them. External pages —
+viser 3D scenes — embed as iframes of their own clients; Leika ships no 3D
+code. Other tools' own applications are theirs to serve: Leika does not wrap
+them.

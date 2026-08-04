@@ -12,3 +12,6 @@ The runnable sources live in the repository's
 
 Each example prints a local URL. If Leika runs on a remote host, forward the
 port over SSH and open the forwarded localhost URL.
+
+The examples cover image, Plotly, and viser panes; [Panes](panes.md) walks
+through all four pane types, including `add_matplotlib`.

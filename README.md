@@ -54,6 +54,8 @@ when you want the browser to restore a layout after a Python restart.
 
 - [Documentation](https://willjhliang.github.io/leika/): guides and the full
   API reference.
+- [Panes](https://willjhliang.github.io/leika/panes.html): the image,
+  matplotlib, Plotly, and viser surfaces, and how they are laid out.
 - [Architecture](https://willjhliang.github.io/leika/architecture.html):
   transport, layout ownership, and update flow.
 - [Examples](https://willjhliang.github.io/leika/examples.html): runnable demos

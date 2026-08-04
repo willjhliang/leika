@@ -10,6 +10,7 @@
 
 Home <self>
 examples
+panes
 gallery
 architecture
 remote-access
