@@ -1084,29 +1084,19 @@ function ViewportDivider({
   );
 }
 
-interface PaneRendererProps {
-  pane: ViewportPane;
-}
-
-const paneRendererRegistry: {
-  [K in ViewportPane["kind"]]: React.ComponentType<{
-    pane: Extract<ViewportPane, { kind: K }>;
-  }>;
-} = {
-  root: () => null,
-  image: ({ pane }) => <ViewportImageRenderer pane={pane} />,
-  matplotlib: ({ pane }) => <ViewportMatplotlibRenderer pane={pane} />,
-  plotly: ({ pane }) => <ViewportPlotlyRenderer pane={pane} />,
-  viser: ({ pane }) => <ViewportViserRenderer pane={pane} />,
-};
-
-function ViewportPaneRenderer(props: PaneRendererProps) {
-  // The registry key and the pane's kind agree by construction, which the
-  // type system cannot correlate through the union.
-  const Renderer = paneRendererRegistry[
-    props.pane.kind
-  ] as React.ComponentType<PaneRendererProps>;
-  return <Renderer {...props} />;
+function ViewportPaneRenderer({ pane }: { pane: ViewportPane }) {
+  switch (pane.kind) {
+    case "root":
+      return null;
+    case "image":
+      return <ViewportImageRenderer pane={pane} />;
+    case "matplotlib":
+      return <ViewportMatplotlibRenderer pane={pane} />;
+    case "plotly":
+      return <ViewportPlotlyRenderer pane={pane} />;
+    case "viser":
+      return <ViewportViserRenderer pane={pane} />;
+  }
 }
 
 /** Static matplotlib figure, relayed as SVG.
@@ -1114,7 +1104,11 @@ function ViewportPaneRenderer(props: PaneRendererProps) {
  * Rendered through an `img` rather than inlined into the document: SVG can
  * carry script, and an image context cannot run it. Vector scales for free,
  * so a pane resize needs no redraw in Python. */
-function ViewportMatplotlibRenderer({ pane }: { pane: ViewportMatplotlibPane }) {
+function ViewportMatplotlibRenderer({
+  pane,
+}: {
+  pane: ViewportMatplotlibPane;
+}) {
   const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
   React.useEffect(() => {
     const url = URL.createObjectURL(
@@ -1272,9 +1266,6 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
   );
 }
 
-/** Live W&B page embed. The iframe is keyed by URL, so re-pointing the pane
- * remounts it rather than navigating it, which keeps the parent page's
- * session history clean and resets the frame's loading state. */
 /** Live viser scene embed: viser's own client in an iframe. The iframe is
  * keyed by its resolved URL, so re-pointing the pane — and flipping Leika's
  * theme, which changes the darkMode parameter — remounts it, resetting the

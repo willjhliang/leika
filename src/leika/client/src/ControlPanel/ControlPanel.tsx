@@ -33,9 +33,7 @@ export function ControlPanelContents() {
   // else.
   const controlsShown = useControlsShown();
   return (
-    /*For intrinsic-size transitions, this `keepMounted` is necessary to prevent
-    some intermittent problems with the initial GUI height being set to 0 when
-    we're under high CPU load.*/
+    // Intrinsic-size transitions need a mounted body to measure.
     <Collapsible open={hasGenerated && controlsShown}>
       <CollapsibleContent keepMounted>
         <div hidden={!controlsShown} data-leika-generated-gui>
@@ -52,9 +50,7 @@ export default function ControlPanel(props: {
   const mobileView = useMobileView();
   const panelContents = <ControlPanelContents />;
 
-  // NOTE: the "floating" layout never reaches this component -- App renders it
-  // on the docking surface (see ControlPanelDock.tsx). This component covers
-  // the mobile bottom sheet and the sidebar layouts.
+  // Floating controls use ControlPanelDockSurface instead.
   if (mobileView) {
     /* Mobile layout. The whole handle is the collapse button, so neither the
        gear nor the connection badge -- both buttons of their own -- can sit
@@ -75,20 +71,19 @@ export default function ControlPanel(props: {
         <BottomPanel.Contents>{panelContents}</BottomPanel.Contents>
       </BottomPanel>
     );
-  } else {
-    /* Sidebar view. */
-    return (
-      <SidebarPanel
-        width={CONTROL_WIDTH_CSS}
-        collapsible={props.control_layout === "collapsible"}
-      >
-        <SidebarPanel.Handle>
-          <PanelHeader actions={<SettingsButton />} />
-        </SidebarPanel.Handle>
-        <SidebarPanel.Contents>{panelContents}</SidebarPanel.Contents>
-      </SidebarPanel>
-    );
   }
+
+  return (
+    <SidebarPanel
+      width={CONTROL_WIDTH_CSS}
+      collapsible={props.control_layout === "collapsible"}
+    >
+      <SidebarPanel.Handle>
+        <PanelHeader actions={<SettingsButton />} />
+      </SidebarPanel.Handle>
+      <SidebarPanel.Contents>{panelContents}</SidebarPanel.Contents>
+    </SidebarPanel>
+  );
 }
 
 /** The panel header's contents: the visualization's title on the left, the

@@ -1,15 +1,8 @@
-/**
- * Simple Vite plugin to compress the inlined HTML output.
- * Uses zstd compression with embedded WASM decoder for decompression at runtime.
- *
- * This is a simplified alternative to vite-plugin-singlefile-compression
- * that doesn't add problematic import.meta.url polyfills.
- */
-
-import { Plugin } from "vite";
+import type { Plugin } from "vite";
 import { gzipSync, zstdCompressSync, constants } from "zlib";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 // Base64 encoding that's safe for embedding in HTML.
 function toBase64(buffer: Buffer): string {
@@ -19,12 +12,9 @@ function toBase64(buffer: Buffer): string {
 // Extract and gzip-compress the WASM from zstddec package.
 // Returns base64-encoded gzipped WASM for smaller raw file size.
 function getGzippedWasmBase64(): string {
-  // Find zstddec in node_modules relative to this file or cwd.
+  const pluginDirectory = dirname(fileURLToPath(import.meta.url));
   const paths = [
-    join(
-      dirname(import.meta.url.replace("file://", "")),
-      "node_modules/zstddec/dist/zstddec.esm.js",
-    ),
+    join(pluginDirectory, "node_modules/zstddec/dist/zstddec.esm.js"),
     join(process.cwd(), "node_modules/zstddec/dist/zstddec.esm.js"),
   ];
 

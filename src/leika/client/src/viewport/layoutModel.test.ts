@@ -118,7 +118,10 @@ describe("reconcileViewportLayout", () => {
           {
             type: "split",
             direction: "column",
-            children: [{ type: "invalid" }, { type: "pane", pane_id: VIEWPORT_ROOT_PANE_ID }],
+            children: [
+              { type: "invalid" },
+              { type: "pane", pane_id: VIEWPORT_ROOT_PANE_ID },
+            ],
             weights: [-1, 2],
           },
         ],
@@ -128,7 +131,11 @@ describe("reconcileViewportLayout", () => {
     const before = JSON.stringify(input);
     const output = reconcileViewportLayout(input, ["image", "plot"]);
 
-    expect(collectViewportPaneIds(output)).toEqual(["image", VIEWPORT_ROOT_PANE_ID, "plot"]);
+    expect(collectViewportPaneIds(output)).toEqual([
+      "image",
+      VIEWPORT_ROOT_PANE_ID,
+      "plot",
+    ]);
     expect(output.root).toMatchObject({
       type: "split",
       direction: "row",
@@ -161,7 +168,9 @@ describe("reconcileViewportLayout", () => {
   });
 
   it("omits a hidden root but retains it as the empty fallback", () => {
-    const rootAndImage = layout(split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("image")]));
+    const rootAndImage = layout(
+      split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("image")]),
+    );
     expect(
       collectViewportPaneIds(
         reconcileViewportLayout(
@@ -211,7 +220,10 @@ describe("reconcileViewportLayout", () => {
     expect(output.root).toEqual(
       split(
         "row",
-        [pane(VIEWPORT_ROOT_PANE_ID), split("row", [pane("a"), pane("b")], [0.75, 0.25])],
+        [
+          pane(VIEWPORT_ROOT_PANE_ID),
+          split("row", [pane("a"), pane("b")], [0.75, 0.25]),
+        ],
         [0.5, 0.5],
       ),
     );
@@ -225,11 +237,17 @@ describe("reconcileViewportLayout", () => {
       children: unknown[];
       weights: number[];
     } = { type: "split", direction: "column", children: [], weights: [1, 1] };
-    cyclic.children.push(cyclic, { type: "pane", pane_id: VIEWPORT_ROOT_PANE_ID });
+    cyclic.children.push(cyclic, {
+      type: "pane",
+      pane_id: VIEWPORT_ROOT_PANE_ID,
+    });
     const output = reconcileViewportLayout({ version: 1, root: cyclic }, [
       "image",
     ]);
-    expect(collectViewportPaneIds(output)).toEqual([VIEWPORT_ROOT_PANE_ID, "image"]);
+    expect(collectViewportPaneIds(output)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "image",
+    ]);
     expectValidLayout(output);
   });
 });
@@ -250,7 +268,11 @@ describe("removeViewportPane", () => {
 
   it("removes panes and collapses one-child splits", () => {
     const output = removeViewportPane(nested(), "b");
-    expect(collectViewportPaneIds(output)).toEqual([VIEWPORT_ROOT_PANE_ID, "a", "c"]);
+    expect(collectViewportPaneIds(output)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "a",
+      "c",
+    ]);
     expect(output.root).toMatchObject({ weights: [0.2, 0.5, 0.3] });
     expectValidLayout(output);
   });
@@ -262,8 +284,12 @@ describe("removeViewportPane", () => {
   });
 
   it("collapses the root after removing the final image", () => {
-    const input = layout(split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("image")]));
-    expect(removeViewportPane(input, "image")).toEqual(layout(pane(VIEWPORT_ROOT_PANE_ID)));
+    const input = layout(
+      split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("image")]),
+    );
+    expect(removeViewportPane(input, "image")).toEqual(
+      layout(pane(VIEWPORT_ROOT_PANE_ID)),
+    );
   });
 });
 
@@ -279,7 +305,10 @@ describe("insertViewportPane and edge drops", () => {
     expect(output.root).toEqual(
       split(
         "row",
-        [pane(VIEWPORT_ROOT_PANE_ID), split("column", [pane("image"), pane("plot")])],
+        [
+          pane(VIEWPORT_ROOT_PANE_ID),
+          split("column", [pane("image"), pane("plot")]),
+        ],
         [0.5, 0.5],
       ),
     );
@@ -292,15 +321,27 @@ describe("insertViewportPane and edge drops", () => {
     );
     const output = insertViewportPane(input, "plot", "image", "right");
     expect(output.root).toMatchObject({ weights: [0.8, 0.1, 0.1] });
-    expect(collectViewportPaneIds(output)).toEqual([VIEWPORT_ROOT_PANE_ID, "image", "plot"]);
+    expect(collectViewportPaneIds(output)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "image",
+      "plot",
+    ]);
   });
 
   it("reorders siblings while preserving pane allocations", () => {
     const input = layout(
-      split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("a"), pane("b")], [0.6, 0.3, 0.1]),
+      split(
+        "row",
+        [pane(VIEWPORT_ROOT_PANE_ID), pane("a"), pane("b")],
+        [0.6, 0.3, 0.1],
+      ),
     );
     const output = insertViewportPane(input, "b", "a", "left");
-    expect(collectViewportPaneIds(output)).toEqual([VIEWPORT_ROOT_PANE_ID, "b", "a"]);
+    expect(collectViewportPaneIds(output)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "b",
+      "a",
+    ]);
     expect(output.root).toMatchObject({ weights: [0.6, 0.1, 0.3] });
   });
 
@@ -308,12 +349,24 @@ describe("insertViewportPane and edge drops", () => {
     const input = layout(
       split(
         "row",
-        [pane(VIEWPORT_ROOT_PANE_ID), split("column", [pane("a"), pane("b")], [0.7, 0.3])],
+        [
+          pane(VIEWPORT_ROOT_PANE_ID),
+          split("column", [pane("a"), pane("b")], [0.7, 0.3]),
+        ],
         [0.6, 0.4],
       ),
     );
-    const output = insertViewportPane(input, "a", VIEWPORT_ROOT_PANE_ID, "right");
-    expect(collectViewportPaneIds(output)).toEqual([VIEWPORT_ROOT_PANE_ID, "a", "b"]);
+    const output = insertViewportPane(
+      input,
+      "a",
+      VIEWPORT_ROOT_PANE_ID,
+      "right",
+    );
+    expect(collectViewportPaneIds(output)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "a",
+      "b",
+    ]);
     expect(output.root.type).toBe("split");
     if (output.root.type === "split") {
       output.root.weights.forEach((weight, index) =>
@@ -324,7 +377,9 @@ describe("insertViewportPane and edge drops", () => {
   });
 
   it("safely no-ops for missing and self targets", () => {
-    const input = layout(split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("a")]));
+    const input = layout(
+      split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("a")]),
+    );
     expect(insertViewportPane(input, "a", "missing", "right")).toBe(input);
     expect(insertViewportPane(input, "a", "a", "right")).toBe(input);
   });
@@ -335,12 +390,24 @@ describe("dropViewportPane", () => {
     const input = layout(
       split(
         "row",
-        [pane(VIEWPORT_ROOT_PANE_ID), split("column", [pane("a"), pane("b")], [0.7, 0.3])],
+        [
+          pane(VIEWPORT_ROOT_PANE_ID),
+          split("column", [pane("a"), pane("b")], [0.7, 0.3]),
+        ],
         [0.6, 0.4],
       ),
     );
-    const output = dropViewportPane(input, VIEWPORT_ROOT_PANE_ID, "b", "center");
-    expect(collectViewportPaneIds(output)).toEqual(["b", "a", VIEWPORT_ROOT_PANE_ID]);
+    const output = dropViewportPane(
+      input,
+      VIEWPORT_ROOT_PANE_ID,
+      "b",
+      "center",
+    );
+    expect(collectViewportPaneIds(output)).toEqual([
+      "b",
+      "a",
+      VIEWPORT_ROOT_PANE_ID,
+    ]);
     expect(output.root).toMatchObject({
       weights: [0.6, 0.4],
       children: [{ pane_id: "b" }, { weights: [0.7, 0.3] }],
@@ -349,11 +416,15 @@ describe("dropViewportPane", () => {
   });
 
   it("no-ops for self and missing center drops and delegates edge drops", () => {
-    const input = layout(split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("a")]));
+    const input = layout(
+      split("row", [pane(VIEWPORT_ROOT_PANE_ID), pane("a")]),
+    );
     expect(dropViewportPane(input, "a", "a", "center")).toBe(input);
     expect(dropViewportPane(input, "missing", "a", "center")).toBe(input);
     expect(
-      collectViewportPaneIds(dropViewportPane(input, "a", VIEWPORT_ROOT_PANE_ID, "left")),
+      collectViewportPaneIds(
+        dropViewportPane(input, "a", VIEWPORT_ROOT_PANE_ID, "left"),
+      ),
     ).toEqual(["a", VIEWPORT_ROOT_PANE_ID]);
   });
 });
@@ -422,5 +493,16 @@ describe("equalizeViewportPanes", () => {
     expect(equalizeViewportPanes(input, ["a"])).toBe(input);
     expect(equalizeViewportPanes(input, ["a", "missing"])).toBe(input);
     expect(equalizeViewportPanes(input, [])).toBe(input);
+  });
+
+  it("preserves identity when matching siblings are already equal", () => {
+    const input = layout(
+      split(
+        "row",
+        [pane(VIEWPORT_ROOT_PANE_ID), pane("a"), pane("b")],
+        [0.5, 0.25, 0.25],
+      ),
+    );
+    expect(equalizeViewportPanes(input, ["a", "b"])).toBe(input);
   });
 });

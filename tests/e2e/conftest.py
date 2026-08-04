@@ -8,7 +8,7 @@ from playwright.sync_api import Page
 import leika
 import leika._client_autobuild
 
-from .utils import find_free_port, wait_for_port
+from .utils import find_free_port
 
 
 @pytest.fixture()
@@ -45,7 +45,6 @@ def leika_server(request: pytest.FixtureRequest) -> Generator[leika.Server, None
         workspace_id=request.node.name,
         verbose=False,
     )
-    wait_for_port(port)
     try:
         yield server
     finally:

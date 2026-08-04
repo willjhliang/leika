@@ -1,5 +1,8 @@
 import { ViewerContext } from "../ViewerContext";
-import { useThrottledMessageSender } from "../WebsocketUtils";
+import {
+  GUI_MESSAGE_THROTTLE_MS,
+  useThrottledMessageSender,
+} from "../WebsocketUtils";
 import { GuiComponentContext } from "./GuiComponentContext";
 import { shallowObjectKeysEqual } from "../utils/shallowObjectKeysEqual";
 
@@ -38,7 +41,7 @@ export default function GeneratedGuiContainer({
 }) {
   const viewer = React.useContext(ViewerContext)!;
   const updateGuiProps = viewer.guiActions.updateGuiProps;
-  const messageSender = useThrottledMessageSender(50).send;
+  const messageSender = useThrottledMessageSender(GUI_MESSAGE_THROTTLE_MS).send;
 
   function setValue(uuid: string, value: NonNullable<unknown>) {
     updateGuiProps(uuid, { value });
@@ -161,5 +164,5 @@ function GeneratedInput(props: { guiUuid: string }) {
 }
 
 function assertNeverType(x: never): never {
-  throw new Error("Unexpected object: " + (x as any).type);
+  throw new Error(`Unexpected GUI component: ${JSON.stringify(x)}`);
 }

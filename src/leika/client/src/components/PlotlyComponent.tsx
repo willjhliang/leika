@@ -2,7 +2,14 @@ import React from "react";
 
 import { GuiPlotlyMessage } from "../WebsocketMessages";
 import { useElementSize } from "../hooks/useElementSize";
+import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
 import { MediaDialog, MediaSurface } from "./MediaExpand";
+
+type PlotDescription = {
+  data: unknown;
+  layout?: Record<string, unknown>;
+  config?: unknown;
+};
 
 const PlotWithAspect = React.memo(function PlotWithAspect({
   jsonStr,
@@ -16,29 +23,39 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
 }) {
   const { ref, width } = useElementSize();
   const plotRef = React.useRef<HTMLDivElement>(null);
-  const plotJson = React.useMemo(() => {
-    const parsed = JSON.parse(jsonStr);
-    parsed.layout.uirevision = "true";
-    return parsed;
+  const plot = React.useMemo(() => {
+    const parsed = JSON.parse(jsonStr) as PlotDescription;
+    return {
+      ...parsed,
+      layout: { ...parsed.layout, uirevision: "true" },
+    };
   }, [jsonStr]);
 
   React.useEffect(() => {
-    if (width <= 0) return;
-    // @ts-ignore - Plotly.js is dynamically imported with an eval() call.
-    Plotly.react(
-      plotRef.current!,
-      plotJson.data,
-      { ...plotJson.layout, width, height: width / aspect },
-      plotJson.config,
-    );
-  }, [plotJson, width, aspect]);
+    const node = plotRef.current;
+    if (width <= 0 || node === null) return;
+    let active = true;
+    const render = (plotly: PlotlyGlobal) => {
+      if (!active) return;
+      plotly.react(
+        node,
+        plot.data,
+        { ...plot.layout, width, height: width / aspect },
+        plot.config,
+      );
+    };
+    const plotly = getPlotly();
+    if (plotly === undefined) void plotlyReady.then(render);
+    else render(plotly);
+    return () => {
+      active = false;
+    };
+  }, [plot, width, aspect]);
 
   React.useEffect(() => {
     const node = plotRef.current;
     return () => {
-      const plotly = (
-        window as unknown as { Plotly?: { purge(node: HTMLElement): void } }
-      ).Plotly;
+      const plotly = getPlotly();
       if (node !== null && plotly !== undefined) plotly.purge(node);
     };
   }, []);

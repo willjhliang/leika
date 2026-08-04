@@ -267,7 +267,7 @@ light or dark theme.
 </div>
 ```
 
-## Containers and overlays
+## Containers and Overlays
 
 ```{raw} html
 <div class="gallery-grid">

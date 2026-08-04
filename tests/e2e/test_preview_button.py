@@ -1,10 +1,4 @@
-"""A preview button, from the press to what ends up on screen.
-
-``filePreview.test.ts`` pins which viewer a name and a type call for, and
-``test_preview_button.py`` pins what the handle does with a press. What is left
-is the trip: the file crossing the wire, the browser assembling it, and the
-right element appearing in the dialog with the file actually in it.
-"""
+"""End-to-end file-preview dialog tests."""
 
 from __future__ import annotations
 
@@ -114,10 +108,7 @@ def _column(page: Page, selector: str) -> dict:
 def test_writing_is_set_in_a_column_and_data_spans_the_width(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # A line run to the width this dialog wants for images is hard to carry
-    # your eye back along, so markdown and plain text take a measure and the
-    # margins a page would give them. A CSV row is a record rather than a
-    # sentence, and the width is there to be used.
+    # Prose uses a readable column; tabular data uses the full frame.
     leika_server.gui.add_preview_button(
         "Show notes", b"# Heading\n\n" + b"word " * 200, filename="notes.md"
     )
@@ -131,7 +122,6 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
         expect(_dialog(preview_page)).to_be_visible()
         box = _column(preview_page, selector)
         assert box["column"] < box["dialog"] / 1.5, (label, box)
-        # Centred, with margins on both sides rather than a column pinned left.
         assert abs(box["left"] - box["right"]) < 2.0, (label, box)
         assert box["left"] > 40.0, (label, box)
         preview_page.keyboard.press("Escape")
@@ -139,7 +129,6 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
 
     _press(preview_page, "Show readings")
     data = _column(preview_page, "pre")
-    # No margins at all: the data runs the width of the frame it is in.
     assert data["column"] > data["dialog"] / 1.5, data
     assert page_errors == []
 
@@ -147,10 +136,7 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
 def test_every_preview_opens_the_same_size(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # Sized to its contents, a one-line file would open a sliver of a dialog
-    # and the next a tall one, moving the close button every time -- and the
-    # type of the file would be deciding the shape of the window, which is
-    # not something the reader asked about.
+    # Every preview uses the same stable frame, independent of its contents.
     leika_server.gui.add_preview_button("Show one line", b"t,v\n", filename="tiny.csv")
     leika_server.gui.add_preview_button(
         "Show many lines", ("t,v\n" * 500).encode(), filename="long.csv"
@@ -170,21 +156,14 @@ def test_every_preview_opens_the_same_size(
         _press(preview_page, label)
         dialog = _dialog(preview_page)
         expect(dialog).to_be_visible()
-        # The dialog zooms open, so a rect read on the first frame is a rect
-        # of the animation rather than of the dialog.
+        # Measure after the dialog's opening animation.
         sizes[label] = dialog.evaluate(
             """async (el) => {
-              let previous = null;
-              for (let frame = 0; frame < 60; frame += 1) {
-                const box = el.getBoundingClientRect();
-                const current = [Math.round(box.width), Math.round(box.height)];
-                if (previous !== null && String(current) === String(previous)) {
-                  return current;
-                }
-                previous = current;
-                await new Promise((resolve) => requestAnimationFrame(resolve));
-              }
-              return previous;
+              await Promise.all(
+                el.getAnimations().map((animation) => animation.finished.catch(() => {}))
+              );
+              const box = el.getBoundingClientRect();
+              return [Math.round(box.width), Math.round(box.height)];
             }"""
         )
         preview_page.keyboard.press("Escape")
@@ -209,8 +188,6 @@ def test_a_file_with_no_viewer_says_what_it_is(
 def test_the_corner_downloads_the_file_being_shown(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # One control in one place, whatever the file turned out to be: the same
-    # corner works for a viewer the dialog could fill and one it could not.
     leika_server.gui.add_preview_button("Show weights", b"\x00\x01\x02\x03", filename="weights.bin")
     leika_server.gui.add_preview_button("Show readings", b"t,v\n0,1\n", filename="readings.csv")
 

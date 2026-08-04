@@ -6,18 +6,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { ViewerContext } from "../ViewerContext";
-import { shallowObjectKeysEqual } from "../utils/shallowObjectKeysEqual";
-
-/** True when a GUI container holds no children, which disables its section. */
-export function useContainerIsEmpty(containerUuid: string): boolean {
-  const viewer = React.useContext(ViewerContext)!;
-  const guiIdSet = viewer.useGui(
-    (state) => state.guiUuidSetFromContainerUuid[containerUuid],
-    shallowObjectKeysEqual,
-  );
-  return guiIdSet === undefined || Object.keys(guiIdSet).length === 0;
-}
 
 /** A folder's collapsible chrome. */
 export function GuiSection({

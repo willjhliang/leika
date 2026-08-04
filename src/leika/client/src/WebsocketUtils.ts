@@ -2,6 +2,8 @@ import React from "react";
 import { Message } from "./WebsocketMessages";
 import { ViewerContext, ViewerContextContents } from "./ViewerContext";
 
+export const GUI_MESSAGE_THROTTLE_MS = 50;
+
 /** Easier, hook version of makeThrottledMessageSender.
  *
  * Memoized so the returned ``{send}`` keeps a stable identity across

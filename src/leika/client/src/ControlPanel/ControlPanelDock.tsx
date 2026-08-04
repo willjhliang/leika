@@ -85,11 +85,8 @@ export function ControlPanelDockSurface({
         render: () => <ControlPanelContents />,
         bodyIsEmpty: !hasBody,
         onResetLayout: () => resetLayoutRef.current(),
-        // The handle owns ONE thing: whether the app's controls are shown. It
-        // does not fold the panel -- folding is what happens when nothing is
-        // left to show, and the gear's section is not the handle's to close.
-        // Always claims the click so the group's own collapse never fires; the
-        // sync node derives that from the two sections instead.
+        // The handle toggles the generated controls. The sync node below maps
+        // that state onto the dock group's collapsed state.
         onHandleClick: () => {
           controlsSection.toggle();
           return true;
@@ -272,18 +269,10 @@ function ControlPanelDockSync({
       (layout) =>
         ops.addFloatingPanel(layout, CONTROL_PANEL_ID, x, y, width).layout,
     );
-    // Initial placement only; the panel width is a constant, and the user is
-    // free to resize the window afterwards.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Initial placement only; the user can resize the window afterwards.
   }, []);
 
-  // The group is folded exactly when the handle says so. The gear does not
-  // come into it: the browser's own settings open in a popout off the header,
-  // which is there to be opened whether the body is up or folded away.
-  //
-  // Deliberately NOT gated on whether the server has sent any GUI: an app with
-  // no GUI keeps an open, empty panel, exactly as it did before these toggles
-  // existed. Only the viewer folds this panel.
+  // Keep the dock group aligned with the generated controls' visibility.
   const bodyVisible = useControlsShown();
   React.useEffect(() => {
     const groupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);

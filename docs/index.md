@@ -2,8 +2,7 @@
 :parser: myst
 ```
 
-% `self` is Sphinx's name for the root page: the lockup above already links
-% home, but a logo is not obviously a link; this entry is.
+% Keep an explicit Home entry in addition to the linked logo.
 ```{toctree}
 :maxdepth: 2
 :caption: Guides
@@ -17,10 +16,7 @@ remote-access
 development
 ```
 
-% Flat on purpose: the API pages sit directly in the section rather than
-% nested under an expandable entry, with the api/index prose reachable as
-% "Overview". Its own toctree is gone -- a page in two toctrees is a
-% warning, and -W makes warnings fatal.
+% The root owns the API toctree so pages are not referenced twice.
 ```{toctree}
 :maxdepth: 1
 :caption: Reference

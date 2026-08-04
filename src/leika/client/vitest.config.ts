@@ -1,12 +1,11 @@
-import { defineConfig } from "vitest/config";
-import tsconfigPaths from "vite-tsconfig-paths";
+import { fileURLToPath, URL } from "node:url";
 
-// Unit tests for pure client-side logic. Kept separate from the app's
-// production vite config (vite.config.mts) so the singlefile/compress plugins
-// don't run during tests. Runs in a Node environment -- the targeted modules
-// are DOM-free pure functions.
+import { defineConfig } from "vitest/config";
+
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

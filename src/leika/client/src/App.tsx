@@ -15,12 +15,13 @@ import { useGuiState } from "./ControlPanel/GuiState";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
-import { searchParamKey } from "./SearchParamsUtils";
+import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
 import { Titlebar } from "./Titlebar";
 import {
   ViewerContext,
   ViewerContextContents,
   ViewerMutable,
+  warnDisconnectedSend,
 } from "./ViewerContext";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
 import { Toaster } from "./components/ui/toast";
@@ -31,26 +32,16 @@ import { useThemeColor } from "./hooks/useThemeColor";
 import { useViewportState } from "./viewport/ViewportState";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
-function getDefaultServerFromUrl(): string {
-  let server = window.location.href
-    .replace("http://", "ws://")
-    .replace("https://", "wss://")
-    .split("?")[0];
-  if (server.endsWith("/")) server = server.slice(0, -1);
-  return server;
-}
-
 export function Root() {
   const searchParams = new URLSearchParams(window.location.search);
   const servers = searchParams.getAll(searchParamKey);
-  const initialServer = servers[0] ?? getDefaultServerFromUrl();
+  const initialServer =
+    servers[0] ?? defaultWebsocketServer(window.location.href);
 
   const mutable = React.useRef<ViewerMutable>({
-    sendMessage: (message) =>
-      console.log(
-        `Tried to send ${message.type} but websocket is not connected!`,
-      ),
+    sendMessage: warnDisconnectedSend,
     messageQueue: [],
+    notifyMessageQueue: () => undefined,
   });
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();

@@ -701,14 +701,23 @@ export function setStackWeights(
   windowId: WindowId,
   weights: Record<GroupId, number>,
 ): DockLayout {
+  const windowIndex = layout.floating.findIndex((w) => w.id === windowId);
+  if (windowIndex === -1) return layout;
+  const win = layout.floating[windowIndex];
+  const current = win.stackWeights ?? {};
+  const updates = Object.entries(weights).filter(
+    ([groupId, weight]) =>
+      Number.isFinite(weight) && weight > 0 && current[groupId] !== weight,
+  );
+  if (updates.length === 0) return layout;
+
   const draft = clone(layout);
-  const win = draft.floating.find((w) => w.id === windowId);
-  if (win === undefined) return layout;
-  const next = { ...(win.stackWeights ?? {}) };
-  for (const [g, w] of Object.entries(weights)) {
-    if (Number.isFinite(w) && w > 0) next[g] = w;
+  const draftWindow = draft.floating[windowIndex];
+  const next = { ...(draftWindow.stackWeights ?? {}) };
+  for (const [groupId, weight] of updates) {
+    next[groupId] = weight;
   }
-  win.stackWeights = next;
+  draftWindow.stackWeights = next;
   return draft;
 }
 
@@ -1227,7 +1236,7 @@ export function setNodeWeights(
 
 /** Set an edge's region width (px) directly -- the region resizer's write
  * path. The value becomes the carry-over base for width reconciliation on
- * commit (which still enforces its min/max invariants). */
+ * commit (which still enforces its minimum-width invariant). */
 export function setRegionWidth(
   layout: DockLayout,
   edge: DockEdge,
@@ -1246,9 +1255,15 @@ export function setActiveTab(
   groupId: GroupId,
   panelId: PanelId,
 ): DockLayout {
+  const group = layout.groups[groupId];
+  if (
+    group === undefined ||
+    group.activeId === panelId ||
+    !group.panelIds.includes(panelId)
+  ) {
+    return layout;
+  }
   const draft = clone(layout);
-  const group = draft.groups[groupId];
-  if (group === undefined || !group.panelIds.includes(panelId)) return layout;
-  group.activeId = panelId;
+  draft.groups[groupId].activeId = panelId;
   return draft;
 }

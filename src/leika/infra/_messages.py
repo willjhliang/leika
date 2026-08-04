@@ -1,5 +1,4 @@
-"""Message type definitions. For synchronization with the TypeScript definitions, see
-`_typescript_interface_gen.py.`"""
+"""Message serialization shared by the Python and TypeScript protocol."""
 
 from __future__ import annotations
 
@@ -64,10 +63,7 @@ def _prepare_for_deserialization(value: Any, annotation: Type) -> Any:
             return value
 
         for i, v in enumerate(value):
-            out.append(
-                # Hack to be OK with wrong type annotations.
-                _prepare_for_deserialization(v, args[i]) if i < len(args) else v
-            )
+            out.append(_prepare_for_deserialization(v, args[i]))
         return tuple(out)
     return value
 
@@ -113,10 +109,7 @@ def _prepare_for_serialization(
             args = [Any] * len(value)
 
         for i, v in enumerate(value):
-            out.append(
-                # Hack to be OK with wrong type annotations.
-                _prepare_for_serialization(v, args[i], binary_buffers) if i < len(args) else v
-            )
+            out.append(_prepare_for_serialization(v, args[i], binary_buffers))
         return tuple(out)
 
     # Handle numpy arrays: extract or inline depending on mode.

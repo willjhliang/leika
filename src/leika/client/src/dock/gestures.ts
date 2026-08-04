@@ -54,9 +54,10 @@ export function bindPointerGesture(
  * browser's mousedown default can anchor a selection -- so dragging a tab,
  * grip, or divider across text content can't start highlighting it. */
 export function suppressTextSelection(): () => void {
+  const previous = document.body.style.userSelect;
   document.body.style.userSelect = "none";
   return () => {
-    document.body.style.userSelect = "";
+    document.body.style.userSelect = previous;
   };
 }
 

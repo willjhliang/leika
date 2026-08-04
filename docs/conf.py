@@ -235,14 +235,10 @@ _shadcn_bridge = {
 html_theme_options = {
     "light_css_variables": _shadcn_bridge,
     "dark_css_variables": _shadcn_bridge,
-    # No view/edit buttons floating over the article. The theme toggle that
-    # shared that corner moves to the footer via _templates/page.html.
+    # The theme toggle is rendered in the footer template.
     "top_of_page_buttons": [],
 }
-# The sidebar brand becomes the same lockup the homepage heads with. The
-# wordmark beside it is `html_title`, set in Almarai by `leika.css` and
-# already lowercase, so the CSS lowercasing there is now a no-op kept for
-# anything else that renders the title.
+# Use the homepage logo in the sidebar lockup.
 html_logo = "_static/leika.svg"
 
 

@@ -4,6 +4,7 @@ import hashlib
 import types
 from collections import defaultdict
 from typing import Any, Tuple, Type, Union, cast
+from typing import Literal as TypingLiteral
 
 import numpy as np
 import numpy.typing as npt
@@ -17,11 +18,6 @@ from typing_extensions import (
     get_type_hints,
     is_typeddict,
 )
-
-try:
-    from typing import Literal as LiteralAlt
-except ImportError:
-    LiteralAlt = Literal  # type: ignore
 
 from ._messages import Message
 
@@ -97,7 +93,7 @@ def _get_ts_type(typ: Type[Any]) -> str:
         args = get_args(typ)
         assert len(args) == 2
         return "{[key: " + _get_ts_type(args[0]) + "]: " + _get_ts_type(args[1]) + "}"
-    elif origin_typ in (Literal, LiteralAlt):
+    elif origin_typ in (Literal, TypingLiteral):
         return " | ".join(
             map(
                 lambda lit: repr(lit).lower() if type(lit) is bool else repr(lit),
@@ -196,7 +192,7 @@ def generate_typescript_interfaces(message_cls: Type[Message]) -> str:
 
         out_lines.append(f"export interface {cls.__name__} " + "{")
         out_lines.append(f'  type: "{cls.__name__}";')
-        field_names = set([f.name for f in dataclasses.fields(cls)])  # type: ignore
+        field_names = {field.name for field in dataclasses.fields(cast(Any, cls))}
         for name, typ in get_type_hints(cls, include_extras=True).items():
             if name in field_names:
                 typ = _get_ts_type(typ)

@@ -27,6 +27,16 @@ class MemoryStorage implements ViewportLayoutStorage {
   }
 }
 
+class ReadOnlyStorage implements ViewportLayoutStorage {
+  constructor(private readonly value: string) {}
+  getItem(): string {
+    return this.value;
+  }
+  setItem(): void {
+    throw new Error("read only");
+  }
+}
+
 function createViewportHarness(storage: ViewportLayoutStorage | null = null): {
   actions: ViewportActions;
   getState: () => ViewportState;
@@ -61,7 +71,6 @@ function imageDeclaration(
     ...overrides,
   };
 }
-
 
 function viserDeclaration(
   paneId: string,
@@ -197,6 +206,22 @@ describe("useViewportState persistence", () => {
     actions.setPersistenceWorkspace("broken");
     expect(collectViewportPaneIds(getState().layout)).toEqual([
       VIEWPORT_ROOT_PANE_ID,
+    ]);
+  });
+
+  it("restores a readable layout even when normalization cannot be written back", () => {
+    const storage = new ReadOnlyStorage(
+      JSON.stringify({
+        version: 1,
+        root: { type: "pane", pane_id: "image" },
+      }),
+    );
+    const { actions, getState } = createViewportHarness(storage);
+    actions.setPersistenceServer("ws://server");
+    actions.setPersistenceWorkspace("read-only");
+    expect(collectViewportPaneIds(getState().layout)).toEqual([
+      VIEWPORT_ROOT_PANE_ID,
+      "image",
     ]);
   });
 });

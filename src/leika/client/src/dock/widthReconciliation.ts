@@ -32,27 +32,17 @@ import {
   DockNode,
   MIN_PANEL_WIDTH_PX,
   regionWidthsOf,
-  SPLIT_DIVIDER_PX,
 } from "./types";
 
-const DIVIDER_PX = SPLIT_DIVIDER_PX;
-
-/** Sum of `cols`' minimum widths (with dividers), for clamping regionWidth. */
+/** Sum of `cols`' minimum content widths. Inter-column dividers are fixed
+ * chrome accounted for by `planRegion`, outside `regionWidth`. */
 function colsMin(cols: DockNode[]): number {
-  if (cols.length === 0) return 0;
-  return (
-    cols.reduce((s, c) => s + minRegionWidth(c), 0) +
-    DIVIDER_PX * (cols.length - 1)
-  );
+  return cols.reduce((sum, column) => sum + minRegionWidth(column), 0);
 }
 
-/** Sum of `cols`' maximum widths (with dividers), for clamping regionWidth. */
+/** Sum of `cols`' maximum content widths. */
 function colsMax(cols: DockNode[]): number {
-  if (cols.length === 0) return 0;
-  return (
-    cols.reduce((s, c) => s + maxRegionWidth(c), 0) +
-    DIVIDER_PX * (cols.length - 1)
-  );
+  return cols.reduce((sum, column) => sum + maxRegionWidth(column), 0);
 }
 
 /** Reconcile docked region widths across a layout transition, writing the

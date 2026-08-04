@@ -49,6 +49,11 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
     assert pane.visible is True
     assert pane.fit == "fill"
     np.testing.assert_array_equal(pane.image, original)
+    original[:] = 255
+    assert np.all(pane.image == 0)
+    returned = pane.image
+    returned[:] = 255
+    assert np.all(pane.image == 0)
 
     next_frame = np.full((4, 6, 3), 127, dtype=np.uint8)
     pane.title = "Updated"
@@ -96,6 +101,9 @@ def test_row_column_and_grid_helpers(server: leika.Server) -> None:
 
     with pytest.raises(ValueError):
         server.panes.add_grid(columns=0)
+    for columns in (True, 1.5):
+        with pytest.raises(ValueError, match="positive integer"):
+            server.panes.add_grid(columns=cast(Any, columns))
     with pytest.raises(ValueError):
         server.panes.add_image(frame, relative_to="missing")
 

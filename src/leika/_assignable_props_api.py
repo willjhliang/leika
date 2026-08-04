@@ -19,12 +19,15 @@ TImpl = TypeVar("TImpl", bound=HasProps)
 def colors_to_uint8(colors: np.ndarray) -> npt.NDArray[np.uint8]:
     """Convert intensity values to uint8. We assume the range [0,1] for floats, and
     [0,255] for integers. Accepts any shape."""
-    if colors.dtype != np.uint8:
-        if np.issubdtype(colors.dtype, np.floating):
-            colors = np.clip(colors * 255.0, 0, 255).astype(np.uint8)
-        if np.issubdtype(colors.dtype, np.integer):
-            colors = np.clip(colors, 0, 255).astype(np.uint8)
-    return colors
+    if colors.dtype == np.uint8:
+        return colors
+    if np.issubdtype(colors.dtype, np.floating):
+        if not np.isfinite(colors).all():
+            raise ValueError("Image values must be finite.")
+        return np.clip(colors * 255.0, 0, 255).astype(np.uint8)
+    if np.issubdtype(colors.dtype, np.integer):
+        return np.clip(colors, 0, 255).astype(np.uint8)
+    raise TypeError("Image values must use an integer or floating dtype.")
 
 
 class AssignablePropsBase(Generic[TImpl]):

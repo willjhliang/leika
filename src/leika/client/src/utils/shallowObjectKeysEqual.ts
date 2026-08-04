@@ -3,7 +3,7 @@
  * Prevents re-renders when object keys haven't changed.
  * Compares objects by checking if they have the same set of keys.
  */
-export function shallowObjectKeysEqual<T extends Record<string, any>>(
+export function shallowObjectKeysEqual<T extends Record<string, unknown>>(
   a: T | undefined,
   b: T | undefined,
 ): boolean {

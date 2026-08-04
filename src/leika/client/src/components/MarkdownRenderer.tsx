@@ -161,7 +161,6 @@ const components: MDXComponents = {
 };
 
 async function parseMarkdown(markdown: string) {
-  // @ts-ignore (necessary since JSX runtime isn't properly typed according to the internet)
   const { default: Content } = await evaluate(markdown, {
     ...runtime,
     ...provider,
@@ -172,11 +171,7 @@ async function parseMarkdown(markdown: string) {
   return Content;
 }
 
-/**
- * Parses and renders markdown on the client. This is generally a bad practice.
- * NOTE: Only run on markdown you trust.
- * It might be worth looking into sandboxing all markdown so that it can't run JS.
- */
+/** Render trusted server-provided MDX. Evaluation can execute expressions. */
 export function MarkdownRenderer(props: { children?: string }) {
   const [child, setChild] = useState<ReactNode>(null);
 

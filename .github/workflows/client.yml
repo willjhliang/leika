@@ -1,6 +1,7 @@
 name: Browser client
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
@@ -34,6 +35,9 @@ jobs:
       - name: ESLint
         working-directory: src/leika/client
         run: npm run lint
+      - name: Prettier
+        working-directory: src/leika/client
+        run: npm run format:check
       - name: Vitest
         working-directory: src/leika/client
         run: npm test

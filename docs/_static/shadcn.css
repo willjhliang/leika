@@ -1,32 +1,9 @@
-/* The client's design system, ported onto Furo.
- *
- * The GUI is shadcn (neutral base) with a handful of deliberate deviations --
- * Geist a weight-step lighter than stock, a 4px radius, even glow shadows,
- * focus as a border-color change rather than a ring. The docs should read as
- * the same product, so this file carries three layers:
- *
- *   1. the client's tokens, copied from src/leika/client/src/index.css and
- *      rescoped to Furo's theme switch;
- *   2. hand-written overrides for everything Furo hardcodes (radii, shadows,
- *      component chrome);
- *   3. and conf.py bridges Furo's own ~150 variables onto these tokens via
- *      html_theme_options, because that inline style is the only thing that
- *      outranks furo.css in dark mode.
- *
- * Furo loads user stylesheets BEFORE its own, so nothing here can win a
- * specificity tie -- every override selector is prefixed with `body` to add
- * one type selector and break the tie deliberately. If a rule "doesn't take",
- * out-specify it; never !important.
- */
+/* Map the client's shadcn tokens and component styling onto Furo. Furo loads
+ * its stylesheet afterward, so overrides use a `body` prefix for specificity. */
 
 /* ------------------------------------------------------------------ fonts */
 
-/* Geist Variable, the client's one face for everything, self-hosted for the
- * same reasons Almarai is: no third-party request, identical offline. The
- * two subsets and their unicode-range lines are copied from the fontsource
- * package the client itself loads. No italic file ships -- the client never
- * loads one either, so a synthesized oblique is already the house style.
- * See geist-OFL.txt, which the license requires travel with it. */
+/* Self-hosted client font; see geist-OFL.txt. */
 @font-face {
   font-family: "Geist Variable";
   font-style: normal;
@@ -51,10 +28,7 @@
 
 /* ----------------------------------------------------------------- tokens */
 
-/* The client's palette, verbatim from index.css (minus the app-only panel
- * plumbing). Stock shadcn neutral in oklch -- achromatic except destructive
- * -- plus the deviations: 4px base radius on a multiplicative scale, and
- * glow shadows whose color deliberately does not change in dark mode. */
+/* Client palette without app-only panel tokens. */
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -451,11 +425,7 @@ body p .sig-inline {
   border: none;
 }
 
-/* The copy button as a client icon button: muted when the block reveals it,
- * foreground under the pointer, hairline chip, 1px press nudge. Everything
- * here out-specifies furo's own copybutton skin (`.highlight button.copybtn`
- * in furo-extensions.css, which loads after this sheet), or it silently
- * loses -- the plain `button.copybtn` selectors this file first used did. */
+/* Copy button styled as a client icon button. */
 body .highlight button.copybtn {
   background: var(--muted);
   border: 1px solid var(--border);
@@ -581,12 +551,7 @@ body .viewcode-back {
 
 /* ---------------------------------------------------------------- footer */
 
-/* Next/previous are links, so they ride the muted-to-foreground ramp too.
- * Left alone, the bridge inverts furo's hover here: the title rests on the
- * inherited foreground and furo's `:hover` rule assigns `--color-link`,
- * which now resolves muted -- darker to lighter, backwards. The arrow also
- * needs rescuing from `--color-foreground-border`, which the bridge turned
- * into a hairline gray. */
+/* Keep next/previous titles and arrows on the normal link color ramp. */
 body .related-pages .page-info .title {
   font-weight: 400;
   color: var(--muted-foreground);

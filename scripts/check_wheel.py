@@ -15,9 +15,11 @@ REQUIRED_NOTICES = (
     "leika/_licenses/shadcn-ui-PROVENANCE.md",
     "leika/_licenses/shadcn-io-PROVENANCE.md",
     "leika/_licenses/base-ui-LICENSE.txt",
+    "leika/_licenses/almarai-OFL.txt",
     "leika/_licenses/geist-OFL.txt",
     "leika/_licenses/lucide-LICENSE.txt",
     "leika/_licenses/cmdk-next-themes-MIT-LICENSE.txt",
+    "leika/_licenses/zstddec-LICENSE.txt",
 )
 FORBIDDEN_PARTS = {
     "node_modules",

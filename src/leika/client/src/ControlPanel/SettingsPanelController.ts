@@ -1,17 +1,6 @@
 import { createStore } from "../store";
 
-/**
- * Open/closed state for the control panel's two body sections, shown
- * INDEPENDENTLY: the app's own controls (toggled by the panel handle) and the
- * browser's settings (toggled by the gear beside it). Neither implies the
- * other; the panel folds away only when BOTH are down, which is a reading of
- * these two flags rather than a third piece of state.
- *
- * Module singletons because the two toggles and the two sections are four
- * separate nodes as far as the dock is concerned, so their shared state cannot
- * come from a React parent. Kept out of `ClientSettings` because which section
- * is open is transient, not a preference to restore.
- */
+/** Transient panel UI state shared by controls rendered in separate dock nodes. */
 function makeSection(initiallyOpen: boolean) {
   const store = createStore({ open: initiallyOpen });
   return {
@@ -22,10 +11,10 @@ function makeSection(initiallyOpen: boolean) {
   };
 }
 
-/** The browser's own settings. Closed until the gear asks for it. */
+/** Whether the settings popover is open. */
 export const settingsPanel = makeSection(false);
 
-/** The app's generated controls. Shown until the handle folds them away. */
+/** Whether the app's generated controls are shown. */
 export const controlsSection = makeSection(true);
 
 /** Subscribe a component to the settings section's open state. */

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import dataclasses
 import json
+import math
 import re
 import time
 import uuid
@@ -66,6 +68,8 @@ from ._messages import (
     GuiVector3Props,
     RemoveCommandMessage,
 )
+from ._threadpool_exceptions import print_threadpool_errors
+from ._validation import validate_finite_number as _finite_number
 from .infra import ClientId
 
 if TYPE_CHECKING:
@@ -85,8 +89,64 @@ def _make_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def _string_options(options: Iterable[Any], control: str) -> tuple[str, ...]:
+    """Validate labels used as both display text and stable values."""
+    if isinstance(options, str):
+        raise ValueError(f"{control} options must be a sequence, not one string.")
+    values = tuple(options)
+    if not values:
+        raise ValueError(f"{control} requires at least one option.")
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"{control} options must be strings; got {value!r}.")
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    if duplicates:
+        raise ValueError(f"{control} options must be unique; repeated {sorted(duplicates)!r}.")
+    return values
+
+
+@overload
+def _cast_vector(vector: tuple | np.ndarray, length: Literal[2]) -> tuple[float, float]: ...
+
+
+@overload
+def _cast_vector(vector: tuple | np.ndarray, length: Literal[3]) -> tuple[float, float, float]: ...
+
+
+def _cast_vector(vector: tuple | np.ndarray, length: int) -> tuple[float, ...]:
+    """Normalize a fixed-length vector."""
+    array = np.asarray(vector)
+    if array.shape != (length,):
+        raise ValueError(f"Expected vector of shape {(length,)}, got {array.shape}.")
+    values = tuple(map(float, array))
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Vector components must be finite.")
+    return values
+
+
+def _schedule_coroutine(
+    event_loop: asyncio.AbstractEventLoop,
+    coroutine: Coroutine[Any, Any, Any],
+) -> None:
+    """Schedule a callback on its owning loop from any thread."""
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is event_loop:
+        event_loop.create_task(coroutine)
+    else:
+        future = asyncio.run_coroutine_threadsafe(coroutine, event_loop)
+        future.add_done_callback(print_threadpool_errors)
+
+
 class GuiContainerProtocol(Protocol):
-    _children: dict[str, SupportsRemoveProtocol] = dataclasses.field(default_factory=dict)
+    _children: dict[str, SupportsRemoveProtocol]
 
 
 class SupportsRemoveProtocol(Protocol):
@@ -256,11 +316,21 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
     def remove(self) -> None:
         """Permanently remove this GUI element from the visualizer."""
 
+        gui_api = self._impl.gui_api
+        if isinstance(self, GuiUploadButtonHandle):
+            with gui_api._file_upload_lock:
+                self._remove_impl()
+        else:
+            self._remove_impl()
+
+    def _remove_impl(self) -> None:
+        """Remove after any handle-specific synchronization is held."""
+
         # Warn if already removed.
         if self._impl.removed:
             warnings.warn(
                 f"Attempted to remove an already removed {self.__class__.__name__}.",
-                stacklevel=2,
+                stacklevel=3,
             )
             return
         self._impl.removed = True
@@ -272,6 +342,8 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
 
         if isinstance(self, _GuiInputHandle):
             gui_api._gui_input_handle_from_uuid.pop(self._impl.uuid)
+        if isinstance(self, GuiUploadButtonHandle):
+            gui_api._discard_file_uploads(source_component_uuid=self._impl.uuid)
 
 
 class _GuiInputHandle(
@@ -355,7 +427,7 @@ class _GuiInputHandle(
             # reduces the likelihood of many common race conditions.
             cb_out = cb(GuiEvent(client_id=None, client=None, target=self))
             if isinstance(cb_out, Coroutine):
-                self._impl.gui_api._event_loop.create_task(cb_out)
+                _schedule_coroutine(self._impl.gui_api._event_loop, cb_out)
 
     @property
     def update_timestamp(self) -> float:
@@ -470,6 +542,29 @@ class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps)
     def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
         _set_row_colors(self, color)
 
+    def _normalize_value(self, value: Any) -> tuple[str, ...]:
+        if isinstance(value, str):
+            raise ValueError("A toggle group value must be a sequence of option names.")
+        wanted = tuple(value)
+        unknown = [option for option in wanted if option not in self.options]
+        if unknown:
+            raise ValueError(f"Unknown toggle option(s): {unknown!r}.")
+        if len(set(wanted)) != len(wanted):
+            raise ValueError("A toggle group value cannot repeat an option.")
+        if not self.multiple and len(wanted) > 1:
+            raise ValueError("This toggle group allows only one active option.")
+        if self.required and not wanted:
+            raise ValueError("This toggle group requires one active option.")
+        return tuple(option for option in self.options if option in wanted)
+
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        return self._normalize_value(value)
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._normalize_value(value)
+
 
 class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
     """Handle for an editable list of text entries.
@@ -483,6 +578,20 @@ class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
        Python adds, removes, and reorders: ``handle.value += ("next",)``.
     """
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            raise ValueError("A list value must be a sequence of strings, not one string.")
+        entries = tuple(value)
+        for entry in entries:
+            if not isinstance(entry, str):
+                raise ValueError(f"List entries must be strings; got {entry!r}.")
+        return entries
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
+
 
 def _checklist_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
     """The ``(text, checked)`` pairs a checklist holds, from what was given.
@@ -492,6 +601,8 @@ def _checklist_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
     a ``False`` per line, and it is what lets ``handle.value += ("Lights",)``
     read the way it does on a list.
     """
+    if isinstance(value, str):
+        raise ValueError("A checklist value must be a sequence of items, not one string.")
     items: list[Tuple[str, bool]] = []
     for item in value:
         if isinstance(item, str):
@@ -631,6 +742,20 @@ class GuiNumberHandle(GuiInputHandle[IntOrFloat], Generic[IntOrFloat], GuiNumber
        Value of the input. Synchronized automatically when assigned.
     """
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        value = _finite_number(value)
+        if self.min is not None and value < self.min:
+            raise ValueError(f"value must be at least {self.min}.")
+        if self.max is not None and value > self.max:
+            raise ValueError(f"value must be at most {self.max}.")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        value = type(self._impl.value)(value)
+        return self._coerce_assigned_value(value)
+
 
 class GuiSliderHandle(GuiInputHandle[IntOrFloat], Generic[IntOrFloat], GuiSliderProps):
     """Handle for slider inputs.
@@ -640,6 +765,18 @@ class GuiSliderHandle(GuiInputHandle[IntOrFloat], Generic[IntOrFloat], GuiSlider
 
        Value of the input. Synchronized automatically when assigned.
     """
+
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        value = _finite_number(value)
+        if not self.min <= value <= self.max:
+            raise ValueError(f"value must be within [{self.min}, {self.max}].")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        value = type(self._impl.value)(value)
+        return self._coerce_assigned_value(value)
 
 
 class GuiMultiSliderHandle(
@@ -653,8 +790,33 @@ class GuiMultiSliderHandle(
        Value of the input. Synchronized automatically when assigned.
     """
 
+    def _normalize_value(self, value: Any) -> tuple[int | float, ...]:
+        if isinstance(value, (str, bytes)):
+            raise ValueError("value must be a sequence of numbers.")
+        values = tuple(_finite_number(item) for item in value)
+        if not values:
+            raise ValueError("value must contain at least one slider value.")
+        if any(not self.min <= item <= self.max for item in values):
+            raise ValueError(f"value entries must be within [{self.min}, {self.max}].")
+        if any(left > right for left, right in zip(values, values[1:])):
+            raise ValueError("value entries must be in ascending order.")
+        if self.min_range is not None and any(
+            right - left < self.min_range for left, right in zip(values, values[1:])
+        ):
+            raise ValueError("value entries are closer than min_range.")
+        item_type = type(self._impl.value[0]) if self._impl.value else float
+        return tuple(item_type(item) for item in values)
 
-def _colors_to_int_tuple(value: Any) -> tuple[int, ...]:
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        return self._normalize_value(value)
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._normalize_value(value)
+
+
+def _colors_to_int_tuple(value: Any, channels: int | None = None) -> tuple[int, ...]:
     """Coerce an RGB/RGBA color to an int tuple in [0, 255].
 
     Integer channels are taken as absolute [0, 255]; float channels are
@@ -663,12 +825,23 @@ def _colors_to_int_tuple(value: Any) -> tuple[int, ...]:
     ``colors_to_uint8`` -- so out-of-range inputs (e.g. a float ``255.0`` or a
     negative value) degrade gracefully instead of producing a wild value.
     Generalized to any channel count (RGB and RGBA)."""
-    if isinstance(value, np.ndarray):
-        assert value.ndim == 1, f"Expected a 1D color, got shape {value.shape}."
-    return tuple(
-        max(0, min(255, int(v) if np.issubdtype(type(v), np.integer) else int(v * 255)))
-        for v in value
-    )
+    array = np.asarray(value, dtype=object)
+    if array.ndim != 1:
+        raise ValueError(f"Expected a 1D color, got shape {array.shape}.")
+    if channels is not None and len(array) != channels:
+        raise ValueError(f"Expected {channels} color channels, got {len(array)}.")
+    normalized: list[int] = []
+    for channel in array:
+        if isinstance(channel, (bool, np.bool_)) or not isinstance(
+            channel, (int, float, np.integer, np.floating)
+        ):
+            raise TypeError("Color channels must be integers or floats.")
+        if isinstance(channel, (float, np.floating)):
+            if not math.isfinite(float(channel)):
+                raise ValueError("Color channels must be finite.")
+            channel = channel * 255
+        normalized.append(max(0, min(255, int(channel))))
+    return tuple(normalized)
 
 
 class GuiRgbHandle(GuiInputHandle[Tuple[int, int, int]], GuiRgbProps):
@@ -685,7 +858,11 @@ class GuiRgbHandle(GuiInputHandle[Tuple[int, int, int]], GuiRgbProps):
         self, value: Tuple[int, int, int] | np.ndarray
     ) -> Tuple[int, int, int]:
         # Float channels are [0, 1] (scaled to [0, 255]); int channels absolute.
-        return cast(Tuple[int, int, int], _colors_to_int_tuple(value))
+        return cast(Tuple[int, int, int], _colors_to_int_tuple(value, 3))
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
 
 
 class GuiRgbaHandle(GuiInputHandle[Tuple[int, int, int, int]], GuiRgbaProps):
@@ -702,7 +879,11 @@ class GuiRgbaHandle(GuiInputHandle[Tuple[int, int, int, int]], GuiRgbaProps):
         self, value: Tuple[int, int, int, int] | np.ndarray
     ) -> Tuple[int, int, int, int]:
         # Float channels are [0, 1] (scaled to [0, 255]); int channels absolute.
-        return cast(Tuple[int, int, int, int], _colors_to_int_tuple(value))
+        return cast(Tuple[int, int, int, int], _colors_to_int_tuple(value, 4))
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
 
 
 class GuiVector2Handle(GuiInputHandle[Tuple[float, float]], GuiVector2Props):
@@ -714,6 +895,19 @@ class GuiVector2Handle(GuiInputHandle[Tuple[float, float]], GuiVector2Props):
        Value of the input. Synchronized automatically when assigned.
     """
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        value = _cast_vector(value, 2)
+        if self.min is not None and any(item < lo for item, lo in zip(value, self.min)):
+            raise ValueError("value has a component below min.")
+        if self.max is not None and any(item > hi for item, hi in zip(value, self.max)):
+            raise ValueError("value has a component above max.")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
+
 
 class GuiVector3Handle(GuiInputHandle[Tuple[float, float, float]], GuiVector3Props):
     """Handle for 3D vector inputs.
@@ -723,6 +917,19 @@ class GuiVector3Handle(GuiInputHandle[Tuple[float, float, float]], GuiVector3Pro
 
        Value of the input. Synchronized automatically when assigned.
     """
+
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        value = _cast_vector(value, 3)
+        if self.min is not None and any(item < lo for item, lo in zip(value, self.min)):
+            raise ValueError("value has a component below min.")
+        if self.max is not None and any(item > hi for item, hi in zip(value, self.max)):
+            raise ValueError("value has a component above max.")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -833,6 +1040,12 @@ class GuiButtonHandle(_GuiInputHandle[bool], GuiButtonProps):
 
         Using async functions can be useful for reducing race conditions.
         """
+
+        if isinstance(callback_hz, bool) or not isinstance(callback_hz, (int, float)):
+            raise ValueError("callback_hz must be a positive, finite number.")
+        callback_hz = float(callback_hz)
+        if not math.isfinite(callback_hz) or callback_hz <= 0.0:
+            raise ValueError("callback_hz must be a positive, finite number.")
 
         def register_callback(
             f: GuiButtonHandle._HoldCallback,
@@ -1096,6 +1309,16 @@ class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
     def color(self, color: ButtonColor | Sequence[ButtonColor]) -> None:  # type: ignore
         _set_row_colors(self, color)
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        if value not in self.options:
+            raise ValueError(f"Button value must be one of {self.options!r}; got {value!r}.")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
+
 
 class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDropdownProps):
     """Handle for a dropdown-style GUI input in our visualizer.
@@ -1121,9 +1344,9 @@ class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDrop
     @options.setter
     def options(self, options: Iterable[StringType]) -> None:  # type: ignore
         assert isinstance(self._impl.props, GuiDropdownProps)
-        options = tuple(options)
-        if len(options) == 0:
-            raise ValueError("Dropdown requires at least one option.")
+        options = cast("tuple[StringType, ...]", _string_options(options, "Dropdown"))
+        if options == self._impl.props.options:
+            return
         self._impl.props.options = options
 
         self._impl.gui_api._websock_interface.queue_message(
@@ -1135,6 +1358,16 @@ class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDrop
         if self.value not in options:
             self.value = options[0]
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        if value not in self.options:
+            raise ValueError(f"Dropdown value must be one of {self.options!r}; got {value!r}.")
+        return value
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
+
 
 class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
     """Handle for a tab group. Call :meth:`add_tab()` to add a tab."""
@@ -1145,6 +1378,9 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
 
     def add_tab(self, label: str, icon: IconName | None = None) -> GuiTabHandle:
         """Add a tab. Returns a handle we can use to add GUI elements to it."""
+
+        if self._impl.removed:
+            raise RuntimeError("Cannot add a tab to a removed GuiTabGroupHandle.")
 
         uuid = _make_uuid()
 
@@ -1170,14 +1406,8 @@ class GuiTabGroupHandle(_GuiHandle[None], GuiTabGroupProps):
             )
             return
 
-        # Remove tabs first. Each tab.remove() writes back to this group's
-        # `_tabs` prop, so we must NOT mark the group removed until afterwards
-        # -- otherwise the removed-handle guard in AssignablePropsBase raises
-        # on those writes, leaving
-        # the group half-removed (still in its parent's _children with
-        # removed=True). A subsequent gui.reset() then spins forever, since its
-        # `while root._children: child.remove()` loop hits that group whose
-        # remove() now no-ops via the already-removed guard.
+        # Tabs update the group's props as they leave, so remove them before
+        # marking the group itself removed.
         for tab in tuple(self._tab_handles):
             tab.remove()
         self._impl.removed = True
@@ -1222,6 +1452,7 @@ class GuiTabHandle(GuiContainer):
 
     @icon.setter
     def icon(self, icon: IconName | None) -> None:
+        self._check_container_active()
         self._icon = icon
         icon_html = None if icon is None else svg_from_icon(icon)
         self._parent._tabs = tuple(
@@ -1463,12 +1694,14 @@ class GuiFormHandle(GuiFolderHandle):
         popout on every client: the question has been answered, whoever
         answered it.
         """
+        if self._impl.removed:
+            raise RuntimeError("Cannot submit a removed GuiFormHandle.")
         gui_api = self._impl.gui_api
         # Fire on_submit callbacks. Server-initiated submits have no client.
         for cb in self._submit_cb:
             cb_out = cb(GuiEvent(client_id=None, client=None, target=self))
             if isinstance(cb_out, Coroutine):
-                gui_api._event_loop.create_task(cb_out)
+                _schedule_coroutine(gui_api._event_loop, cb_out)
         gui_api._websock_interface.queue_message(GuiFormSubmitMessage(uuid=self._impl.uuid))
 
 
@@ -1503,7 +1736,7 @@ class GuiModalHandle(GuiContainer):
         self._gui_api._modal_handle_from_uuid[self._uuid] = self
 
     def close(self) -> None:
-        """Close this modal and permananently remove all contained GUI elements."""
+        """Close this modal and permanently remove all contained GUI elements."""
         if self.closed:
             warnings.warn(
                 "Attempted to close an already closed GuiModalHandle.",
@@ -1565,6 +1798,17 @@ def _parse_markdown(markdown: str, image_root: Path | None) -> str:
 class GuiProgressBarHandle(_GuiInputHandle[float], GuiProgressBarProps):
     """Handle for updating and removing progress bars."""
 
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        value = _finite_number(value)
+        if not 0 <= value <= 100:
+            raise ValueError("Progress bar value must be within [0, 100].")
+        return float(value)
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return self._coerce_assigned_value(value)
+
 
 class GuiHtmlHandle(_GuiHandle[None], GuiHtmlProps):
     """Handling for updating and removing HTML elements."""
@@ -1625,22 +1869,21 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
         _user_format: Literal["auto", "jpeg", "png"] = "auto",
     ):
         super().__init__(impl=_impl)
-        self._image = _image
+        self._image = np.asarray(_image).copy()
         self._jpeg_quality = _jpeg_quality
         self._user_format = _user_format
 
     @property
     def image(self) -> np.ndarray:
         """Current content of this image element. Synchronized automatically when assigned."""
-        assert self._image is not None
-        return self._image
+        return self._image.copy()
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
-        self._image = image
         resolved_format, data = encode_image_binary(
             image, self._user_format, jpeg_quality=self._jpeg_quality
         )
+        self._image = np.asarray(image).copy()
         self._format = resolved_format
         self._data = data
 
@@ -1655,14 +1898,15 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
         if self._user_format == value:
             return
 
-        self._user_format = value
-
-        # Re-encode image.
         if value == "jpeg" and self._image.shape[2] == 4:
-            warnings.warn("Converting RGBA image to JPEG will discard the alpha channel.")
+            warnings.warn(
+                "Converting RGBA image to JPEG will discard the alpha channel.",
+                stacklevel=2,
+            )
         resolved_format, data = encode_image_binary(
             self._image, value, jpeg_quality=self._jpeg_quality
         )
+        self._user_format = value
         self._format = resolved_format
         self._data = data
 

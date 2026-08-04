@@ -1,116 +1,53 @@
-/* Brand type for the homepage lockup.
- *
- * The README heads itself with the logo and the wordmark, and that README is
- * the homepage. On GitHub and PyPI the wordmark can only ever be the reader's
- * system font -- both strip `style`, forbid `<style>`, and load no external
- * stylesheet -- but the docs are ours, so here it can be the real face.
- *
- * Self-hosted rather than pulled from the Google Fonts CDN: one fewer
- * third-party request per page, and the docs render the same offline. Only
- * the Latin subset ships; the family covers Arabic too, which nothing here
- * sets. See almarai-OFL.txt, which the license requires travel with it.
- */
+/* Self-hosted wordmark font; see almarai-OFL.txt. */
 
 @font-face {
   font-family: "Almarai";
   font-style: normal;
   font-weight: 400;
-  /* The wordmark is the first thing on the page, and a face that arrives late
-   * would relayout the heading under the reader. `swap` still beats an
-   * invisible heading while the 9 KB lands. */
   font-display: swap;
   src: url("almarai-latin-400.woff2") format("woff2");
 }
 
-/* The lockup, in the two places it appears: the homepage heading and the
- * sidebar brand.
- *
- * The heading is the only centered H1 in the docs -- it is raw HTML in the
- * README, because a Markdown heading cannot be centered on GitHub, and that
- * `align` is what carries through to here. The brand is Furo's, built from
- * `html_logo` and `html_title`.
- *
- * Every measurement below is the design's own, divided by its 280px type size,
- * so one set of rules holds the proportions at either size. */
+/* Shared homepage and sidebar lockup. */
 h1[align="center"],
 .sidebar-brand {
-  /* Flex rather than an inline image, so the logo centers on the wordmark's
-   * box the way the design has it (both centered on y=200) instead of on the
-   * baseline plus half an x-height, which is all `vertical-align` can offer.
-   * This also makes the `align="absmiddle"` in the README inert here -- it is
-   * carried for GitHub, which has no such choice. */
   display: flex;
-  /* Furo stacks its brand in a column; the lockup sets them side by side. */
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  /* 412 - 340: the whitespace between the last petal and the wordmark, less
-   * the padding our own squared viewBox already carries. */
   gap: 0.1875em;
 
   font-family: "Almarai", var(--font-stack), sans-serif;
-  /* Almarai Regular. Furo heads at 700, and only the 400 face ships, so
-   * without this the browser synthesizes a bold that is neither the design
-   * nor a real weight of the family. */
   font-weight: 400;
-  /* -8.4px at 280. */
   letter-spacing: -0.03em;
   color: var(--foreground);
 }
 
-/* Pinned: the article heading scale in shadcn.css sizes h1 for prose, and
- * the homepage lockup is a masthead, not a heading. The logo and gap are
- * em-proportioned, so they follow. */
 h1[align="center"] {
   font-size: 2.25rem;
 }
 
-/* 357 tall against a 280px wordmark. The README asks for 44px, which is sized
- * for GitHub's 32px heading; here the logo tracks whatever Furo sets. */
 h1[align="center"] img,
 .sidebar-brand .sidebar-logo {
   width: 1.275em;
   height: auto;
-  /* Furo centers a stacked logo and caps it at the sidebar's width; neither
-   * applies once it is a flex item sized off the wordmark. */
   max-width: none;
   margin: 0;
 }
 
-/* Furo wraps the logo in a block that carries the stacked layout's spacing. */
 .sidebar-brand .sidebar-logo-container {
   display: flex;
   margin: 0;
 }
 
-/* Furo's own brand size, moved onto the anchor so the wordmark, the gap and
- * the logo are all measured from it. */
 .sidebar-brand {
   font-size: 1.5rem;
-  /* Room above the mark, so it reads as the sidebar's masthead rather than as
-   * the first item in the list. Furo's stacked brand got some of this from the
-   * margins the row layout had to drop; this is a multiple of the theme's own
-   * spacing step rather than a new number, so it keeps the sidebar's rhythm. */
   padding-top: calc(var(--sidebar-item-spacing-vertical) * 4);
 }
 
-/* The mark is lowercase. Done here rather than in `html_title` so the title
- * stays "Leika" everywhere it is read as text rather than drawn: the browser
- * tab, the search index, the page metadata. */
 .sidebar-brand-text {
   text-transform: lowercase;
-  /* Furo sizes the brand text but not the anchor around it, which would leave
-   * the gap and the logo measured against a different type size than the
-   * wordmark they are proportioned to. The anchor carries the size now, and
-   * this inherits it, so every `em` above resolves against one basis. */
   font-size: inherit;
-  /* Furo gives the wordmark the column layout's vertical margins. */
   margin: 0;
-  /* Stated here rather than inherited from the anchor. The brand links to the
-   * page it is on, so it is always `:visited`, and Furo's `a:visited` outranks
-   * a plain class -- the wordmark would come up link-colored the moment a
-   * reader had been to the homepage. A span is never a link, so its own
-   * declaration settles it. The token flips itself in dark mode, so no
-   * inversion block is needed here. */
   color: var(--foreground);
 }

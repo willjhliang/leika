@@ -1,10 +1,10 @@
 import React, { useContext } from "react";
-import { v4 as uuid } from "uuid";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ViewerContext, ViewerContextContents } from "../ViewerContext";
 import { GuiUploadButtonMessage } from "../WebsocketMessages";
+import { randomUuid } from "../utils/randomUuid";
 import { GuiButtonRow, IconHtml } from "./common";
 
 export default function UploadButtonComponent({
@@ -86,7 +86,7 @@ function useFileUpload({
     const viewerMutable = viewer.mutable.current;
     const chunkSize = 512 * 1024;
     const numChunks = Math.ceil(file.size / chunkSize);
-    const transferUuid = uuid();
+    const transferUuid = randomUuid();
 
     updateUploadState({
       componentId: componentUuid,

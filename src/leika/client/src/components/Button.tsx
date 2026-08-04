@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
 import { GuiButtonRow, IconHtml } from "./common";
 
@@ -19,24 +20,31 @@ export default function ButtonComponent({
 }: GuiButtonMessage) {
   const { messageSender } = React.useContext(GuiComponentContext)!;
   const holdIntervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
+  const holdFrequencies = React.useMemo(
+    () =>
+      holdCallbackFreqs.filter(
+        (frequency) => Number.isFinite(frequency) && frequency > 0,
+      ),
+    [holdCallbackFreqs],
+  );
 
   const stopHoldTimers = useCallback(() => {
     holdIntervalsRef.current.forEach(clearInterval);
     holdIntervalsRef.current = [];
   }, []);
 
-  useEffect(() => stopHoldTimers, [stopHoldTimers]);
+  useEffect(() => stopHoldTimers, [holdFrequencies, stopHoldTimers]);
   useEffect(() => {
     if (disabled) stopHoldTimers();
   }, [disabled, stopHoldTimers]);
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
-      if (event.button !== 0 || holdCallbackFreqs.length === 0) return;
+      if (event.button !== 0 || holdFrequencies.length === 0) return;
       if (holdIntervalsRef.current.length > 0) return;
 
       event.currentTarget.setPointerCapture(event.pointerId);
-      for (const frequency of holdCallbackFreqs) {
+      for (const frequency of holdFrequencies) {
         messageSender({
           type: "GuiButtonHoldMessage",
           uuid,
@@ -50,12 +58,12 @@ export default function ButtonComponent({
                 uuid,
                 frequency,
               }),
-            1000 / frequency,
+            Math.max(GUI_MESSAGE_THROTTLE_MS, 1000 / frequency),
           ),
         );
       }
     },
-    [holdCallbackFreqs, messageSender, uuid],
+    [holdFrequencies, messageSender, uuid],
   );
 
   const button = (

@@ -1,5 +1,3 @@
-"use client";
-
 import { PipetteIcon, RotateCcwIcon } from "lucide-react";
 import * as React from "react";
 

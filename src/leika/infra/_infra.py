@@ -34,6 +34,17 @@ from ._auth import HttpPasswordGuard
 from ._messages import Message
 
 
+class _WebsocketLogFilter(logging.Filter):
+    """Hide the expected rejection used to serve ordinary HTTP responses."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() != "connection rejected (200 OK)"
+
+
+_WEBSOCKET_LOGGER = logging.getLogger("leika.websockets")
+_WEBSOCKET_LOGGER.addFilter(_WebsocketLogFilter())
+
+
 @dataclasses.dataclass
 class _ClientHandleState:
     # Internal state for ClientConnection objects.
@@ -127,7 +138,7 @@ class WebsockClientConnection(WebsockMessageHandler):
 
     def __init__(
         self,
-        client_id: int,
+        client_id: ClientId,
         client_state: _ClientHandleState,
     ) -> None:
         self.client_id = client_id
@@ -237,8 +248,9 @@ class WebsockServer(WebsockMessageHandler):
         for client in list(self._client_state_from_id.values()):
             client.message_buffer.set_done()
 
-        # Wait for the server thread to finish.
-        self._server_thread.join(timeout=0.1)
+        self._server_thread.join(timeout=10.0)
+        if self._server_thread.is_alive():
+            raise RuntimeError("Leika server thread did not stop within ten seconds.")
 
     def on_client_connect(self, cb: Callable[[WebsockClientConnection], None | Coroutine]) -> None:
         """Attach a callback to run for newly connected clients."""
@@ -434,31 +446,10 @@ class WebsockServer(WebsockMessageHandler):
         file_cache_gzipped: dict[Path, bytes] = {}
         file_cache_etags: dict[tuple[Path, bool], str] = {}
 
-        filter_added = False
-
         def leika_http_server(
             connection: ServerConnection,
             request: Request,
         ) -> Response | None:
-            # <Hack>
-            # Suppress errors for:
-            # - https://github.com/python-websockets/websockets/issues/1513
-            #    - (fixed in newer versions of websockets)
-            # - https://github.com/python-websockets/websockets/issues/1606
-            nonlocal filter_added
-            if not filter_added:
-
-                class NoHttpErrors(logging.Filter):
-                    def filter(self, record):
-                        return record.getMessage() not in (
-                            "opening handshake failed",
-                            "connection rejected (200 OK)",
-                        )
-
-                connection.logger.logger.addFilter(NoHttpErrors())  # type: ignore
-                filter_added = True
-            # </Hack>
-
             # The password gate comes first: nothing -- static files or the
             # websocket handshake -- is reachable without authenticating.
             if auth_guard is not None:
@@ -605,6 +596,7 @@ class WebsockServer(WebsockMessageHandler):
                         ws_handler,
                         host,
                         port_attempt,
+                        logger=_WEBSOCKET_LOGGER,
                         # Increase ws message size limit to 50MB to allow large messages.
                         # for large pane images.
                         max_size=50 * 1024 * 1024,
@@ -646,8 +638,11 @@ class WebsockServer(WebsockMessageHandler):
         event_loop.run_until_complete(start_server())
         rich.print("[bold](leika)[/bold] Server stopped")
 
-        # Clean up the event loop to prevent reference leaks.
-        event_loop.stop()
+        pending = asyncio.all_tasks(event_loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         event_loop.close()
 
 

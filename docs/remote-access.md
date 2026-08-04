@@ -1,10 +1,12 @@
 # Remote access
 
-A leika server listens on `localhost:8080`. When it runs on another machine,
-the usual way in is port forwarding (`ssh -L 8080:localhost:8080 ...`) -- but
-sometimes there is no path to forward through, such as when the machine sits
-behind a VPN. Two server options cover that case: a password gate and a share
-tunnel.
+By default, a leika server binds to `0.0.0.0:8080`, so it is reachable through
+the machine's network interfaces even though its printed convenience URL uses
+`localhost`. Use `Server(host="127.0.0.1")` when it should be local only.
+
+For a server on another machine, the usual path is port forwarding
+(`ssh -L 8080:localhost:8080 ...`). When forwarding is unavailable, a password
+gate, share tunnel, or mesh VPN can provide controlled remote access.
 
 ## Password protection
 

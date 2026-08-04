@@ -88,6 +88,30 @@ export type DragController = Pick<
   "startGroupDrag" | "startTabDrag" | "startWindowDrag" | "startColumnDrag"
 >;
 
+/** Resolve only a floating window's model-owned stack groups, in stack order.
+ * Nested dock-area groups are collected separately as area targets. */
+export function floatingStackGroupElements(
+  windowElement: Element,
+  stack: readonly GroupId[],
+): { element: Element; index: number }[] {
+  const stackIds = new Set(stack);
+  const elementsByGroup = new Map<GroupId, Element>();
+  windowElement.querySelectorAll("[data-dock-group]").forEach((element) => {
+    const groupId = element.getAttribute("data-dock-group");
+    if (
+      groupId !== null &&
+      stackIds.has(groupId) &&
+      !elementsByGroup.has(groupId)
+    ) {
+      elementsByGroup.set(groupId, element);
+    }
+  });
+  return stack.flatMap((groupId, index) => {
+    const element = elementsByGroup.get(groupId);
+    return element === undefined ? [] : [{ element, index }];
+  });
+}
+
 export function createDragController(deps: DragControllerDeps): DragController {
   const {
     containerRef,
@@ -187,14 +211,16 @@ export function createDragController(deps: DragControllerDeps): DragController {
         `[data-floating-window="${win.id}"]`,
       );
       if (winEl === null) return;
-      winEl.querySelectorAll("[data-dock-group]").forEach((groupEl, index) => {
-        const g = readGroup(groupEl, {
-          kind: "floating",
-          windowId: win.id,
-          index,
-        });
-        if (g !== null) targets.groups.push(g);
-      });
+      floatingStackGroupElements(winEl, win.stack).forEach(
+        ({ element, index }) => {
+          const g = readGroup(element, {
+            kind: "floating",
+            windowId: win.id,
+            index,
+          });
+          if (g !== null) targets.groups.push(g);
+        },
+      );
     });
     // Nested dockable areas. Pushed LAST so that when an area sits inside a
     // docked/floating panel's body, hovering it makes the area (the topmost
@@ -880,10 +906,10 @@ export function createDragController(deps: DragControllerDeps): DragController {
       if (prefersReducedMotion()) {
         setDraggingTabId(null);
       } else {
-        settleTimer.current = window.setTimeout(
-          () => setDraggingTabId(null),
-          TAB_GLIDE_MS + 20,
-        );
+        settleTimer.current = window.setTimeout(() => {
+          settleTimer.current = undefined;
+          setDraggingTabId(null);
+        }, TAB_GLIDE_MS + 20);
       }
     };
 

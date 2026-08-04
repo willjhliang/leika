@@ -1,20 +1,5 @@
-// Pure hit-test resolution tests.
-//
-// Feeds SYNTHETIC rects (no DOM) into hitTest/tabInsertion and asserts the
-// DropResult kind + key fields and that hint geometry is plausible. The module
-// is DOM-free; the only DOM type it references is DOMRect, which we synthesize
-// below.
-//
-// Regression pins (from adversarial pointer probing, since FIXED) live next to
-// the describe of the zone/target they pin, marked with a "regression:"
-// comment. Notably BUG #4: when drop targets overlap (two floating windows, or
-// a floating window atop the docked region), hitTest used to resolve to the
-// FIRST matching rect -- the target painted UNDERNEATH. FIX: hitTest iterates
-// all targets and keeps the LAST match (targets are ordered back-to-front:
-// docked behind, then floating ascending z), so the visually-topmost target
-// wins. (DockManager collects floating targets in front-order; floating
-// windows render in a stable DOM order with z from front-order, so raising a
-// window no longer reorders the DOM.)
+// Pure hit-test coverage using synthetic DOMRects. Targets are ordered
+// back-to-front, so the last overlapping match must win.
 
 import { describe, it, expect } from "vitest";
 import {

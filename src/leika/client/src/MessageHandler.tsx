@@ -10,6 +10,7 @@ import {
   updateNotification,
 } from "./notifications";
 import { notePlotlyMaybeLoaded } from "./plotlyReady";
+import { makeMessageQueueScheduler } from "./messageQueueScheduler";
 import { ViewerContext } from "./ViewerContext";
 import {
   FileTransferPart,
@@ -121,16 +122,12 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
   };
 }
 
-/** Process websocket batches before paint, with a timer fallback for hidden tabs. */
+/** Process queued websocket batches before paint. */
 export function MessageHandler() {
   const viewer = useContext(ViewerContext)!;
   const handleMessage = useMessageHandler();
 
   React.useEffect(() => {
-    let stopped = false;
-    let animationFrame: number | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
     const processQueue = () => {
       const queue = viewer.mutable.current.messageQueue;
       if (queue.length === 0) return;
@@ -176,29 +173,26 @@ export function MessageHandler() {
       }
     };
 
-    const schedule = () => {
-      if (stopped) return;
-      if (document.visibilityState === "hidden") {
-        // rAF does not fire in hidden tabs. The nominal 16ms matches the
-        // visible cadence; browsers clamp hidden-tab timers to ~1s, which is
-        // plenty for a tab nobody is watching.
-        timer = setTimeout(tick, 16);
-      } else {
-        animationFrame = requestAnimationFrame(tick);
-      }
-    };
-    const tick = () => {
-      animationFrame = null;
-      timer = null;
-      processQueue();
-      schedule();
-    };
+    const scheduler = makeMessageQueueScheduler(processQueue, {
+      isHidden: () => document.visibilityState === "hidden",
+      requestFrame: (callback) => requestAnimationFrame(callback),
+      cancelFrame: (handle) => cancelAnimationFrame(handle),
+      setTimer: (callback) => setTimeout(callback, 16),
+      clearTimer: (handle) => clearTimeout(handle),
+    });
+    const handleVisibilityChange = () => scheduler.visibilityChanged();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    schedule();
+    const mutable = viewer.mutable.current;
+    const previousNotifier = mutable.notifyMessageQueue;
+    mutable.notifyMessageQueue = scheduler.schedule;
+    if (mutable.messageQueue.length > 0) scheduler.schedule();
     return () => {
-      stopped = true;
-      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
-      if (timer !== null) clearTimeout(timer);
+      if (mutable.notifyMessageQueue === scheduler.schedule) {
+        mutable.notifyMessageQueue = previousNotifier;
+      }
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      scheduler.stop();
     };
   }, [handleMessage, viewer]);
 

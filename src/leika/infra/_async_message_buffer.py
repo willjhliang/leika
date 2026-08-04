@@ -133,47 +133,51 @@ class AsyncMessageBuffer:
             pass
 
     async def window_generator(self, client_id: int) -> AsyncGenerator[Sequence[Message], None]:
-        """Async iterator over messages. Loops infinitely, and waits when no messages
-        are available."""
+        """Yield message windows until the buffer is done."""
 
         last_sent_id = -1
         flush_wait = self.event_loop.create_task(self.flush_event.wait())
-        while not self.done:
-            window: List[Message] = []
-            most_recent_message_id = self.message_counter - 1
-            while (
-                last_sent_id < most_recent_message_id
-                and len(window) < self.max_window_size
-                # We should only be polling for new messages if we aren't in an atomic block.
-                and self.atomic_counter == 0
-            ):
-                last_sent_id += 1
-                if self.persistent_messages:
-                    message = self.message_from_id.get(last_sent_id, None)
+        try:
+            while not self.done:
+                window: List[Message] = []
+                most_recent_message_id = self.message_counter - 1
+                while (
+                    last_sent_id < most_recent_message_id
+                    and len(window) < self.max_window_size
+                    # We should only poll while no atomic block is active.
+                    and self.atomic_counter == 0
+                ):
+                    last_sent_id += 1
+                    if self.persistent_messages:
+                        message = self.message_from_id.get(last_sent_id, None)
+                    else:
+                        # If we're not persisting messages, remove them from the buffer.
+                        with self.buffer_lock:
+                            message = self.message_from_id.pop(last_sent_id, None)
+                            if message is not None:
+                                redundancy_key = message.redundancy_key()
+                                self.id_from_redundancy_key.pop(redundancy_key, None)
+
+                    if message is not None and message.excluded_self_client != client_id:
+                        window.append(message)
+
+                if len(window) > 0:
+                    yield window
                 else:
-                    # If we're not persisting messages, remove them from the buffer.
-                    with self.buffer_lock:
-                        message = self.message_from_id.pop(last_sent_id, None)
-                        if message is not None:
-                            redundancy_key = message.redundancy_key()
-                            self.id_from_redundancy_key.pop(redundancy_key, None)
+                    await self.message_event.wait()
+                    self.message_event.clear()
 
-                if message is not None and message.excluded_self_client != client_id:
-                    window.append(message)
-
-            if len(window) > 0:
-                # Yield a window!
-                yield window
-            else:
-                # Wait for a new message to come in.
-                await self.message_event.wait()
-                self.message_event.clear()
-
-            # Add a delay if either (a) we failed to yield or (b) there's currently no messages to send.
-            most_recent_message_id = self.message_counter - 1
-            if len(window) == 0 or most_recent_message_id == last_sent_id:
-                done, pending = await asyncio.wait([flush_wait], timeout=self.window_duration_sec)
-                del pending
-                if flush_wait in done and not self.done:
-                    self.flush_event.clear()
-                    flush_wait = self.event_loop.create_task(self.flush_event.wait())
+                most_recent_message_id = self.message_counter - 1
+                if len(window) == 0 or most_recent_message_id == last_sent_id:
+                    completed, _ = await asyncio.wait(
+                        [flush_wait], timeout=self.window_duration_sec
+                    )
+                    if flush_wait in completed and not self.done:
+                        self.flush_event.clear()
+                        flush_wait = self.event_loop.create_task(self.flush_event.wait())
+        finally:
+            flush_wait.cancel()
+            try:
+                await flush_wait
+            except asyncio.CancelledError:
+                pass

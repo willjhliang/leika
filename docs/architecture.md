@@ -5,9 +5,10 @@ HTTP serves the client bundle; a binary msgpack websocket carries typed
 messages in both directions. Large payloads use zstd compression and uploads
 are chunked.
 
-The server has no authentication and binds to `0.0.0.0` by default. Bind to a
-trusted interface or put Leika behind an authenticated reverse proxy when it is
-not strictly local.
+The server binds to `0.0.0.0` by default and has no password unless one is
+configured. Use `host="127.0.0.1"` for same-machine access, or set `password=`
+and provide a protected transport when other machines can reach it. See
+[Remote access](remote-access.md) for the complete security model.
 
 ## State flow
 

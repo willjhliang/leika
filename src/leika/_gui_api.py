@@ -5,6 +5,7 @@ import builtins
 import dataclasses
 import threading
 import time
+import warnings
 from asyncio import AbstractEventLoop
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -69,6 +70,7 @@ from ._gui_handles import (
     PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
+    _cast_vector,
     _checklist_items,
     _colors_to_int_tuple,
     _CommandHandleState,
@@ -76,6 +78,7 @@ from ._gui_handles import (
     _GuiInputHandle,
     _make_uuid,
     _plotly_json_with_config,
+    _string_options,
     install_container_add_methods,
     not_container_scoped,
 )
@@ -85,6 +88,15 @@ from ._image_encoding import encode_image_binary
 from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import NotificationHandle, _NotificationHandleState
 from ._threadpool_exceptions import print_threadpool_errors
+from ._validation import (
+    validate_finite_number as _validate_number,
+)
+from ._validation import (
+    validate_nonnegative_integer as _validate_nonnegative_integer,
+)
+from ._validation import (
+    validate_positive_number as _validate_positive_number,
+)
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -97,23 +109,6 @@ IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 T = TypeVar("T")
-
-
-@overload
-def _cast_vector(vector: tuple | np.ndarray, length: Literal[2]) -> tuple[float, float]: ...
-
-
-@overload
-def _cast_vector(vector: tuple | np.ndarray, length: Literal[3]) -> tuple[float, float, float]: ...
-
-
-def _cast_vector(vector: tuple | np.ndarray, length: int) -> tuple[float, ...]:
-    """Normalize a fixed-length vector for a fixed-length GUI input."""
-
-    array = np.asarray(vector)
-    if array.shape != (length,):
-        raise ValueError(f"Expected vector of shape {(length,)}, got {array.shape}.")
-    return tuple(map(float, array))
 
 
 def _compute_step(x: float | None) -> float:  # type: ignore
@@ -320,13 +315,13 @@ def _apply_default_order(order: float | None) -> float:
 
 
 class _FileUploadState(TypedDict):
+    client_id: ClientId
+    source_component_uuid: str
     filename: str
-    mime_type: str
     part_count: int
     parts: dict[int, bytes]
     total_bytes: int
     transferred_bytes: int
-    lock: threading.Lock
 
 
 class GuiApi(GuiContainer):
@@ -372,7 +367,8 @@ class GuiApi(GuiContainer):
         }
         self._modal_handle_from_uuid: dict[str, GuiModalHandle] = {}
         self._command_handle_from_uuid: dict[str, CommandHandle] = {}
-        self._current_file_upload_states: dict[str, _FileUploadState] = {}
+        self._current_file_upload_states: dict[tuple[ClientId, str], _FileUploadState] = {}
+        self._file_upload_lock = threading.RLock()
 
         # Set to True when plotly.min.js has been sent to client. The lock
         # keeps concurrent first adds from queueing the ~3MB payload twice.
@@ -440,7 +436,10 @@ class GuiApi(GuiContainer):
         prop_value = message.updates["value"]
 
         # Cast to the shape the handle holds, which is the handle's own to know.
-        prop_value = handle._coerce_client_value(prop_value)
+        try:
+            prop_value = handle._coerce_client_value(prop_value)
+        except (TypeError, ValueError, OverflowError):
+            return
 
         has_changed = handle_state.value != prop_value
         if has_changed:
@@ -456,7 +455,7 @@ class GuiApi(GuiContainer):
         client = self._resolve_client(client_id)
         if client is None:
             return
-        for cb in handle_state.update_cb:
+        for cb in tuple(handle_state.update_cb):
             if asyncio.iscoroutinefunction(cb):
                 await cb(GuiEvent(client, client_id, handle))
             else:
@@ -489,7 +488,7 @@ class GuiApi(GuiContainer):
             return
 
         # Call all callbacks for this frequency.
-        for cb in callbacks:
+        for cb in tuple(callbacks):
             if asyncio.iscoroutinefunction(cb):
                 await cb(GuiEvent(client, client_id, handle))
             else:
@@ -515,7 +514,7 @@ class GuiApi(GuiContainer):
         if client is None:
             return
 
-        for cb in handle._submit_cb:
+        for cb in tuple(handle._submit_cb):
             if asyncio.iscoroutinefunction(cb):
                 await cb(GuiEvent(client, client_id, handle))
             else:
@@ -529,50 +528,67 @@ class GuiApi(GuiContainer):
     def _handle_file_transfer_start(
         self, client_id: ClientId, message: _messages.FileTransferStartUpload
     ) -> None:
-        if message.source_component_uuid not in self._gui_input_handle_from_uuid:
+        if (
+            not message.transfer_uuid
+            or message.part_count < 0
+            or message.size_bytes < 0
+            or (message.part_count == 0) != (message.size_bytes == 0)
+            or (message.size_bytes > 0 and message.part_count > message.size_bytes)
+        ):
             return
-        self._current_file_upload_states[message.transfer_uuid] = {
-            "filename": message.filename,
-            "mime_type": message.mime_type,
-            "part_count": message.part_count,
-            "parts": {},
-            "total_bytes": message.size_bytes,
-            "transferred_bytes": 0,
-            "lock": threading.Lock(),
-        }
 
-        # A zero-byte file is sent with part_count == 0, so no FileTransferPart
-        # messages ever arrive to drive completion. Finish it here -- otherwise
-        # on_upload never fires and the transfer state leaks forever.
-        if message.part_count == 0:
-            self._websock_interface.queue_message(
-                FileTransferPartAck(
-                    source_component_uuid=message.source_component_uuid,
-                    transfer_uuid=message.transfer_uuid,
-                    transferred_bytes=0,
-                    total_bytes=0,
+        key = (client_id, message.transfer_uuid)
+        completion = None
+        with self._file_upload_lock:
+            handle = self._gui_input_handle_from_uuid.get(message.source_component_uuid)
+            if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
+                return
+            if key in self._current_file_upload_states:
+                return
+            self._current_file_upload_states[key] = {
+                "client_id": client_id,
+                "source_component_uuid": message.source_component_uuid,
+                "filename": message.filename,
+                "part_count": message.part_count,
+                "parts": {},
+                "total_bytes": message.size_bytes,
+                "transferred_bytes": 0,
+            }
+
+            # Empty uploads have no part message to drive completion.
+            if message.part_count == 0:
+                self._websock_interface.queue_message(
+                    FileTransferPartAck(
+                        source_component_uuid=message.source_component_uuid,
+                        transfer_uuid=message.transfer_uuid,
+                        transferred_bytes=0,
+                        total_bytes=0,
+                    )
                 )
-            )
-            self._finish_file_upload(
-                client_id, message.transfer_uuid, message.source_component_uuid
-            )
+                completion = self._complete_file_upload_locked(key)
 
-    def _finish_file_upload(
+        if completion is not None:
+            self._dispatch_file_upload_completion(completion)
+
+    def _complete_file_upload_locked(
         self,
-        client_id: ClientId,
-        transfer_uuid: str,
-        source_component_uuid: str,
-    ) -> None:
-        """Finalize a completed upload by assembling the file contents and
-        firing the handle's update callbacks. Shared by the normal multi-part
-        path and the zero-byte path (which has no parts)."""
-        state = self._current_file_upload_states.pop(transfer_uuid, None)
+        key: tuple[ClientId, str],
+    ) -> (
+        tuple[
+            ClientId,
+            GuiUploadButtonHandle,
+            tuple[Callable[..., Any], ...],
+        ]
+        | None
+    ):
+        """Consume a completed upload while ``_file_upload_lock`` is held."""
+        state = self._current_file_upload_states.pop(key, None)
         if state is None:
-            return
+            return None
 
-        handle = self._gui_input_handle_from_uuid.get(source_component_uuid, None)
-        if handle is None or handle._impl.removed:
-            return
+        handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
+        if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
+            return None
         handle_state = handle._impl
 
         value = UploadedFile(
@@ -583,12 +599,22 @@ class GuiApi(GuiContainer):
         # Update state.
         handle_state.value = value
         handle_state.update_timestamp = time.time()
+        return state["client_id"], handle, tuple(handle_state.update_cb)
 
-        # Trigger callbacks.
+    def _dispatch_file_upload_completion(
+        self,
+        completion: tuple[
+            ClientId,
+            GuiUploadButtonHandle,
+            tuple[Callable[..., Any], ...],
+        ],
+    ) -> None:
+        """Run completion callbacks without holding the upload-state lock."""
+        client_id, handle, callbacks = completion
         client = self._resolve_client(client_id)
         if client is None:
             return
-        for cb in handle_state.update_cb:
+        for cb in callbacks:
             if asyncio.iscoroutinefunction(cb):
                 self._event_loop.create_task(cb(GuiEvent(client, client_id, handle)))
             else:
@@ -599,35 +625,68 @@ class GuiApi(GuiContainer):
     def _handle_file_transfer_part(
         self, client_id: ClientId, message: _messages.FileTransferPart
     ) -> None:
-        if message.transfer_uuid not in self._current_file_upload_states:
-            return
-        # The upload button may have been removed mid-transfer; drop the part.
-        if message.source_component_uuid not in self._gui_input_handle_from_uuid:
-            return
+        key = (client_id, message.transfer_uuid)
+        completion = None
+        with self._file_upload_lock:
+            state = self._current_file_upload_states.get(key)
+            if state is None:
+                return
+            if message.source_component_uuid != state["source_component_uuid"]:
+                return
+            handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
+            if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
+                self._current_file_upload_states.pop(key, None)
+                return
+            if not 0 <= message.part_index < state["part_count"]:
+                return
+            if message.part_index in state["parts"]:
+                return
+            transferred_bytes = state["transferred_bytes"] + len(message.content)
+            if transferred_bytes > state["total_bytes"]:
+                self._current_file_upload_states.pop(key, None)
+                return
 
-        state = self._current_file_upload_states[message.transfer_uuid]
-        state["parts"][message.part_index] = message.content
-        total_bytes = state["total_bytes"]
-
-        with state["lock"]:
-            state["transferred_bytes"] += len(message.content)
-
-            # Send ack to the server.
+            state["parts"][message.part_index] = message.content
+            state["transferred_bytes"] = transferred_bytes
+            total_bytes = state["total_bytes"]
             self._websock_interface.queue_message(
                 FileTransferPartAck(
-                    source_component_uuid=message.source_component_uuid,
+                    source_component_uuid=state["source_component_uuid"],
                     transfer_uuid=message.transfer_uuid,
-                    transferred_bytes=state["transferred_bytes"],
+                    transferred_bytes=transferred_bytes,
                     total_bytes=total_bytes,
                 )
             )
 
-            if state["transferred_bytes"] < total_bytes:
+            if len(state["parts"]) < state["part_count"]:
                 return
+            if transferred_bytes != total_bytes:
+                self._current_file_upload_states.pop(key, None)
+                return
+            completion = self._complete_file_upload_locked(key)
 
-        # Finish the upload.
-        assert state["transferred_bytes"] == total_bytes
-        self._finish_file_upload(client_id, message.transfer_uuid, message.source_component_uuid)
+        if completion is not None:
+            self._dispatch_file_upload_completion(completion)
+
+    def _discard_file_uploads(
+        self,
+        *,
+        client_id: ClientId | None = None,
+        source_component_uuid: str | None = None,
+    ) -> None:
+        """Discard incomplete uploads for a disconnected client or removed button."""
+        with self._file_upload_lock:
+            stale = [
+                key
+                for key, state in self._current_file_upload_states.items()
+                if (client_id is None or state["client_id"] == client_id)
+                and (
+                    source_component_uuid is None
+                    or state["source_component_uuid"] == source_component_uuid
+                )
+            ]
+            for key in stale:
+                self._current_file_upload_states.pop(key, None)
 
     async def _handle_command_trigger(
         self, client_id: ClientId, message: _messages.CommandTriggerMessage
@@ -644,7 +703,7 @@ class GuiApi(GuiContainer):
         if client is None:
             return
 
-        for cb in handle_state.trigger_cb:
+        for cb in tuple(handle_state.trigger_cb):
             if asyncio.iscoroutinefunction(cb):
                 await cb(CommandEvent(client, client_id, handle))
             else:
@@ -730,6 +789,11 @@ class GuiApi(GuiContainer):
                        changes their OS setting mid-session.
         """
 
+        if control_layout not in ("floating", "collapsible", "fixed"):
+            raise ValueError("control_layout must be 'floating', 'collapsible', or 'fixed'.")
+        if dark_mode != "auto" and type(dark_mode) is not bool:
+            raise ValueError("dark_mode must be True, False, or 'auto'.")
+
         self._websock_interface.queue_message(
             _messages.ThemeConfigurationMessage(
                 # Icon names resolve to SVG here, so the client never needs to
@@ -764,6 +828,10 @@ class GuiApi(GuiContainer):
             auto_close_seconds: Time before the notification closes on its own;
                 ``None`` keeps it up until it is closed or removed.
         """
+        if auto_close_seconds is not None:
+            _validate_number(auto_close_seconds, "auto_close_seconds")
+            if auto_close_seconds < 0:
+                raise ValueError("auto_close_seconds must be non-negative or None.")
         handle = NotificationHandle(
             _NotificationHandleState(
                 websock_interface=self._websock_interface,
@@ -1233,7 +1301,13 @@ class GuiApi(GuiContainer):
         Returns:
             Handle for manipulating the image element.
         """
-        resolved_format, data = encode_image_binary(image, format, jpeg_quality=jpeg_quality)
+        image_array = np.asarray(image)
+        if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
+            warnings.warn(
+                "Encoding an RGBA image as JPEG discards its alpha channel.",
+                stacklevel=2,
+            )
+        resolved_format, data = encode_image_binary(image_array, format, jpeg_quality=jpeg_quality)
         message = _messages.GuiImageMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
@@ -1255,7 +1329,7 @@ class GuiApi(GuiContainer):
                 props=message.props,
                 parent_container_id=message.container_uuid,
             ),
-            _image=image,
+            _image=image_array,
             _jpeg_quality=jpeg_quality,
             _user_format=format,
         )
@@ -1316,8 +1390,9 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        # If plotly.min.js hasn't been sent to the client yet, the client won't be able
-        # to render the plot. Send this large file now! (~3MB)
+        _validate_positive_number(aspect, "aspect")
+
+        # Plotly must be available before the figure creation message.
         self._ensure_plotly_js_sent()
 
         # After plotly.min.js has been sent, we can send the plotly figure.
@@ -1687,6 +1762,7 @@ class GuiApi(GuiContainer):
 
         _validate_button_color(color)
         _validate_file_content(content, filename, "add_preview_button()")
+        _validate_nonnegative_integer(max_bytes, "max_bytes")
 
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -1730,11 +1806,7 @@ class GuiApi(GuiContainer):
         order: float | None,
     ) -> GuiButtonGroupHandle:
         """The many-faced half of :meth:`add_button`."""
-        if len(options) == 0:
-            raise ValueError(
-                "add_button() needs at least one option: an empty sequence would draw"
-                " a group with nothing in it."
-            )
+        options = _string_options(options, "add_button()")
         value = options[0]
         uuid = _make_uuid()
         order = _apply_default_order(order)
@@ -1750,7 +1822,7 @@ class GuiApi(GuiContainer):
                         label=label,
                         hint=hint,
                         color=_button_colors(len(options), color),
-                        options=tuple(options),
+                        options=options,
                         _merge=_merge_flags(len(options), merge),
                         disabled=disabled,
                         visible=visible,
@@ -1900,12 +1972,11 @@ class GuiApi(GuiContainer):
                 "icon= is for a single toggle; a row has one face per option and"
                 " nowhere to say which of them the icon belongs to."
             )
-        options = tuple(text)
-        if len(options) == 0:
-            raise ValueError(
-                "add_toggle() needs at least one option: an empty sequence would draw"
-                " a row with nothing in it."
-            )
+        if type(multiple) is not bool:
+            raise ValueError("multiple must be a bool.")
+        if required is not None and type(required) is not bool:
+            raise ValueError("required must be a bool or None.")
+        options = _string_options(text, "add_toggle()")
         # A row behaves like the control it resembles unless told otherwise: a
         # choice between options is required the way a radio group is, and a row
         # of independent switches is not, the way checkboxes are not.
@@ -2036,8 +2107,11 @@ class GuiApi(GuiContainer):
         value = initial_value
         if not isinstance(value, str):
             raise ValueError(f"initial_value must be a string, not {type(value).__name__}.")
-        if rows is not None and rows < 1:
-            raise ValueError(f"rows= is a height in lines, so it starts at 1; got {rows}.")
+        if rows is not None:
+            if isinstance(rows, bool) or not isinstance(rows, int) or rows < 1:
+                raise ValueError(
+                    f"rows= is a height in lines and must be a positive integer; got {rows!r}."
+                )
         uuid = _make_uuid()
         order = _apply_default_order(order)
         handle = GuiTextHandle(
@@ -2106,6 +2180,8 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
+        if isinstance(initial_value, str):
+            raise ValueError("add_list() initial_value must be a sequence, not one string.")
         entries = tuple(initial_value)
         for entry in entries:
             if not isinstance(entry, str):
@@ -2242,8 +2318,19 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
         value: IntOrFloat = initial_value
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"initial_value must be a number, not {type(value).__name__}.")
+        _validate_number(value, "initial_value")
+        if min is not None:
+            _validate_number(min, "min")
+        if max is not None:
+            _validate_number(max, "max")
+        if step is not None:
+            _validate_positive_number(step, "step")
+        if min is not None and max is not None and min > max:
+            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
+        if min is not None and value < min:
+            raise ValueError(f"initial_value {value} is below min={min}.")
+        if max is not None and value > max:
+            raise ValueError(f"initial_value {value} is above max={max}.")
 
         # Incoming client edits are cast to the type of the stored value, so an
         # int value with float bounds would truncate every edit. Promote it.
@@ -2322,6 +2409,14 @@ class GuiApi(GuiContainer):
         value = _cast_vector(value, 2)
         min = _cast_vector(min, 2) if min is not None else None
         max = _cast_vector(max, 2) if max is not None else None
+        if step is not None:
+            _validate_positive_number(step, "step")
+        if min is not None and max is not None and any(lo > hi for lo, hi in zip(min, max)):
+            raise ValueError("Each vector min component must be at most its max component.")
+        if min is not None and any(component < lo for component, lo in zip(value, min)):
+            raise ValueError("initial_value has a component below min.")
+        if max is not None and any(component > hi for component, hi in zip(value, max)):
+            raise ValueError("initial_value has a component above max.")
         uuid = _make_uuid()
         order = _apply_default_order(order)
 
@@ -2382,6 +2477,14 @@ class GuiApi(GuiContainer):
         value = _cast_vector(value, 3)
         min = _cast_vector(min, 3) if min is not None else None
         max = _cast_vector(max, 3) if max is not None else None
+        if step is not None:
+            _validate_positive_number(step, "step")
+        if min is not None and max is not None and any(lo > hi for lo, hi in zip(min, max)):
+            raise ValueError("Each vector min component must be at most its max component.")
+        if min is not None and any(component < lo for component, lo in zip(value, min)):
+            raise ValueError("initial_value has a component below min.")
+        if max is not None and any(component > hi for component, hi in zip(value, max)):
+            raise ValueError("initial_value has a component above max.")
         uuid = _make_uuid()
         order = _apply_default_order(order)
 
@@ -2470,9 +2573,10 @@ class GuiApi(GuiContainer):
         """
         # Materialize once so a one-shot iterable isn't consumed by the checks
         # below and again by the message construction.
-        options_tuple = tuple(options)
-        if len(options_tuple) == 0:
-            raise ValueError("add_dropdown requires at least one option.")
+        options_tuple = cast(
+            "tuple[TLiteralString, ...] | tuple[TString, ...]",
+            _string_options(options, "add_dropdown()"),
+        )
         value = initial_value
         if value is None:
             value = options_tuple[0]
@@ -2521,6 +2625,7 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
+        _validate_number(initial_value, "initial_value")
         if not 0 <= initial_value <= 100:
             raise ValueError(
                 f"initial_value= is a percentage, so it lives in [0, 100]; got {initial_value}."
@@ -2585,6 +2690,10 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
         value: IntOrFloat = initial_value
+        _validate_number(value, "initial_value")
+        _validate_number(min, "min")
+        _validate_number(max, "max")
+        _validate_positive_number(step, "step")
         if max < min:
             raise ValueError(f"max= must be at least min=; got {min} > {max}.")
         step = builtins.min(step, max - min)
@@ -2660,8 +2769,26 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
+        _validate_number(min, "min")
+        _validate_number(max, "max")
+        _validate_positive_number(step, "step")
         if max < min:
             raise ValueError(f"max= must be at least min=; got {min} > {max}.")
+        initial_value = tuple(initial_value)
+        if not initial_value:
+            raise ValueError("initial_value must contain at least one slider value.")
+        for value in initial_value:
+            _validate_number(value, "initial_value entries")
+        if any(left > right for left, right in zip(initial_value, initial_value[1:])):
+            raise ValueError("initial_value entries must be in ascending order.")
+        if min_range is not None:
+            _validate_number(min_range, "min_range")
+            if min_range < 0:
+                raise ValueError("min_range must be non-negative.")
+            if any(
+                right - left < min_range for left, right in zip(initial_value, initial_value[1:])
+            ):
+                raise ValueError("initial_value entries are closer than min_range.")
         step = builtins.min(step, max - min)
         if not all(min <= x <= max for x in initial_value):
             raise ValueError(f"initial_value {initial_value} has entries outside [{min}, {max}].")
@@ -2733,7 +2860,7 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        value = cast("tuple[int, int, int]", _colors_to_int_tuple(initial_value))
+        value = cast("tuple[int, int, int]", _colors_to_int_tuple(initial_value, 3))
         uuid = _make_uuid()
         order = _apply_default_order(order)
         return GuiRgbHandle(
@@ -2780,7 +2907,7 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value = cast("tuple[int, int, int, int]", _colors_to_int_tuple(initial_value))
+        value = cast("tuple[int, int, int, int]", _colors_to_int_tuple(initial_value, 4))
         uuid = _make_uuid()
         order = _apply_default_order(order)
         return GuiRgbaHandle(

@@ -61,8 +61,8 @@ when you want the browser to restore a layout after a Python restart.
 - [Development](https://willjhliang.github.io/leika/development.html): local
   checks, browser builds, and packaging.
 
-Note that Leika's sole function is relaying formed visualizations and does not
-replace software like `matplotlib` or `plotly`.
+Leika relays visualizations you create; it does not replace libraries such as
+`matplotlib` or `plotly`.
 
 ## Acknowledgments
 

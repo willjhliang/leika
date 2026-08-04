@@ -1,4 +1,4 @@
-.PHONY: help install install-docs test test-e2e lint typecheck client-test build-client docs docs-serve package
+.PHONY: help install install-docs test test-e2e lint typecheck client-test build-client docs gallery docs-serve package
 
 help: ## Show available development commands
 	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -17,14 +17,14 @@ test-e2e: ## Run Playwright browser tests
 	pytest tests/e2e -n auto
 
 lint: ## Check Python formatting and lint rules
-	ruff check src tests examples scripts
-	ruff format --check src tests examples scripts
+	ruff check src tests examples scripts sync_client_server.py
+	ruff format --check src tests examples scripts sync_client_server.py
 
 typecheck: ## Type-check the Python package and examples
 	pyright src examples
 
-client-test: ## Type-check, lint, and unit-test the browser client
-	cd src/leika/client && npm run typecheck && npm run lint && npm test
+client-test: ## Type-check, lint, format-check, and unit-test the browser client
+	cd src/leika/client && npm run typecheck && npm run lint && npm run format:check && npm test
 
 build-client: ## Build the single-file browser client
 	leika-build-client
@@ -39,6 +39,7 @@ docs-serve: ## Serve the documentation on :8000, rebuilding as files change
 	sphinx-autobuild -b html -W --keep-going docs docs/_build/html \
 	  --watch README.md --open-browser
 
-package: ## Build distributions and enforce the wheel-size ceiling
+package: build-client ## Build and validate the release distributions
 	python -m build
 	python scripts/check_wheel.py dist/*.whl
+	python scripts/check_sdist.py dist/*.tar.gz

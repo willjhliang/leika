@@ -277,8 +277,13 @@ class RunJavascriptMessage(Message):
 
     @override
     def redundancy_key(self) -> str:
-        # Never cull these messages.
-        return str(uuid.uuid4())
+        # Each script is independent, but its key must remain stable while the
+        # buffer tracks and later removes this message.
+        key = self.__dict__.get("_cached_redundancy_key")
+        if key is None:
+            key = f"{type(self).__name__}-{uuid.uuid4()}"
+            object.__setattr__(self, "_cached_redundancy_key", key)
+        return key
 
 
 @dataclasses.dataclass

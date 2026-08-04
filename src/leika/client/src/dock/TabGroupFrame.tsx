@@ -168,13 +168,15 @@ export function TabGroupFrame({
 
   const stripRef = React.useRef<HTMLDivElement>(null);
   const previousLefts = React.useRef<Map<string, number>>(new Map());
-  const orderKey = group.panelIds.join("\n");
+  const orderKey = JSON.stringify(group.panelIds);
   React.useLayoutEffect(() => {
     const strip = stripRef.current;
     if (strip === null) return;
+    const currentIds = new Set<string>();
     strip.querySelectorAll<HTMLElement>("[data-dock-tab]").forEach((tab) => {
       const id = tab.getAttribute("data-dock-tab");
       if (id === null) return;
+      currentIds.add(id);
       const left = tab.offsetLeft;
       const previous = previousLefts.current.get(id);
       previousLefts.current.set(id, left);
@@ -192,6 +194,9 @@ export function TabGroupFrame({
         tab.style.transition = `transform ${TAB_GLIDE_MS}ms ease`;
         tab.style.transform = "";
       });
+    });
+    previousLefts.current.forEach((_, id) => {
+      if (!currentIds.has(id)) previousLefts.current.delete(id);
     });
   }, [orderKey, dock.draggingTabId]);
 
@@ -224,12 +229,6 @@ export function TabGroupFrame({
       inheritContentPadding={inheritContentPadding}
     />
   );
-  const body = renderPanelBody(group.activeId);
-  const collapsibleBody = (
-    <Collapsible open={!collapsed}>
-      <CollapsibleContent keepMounted>{body}</CollapsibleContent>
-    </Collapsible>
-  );
   const rootClassName = "flex min-h-0 w-full min-w-0 flex-col overflow-hidden";
   const rootStyle: React.CSSProperties = {
     flexGrow: collapsed ? 0 : fill ? 1 : undefined,
@@ -245,6 +244,12 @@ export function TabGroupFrame({
 
   if (unmergeable) {
     const panel = panels[group.activeId];
+    const body = renderPanelBody(group.activeId);
+    const collapsibleBody = (
+      <Collapsible open={!collapsed}>
+        <CollapsibleContent keepMounted>{body}</CollapsibleContent>
+      </Collapsible>
+    );
     const handleTestId = panel?.testId && `${panel.testId}-handle`;
     // The gap separating the header from the body is the header's, not the
     // root's: a press in it is a press on the title bar, and the header can

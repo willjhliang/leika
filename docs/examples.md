@@ -1,6 +1,7 @@
 # Examples
 
-Examples can be found on [Github](https://github.com/willjhliang/leika).
+The runnable sources live in the repository's
+[examples directory](https://github.com/willjhliang/leika/tree/main/examples).
 
 - `python examples/basic.py`: live NumPy image plus a slider and a checkbox;
   base install.

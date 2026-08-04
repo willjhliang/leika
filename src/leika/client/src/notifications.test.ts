@@ -5,7 +5,9 @@ import {
   type NotificationProps,
 } from "./notifications";
 
-const props = (overrides: Partial<NotificationProps> = {}): NotificationProps => ({
+const props = (
+  overrides: Partial<NotificationProps> = {},
+): NotificationProps => ({
   title: "Export finished",
   body: "Wrote 12 files.",
   loading: false,
@@ -33,13 +35,19 @@ describe("toastOptionsFor", () => {
 
   describe("auto-close", () => {
     it("converts seconds to milliseconds", () => {
-      expect(toastOptionsFor(props({ auto_close_seconds: 5 })).timeout).toBe(5000);
-      expect(toastOptionsFor(props({ auto_close_seconds: 0.5 })).timeout).toBe(500);
+      expect(toastOptionsFor(props({ auto_close_seconds: 5 })).timeout).toBe(
+        5000,
+      );
+      expect(toastOptionsFor(props({ auto_close_seconds: 0.5 })).timeout).toBe(
+        500,
+      );
     });
 
     it("treats null as stay-until-dismissed", () => {
       // 0 is the toast manager's spelling of "never auto-dismiss".
-      expect(toastOptionsFor(props({ auto_close_seconds: null })).timeout).toBe(0);
+      expect(toastOptionsFor(props({ auto_close_seconds: null })).timeout).toBe(
+        0,
+      );
     });
 
     it("treats zero seconds as stay-until-dismissed too", () => {

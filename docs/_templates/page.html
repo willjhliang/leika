@@ -1,14 +1,6 @@
 {% extends "!page.html" %}
 
-{#-
-  The footer block, reproduced from furo's page.html with one change: the
-  light/dark toggle lives here, at the end of the reading path, instead of
-  floating over the top of the article. The markup is identical to furo's
-  content-toggle so furo.js binds it with no extra wiring; the original
-  top-of-page toggle is hidden in shadcn.css. Furo's Read the Docs-only
-  branches (RTD project link, GitHub icon) are dropped -- these docs deploy
-  to GitHub Pages.
--#}
+{# This follows Furo's footer markup; recheck it when updating Furo. #}
 {% block footer %}
 <div class="related-pages">
   {% if next -%}

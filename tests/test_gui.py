@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from typing import Any
 
@@ -7,6 +9,8 @@ import numpy as np
 import pytest
 
 import leika
+from leika import _messages
+from leika.infra import ClientId
 
 
 def _wait_for(predicate, timeout: float = 2.0) -> None:
@@ -109,6 +113,98 @@ def test_option_validation(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="at least one option"):
         dropdown.options = []
     assert dropdown.options == ("a", "b")
+
+    for add in (
+        lambda: server.gui.add_dropdown("Duplicate", ("same", "same")),
+        lambda: server.gui.add_button(("same", "same")),
+        lambda: server.gui.add_toggle(("same", "same")),
+    ):
+        with pytest.raises(ValueError, match="unique"):
+            add()
+    with pytest.raises(ValueError, match="strings"):
+        server.gui.add_dropdown("Invalid", ("valid", 1))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="strings"):
+        server.gui.add_button(("valid", None))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="sequence"):
+        server.gui.add_dropdown("Invalid", "not a sequence")
+    with pytest.raises(ValueError, match="unique"):
+        dropdown.options = ("same", "same")
+    assert dropdown.options == ("a", "b")
+    with pytest.raises(ValueError, match="must be one of"):
+        dropdown.value = "missing"
+
+
+def test_hold_frequency_is_positive_and_finite(server: leika.Server) -> None:
+    button = server.gui.add_button("Hold")
+    for frequency in (0, -1, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="positive, finite"):
+            button.on_hold(callback_hz=frequency)  # type: ignore[arg-type]
+
+    callback = button.on_hold(callback_hz=20)(lambda _: None)
+    assert callback is not None
+    assert button._hold_callback_freqs == (20.0,)
+
+
+def test_async_callbacks_are_scheduled_on_the_server_loop(server: leika.Server) -> None:
+    checkbox = server.gui.add_checkbox("Async", True)
+    called = threading.Event()
+
+    @checkbox.on_update
+    async def _(_: leika.GuiEvent[Any]) -> None:
+        called.set()
+
+    checkbox.value = False
+    assert called.wait(2.0)
+
+
+def test_handle_values_preserve_constructor_invariants(server: leika.Server) -> None:
+    entries = server.gui.add_list("Entries", ("one",))
+    with pytest.raises(ValueError, match="sequence of strings"):
+        entries.value = "one"  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="strings"):
+        entries.value = ("one", None)  # type: ignore[assignment]
+
+    toggles = server.gui.add_toggle(("A", "B"))
+    with pytest.raises(ValueError, match="only one"):
+        toggles.value = ("A", "B")
+    with pytest.raises(ValueError, match="requires one"):
+        toggles.value = ()
+
+    color = server.gui.add_rgb("Color", (1, 2, 3))
+    with pytest.raises(ValueError, match="3 color channels"):
+        color.value = (1, 2)  # type: ignore[assignment]
+    rgba = server.gui.add_rgba("Alpha", (1, 2, 3, 4))
+    for handle, invalid in ((color, [1, 2]), (rgba, [1, 2, 3])):
+        asyncio.run(
+            server.gui._handle_gui_updates(
+                ClientId(1),
+                _messages.GuiUpdateMessage(handle.id, {"value": invalid}),
+            )
+        )
+    assert color.value == (1, 2, 3)
+    assert rgba.value == (1, 2, 3, 4)
+
+    vector = server.gui.add_vector2("Point", (0.0, 0.0), min=(-1.0, -1.0), max=(1.0, 1.0))
+    with pytest.raises(ValueError, match="shape"):
+        vector.value = (0.0, 0.0, 0.0)  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="above max"):
+        vector.value = (2.0, 0.0)
+
+    asyncio.run(
+        server.gui._handle_gui_updates(
+            ClientId(1),
+            _messages.GuiUpdateMessage(vector.id, {"value": [2.0, 0.0]}),
+        )
+    )
+    assert vector.value == (0.0, 0.0)
+
+    progress = server.gui.add_progress_bar(50)
+    with pytest.raises(ValueError, match=r"\[0, 100\]"):
+        progress.value = 101
+
+    slider = server.gui.add_slider("Bounded", 0.5, min=0.0, max=1.0, step=0.1)
+    with pytest.raises(ValueError, match="within"):
+        slider.value = 2.0
 
 
 def test_form_compatibility_and_submission(server: leika.Server) -> None:
@@ -259,6 +355,13 @@ def test_theme_defaults_to_following_the_browser_color_scheme(
     assert [message.dark_mode for message in sent] == ["auto", True, False]
 
 
+def test_theme_rejects_unknown_wire_values(server: leika.Server) -> None:
+    with pytest.raises(ValueError, match="control_layout"):
+        server.gui.configure_theme(control_layout="wide")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="dark_mode"):
+        server.gui.configure_theme(dark_mode=1)  # type: ignore[arg-type]
+
+
 def test_removed_visual_customization_arguments_are_rejected(
     server: leika.Server,
 ) -> None:
@@ -323,6 +426,196 @@ def test_gui_images_always_span_the_panel(server: leika.Server) -> None:
     assert not hasattr(handle, "fit_width")
     with pytest.raises(TypeError):
         server.gui.add_image(frame, fit_width=False)  # type: ignore[call-arg]
+
+
+def test_gui_image_state_is_transactional_and_private(server: leika.Server) -> None:
+    frame = np.zeros((2, 3, 3), dtype=np.uint8)
+    image = server.gui.add_image(frame, format="png")
+
+    frame[:] = 255
+    assert np.all(image.image == 0)
+    returned = image.image
+    returned[:] = 255
+    assert np.all(image.image == 0)
+
+    old_data = image._data
+    with pytest.raises(ValueError, match="format must be"):
+        image.format = "gif"  # type: ignore[assignment]
+    assert image.format == "png"
+    assert image._data == old_data
+
+
+def test_removed_containers_reject_new_actions(server: leika.Server) -> None:
+    tabs = server.gui.add_tab_group()
+    tab = tabs.add_tab("One")
+    tab.remove()
+    with pytest.raises(RuntimeError, match="removed tab"):
+        tab.icon = leika.Icon.PLAY
+
+    tabs.remove()
+    with pytest.raises(RuntimeError, match="removed GuiTabGroupHandle"):
+        tabs.add_tab("Too late")
+
+    form = server.gui.add_mini_form()
+    form.remove()
+    with pytest.raises(RuntimeError, match="removed GuiFormHandle"):
+        form.submit_form()
+
+
+def test_numeric_constructors_reject_invalid_ranges(server: leika.Server) -> None:
+    fixed = server.gui.add_slider("Fixed", 1.0, min=1.0, max=1.0, step=0.1)
+    assert fixed.step == 0.0
+    with pytest.raises(ValueError, match="at least min"):
+        server.gui.add_slider("Backwards", 1.0, min=2.0, max=1.0, step=0.1)
+    with pytest.raises(ValueError, match="greater than zero"):
+        server.gui.add_number("Bad step", 1.0, step=0.0)
+    with pytest.raises(ValueError, match="ascending"):
+        server.gui.add_multi_slider("Order", (0.8, 0.2), min=0.0, max=1.0, step=0.1)
+    with pytest.raises(ValueError, match="finite"):
+        server.gui.add_progress_bar(float("nan"))
+
+    preview = server.gui.add_preview_button("Empty", b"", filename="empty.txt", max_bytes=0)
+    assert preview._max_bytes == 0
+
+
+def test_uploads_are_isolated_and_validated_per_client(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upload = server.gui.add_upload_button("Upload")
+    sent: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", sent.append)
+
+    def start(client_id: int, *, transfer_uuid: str = "same", parts: int = 2) -> None:
+        server.gui._handle_file_transfer_start(
+            ClientId(client_id),
+            _messages.FileTransferStartUpload(
+                source_component_uuid=upload.id,
+                transfer_uuid=transfer_uuid,
+                filename=f"client-{client_id}.bin",
+                mime_type="application/octet-stream",
+                part_count=parts,
+                size_bytes=parts,
+            ),
+        )
+
+    start(1)
+    start(2)
+    assert len(server.gui._current_file_upload_states) == 2
+
+    # A duplicate part neither double-counts bytes nor completes early.
+    first = _messages.FileTransferPart(upload.id, "same", 0, b"a")
+    server.gui._handle_file_transfer_part(ClientId(1), first)
+    server.gui._handle_file_transfer_part(ClientId(1), first)
+    assert upload.value.content == b""
+    server.gui._handle_file_transfer_part(
+        ClientId(1), _messages.FileTransferPart(upload.id, "same", 1, b"b")
+    )
+    assert upload.value.content == b"ab"
+    assert upload.value.name == "client-1.bin"
+    assert len(server.gui._current_file_upload_states) == 1
+
+    # The same transfer UUID from another client remains independent.
+    server.gui._handle_file_transfer_part(
+        ClientId(2), _messages.FileTransferPart(upload.id, "same", 0, b"c")
+    )
+    server.gui._handle_file_transfer_part(
+        ClientId(2), _messages.FileTransferPart(upload.id, "same", 1, b"d")
+    )
+    assert upload.value.content == b"cd"
+    assert server.gui._current_file_upload_states == {}
+    assert (
+        len([message for message in sent if isinstance(message, _messages.FileTransferPartAck)])
+        == 4
+    )
+
+    # Removing a button releases any incomplete transfer.
+    start(1, transfer_uuid="pending", parts=1)
+    upload.remove()
+    assert server.gui._current_file_upload_states == {}
+
+
+def test_malformed_upload_messages_are_dropped(server: leika.Server) -> None:
+    upload = server.gui.add_upload_button("Upload")
+    server.gui._handle_file_transfer_start(
+        ClientId(1),
+        _messages.FileTransferStartUpload(
+            source_component_uuid=upload.id,
+            transfer_uuid="invalid",
+            filename="bad.bin",
+            mime_type="application/octet-stream",
+            part_count=0,
+            size_bytes=1,
+        ),
+    )
+    assert server.gui._current_file_upload_states == {}
+
+    server.gui._handle_file_transfer_start(
+        ClientId(1),
+        _messages.FileTransferStartUpload(
+            source_component_uuid=upload.id,
+            transfer_uuid="oversize",
+            filename="bad.bin",
+            mime_type="application/octet-stream",
+            part_count=1,
+            size_bytes=1,
+        ),
+    )
+    server.gui._handle_file_transfer_part(
+        ClientId(1), _messages.FileTransferPart(upload.id, "oversize", 0, b"too long")
+    )
+    assert server.gui._current_file_upload_states == {}
+    assert upload.value.content == b""
+
+
+def test_upload_part_and_button_removal_are_serialized(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upload = server.gui.add_upload_button("Upload")
+    server.gui._handle_file_transfer_start(
+        ClientId(1),
+        _messages.FileTransferStartUpload(
+            source_component_uuid=upload.id,
+            transfer_uuid="race",
+            filename="race.bin",
+            mime_type="application/octet-stream",
+            part_count=2,
+            size_bytes=2,
+        ),
+    )
+
+    ack_started = threading.Event()
+    release_ack = threading.Event()
+
+    def queue_message(message: Any) -> None:
+        if isinstance(message, _messages.FileTransferPartAck):
+            ack_started.set()
+            assert release_ack.wait(2.0)
+
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", queue_message)
+    part_thread = threading.Thread(
+        target=server.gui._handle_file_transfer_part,
+        args=(ClientId(1), _messages.FileTransferPart(upload.id, "race", 0, b"a")),
+    )
+    part_thread.start()
+    assert ack_started.wait(2.0)
+
+    removed = threading.Event()
+
+    def remove() -> None:
+        upload.remove()
+        removed.set()
+
+    remove_thread = threading.Thread(target=remove)
+    remove_thread.start()
+    assert not removed.wait(0.1)
+    release_ack.set()
+    part_thread.join(timeout=2.0)
+    remove_thread.join(timeout=2.0)
+
+    assert not part_thread.is_alive()
+    assert not remove_thread.is_alive()
+    assert removed.is_set()
+    assert server.gui._current_file_upload_states == {}
 
 
 def test_containers_mirror_every_container_scoped_add_method() -> None:

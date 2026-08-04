@@ -17,7 +17,10 @@ export default function TabGroupComponent(message: GuiTabGroupMessage) {
   return <PlainTabGroup {...message} />;
 }
 
-function DockableTabGroup({ uuid, props: { _tabs: tabs } }: GuiTabGroupMessage) {
+function DockableTabGroup({
+  uuid,
+  props: { _tabs: tabs },
+}: GuiTabGroupMessage) {
   const dock = useDock();
   const guiDock = React.useContext(GuiDockContext)!;
   const areaId = `gui-tabs-${uuid}`;
@@ -34,7 +37,6 @@ function DockableTabGroup({ uuid, props: { _tabs: tabs } }: GuiTabGroupMessage) 
     dock.api.apply((layout) =>
       layoutOps.setAreaTabOrder(layout, areaId, tabContainerIds),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, orderKey, areaId, dock.api]);
 
   return <DockArea areaId={areaId} minHeight="2.4em" inheritContentPadding />;
@@ -70,7 +72,11 @@ function PlainTabGroup({ props: { _tabs: tabs } }: GuiTabGroupMessage) {
         ))}
       </TabsList>
       {tabs.map((tab) => (
-        <TabsContent value={tab.container_id} key={tab.container_id} keepMounted>
+        <TabsContent
+          value={tab.container_id}
+          key={tab.container_id}
+          keepMounted
+        >
           <GuiContainer containerUuid={tab.container_id} />
         </TabsContent>
       ))}

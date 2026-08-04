@@ -1,7 +1,7 @@
-import type * as React from "react"
-import { Slider as SliderPrimitive } from "@base-ui/react/slider"
+import type * as React from "react";
+import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 function Slider({
   className,
@@ -18,19 +18,19 @@ function Slider({
   ...props
 }: SliderPrimitive.Root.Props & {
   /** Accessible name for each thumb's range input, by thumb index. */
-  getThumbAriaLabel?: (index: number) => string
+  getThumbAriaLabel?: (index: number) => string;
   /** Hide the filled range, for tracks that paint their own background. */
-  showIndicator?: boolean
-  trackClassName?: string
-  trackStyle?: React.CSSProperties
-  thumbClassName?: string
-  thumbStyle?: React.CSSProperties
+  showIndicator?: boolean;
+  trackClassName?: string;
+  trackStyle?: React.CSSProperties;
+  thumbClassName?: string;
+  thumbStyle?: React.CSSProperties;
 }) {
   const _values = Array.isArray(value)
     ? value
     : Array.isArray(defaultValue)
       ? defaultValue
-      : [min, max]
+      : [min, max];
 
   return (
     <SliderPrimitive.Root
@@ -49,7 +49,7 @@ function Slider({
           style={trackStyle}
           className={cn(
             "relative grow overflow-hidden rounded-full bg-muted select-none data-horizontal:h-1 data-horizontal:w-full data-vertical:h-full data-vertical:w-1",
-            trackClassName
+            trackClassName,
           )}
         >
           {showIndicator && (
@@ -70,13 +70,13 @@ function Slider({
               // takes focus, so the focus border keys off the input via `has-`
               // rather than off the thumb itself.
               "relative block size-3 shrink-0 rounded-full border border-input bg-white transition-colors select-none after:absolute after:-inset-2 hover:border-ring has-[:focus-visible]:border-ring has-[:focus-visible]:outline-hidden active:border-ring disabled:pointer-events-none disabled:opacity-50",
-              thumbClassName
+              thumbClassName,
             )}
           />
         ))}
       </SliderPrimitive.Control>
     </SliderPrimitive.Root>
-  )
+  );
 }
 
-export { Slider }
+export { Slider };

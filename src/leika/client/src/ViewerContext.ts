@@ -9,7 +9,12 @@ import { useViewportState } from "./viewport/ViewportState";
 export type ViewerMutable = {
   sendMessage: (message: Message) => void;
   messageQueue: Message[];
+  notifyMessageQueue: () => void;
 };
+
+export function warnDisconnectedSend(message: Message): void {
+  console.warn(`Cannot send ${message.type}: WebSocket is not connected.`);
+}
 
 /** Application context for Leika's GUI and 2D pane workspace. */
 export type ViewerContextContents = {

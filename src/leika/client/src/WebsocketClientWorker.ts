@@ -1,8 +1,16 @@
 import * as msgpack from "@msgpack/msgpack";
-import { Message } from "./WebsocketMessages";
 import AwaitLock from "await-lock";
-import { LEIKA_PROTOCOL, LEIKA_VERSION } from "./VersionInfo";
 import { ZSTDDecoder } from "zstddec";
+
+import {
+  computeBinaryOffsets,
+  replaceBinaryPlaceholders,
+} from "./BinaryMessageDecode";
+import { ConnectionCounters, emptyCounters } from "./connectionStats";
+import { newPacingState, paceBatch } from "./pacing";
+import { shouldRetryWebsocket } from "./utils/shouldRetryWebsocket";
+import { LEIKA_PROTOCOL, LEIKA_VERSION } from "./VersionInfo";
+import { Message } from "./WebsocketMessages";
 
 // Initialize zstd decoder at module load.
 const zstdDecoder = new ZSTDDecoder();
@@ -12,25 +20,24 @@ export type WsWorkerIncoming =
   | { type: "send"; message: Message }
   | { type: "set_server"; server: string }
   | { type: "retry" }
-  | { type: "watch_stats"; watching: boolean }
-  | { type: "close" };
+  | { type: "watch_stats"; watching: boolean };
 
 export type WsWorkerOutgoing =
   | { type: "connected" }
   | {
       type: "closed";
-      versionMismatch?: boolean;
-      closeReason?: string;
+      versionMismatch: boolean;
+      closeReason: string;
     }
   | { type: "message_batch"; messages: Message[] }
   | { type: "stats"; counters: ConnectionCounters };
 
-import {
-  replaceBinaryPlaceholders,
-  computeBinaryOffsets,
-} from "./BinaryMessageDecode";
-import { newPacingState, paceBatch } from "./pacing";
-import { ConnectionCounters, emptyCounters } from "./connectionStats";
+type WorkerScope = {
+  postMessage(data: WsWorkerOutgoing, transferable?: Transferable[]): void;
+  onmessage: ((event: MessageEvent<WsWorkerIncoming>) => void) | null;
+};
+
+const workerScope = self as unknown as WorkerScope;
 
 type SerializedStruct = {
   messages: Message[];
@@ -93,14 +100,12 @@ function decodeHybridMessage(
 {
   let server: string | null = null;
   let ws: WebSocket | null = null;
-  const orderLock = new AwaitLock();
 
   const postOutgoing = (
     data: WsWorkerOutgoing,
     transferable?: Transferable[],
   ) => {
-    // @ts-ignore
-    self.postMessage(data, transferable);
+    workerScope.postMessage(data, transferable);
   };
 
   // -- What the connection is doing ----------------------------------------
@@ -156,7 +161,9 @@ function decodeHybridMessage(
   const reportStats = () => {
     // Ping first: the reply lands between now and the next tick, so what is
     // posted here is the round trip the last tick asked for.
-    sendToServer({ type: "ClientPingMessage", sent_ms: performance.now() });
+    if (ws?.readyState === WebSocket.OPEN) {
+      sendToServer({ type: "ClientPingMessage", sent_ms: performance.now() });
+    }
     counters.atMs = performance.now();
     postOutgoing({ type: "stats", counters });
   };
@@ -168,7 +175,7 @@ function decodeHybridMessage(
       statsTimer = setInterval(reportStats, STATS_INTERVAL_MS);
       return;
     }
-    clearInterval(statsTimer!);
+    if (statsTimer !== null) clearInterval(statsTimer);
     statsTimer = null;
     // Round trips are only measured while someone is looking, so the ones from
     // the last look say nothing about the link now. The totals stay.
@@ -176,25 +183,41 @@ function decodeHybridMessage(
   };
 
   const tryConnect = () => {
-    if (ws !== null) ws.close();
+    const targetServer = server;
+    if (targetServer === null) return;
+    const previousSocket = ws;
+    ws = null;
+    previousSocket?.close();
 
     // One subprotocol string carries the client identification, the version,
     // and the schema this bundle was built against. The server turns away
     // anything it does not match, which is what keeps a page from connecting
     // to a server whose messages it cannot read.
     const protocol = `leika-v${LEIKA_VERSION}+p${LEIKA_PROTOCOL}`;
-    console.log(`Connecting to: ${server!} with protocol: ${protocol}`);
-    ws = new WebSocket(server!, [protocol]);
-    ws.binaryType = "arraybuffer";
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(targetServer, [protocol]);
+    } catch (error) {
+      postOutgoing({
+        type: "closed",
+        versionMismatch: false,
+        closeReason:
+          error instanceof Error ? error.message : "Invalid WebSocket URL",
+      });
+      return;
+    }
+    const orderLock = new AwaitLock();
+    ws = socket;
+    socket.binaryType = "arraybuffer";
 
     // Timeout is necessary when we're connecting to an SSH/tunneled port.
     const retryTimeout = setTimeout(() => {
-      ws?.close();
+      socket.close();
     }, 5000);
 
-    ws.onopen = () => {
+    socket.onopen = () => {
       clearTimeout(retryTimeout);
-      console.log(`Connected! ${server}`);
+      if (ws !== socket) return;
 
       connectionsOpened += 1;
       counters.connectedSinceMs = performance.now();
@@ -207,22 +230,20 @@ function decodeHybridMessage(
       });
     };
 
-    ws.onclose = (event) => {
-      // Check for explicit close (code 1002 = protocol error, which we use for version mismatch).
+    socket.onclose = (event) => {
+      clearTimeout(retryTimeout);
+      if (ws !== socket) return;
+      ws = null;
+      // Code 1002 is the server's protocol/version rejection.
       const versionMismatch = event.code === 1002;
 
       counters.connectedSinceMs = null;
 
-      // Send close notification.
       postOutgoing({
         type: "closed",
         versionMismatch: versionMismatch,
         closeReason: event.reason || "Connection closed",
       });
-
-      console.log(
-        `Disconnected! ${server} code=${event.code}, reason: ${event.reason}`,
-      );
 
       if (versionMismatch) {
         console.warn(
@@ -230,13 +251,12 @@ function decodeHybridMessage(
             ` protocol: ${LEIKA_PROTOCOL}`,
         );
       }
-
-      clearTimeout(retryTimeout);
     };
 
     // State for tracking message timing.
     const pacing = newPacingState();
-    ws.onmessage = async (event) => {
+    socket.onmessage = async (event) => {
+      if (ws !== socket) return;
       // Weighed here, before the buffer is handed to the main thread: posting
       // it transfers ownership away and leaves `byteLength` at zero.
       counters.bytesReceived += (event.data as ArrayBuffer).byteLength;
@@ -248,7 +268,7 @@ function decodeHybridMessage(
         return decodeHybridMessage(buffer, zstdDecoder);
       })();
 
-      // Try our best to handle messages in order. If this takes more than 10 seconds, we give up. :)
+      // Preserve arrival order unless an earlier batch stalls for ten seconds.
       const jsReceivedMs = performance.now();
       let acquiredLock = false;
       try {
@@ -260,7 +280,7 @@ function decodeHybridMessage(
         // acquired -- that would release another waiter's hold and corrupt the
         // ordering state.
         counters.outOfOrderBatches += 1;
-        console.log("Order lock timed out; processing message out of order.");
+        console.warn("Order lock timed out; processing message out of order.");
       }
       // Once the lock is acquired the release happens in `sendFn` (which may
       // be deferred via setTimeout). If anything between here and scheduling
@@ -268,17 +288,20 @@ function decodeHybridMessage(
       // lock stays held and every subsequent message times out.
       try {
         const data = await dataPromise;
+        if (ws !== socket) {
+          if (acquiredLock) orderLock.release();
+          return;
+        }
 
-        // Function to send the message and release the order lock.
         counters.messagesReceived += data.messages.length;
         const messages = takePongs(data.messages, jsReceivedMs);
         // All typed array views point into the original WebSocket ArrayBuffer.
         // Transfer just that buffer instead of walking the entire message tree.
         const sendFn = () => {
           try {
-            postOutgoing({ type: "message_batch", messages: messages }, [
-              data.buffer,
-            ]);
+            if (ws === socket) {
+              postOutgoing({ type: "message_batch", messages }, [data.buffer]);
+            }
           } catch (e) {
             // `sendFn` can run later from setTimeout, outside the catch below.
             // Log and still release the lock so one bad post cannot wedge all
@@ -311,8 +334,8 @@ function decodeHybridMessage(
     };
   };
 
-  self.onmessage = (e) => {
-    const data: WsWorkerIncoming = e.data;
+  workerScope.onmessage = (event) => {
+    const data = event.data;
 
     if (data.type === "send") {
       // The socket can be null (not yet connected) or closing/closed by the
@@ -325,22 +348,11 @@ function decodeHybridMessage(
       server = data.server;
       tryConnect();
     } else if (data.type === "retry") {
-      // A retry closes the current socket before opening a fresh one -- so
-      // while an attempt is still CONNECTING, leave it alone. The 5-second
-      // timeout in `tryConnect` owns slow attempts; killing them here every
-      // second would starve a link (e.g. an SSH tunnel) that takes longer
-      // than the retry interval to come up.
-      if (server !== null && ws?.readyState !== WebSocket.CONNECTING) {
+      // Leave live sockets alone. The timeout in `tryConnect` owns slow
+      // attempts, so retry ticks cannot starve a slow link.
+      if (server !== null && shouldRetryWebsocket(ws?.readyState ?? null)) {
         tryConnect();
       }
-    } else if (data.type === "close") {
-      server = null;
-      ws !== null && ws.close();
-      self.close();
-    } else {
-      console.log(
-        `WebSocket worker: got ${data}, not sure what to do with it!`,
-      );
     }
   };
 }

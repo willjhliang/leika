@@ -14,12 +14,7 @@ import { HintTooltip } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaDialog } from "./MediaExpand";
 
-/** The file's text, once it has been read out of the blob.
- *
- * Reading is asynchronous where every other viewer just takes the URL, so the
- * text arrives a frame or two after the dialog opens. `null` is "not yet",
- * which draws nothing rather than an empty document that then jumps.
- */
+/** Read a textual blob without briefly rendering an empty document. */
 function useBlobText(blob: Blob, enabled: boolean): string | null {
   const [text, setText] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -40,13 +35,7 @@ function useBlobText(blob: Blob, enabled: boolean): string | null {
   return text;
 }
 
-/** A file with no viewer of its own: what it is, and where to go instead.
- *
- * Also where a preview lands when the browser cannot play the codec inside a
- * container it otherwise understands. It carries no download of its own: that
- * control is in the corner for every file, and a second copy of it here would
- * put the same action in two places depending on the type.
- */
+/** Fallback for file types without an in-browser viewer. */
 function UnsupportedPreview({
   filename,
   mimeType,
@@ -73,21 +62,13 @@ function UnsupportedPreview({
   );
 }
 
-/** The download control, pinned beside the dialog's close button.
- *
- * Drawn as the close button is -- a ghost icon in the top corner -- because it
- * is the same kind of thing: chrome for the dialog rather than part of the
- * file being shown. Sitting to the left of the X puts it in the one place it
- * can be found whatever the file turns out to be.
- */
+/** Download action beside the dialog's close button. */
 function DownloadCorner({ filename, url }: { filename: string; url: string }) {
   return (
     <HintTooltip hint="Download">
       <Button
         variant="ghost"
         size="icon-sm"
-        // The close button is `top-2 right-2` and 1.75rem wide, so this clears
-        // it by the 0.25rem step the rest of the app is spaced on.
         className="absolute top-2 right-10"
         render={<a href={url} download={filename} />}
       >
@@ -98,12 +79,7 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
   );
 }
 
-/** What goes inside the frame: whichever viewer the file's kind calls for.
- *
- * Nothing here sets its own size. The frame is one fixed rectangle for every
- * kind -- see {@link FilePreviewDialog} -- so these fill it, fit inside it, or
- * sit at the top of it and scroll.
- */
+/** Render content within the dialog's fixed preview frame. */
 function PreviewBody({
   kind,
   preview,
@@ -117,8 +93,6 @@ function PreviewBody({
 
   switch (kind) {
     case "image":
-      // Fits the frame rather than filling it: an icon stays an icon instead
-      // of being blown up to the width of the dialog.
       return (
         <div className="flex h-full items-center justify-center">
           <img
@@ -141,8 +115,7 @@ function PreviewBody({
         </div>
       );
     case "pdf":
-      // An object, not an iframe: a browser with no PDF viewer falls through
-      // to the children instead of drawing an empty white rectangle.
+      // Let browsers without a PDF viewer render the fallback children.
       return (
         <object
           data={url}
@@ -156,10 +129,7 @@ function PreviewBody({
           />
         </object>
       );
-    // Prose is read line after line, and a line run to the width this dialog
-    // wants for images is hard to carry your eye back along. Markdown and
-    // plain text take a measure -- 65ch, which is what `prose` is -- with the
-    // margins a page would give them.
+    // Prose and Markdown use a readable line length.
     case "markdown":
       return (
         <div className="mx-auto w-full max-w-prose px-2">
@@ -168,17 +138,13 @@ function PreviewBody({
       );
     case "prose":
       return (
-        // Wrapped to the measure rather than scrolling past it: a paragraph
-        // of plain text is often one long line, and the column is the point.
         <pre className="mx-auto w-full max-w-prose px-2 font-mono text-xs whitespace-pre-wrap">
           {text ?? ""}
         </pre>
       );
     case "text":
       return (
-        // Source and data, where a row is a record rather than a sentence:
-        // the width is there to be used, and a long line scrolls rather than
-        // being read in pieces.
+        // Preserve data and source lines, scrolling horizontally when needed.
         <pre className="bg-muted/40 min-h-full w-full overflow-x-auto rounded-lg p-4 font-mono text-xs whitespace-pre">
           {text ?? ""}
         </pre>
@@ -204,8 +170,7 @@ export function FilePreviewHost() {
   if (preview === null) return null;
   return (
     <FilePreviewDialog
-      // Keyed by transfer so switching files rebuilds the viewers rather than
-      // handing a new URL to a <video> that is already playing another.
+      // Remount stateful media viewers for each transfer.
       key={preview.id}
       preview={preview}
       onClose={() => closeFilePreview(preview.id)}
@@ -213,20 +178,7 @@ export function FilePreviewHost() {
   );
 }
 
-/** The dialog a previewed file opens in.
- *
- * Built on the same {@link MediaDialog} an expanded image or plot uses, so a
- * preview is the size and shape of every other large thing in the app. The
- * title is shown here where an expanded pane's is not: a file has a name, and
- * the name is half of what a preview is telling you.
- *
- * One rectangle, the same for every file: a fixed width and a fixed height,
- * with the viewer filling, fitting or scrolling inside it. Sized to its
- * contents instead, a one-line file would open a sliver of a dialog and the
- * next a tall one, moving the close button every time -- and the type of the
- * file would be deciding the shape of the window, which is not something the
- * reader asked about.
- */
+/** Fixed-size dialog shared by every preview type. */
 export function FilePreviewDialog({
   preview,
   onClose,

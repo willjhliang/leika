@@ -19,6 +19,8 @@ from ._notification_handle import NotificationHandle
 from ._panes import Panes
 from ._share import CloudflaredTunnel, ShareTunnelError
 from ._threadpool_exceptions import print_threadpool_errors
+from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
+from ._validation import validate_positive_integer as _validate_positive_integer
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
 
@@ -31,6 +33,14 @@ def _format_bytes(count: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024.0
     raise AssertionError("unreachable")
+
+
+def _validate_file_content(content: object) -> None:
+    if not isinstance(content, (bytes, Path)):
+        raise TypeError(
+            "content must be bytes or a Path; a str is neither a file's contents"
+            " (encode it) nor a path we would guess at (wrap it in Path)."
+        )
 
 
 def _read_in_chunks(
@@ -70,11 +80,8 @@ def _download_source(
             (content[i : i + chunk_size] for i in range(0, len(content), chunk_size)),
         )
         return
-    if not isinstance(content, Path):
-        raise TypeError(
-            "content must be bytes or a Path; a str is neither a file's contents"
-            " (encode it) nor a path we would guess at (wrap it in Path)."
-        )
+    _validate_file_content(content)
+    assert isinstance(content, Path)
     with content.open("rb") as file:
         size_bytes = os.fstat(file.fileno()).st_size
         yield size_bytes, _read_in_chunks(file, size_bytes, chunk_size, content)
@@ -162,6 +169,10 @@ class ClientHandle:
                 that is what showing it means -- so an arbitrarily large file
                 would be an arbitrarily large tab. Defaults to 64 MiB.
         """
+        _validate_file_content(content)
+        _validate_positive_integer(chunk_size, "chunk_size")
+        _validate_nonnegative_integer(max_bytes, "max_bytes")
+        assert isinstance(content, (bytes, Path))
         size_bytes = len(content) if isinstance(content, bytes) else content.stat().st_size
         if size_bytes > max_bytes:
             # Said rather than sent: the alternative is a tab that stops
@@ -182,8 +193,7 @@ class ClientHandle:
         disposition: _messages.FileDisposition,
     ) -> None:
         """One file onto the wire, whatever the client is to do with it."""
-        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
-            raise ValueError("chunk_size must be a positive integer.")
+        _validate_positive_integer(chunk_size, "chunk_size")
 
         mime_type = mimetypes.guess_type(filename, strict=False)[0]
         if mime_type is None:
@@ -338,6 +348,10 @@ class Server:
                 callbacks = tuple(self._client_disconnect_cb)
             if client is None:
                 return
+            client.gui._discard_file_uploads(client_id=conn.client_id)
+            gui = getattr(self, "gui", None)
+            if gui is not None:
+                gui._discard_file_uploads(client_id=conn.client_id)
             for callback in callbacks:
                 if asyncio.iscoroutinefunction(callback):
                     await callback(client)
@@ -508,7 +522,8 @@ class Server:
         # connect between the two lines.
         for client in clients:
             if asyncio.iscoroutinefunction(cb):
-                self._event_loop.create_task(cb(client))
+                future = asyncio.run_coroutine_threadsafe(cb(client), self._event_loop)
+                future.add_done_callback(print_threadpool_errors)
             else:
                 self._thread_executor.submit(cb, client).add_done_callback(print_threadpool_errors)
 
@@ -567,8 +582,7 @@ class Server:
                 a link to the file will be shown as a notification. Being able to
                 right click the link and choose "Save as..." can be useful.
         """
-        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
-            raise ValueError("chunk_size must be a positive integer.")
+        _validate_positive_integer(chunk_size, "chunk_size")
 
         for client in self.clients.values():
             client.send_file_download(filename, content, chunk_size, save_immediately)
@@ -591,8 +605,8 @@ class Server:
             max_bytes: Size past which the file is not sent, and the clients
                 are told why; see :meth:`ClientHandle.send_file_preview`.
         """
-        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
-            raise ValueError("chunk_size must be a positive integer.")
+        _validate_positive_integer(chunk_size, "chunk_size")
+        _validate_nonnegative_integer(max_bytes, "max_bytes")
 
         for client in self.clients.values():
             client.send_file_preview(filename, content, chunk_size, max_bytes)

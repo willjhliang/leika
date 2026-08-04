@@ -654,7 +654,9 @@ function equalizePanesInNode(
     );
     const share = combined / memberIndices.length;
     memberIndices.forEach((index) => (weights[index] = share));
-    result = { ...result, weights };
+    if (weights.some((weight, index) => weight !== result.weights[index])) {
+      result = { ...result, weights };
+    }
   }
   return result;
 }

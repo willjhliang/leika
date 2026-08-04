@@ -90,10 +90,10 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z"
 ```
 
-Publishing the release runs `.github/workflows/package.yml`, which builds the
-browser client and the distributions, checks the tag against the packaged
-version, validates wheel contents and size, smoke-tests a base install and the
-`examples` extra, and only then uploads to PyPI through Trusted Publishing.
+Publishing the release runs `.github/workflows/package.yml`, which checks the
+generated protocol and version, reruns the Python, client, and browser suites,
+builds the distributions, validates and smoke-tests both the wheel and source
+archive, and only then uploads to PyPI through Trusted Publishing.
 
 PyPI releases are immutable. A version number cannot be reused even after a
 release is deleted, so a mistake means moving to the next patch version.
@@ -115,7 +115,7 @@ lifecycle, resizing and persistence, and responsive floating/mobile control
 panels.
 
 `test_dock.py` covers the docking surface's pointer gestures. The dock's layout
-model is unit-tested in TypeScript (`src/dock/*.test.ts`); the gesture
+model is unit-tested in TypeScript (`src/leika/client/src/dock/*.test.ts`); the gesture
 controller and views above it read real DOM geometry, so they can only be
 verified in a browser. Those tests drive the real app rather than a fixture:
 the control panel is an ordinary dock panel and GUI tab groups are ordinary
@@ -130,7 +130,7 @@ the local pytest-playwright configuration or CI runner.
 Interactive controls and app chrome use the stock shadcn/ui Base/Nova preset on
 Base UI. The checked-in `src/leika/client/components.json` pins that preset,
 the neutral base color, and Lucide; Geist and the radius scale are theme tokens
-in `src/index.css`. Generated component source lives in
+in `src/leika/client/src/index.css`. Generated component source lives in
 `src/leika/client/src/components/ui`. From the client directory, add or refresh
 a component with the pinned CLI version:
 
@@ -138,8 +138,8 @@ a component with the pinned CLI version:
 npx --yes shadcn@4.14.1 add <component>
 ```
 
-The `shadcn` package remains pinned because `src/index.css` imports its stock
-Tailwind support stylesheet. When that version or preset changes, regenerate
+The `shadcn` package remains pinned because `src/leika/client/src/index.css`
+imports its stock Tailwind support stylesheet. When that version or preset changes, regenerate
 the components and update the package, theme tokens, licenses, and provenance
 together. Keep to this single component framework, and let Leika's domain
 components compose the generated shadcn primitives directly rather than through

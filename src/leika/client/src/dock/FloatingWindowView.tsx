@@ -196,8 +196,8 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   // WHOLE-WINDOW constraint. Measure the live non-scroll chrome instead of
   // subtracting a guessed header height: that keeps unmergeable headers,
   // ordinary tab strips, nested stacks, and future visual changes correct.
-  // For a stack, every visible scroll body receives an equal share (still
-  // bounded by the compact 320 px per-group cap used previously).
+  // For a stack, every visible scroll body receives an equal share, capped at
+  // 320 px per group.
   React.useLayoutEffect(() => {
     if (fixedHeight || collapsed || containerHeight <= 0) return;
     const paper = paperRef.current;

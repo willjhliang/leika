@@ -58,16 +58,10 @@ dev = [
   "ruff>=0.9.3",
 ]
 docs = [
-  # The floor is the furo whose compiled selectors _static/shadcn.css
-  # overrides. Its dependency chain (accessible-pygments) starts at Python
-  # 3.9, so it carries the same marker as sphinx-autobuild below.
+  # These tools require Python 3.9, while the base package supports 3.8.
   "furo>=2025.12.19; python_version >= '3.9'",
   "myst-parser>=3,<5",
   "sphinx>=7,<9",
-  # The live-reload server is a development convenience, not part of the CI
-  # docs build; the marker keeps the extra resolvable under uv's universal
-  # resolution, which must satisfy every Python the package itself supports
-  # -- sphinx-autobuild has no release for 3.8.
   "sphinx-autobuild>=2024.2.4; python_version >= '3.9'",
   "sphinx-copybutton>=0.5.2",
 ]
@@ -82,6 +76,7 @@ path = "src/leika/__init__.py"
 ignore-vcs = true
 exclude = [
   "**/__pycache__/**",
+  "docs/_build/**",
   "src/leika/client/.leika-build.lock",
   "src/leika/client/.nodeenv/**",
   "src/leika/client/node_modules/**",
@@ -96,8 +91,10 @@ include = [
   "/docs",
   "/CONTRIBUTING.md",
   "/LICENSE",
+  "/Makefile",
   "/README.md",
   "/pyproject.toml",
+  "/sync_client_server.py",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -107,17 +104,16 @@ exclude = [
   "src/leika/client/.nodeenv/**",
   "src/leika/client/node_modules/**",
   "src/leika/client/src/**",
-  "src/leika/client/.eslintrc.js",
   "src/leika/client/.nvmrc",
   "src/leika/client/.gitignore",
+  "src/leika/client/.prettierignore",
   "src/leika/client/components.json",
   "src/leika/client/dock_test.html",
+  "src/leika/client/eslint.config.mjs",
   "src/leika/client/index.html",
   "src/leika/client/package.json",
   "src/leika/client/package-lock.json",
-  "src/leika/client/postcss.config.cjs",
   "src/leika/client/tsconfig.json",
-  "src/leika/client/vite-env.d.ts",
   "src/leika/client/vite-plugin-compress-html.mts",
   "src/leika/client/vite.config.mts",
   "src/leika/client/vitest.config.ts",

@@ -380,14 +380,22 @@ export function useViewportState(
 
         let layout = initialLayout();
         if (storage !== null) {
+          let storedLayout: ViewportLayout | null = null;
           try {
             const serialized = storage.getItem(storageKey);
             if (serialized !== null) {
-              layout = normalizeViewportLayout(JSON.parse(serialized));
-              storage.setItem(storageKey, JSON.stringify(layout));
+              storedLayout = normalizeViewportLayout(JSON.parse(serialized));
             }
           } catch {
             // Malformed or inaccessible storage falls back to the root sentinel.
+          }
+          if (storedLayout !== null) {
+            layout = storedLayout;
+            try {
+              storage.setItem(storageKey, JSON.stringify(layout));
+            } catch {
+              // A read-only/full store must not discard a layout already read.
+            }
           }
         }
         store.set(initialState(layout, store.get().interactionEpoch + 1));

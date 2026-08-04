@@ -19,6 +19,7 @@ from typing_extensions import TypeAlias
 from . import _messages
 from ._gui_handles import _plotly_json_with_config
 from ._image_encoding import encode_image_binary
+from ._validation import validate_positive_integer as _validate_positive_integer
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -290,7 +291,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
     def image(self) -> np.ndarray:
         """Current image. Assign a new array to stream another frame."""
 
-        return self._impl.image
+        return self._impl.image.copy()
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
@@ -310,7 +311,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             # Encoding can be expensive. Recheck after taking the lock so a
             # concurrent remove cannot queue an update for a reused pane ID.
             self._check_not_removed()
-            self._impl.image = image
+            self._impl.image = image.copy()
             self._impl.props._format = resolved_format
             self._impl.props._data = data
             self._queue_update({"_format": resolved_format, "_data": data})
@@ -932,7 +933,7 @@ class Panes:
                 pane_id=pane_id,
                 props=copy.deepcopy(props),
                 api=self,
-                image=image,
+                image=image.copy(),
                 requested_format=format,
                 jpeg_quality=jpeg_quality,
             )
@@ -1358,8 +1359,7 @@ class Panes:
             Grid for adding equally sized panes.
         """
 
-        if columns < 1:
-            raise ValueError("columns must be at least 1.")
+        _validate_positive_integer(columns, "columns")
         return PaneGrid(self, columns, "right", relative_to)
 
 

@@ -23,7 +23,11 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
         {/* `w-full` rather than `max-w-full`: a GUI image spans the panel,
             upscaling a narrow one instead of stranding it against the left
             edge of a row that is wider than it. */}
-        <img src={imageUrl} className="block h-auto w-full rounded-lg" />
+        <img
+          src={imageUrl}
+          alt={label ?? ""}
+          className="block h-auto w-full rounded-lg"
+        />
       </MediaSurface>
     </Field>
   );
@@ -39,14 +43,22 @@ function ImageComponent({ props }: GuiImageMessage) {
   const expand = React.useCallback(() => setOpened(true), []);
 
   useEffect(() => {
+    let active = true;
     const nextUrl = URL.createObjectURL(
       new Blob([props._data], { type: `image/${props._format}` }),
     );
+    setImageWidth(null);
     setImageUrl(nextUrl);
     const image = new Image();
-    image.onload = () => setImageWidth(image.naturalWidth);
+    image.onload = () => {
+      if (active) setImageWidth(image.naturalWidth);
+    };
     image.src = nextUrl;
-    return () => URL.revokeObjectURL(nextUrl);
+    return () => {
+      active = false;
+      image.onload = null;
+      URL.revokeObjectURL(nextUrl);
+    };
   }, [props._data, props._format]);
 
   if (imageUrl === null) return null;
@@ -71,6 +83,7 @@ function ImageComponent({ props }: GuiImageMessage) {
       >
         <img
           src={imageUrl}
+          alt={props.label ?? ""}
           className="mx-auto block h-auto w-full rounded-lg"
         />
       </MediaDialog>

@@ -2,7 +2,8 @@ import * as React from "react";
 
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiFolderMessage } from "../WebsocketMessages";
-import { GuiSection, useContainerIsEmpty } from "./GuiSection";
+import { GuiSection } from "./GuiSection";
+import { useContainerIsEmpty } from "./useContainerIsEmpty";
 
 export default function FolderComponent({
   uuid,

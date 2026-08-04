@@ -39,9 +39,6 @@ _lock_path = client_dir / ".leika-build.lock"
 # Directories under the client that a build writes rather than reads.
 _NOT_SOURCES = {"build", "node_modules", ".nodeenv", "__pycache__"}
 
-# How long to wait for another process's build before treating it as dead.
-_LOCK_TIMEOUT_SECONDS = 900.0
-
 
 def _node_version() -> str:
     """The one pinned Node version, shared with CI's `setup-node`.
@@ -72,14 +69,7 @@ def _source_files() -> Iterator[Path]:
 
 
 def _source_hash() -> str:
-    """Identify a build by its inputs.
-
-    The same question CI's cache key asks with `hashFiles`, asked the same way,
-    so a build restored from that cache is recognized as current here too.
-    Timestamps cannot answer it: the checkout, the cache restore, and pip all
-    rewrite them, which is why the previous mtime comparison needed a
-    ten-second fudge and still called a restored build stale.
-    """
+    """Hash every build input so copied and cache-restored trees stay deterministic."""
     digest = hashlib.sha256()
     for path in sorted(_source_files()):
         digest.update(path.relative_to(client_dir).as_posix().encode("utf-8"))
@@ -106,35 +96,47 @@ def _is_current() -> bool:
 
 @contextlib.contextmanager
 def _build_lock() -> Iterator[None]:
-    """Hold the sole right to build, so concurrent callers wait rather than race.
+    """Hold the sole right to build, so concurrent callers cannot race.
 
     The end-to-end suite runs under `pytest -n auto` and a Leika script may be
     started several times at once; without this they interleave `npm ci` and
-    `nodeenv` in the same directories.
+    `nodeenv` in the same directories. The operating system releases the lock
+    when a process exits, so an interrupted build cannot strand a stale lock.
     """
     _lock_path.parent.mkdir(parents=True, exist_ok=True)
-    while True:
-        try:
-            handle = os.open(str(_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            try:
-                held_for = time.time() - _lock_path.stat().st_mtime
-            except OSError:
-                continue  # Released while we were looking at it.
-            if held_for > _LOCK_TIMEOUT_SECONDS:
-                # No build we would still want to wait for lasts this long, so
-                # the holder is gone and left the lock behind.
-                _lock_path.unlink(missing_ok=True)
-                continue
-            time.sleep(0.2)
+    with _lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
 
-    try:
-        os.write(handle, str(os.getpid()).encode("utf-8"))
-        os.close(handle)
-        yield
-    finally:
-        _lock_path.unlink(missing_ok=True)
+            handle.seek(0)
+            if not handle.read(1):
+                handle.seek(0)
+                handle.write(b"\0")
+                handle.flush()
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.2)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _nodeenv_bin_dir(env_dir: Path) -> Path:
@@ -206,17 +208,16 @@ def _node_env(bin_dir: Path, virtual_env: Optional[Path]) -> "dict[str, str]":
 
 
 def _install_dependencies(bin_dir: Path, env: "dict[str, str]") -> None:
-    """Install exactly what the lock file says, and only when it has changed.
+    """Run ``npm ci`` when the manifest, lockfile, or Node version changes."""
+    inputs = (client_dir / "package.json", client_dir / "package-lock.json")
+    missing = next((path for path in inputs if not path.exists()), None)
+    if missing is not None:
+        raise RuntimeError(f"Cannot build the Leika client: {missing} is missing.")
 
-    `npm ci`, never `npm install`: a build must not rewrite the lock file it
-    built from. That is how a lock file comes to describe one developer's
-    platform and fail everywhere else.
-    """
-    lock_file = client_dir / "package-lock.json"
-    if not lock_file.exists():
-        raise RuntimeError(f"Cannot build the Leika client: {lock_file} is missing.")
-
-    want = hashlib.sha256(lock_file.read_bytes()).hexdigest() + "-" + _node_version()
+    digest = hashlib.sha256()
+    for path in inputs:
+        digest.update(path.read_bytes())
+    want = digest.hexdigest() + "-" + _node_version()
     if _read_stamp(_install_stamp_path) == want:
         return
     subprocess.run([str(_npm(bin_dir)), "ci"], env=env, cwd=client_dir, check=True)

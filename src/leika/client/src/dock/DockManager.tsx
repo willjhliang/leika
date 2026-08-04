@@ -81,7 +81,7 @@ export function DockManager({
   // (and the window transform, tab glue, and leaf preview, which were already
   // imperative) off the React path, a drag does no React work per move at all.
   const hintRef = React.useRef<HTMLDivElement>(null);
-  const showHint = (hint: DropHint | null) => {
+  const showHint = React.useCallback((hint: DropHint | null) => {
     const el = hintRef.current;
     if (el === null) return;
     if (hint === null) {
@@ -99,7 +99,7 @@ export function DockManager({
     el.style.borderRadius = variant.borderRadius;
     el.style.opacity = variant.opacity;
     el.setAttribute("data-dock-hint", hint.variant);
-  };
+  }, []);
 
   const containerRef = React.useRef<HTMLDivElement>(null);
   // The window currently being dragged, if any. The container ResizeObserver

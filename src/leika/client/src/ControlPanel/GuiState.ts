@@ -43,7 +43,7 @@ export interface GuiActions {
   addGui: (config: GuiComponentMessage) => void;
   addModal: (config: GuiModalMessage) => void;
   removeModal: (id: string) => void;
-  updateGuiProps: (id: string, updates: { [key: string]: any }) => void;
+  updateGuiProps: (id: string, updates: Record<string, unknown>) => void;
   /** Record that a form was submitted, whoever submitted it. */
   noteFormSubmit: (uuid: string) => void;
   /** Move components within their containers.
@@ -64,7 +64,7 @@ export interface GuiActions {
     ) & { componentId: string },
   ) => void;
   addCommand: (command: RegisterCommandMessage) => void;
-  updateCommand: (uuid: string, updates: { [key: string]: any }) => void;
+  updateCommand: (uuid: string, updates: Record<string, unknown>) => void;
   removeCommand: (uuid: string) => void;
 }
 
@@ -78,7 +78,7 @@ const cleanGuiState: GuiState = {
     dark_mode: "auto",
   },
   label: "",
-  server: "ws://localhost:8080", // Currently this will always be overridden.
+  server: "",
   websocketState: "inactive",
   connectionError: null,
   guiUuidSetFromContainerUuid: { root: {} },
@@ -96,7 +96,7 @@ const cleanGuiState: GuiState = {
  */
 export function applyGuiConfigUpdate(
   config: GuiComponentMessage,
-  updates: { [key: string]: any },
+  updates: Record<string, unknown>,
 ): GuiComponentMessage {
   let propsChanged = false;
   let valueChanged = false;
@@ -117,9 +117,9 @@ export function applyGuiConfigUpdate(
 
   if (!propsChanged && !valueChanged) return config;
 
-  let newConfig: any = config;
+  let newConfig = config;
   if (valueChanged) {
-    newConfig = { ...newConfig, value: updates.value };
+    newConfig = { ...newConfig, value: updates.value } as GuiComponentMessage;
   }
   if (propsChanged) {
     const newProps = { ...config.props } as Record<string, unknown>;
@@ -128,7 +128,7 @@ export function applyGuiConfigUpdate(
         newProps[key] = value;
       }
     }
-    newConfig = { ...newConfig, props: newProps };
+    newConfig = { ...newConfig, props: newProps } as GuiComponentMessage;
   }
 
   return newConfig;
@@ -167,7 +167,9 @@ export function useGuiState(initialServer: string) {
       },
       addModal: (modalConfig) => {
         store.set((state) => ({
-          modals: [...state.modals, modalConfig],
+          modals: [...state.modals, modalConfig].sort(
+            (left, right) => left.order - right.order,
+          ),
         }));
       },
       removeModal: (id) => {
@@ -177,15 +179,10 @@ export function useGuiState(initialServer: string) {
       },
       removeGui: (id) => {
         const guiConfig = configStore.get(id);
-        if (guiConfig == undefined) {
-          // TODO: this will currently happen when GUI elements are removed
-          // and then a new client connects. Needs to be revisited.
-          console.warn("(OK) Tried to remove non-existent component", id);
-          return;
-        }
+        if (guiConfig === undefined) return;
         const state = store.get();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { [id]: _2, ...remainingOrders } = state.guiOrderFromUuid;
+        const remainingOrders = { ...state.guiOrderFromUuid };
+        delete remainingOrders[id];
         const containerUuid = guiConfig.container_uuid;
         const containerSet = {
           ...state.guiUuidSetFromContainerUuid[containerUuid],

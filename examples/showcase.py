@@ -22,9 +22,7 @@ import viser
 
 import leika
 
-# Plotly's built-in named templates. Long enough to be a chore to scan by eye,
-# which is the case `searchable=True` exists for; the short `Cloud shape`
-# dropdown below is the plain default.
+# Plotly templates used to demonstrate a searchable dropdown.
 PLOTLY_TEMPLATES = (
     "plotly",
     "plotly_white",
@@ -39,12 +37,8 @@ PLOTLY_TEMPLATES = (
     "none",
 )
 
-# The one thing here that is a file before it is a preview. Everything else
-# the showcase shows is made up as it runs.
 ASSETS = Path(__file__).resolve().parent / "assets"
 
-# A file with no file behind it: bytes made up on the spot and previewed as
-# markdown, which the dialog renders the way `add_text(markdown=True)` does.
 NOTES_MD = """\
 # Showcase notes
 
@@ -67,8 +61,6 @@ A preview holds the whole file in the tab, so anything past **64 MiB** is
 declined with a notification rather than opened.
 """
 
-# Shapes the viser point cloud can take. Three of them, which is short enough
-# that a plain dropdown beats a search box.
 CLOUD_SHAPES = ("Gaussian", "Shell", "Spiral")
 
 
@@ -76,21 +68,14 @@ HEIGHT = 300
 WIDTH = 480
 Y, X = np.mgrid[-1.0 : 1.0 : complex(HEIGHT), -1.5 : 1.5 : complex(WIDTH)]
 
-# Coarse grid for the 3D surface pane: kept small because every update ships
-# the whole z matrix to the browser.
+# Keep live surface updates compact.
 SURFACE_AXIS = np.linspace(-2.0, 2.0, 40)
 SURFACE_X, SURFACE_Y = np.meshgrid(SURFACE_AXIS, SURFACE_AXIS)
 SURFACE_RADIUS = np.sqrt(SURFACE_X**2 + SURFACE_Y**2)
 
 
 def png_bytes(frame: np.ndarray) -> bytes:
-    """Encode an RGB array as a PNG, with nothing but the standard library.
-
-    Leika takes NumPy arrays directly, so the showcase has no image library
-    of its own; a preview wants a file, and this is the shortest bridge
-    between the two. Each row is prefixed with a zero -- PNG's "no filter" --
-    and the lot is deflated into a single data chunk.
-    """
+    """Encode an RGB array as a minimal PNG using the standard library."""
     height, width, _ = frame.shape
     rows = b"".join(b"\x00" + frame[row].tobytes() for row in range(height))
 
@@ -104,7 +89,6 @@ def png_bytes(frame: np.ndarray) -> bytes:
 
     return (
         b"\x89PNG\r\n\x1a\n"
-        # 8 bits per sample, color type 2: RGB, no palette and no alpha.
         + chunk(b"IHDR", struct.pack(">2I5B", width, height, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(rows))
         + chunk(b"IEND", b"")
@@ -182,8 +166,6 @@ def make_plot() -> go.Figure:
         )
     )
     figure.update_layout(
-        # No in-figure title: the pane and the GUI row already name this plot,
-        # so the top margin only has to clear the highest tick label.
         margin={"l": 42, "r": 18, "t": 10, "b": 34},
         showlegend=False,
         uirevision="leika-showcase",
@@ -209,7 +191,6 @@ def make_surface() -> go.Figure:
     )
     figure.update_layout(
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        # Keeps the camera where the user dragged it across live updates.
         uirevision="leika-showcase-surface",
         scene={"zaxis": {"range": [-1.1, 1.1]}},
     )
@@ -230,10 +211,8 @@ def main() -> None:
         format="jpeg",
         jpeg_quality=82,
     )
-    # viser owns the 3D scene and serves its own client; Leika embeds that
-    # client as a pane and supplies the controls. A concrete port, because
-    # released viser does not report the bound port for port=0 -- if this one
-    # is taken viser probes upward and get_port() reports the real one.
+    # Released viser does not report its chosen port for port=0, so use a
+    # concrete starting port; viser probes upward when it is occupied.
     viser_server = viser.ViserServer(port=8081, verbose=False)
     grid.add_viser(viser_server, pane_id="scene", title="Live viser scene")
     plot_figure = make_plot()
@@ -260,13 +239,9 @@ def main() -> None:
             step=0.01,
             initial_value=1.0,
             marks=((0.1, "slow"), (3.0, "fast")),
-            # The number is worth reading exactly here, and worth typing when a
-            # drag cannot land on 1.00 by hand.
             show_value=True,
             hint="Fast drags stay optimistic while Python catches up.",
         )
-        # The default the other way: no box, so the track takes the whole
-        # row, and no `marks`, so the ends label themselves with the numbers.
         trail = server.gui.add_slider(
             "Trail",
             min=0.05,
@@ -289,14 +264,9 @@ def main() -> None:
         reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW)
 
     with server.gui.add_folder("Image appearance"):
-        # Toggles rather than buttons: the palette is a state the image is
-        # in, not an action. Single-select (the default) also means required,
-        # so the image always has a palette to render with.
         palette = server.gui.add_toggle(
             ("Ocean", "Magma", "Viridis"), label="Palette", color="secondary"
         )
-        # Buttons this time, because a nudge happens and is over. Parted, since
-        # the two are opposite moves rather than one control with two ends.
         nudge = server.gui.add_button(
             ("Left", "Right"), label="Nudge", color="secondary", merge=False
         )
@@ -304,8 +274,6 @@ def main() -> None:
             offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
             tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
             plot_color = server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
-            # A single button with a label: it gives up the full width and
-            # takes the controls column, at the height every other row is.
             revert = server.gui.add_button("Revert", label="Colors", color="secondary")
         gui_preview = server.gui.add_image(
             initial[::4, ::4],
@@ -314,8 +282,6 @@ def main() -> None:
         )
 
     with server.gui.add_folder("3D scene"):
-        # Three options, so no search box: the plain dropdown opens with the
-        # current one already under the cursor.
         cloud_shape = server.gui.add_dropdown(
             "Cloud shape", options=CLOUD_SHAPES, initial_value="Gaussian"
         )
@@ -326,20 +292,16 @@ def main() -> None:
             "Point size", min=0.005, max=0.06, step=0.005, initial_value=0.02
         )
         cloud_color = server.gui.add_rgb("Cloud color", initial_value=(230, 180, 80))
-        # A toggle with no label takes the row, exactly as a button does.
         spin = server.gui.add_toggle("Spin the cloud", color="secondary")
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
-        # The other half of the pair: a list this long earns a search box.
         plotly_theme = server.gui.add_dropdown(
             "Plotly theme",
             options=PLOTLY_TEMPLATES,
             searchable=True,
             hint="Type to filter Plotly's built-in templates.",
         )
-        # Toggles rather than buttons: these two stay where they are put, and
-        # both can be on at once, so the row is `multiple`.
         plot_overlays = server.gui.add_toggle(
             ("Grid", "Zero line"),
             label="Overlays",
@@ -349,16 +311,11 @@ def main() -> None:
         )
         gui_plot = server.gui.add_plotly(
             plot_figure,
-            # Twice as wide as it is tall.
             aspect=2.0,
             config={"displayModeBar": False, "staticPlot": True},
         )
 
     with tabs.add_tab("Actions", icon=leika.Icon.BOLT):
-        # The two that show off the panel lead, filled and merged into one
-        # block: neighbours in a row are joined unless told otherwise, and the
-        # value says which face was pressed. The two that move a file follow,
-        # outlined and each on its own row.
         panel_actions = server.gui.add_button(("Notify", "Open modal"))
         upload = server.gui.add_upload_button(
             "Inspect a file",
@@ -367,8 +324,6 @@ def main() -> None:
             color="secondary",
         )
 
-        # The contents are made when the button is pressed, so the CSV holds
-        # the signal as it stood at that moment rather than at startup.
         def signal_csv(event: leika.GuiEvent[Any]) -> bytes:
             buffer = io.StringIO()
             buffer.write("time,signal\n")
@@ -382,8 +337,6 @@ def main() -> None:
             icon=leika.Icon.DOWNLOAD,
             color="secondary",
         )
-        # The same contents, shown instead of saved: worth a look before it is
-        # worth a file. One producer serves both buttons.
         server.gui.add_preview_button(
             "Preview signal CSV",
             signal_csv,
@@ -399,9 +352,6 @@ def main() -> None:
             color="secondary",
         )
 
-        # The field as a file: the same frame the pane is showing, encoded
-        # when the button is pressed, so the preview is of the animation as
-        # it stands rather than as it started.
         def field_png(event: leika.GuiEvent[Any]) -> bytes:
             return png_bytes(
                 render_field(
@@ -420,55 +370,34 @@ def main() -> None:
             icon=leika.Icon.IMAGE,
             color="secondary",
         )
-        # A file on disk rather than bytes made up on the spot -- the path is
-        # read when the button is pressed, and its own name is what the
-        # preview is titled with.
         server.gui.add_preview_button(
             "Watch the ripple",
             ASSETS / "ripple.mp4",
             icon=leika.Icon.FILM,
             color="secondary",
         )
-        # A form: a note is worth reading once it is finished, not at every
-        # keystroke. Fields still report every edit; `on_submit` adds the commit.
         with server.gui.add_form(label="Annotation") as annotation:
-            # Enter in a single-line text input submits the form, so this row
-            # doubles as the fast path: type a title, press Enter.
             note_title = server.gui.add_text("Title", "Interesting spike")
             note_body = server.gui.add_text("Note", "", multiline=True)
-            # One at a time, so a note always carries exactly one level.
             note_level = server.gui.add_toggle(
                 ("Info", "Warning"), label="Level", color="secondary"
             )
         log = server.gui.add_text(
             None, "_Nothing logged yet._", editable=False, markdown=True, multiline=True
         )
-        # The same commit semantics with one field to commit: no popout, no row
-        # of its own, just the field wearing a send button. A broadcast is worth
-        # sending when it is written, not letter by letter.
         with server.gui.add_mini_form() as broadcast:
             message = server.gui.add_text("Broadcast", "")
-        # A list is a stack of text boxes and the whole tuple as its value: the
-        # viewer types in one, adds, removes, or drags one somewhere else, and
-        # every one of those arrives as the list now reads. Labelled, so it
-        # takes the controls column with its label beside the first entry.
         watchlist = server.gui.add_list(
             "Watch for",
             ("phase drift", "edge ringing"),
             hint="Drag an entry to reorder it.",
         )
         watching = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
-        # The same stack with an answer on each row: the value is the
-        # (text, checked) pairs, so a tick arrives with the words it is
-        # against -- and stays with them when the entry is dragged elsewhere.
         todo = server.gui.add_checklist(
             "To do",
             (("Sweep the offset", True), "Log the ringing", "Export the run"),
             hint="Drag an entry to reorder it; its tick goes with it.",
         )
-        # Frozen, the words are fixed too and all there is to do is work
-        # through them, which is the checklist a list cannot be. The rows stop
-        # being fields and become what they say.
         preflight = server.gui.add_checklist(
             "Before a run",
             ("Warm up the source", ("Zero the offset", True), "Clear the log"),
@@ -485,8 +414,6 @@ def main() -> None:
 
     @plotly_theme.on_update
     def _(_) -> None:
-        # The live loop keeps pushing this same figure, so the template sticks
-        # without being reapplied on every frame.
         plot_figure.update_layout(template=plotly_theme.value)
         plot_pane.update(plot_figure)
         gui_plot.figure = plot_figure
@@ -521,9 +448,6 @@ def main() -> None:
 
     @panel_actions.on_click
     def _(event: leika.GuiEvent[Any]) -> None:
-        # One handler for the row: `value` is the face that was pressed, and a
-        # second press of the same one arrives again rather than being
-        # swallowed as an unchanged value.
         if event.target.value == "Notify":
             server.gui.add_notification(
                 "Leika is live",
@@ -571,38 +495,28 @@ def main() -> None:
         x, y = offset.value
         offset.value = (round(x + step, 2), y)
 
-    # The last few submissions, newest first: enough to show the form doing
-    # something, few enough that the tab does not start scrolling.
     entries: deque[str] = deque(maxlen=3)
 
     @annotation.on_submit
     def _(_) -> None:
         title = note_title.value.strip() or "Untitled"
         body = note_body.value.strip()
-        # Stamped at the submit, which is the point of the form: the note is
-        # anchored to the moment it was filed, not the moment typing started.
         at = time.monotonic() - state["start"]
         entries.appendleft(
             f"- `t={at:5.1f}s` **{title}** ({note_level.value[0]})"
             + (f" -- {body}" if body else "")
         )
         log.value = "\n".join(entries)
-        # Assigning a value pushes it to every client, so the form empties
-        # itself for the next note.
         note_title.value = ""
         note_body.value = ""
         server.gui.add_notification("Annotation logged", title, auto_close_seconds=2.0)
 
     @watchlist.on_update
     def _(_) -> None:
-        # Reads the list back as it now stands, whichever of the four ways it
-        # was changed -- typed in, added to, removed from, or dragged about.
         kept = [entry.strip() for entry in watchlist.value if entry.strip()]
         watching.value = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
 
     def show_progress(_: Any = None) -> None:
-        # `checked` is the question a checklist is usually asked, without the
-        # comprehension over the pairs.
         done = len(todo.checked) + len(preflight.checked)
         total = len(todo.value) + len(preflight.value)
         progress.value = f"_{done} of {total} ticked._"
@@ -683,8 +597,6 @@ def main() -> None:
                 half = state["phase"] * 0.5
                 state["cloud"].wxyz = (float(np.cos(half)), 0.0, 0.0, float(np.sin(half)))
 
-            # How much of the buffered history the plots draw. Two points is
-            # the least that is still a line.
             kept = max(2, round(len(history_t) * float(trail.value)))
             trail_t = list(history_t)[-kept:]
             trail_y = list(history_y)[-kept:]

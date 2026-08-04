@@ -13,17 +13,6 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def wait_for_port(port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(0.03)
-    raise RuntimeError(f"Leika did not start on port {port}")
-
-
 def wait_until(predicate, timeout: float = 2.0) -> None:
     """Poll a server-side predicate until it holds, then assert that it does.
 
@@ -81,6 +70,7 @@ def drag(
     try:
         for waypoint in waypoints:
             page.mouse.move(*waypoint, steps=steps)
+        page.evaluate("() => new Promise(requestAnimationFrame)")
         if cancel:
             page.keyboard.press("Escape")
     finally:

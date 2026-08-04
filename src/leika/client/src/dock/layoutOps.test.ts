@@ -1,23 +1,5 @@
-// Exhaustive structural tests for the pure layout ops.
-//
-// These exercise every dock/undock transition and assert the resulting tree
-// shape. The ops use module-scoped `freshId` counters, so we never assert on
-// concrete ids -- instead we walk the structure and check shape (dir, child
-// counts, weights) and *which groups* end up where. The shared makeLayout /
-// shapeOf helpers (testUtils) build layouts and describe tree shape id-free.
-//
-// Regression pins (from adversarial fuzzing and bug batches, all since FIXED
-// in production) live next to the describe of the op they pin, marked with a
-// "regression:" comment. The recurring contracts they guard:
-//   - Self-targeting drops (snapping a window's whole stack into itself,
-//     dropping a group onto its own leaf) are safe no-ops -- the ops re-find
-//     the target AFTER detach and abort if it was consumed, so no panel is
-//     ever lost or orphaned.
-//   - An AREA-backing group is a fixed fixture: detachInPlace is a no-op on
-//     it, so the merge/dock/snap ops skip it as a source / in the dragged set
-//     (it must never be consumed or referenced from a second place).
-//   - Numeric ops (resizeWindow*) do NOT validate inputs (0/negative/NaN
-//     accepted) -- callers clamp; this is by contract.
+// Structural coverage for pure layout transitions, self-targeting no-ops,
+// fixed area groups, and caller-clamped numeric operations.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -64,7 +46,7 @@ import {
 } from "./layoutOps";
 
 // ---------------------------------------------------------------------------
-// Shared regression fixtures (used by the bug pins below).
+// Shared fixtures.
 // ---------------------------------------------------------------------------
 
 /** Left edge holds row [a | b] with fixed node ids S / La / Lb. */
@@ -1092,6 +1074,13 @@ describe("setStackWeights", () => {
     expect(setStackWeights(l, "nope", { a: 2 })).toBe(l);
   });
 
+  it("returns the input when no valid weight changes", () => {
+    const l = floatingLayout([
+      { id: "w1", stack: ["a", "b"], stackWeights: { a: 2 } },
+    ]);
+    expect(setStackWeights(l, "w1", { a: 2, b: 0 })).toBe(l);
+  });
+
   it("does not mutate the input layout (pure)", () => {
     const l = floatingLayout([{ id: "w1", stack: ["a"] }]);
     const before = structuredClone(l);
@@ -1291,6 +1280,11 @@ describe("setActiveTab", () => {
   it("returns input for an unknown group", () => {
     const layout = makeLayout({ left: leaf("g"), groups: { g: 1 } });
     expect(setActiveTab(layout, "zzz", "g:0")).toBe(layout);
+  });
+
+  it("returns input when the panel is already active", () => {
+    const layout = makeLayout({ left: leaf("g"), groups: { g: 2 } });
+    expect(setActiveTab(layout, "g", "g:0")).toBe(layout);
   });
 });
 

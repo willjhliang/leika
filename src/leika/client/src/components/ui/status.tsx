@@ -2,16 +2,15 @@
 // from the shadcn/ui registry the rest of this directory comes from, with no
 // `shadcn add` path to regenerate it. See
 // `src/leika/_licenses/shadcn-io-PROVENANCE.md`.
-"use client"
 
-import type { ComponentProps, HTMLAttributes } from "react"
+import type { ComponentProps, HTMLAttributes } from "react";
 
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 export type StatusProps = ComponentProps<typeof Badge> & {
-  status: "online" | "offline" | "maintenance" | "degraded"
-}
+  status: "online" | "offline" | "maintenance" | "degraded";
+};
 
 export const Status = ({ className, status, ...props }: StatusProps) => (
   <Badge
@@ -19,9 +18,9 @@ export const Status = ({ className, status, ...props }: StatusProps) => (
     variant="secondary"
     {...props}
   />
-)
+);
 
-export type StatusIndicatorProps = HTMLAttributes<HTMLSpanElement>
+export type StatusIndicatorProps = HTMLAttributes<HTMLSpanElement>;
 
 export const StatusIndicator = ({
   className,
@@ -34,7 +33,7 @@ export const StatusIndicator = ({
         "group-[.online]:bg-emerald-500",
         "group-[.offline]:bg-red-500",
         "group-[.maintenance]:bg-blue-500",
-        "group-[.degraded]:bg-amber-500"
+        "group-[.degraded]:bg-amber-500",
       )}
     />
     <span
@@ -43,13 +42,13 @@ export const StatusIndicator = ({
         "group-[.online]:bg-emerald-500",
         "group-[.offline]:bg-red-500",
         "group-[.maintenance]:bg-blue-500",
-        "group-[.degraded]:bg-amber-500"
+        "group-[.degraded]:bg-amber-500",
       )}
     />
   </span>
-)
+);
 
-export type StatusLabelProps = HTMLAttributes<HTMLSpanElement>
+export type StatusLabelProps = HTMLAttributes<HTMLSpanElement>;
 
 export const StatusLabel = ({
   className,
@@ -66,4 +65,4 @@ export const StatusLabel = ({
       </>
     )}
   </span>
-)
+);

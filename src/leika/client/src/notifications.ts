@@ -42,10 +42,7 @@ export function toastOptionsFor(
   };
 }
 
-export function showNotification(
-  uuid: string,
-  props: NotificationProps,
-): void {
+export function showNotification(uuid: string, props: NotificationProps): void {
   toast.add({ id: uuid, ...toastOptionsFor(props) });
 }
 

@@ -1,7 +1,7 @@
 import React, { useContext } from "react";
 
 import { connectionStats } from "./ConnectionStatsController";
-import { ViewerContext } from "./ViewerContext";
+import { ViewerContext, warnDisconnectedSend } from "./ViewerContext";
 import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
 import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
 import { syncSearchParamServer } from "./SearchParamsUtils";
@@ -18,12 +18,14 @@ export function WebsocketMessageProducer() {
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);
     const worker = new WebsocketClientWorker();
+    let active = true;
     let isConnected = false;
+    let retryAllowed = true;
     let retryIntervalId: ReturnType<typeof setInterval> | null = null;
     const postToWorker = (data: WsWorkerIncoming) => worker.postMessage(data);
 
     const updateRetryInterval = () => {
-      const shouldRetry = !isConnected && document.hasFocus();
+      const shouldRetry = retryAllowed && !isConnected && document.hasFocus();
       if (!isConnected) {
         viewer.useGui.set({
           websocketState: shouldRetry ? "reconnecting" : "inactive",
@@ -56,6 +58,7 @@ export function WebsocketMessageProducer() {
     window.addEventListener("focus", updateRetryInterval);
     window.addEventListener("blur", updateRetryInterval);
     worker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
+      if (!active) return;
       const data = event.data;
       if (data.type === "stats") {
         connectionStats.record(data.counters);
@@ -63,6 +66,7 @@ export function WebsocketMessageProducer() {
       }
       if (data.type === "connected") {
         isConnected = true;
+        retryAllowed = true;
         viewer.guiActions.resetGui();
         viewer.viewportActions.resetPanes();
         viewer.mutable.current.messageQueue.length = 0;
@@ -77,33 +81,35 @@ export function WebsocketMessageProducer() {
       }
       if (data.type === "closed") {
         isConnected = false;
+        retryAllowed = !data.versionMismatch;
         viewer.guiActions.resetGui();
         // Anything still queued belongs to the dead connection.
         viewer.mutable.current.messageQueue.length = 0;
-        updateRetryInterval();
-        viewer.mutable.current.sendMessage = (message) =>
-          console.log(
-            `Tried to send ${message.type} but websocket is not connected!`,
-          );
+        viewer.mutable.current.sendMessage = warnDisconnectedSend;
         if (data.versionMismatch) {
-          // Retrying cannot fix a version mismatch, so this is reported as a
-          // standing error on the connection status rather than a transient
-          // "reconnecting" state.
           viewer.useGui.set({
             connectionError: `Connection rejected: ${data.closeReason}`,
           });
+        } else {
+          viewer.useGui.set({ connectionError: null });
         }
+        updateRetryInterval();
         return;
       }
       // The worker's rate smoothing can deliver a batch after the close; a
       // batch from a dead connection must not replay over the reset GUI.
-      if (isConnected)
+      if (isConnected) {
         viewer.mutable.current.messageQueue.push(...data.messages);
+        viewer.mutable.current.notifyMessageQueue();
+      }
     };
 
     postToWorker({ type: "set_server", server });
     updateWatching();
     return () => {
+      active = false;
+      worker.onmessage = null;
+      worker.terminate();
       unsubscribeWatchers();
       // The counters belong to the worker that is about to be replaced, so
       // they say nothing about the connection that follows.
@@ -111,11 +117,8 @@ export function WebsocketMessageProducer() {
       window.removeEventListener("focus", updateRetryInterval);
       window.removeEventListener("blur", updateRetryInterval);
       if (retryIntervalId !== null) clearInterval(retryIntervalId);
-      postToWorker({ type: "close" });
-      viewer.mutable.current.sendMessage = (message) =>
-        console.log(
-          `Tried to send ${message.type} but websocket is not connected!`,
-        );
+      viewer.mutable.current.messageQueue.length = 0;
+      viewer.mutable.current.sendMessage = warnDisconnectedSend;
       viewer.useGui.set({ websocketState: "inactive" });
     };
   }, [server, viewer]);

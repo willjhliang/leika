@@ -8,7 +8,15 @@
 
 import { describe, expect, it } from "vitest";
 import { toggleCollapsed } from "./layoutOps";
-import { DockEdge, DockLayout, emptyLayout, regionWidthsOf } from "./types";
+import { planRegion, plannedReservedWidth } from "./regionPlan";
+import {
+  DockEdge,
+  DockLayout,
+  MIN_PANEL_WIDTH_PX,
+  SPLIT_DIVIDER_PX,
+  emptyLayout,
+  regionWidthsOf,
+} from "./types";
 import { reconcileRegionWidths } from "./widthReconciliation";
 import { leaf, row, group } from "./testUtils";
 
@@ -104,17 +112,22 @@ describe("reconcileRegionWidths with minimized columns", () => {
 });
 
 describe("reconcileRegionWidths min-width floor", () => {
-  it("raises a too-narrow width to the expanded columns' summed minimum", () => {
-    // Two 220px-minimum columns + divider = 447; a carried width of 300 is
-    // unrepresentable and must be floored on commit (replaces the old
-    // auto-grow effect).
+  it("floors content width without counting fixed divider chrome twice", () => {
     const prev = emptyLayout();
-    prev.groups = { a: group("a") };
-    prev.docked.right = leaf("a", 1);
-    prev.regionWidth = { left: 0, right: 300 };
+    prev.groups = { a: group("a"), b: group("b") };
+    prev.docked.right = row([
+      leaf("a", MIN_PANEL_WIDTH_PX),
+      leaf("b", MIN_PANEL_WIDTH_PX),
+    ]);
+    prev.regionWidth = { left: 0, right: MIN_PANEL_WIDTH_PX * 2 };
     const next = structuredClone(prev);
-    next.groups["b"] = group("b");
-    next.docked.right = row([leaf("a", 300), leaf("b", 300)]);
-    expect(recon(prev, next).right).toBeGreaterThanOrEqual(447);
+    next.regionWidth!.right = 300;
+
+    const width = recon(prev, next).right;
+    const plan = planRegion(next.docked.right!, next.groups);
+    expect(width).toBe(MIN_PANEL_WIDTH_PX * 2);
+    expect(plannedReservedWidth(plan, width)).toBe(
+      MIN_PANEL_WIDTH_PX * 2 + SPLIT_DIVIDER_PX,
+    );
   });
 });

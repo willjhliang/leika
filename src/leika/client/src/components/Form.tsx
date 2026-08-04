@@ -13,7 +13,7 @@ import {
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { ViewerContext } from "../ViewerContext";
 import { GuiFormMessage } from "../WebsocketMessages";
-import { useContainerIsEmpty } from "./GuiSection";
+import { useContainerIsEmpty } from "./useContainerIsEmpty";
 import { GuiInputRow } from "./common";
 import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
 

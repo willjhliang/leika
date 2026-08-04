@@ -183,6 +183,21 @@ def test_a_preview_rides_the_same_transfer_under_its_own_disposition() -> None:
     assert b"".join(part.content for part in _parts(messages)) == b"# Title\n"
 
 
+def test_preview_rejects_invalid_content_and_limits() -> None:
+    client = _Client()
+    with pytest.raises(TypeError, match="bytes or a Path"):
+        ClientHandle.send_file_preview(client, "notes.txt", "hello")  # type: ignore[arg-type]
+    ClientHandle.send_file_preview(client, "empty.txt", b"", max_bytes=0)  # type: ignore[arg-type]
+    for max_bytes in (-1, True):
+        with pytest.raises(ValueError, match="non-negative integer"):
+            ClientHandle.send_file_preview(
+                client,
+                "notes.txt",
+                b"hello",
+                max_bytes=max_bytes,  # type: ignore[arg-type]
+            )
+
+
 def test_a_file_over_the_preview_limit_is_described_rather_than_sent() -> None:
     # Showing a file means holding all of it in the tab; past some size that
     # is a tab that stops responding, with nothing on screen to say why.

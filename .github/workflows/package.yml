@@ -25,6 +25,8 @@ jobs:
         run: python scripts/check_release_tag.py "${{ github.event.release.tag_name }}" dist/*.whl
       - name: Check wheel contents and size
         run: python scripts/check_wheel.py dist/*.whl
+      - name: Check source distribution contents
+        run: python scripts/check_sdist.py dist/*.tar.gz
       - name: Base-install smoke test
         run: |
           python -m venv /tmp/leika-wheel-smoke
@@ -35,14 +37,35 @@ jobs:
           python -m venv /tmp/leika-examples-smoke
           /tmp/leika-examples-smoke/bin/pip install "$(realpath dist/*.whl)[examples]"
           /tmp/leika-examples-smoke/bin/python -c "import leika, viser, plotly.graph_objects as go; assert go.Figure() is not None"
+      - name: Source-distribution smoke test
+        run: |
+          python -m venv /tmp/leika-sdist-smoke
+          /tmp/leika-sdist-smoke/bin/pip install dist/*.tar.gz
+          /tmp/leika-sdist-smoke/bin/python -c "import leika; print('installed sdist leika', leika.__version__)"
       - uses: actions/upload-artifact@v4
         with:
           name: distributions
           path: dist/
 
+  release-python:
+    if: github.event_name == 'release'
+    uses: ./.github/workflows/python.yml
+
+  release-client:
+    if: github.event_name == 'release'
+    uses: ./.github/workflows/client.yml
+
+  release-docs:
+    if: github.event_name == 'release'
+    uses: ./.github/workflows/docs.yml
+
+  release-e2e:
+    if: github.event_name == 'release'
+    uses: ./.github/workflows/e2e.yml
+
   publish:
     if: github.event_name == 'release'
-    needs: wheel
+    needs: [wheel, release-python, release-client, release-docs, release-e2e]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
