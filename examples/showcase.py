@@ -1,4 +1,4 @@
-"""Comprehensive Leika image, Plotly, viser, layout, and GUI showcase.
+"""Comprehensive Leika image, matplotlib, Plotly, viser, layout, and GUI showcase.
 
 Install the optional dependency and run from the repository root::
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import struct
+import threading
 import time
 import zlib
 from collections import deque
@@ -19,6 +20,8 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 import viser
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 import leika
 
@@ -68,10 +71,11 @@ HEIGHT = 300
 WIDTH = 480
 Y, X = np.mgrid[-1.0 : 1.0 : complex(HEIGHT), -1.5 : 1.5 : complex(WIDTH)]
 
-# Keep live surface updates compact.
-SURFACE_AXIS = np.linspace(-2.0, 2.0, 40)
-SURFACE_X, SURFACE_Y = np.meshgrid(SURFACE_AXIS, SURFACE_AXIS)
-SURFACE_RADIUS = np.sqrt(SURFACE_X**2 + SURFACE_Y**2)
+# Leika relays a matplotlib figure exactly as composed -- no recoloring -- so a
+# figure styled for a white page is wrong the moment a viewer switches to the
+# dark theme. One mid gray reads against both.
+FIGURE_INK = "#8a8a8a"
+FIGURE_FILL = "#6aa9d8"
 
 
 def png_bytes(frame: np.ndarray) -> bytes:
@@ -173,28 +177,43 @@ def make_plot() -> go.Figure:
     return figure
 
 
-def surface_height(phase: float, frequency: float) -> np.ndarray:
-    """Radial ripple that shares the image panes' phase and frequency."""
+def style_axes(axes: Axes) -> None:
+    """Apply the two-theme styling. Called again after every ``clear()``."""
 
-    return np.sin(frequency * 2.0 * SURFACE_RADIUS - phase) * np.exp(-0.35 * SURFACE_RADIUS)
+    axes.set_facecolor("none")
+    axes.spines["top"].set_visible(False)
+    axes.spines["right"].set_visible(False)
+    axes.spines["left"].set_color(FIGURE_INK)
+    axes.spines["bottom"].set_color(FIGURE_INK)
+    axes.tick_params(colors=FIGURE_INK, labelsize=9)
+    axes.set_xlabel("signal", color=FIGURE_INK, fontsize=9)
+    axes.set_ylabel("count", color=FIGURE_INK, fontsize=9)
 
 
-def make_surface() -> go.Figure:
-    figure = go.Figure(
-        go.Surface(
-            x=SURFACE_AXIS,
-            y=SURFACE_AXIS,
-            z=surface_height(0.0, 1.2),
-            colorscale="Blues",
-            showscale=False,
-        )
-    )
-    figure.update_layout(
-        margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        uirevision="leika-showcase-surface",
-        scene={"zaxis": {"range": [-1.1, 1.1]}},
-    )
+def make_distribution() -> Figure:
+    """Build the figure the matplotlib pane relays.
+
+    Constructed through ``Figure`` rather than ``pyplot``: nothing here is
+    ever shown locally, so there is no backend or figure manager to involve.
+    """
+
+    # Sized generously against the type: the pane scales the SVG to fit, so a
+    # small figure would land with text twice the size of the Plotly pane's.
+    figure = Figure(figsize=(7.5, 4.6), layout="constrained", facecolor="none")
+    style_axes(figure.add_subplot())
     return figure
+
+
+def draw_distribution(figure: Figure, values: list[float]) -> None:
+    """Redraw the trailing signal's histogram in place."""
+
+    axes = figure.axes[0]
+    axes.clear()
+    style_axes(axes)
+    axes.set_xlim(-1.0, 1.0)
+    if values:
+        axes.hist(values, bins=24, range=(-1.0, 1.0), color=FIGURE_FILL, edgecolor="none")
+        axes.axvline(float(np.mean(values)), color=FIGURE_INK, linewidth=1.0, linestyle="--")
 
 
 def main() -> None:
@@ -222,12 +241,11 @@ def main() -> None:
         title="Interactive Plotly",
         config={"displayModeBar": False, "responsive": True},
     )
-    surface_figure = make_surface()
-    surface_pane = grid.add_plotly(
-        surface_figure,
-        pane_id="surface",
-        title="3D surface",
-        config={"displayModeBar": False, "responsive": True},
+    distribution_figure = make_distribution()
+    distribution_pane = grid.add_matplotlib(
+        distribution_figure,
+        pane_id="distribution",
+        title="matplotlib distribution",
     )
 
     with server.gui.add_folder("Playback and signal"):
@@ -408,6 +426,7 @@ def main() -> None:
     state: dict[str, Any] = {
         "phase": 0.0,
         "start": time.monotonic(),
+        "signal": [],
     }
     history_t: deque[float] = deque(maxlen=240)
     history_y: deque[float] = deque(maxlen=240)
@@ -562,6 +581,22 @@ def main() -> None:
             auto_close_seconds=4.0,
         )
 
+    # Redrawing matplotlib and serializing to SVG costs about 50 ms -- a frame
+    # and a half of the budget below -- so it runs on its own thread, reading
+    # the snapshot the loop publishes rather than the deque. Only this thread
+    # ever touches the figure. A thread does not make it free, since the SVG
+    # backend holds the GIL throughout; once a second is what keeps the loop
+    # at 30 fps. A matplotlib pane is a picture, not a live chart.
+    stopping = threading.Event()
+
+    def refresh_distribution() -> None:
+        while not stopping.is_set():
+            draw_distribution(distribution_figure, state["signal"])
+            distribution_pane.update(distribution_figure)
+            stopping.wait(1.0)
+
+    threading.Thread(target=refresh_distribution, daemon=True).start()
+
     print(f"Open {server.url}")
     frame_interval = 1.0 / 30.0
     last_tick = time.monotonic()
@@ -605,8 +640,9 @@ def main() -> None:
             plot_figure.update_yaxes(range=list(plot_range.value))
             plot_pane.update(plot_figure)
             gui_plot.figure = plot_figure
-            surface_figure.data[0].z = surface_height(state["phase"], float(frequency.value))
-            surface_pane.update(surface_figure)
+            # Published for the distribution thread. Building the list here
+            # keeps the deque's iteration on the thread that appends to it.
+            state["signal"] = list(history_y)
 
             # Sleep to the next 30 Hz deadline rather than for a fixed
             # interval, so frame work does not subtract from the frame rate.
@@ -618,6 +654,7 @@ def main() -> None:
             else:
                 next_frame = time.monotonic()
     except KeyboardInterrupt:
+        stopping.set()
         server.stop()
         viser_server.stop()
 
