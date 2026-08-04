@@ -87,13 +87,24 @@ in `docs/api/`; autodoc will not discover it otherwise.
 ## Releases
 
 Bump `__version__` in `src/leika/__init__.py`, rerun `python
-sync_client_server.py`, then tag and publish a GitHub release:
+sync_client_server.py`, then rebuild the client before running anything
+locally:
 
 ```bash
+LEIKA_CLIENT_BUILD=always leika-build-client
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z"
 ```
+
+The rebuild matters because the bundle carries the version it was built with,
+and a client whose version does not match the server's is turned away for
+good -- it does not retry. Skip it and the page comes up blank: no panes, no
+GUI, just the status badge red and reading "Inactive", with the rejection
+behind it. The server looks healthy throughout, so it reads as a bug in
+whatever you last changed. `always` is what forces the build: the source hash
+did change, but a running `npm run dev` makes the default `auto` skip the
+check entirely.
 
 Publishing the release runs `.github/workflows/package.yml`, which checks the
 generated protocol and version, reruns the Python, client, docs, and browser
