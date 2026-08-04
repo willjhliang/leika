@@ -127,10 +127,10 @@ def _compute_step(x: float | None) -> float:  # type: ignore
 def _validate_button_color(color: str) -> None:
     """Reject anything but the two button roles at runtime, where the
     ``Literal`` annotation alone would let ``"blue"`` through and quietly draw
-    a primary. Shared by ``add_button`` and ``add_upload_button``."""
-    if color not in ("primary", "secondary"):
+    the default. Shared by ``add_button`` and ``add_upload_button``."""
+    if color not in ("default", "inverse"):
         raise ValueError(
-            f"Button color must be 'primary' or 'secondary', not {color!r}. Buttons take"
+            f"Button color must be 'default' or 'inverse', not {color!r}. Buttons take"
             " a role rather than a color; the accent itself is a viewer setting."
         )
 
@@ -1029,7 +1029,7 @@ class GuiApi(GuiContainer):
         # them would invite the wrong one -- with the accent behind Submit alone.
         with handle:
             handle.actions = self.add_button(
-                ("Reset", "Submit"), color=("secondary", "primary"), merge=False
+                ("Reset", "Submit"), color=("default", "inverse"), merge=False
             )
 
         def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
@@ -1426,7 +1426,7 @@ class GuiApi(GuiContainer):
         text: str,
         *,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: Literal["default", "inverse"] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1444,7 +1444,7 @@ class GuiApi(GuiContainer):
         text: list[str] | tuple[str, ...],
         *,
         label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1458,7 +1458,7 @@ class GuiApi(GuiContainer):
         text: str | Sequence[str],
         *,
         label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1486,12 +1486,12 @@ class GuiApi(GuiContainer):
                 whole width of the panel, which is what a button that says what
                 it does needs; given one, the label takes the left column and
                 the button sits beside it, like every other labelled control.
-            color: Colorway. ``"primary"`` fills with the accent, which is what
-                a panel's main action wants; ``"secondary"`` outlines instead,
-                for the ones that sit beside it. A single role answers for
-                every button in a row; a sequence answers one button at a time,
-                so ``color=("secondary", "primary")`` puts the accent behind
-                the second of a pair and not the first.
+            color: Colorway. ``"default"`` outlines, which is what most
+                buttons want; ``"inverse"`` fills with the accent instead, for
+                the one action a panel is really about. A single role answers
+                for every button in a row; a sequence answers one button at a
+                time, so ``color=("default", "inverse")`` puts the accent
+                behind the second of a pair and not the first.
             merge: Whether neighbouring buttons in a row are joined into one
                 block, sharing an edge, or parted by a gap. A single bool
                 answers for the whole row; a sequence answers one gap at a
@@ -1566,7 +1566,7 @@ class GuiApi(GuiContainer):
         text: str,
         *,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: Literal["default", "inverse"] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1580,9 +1580,9 @@ class GuiApi(GuiContainer):
         Args:
             text: Text to display on the button itself.
             label: Optional label for the row; see :meth:`add_button`.
-            color: Colorway for the button. ``"primary"`` fills with the accent,
-                which is what a panel's main action wants; ``"secondary"``
-                outlines instead, for the ones that sit beside it.
+            color: Colorway for the button. ``"default"`` outlines, which is
+                what most buttons want; ``"inverse"`` fills with the accent
+                instead, for the one action a panel is really about.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1629,7 +1629,7 @@ class GuiApi(GuiContainer):
         *,
         filename: str | None = None,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: Literal["default", "inverse"] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1659,9 +1659,9 @@ class GuiApi(GuiContainer):
             filename: Name the file is saved under. Optional only when the
                 contents come from a path, whose own name is then used.
             label: Optional label for the row; see :meth:`add_button`.
-            color: Colorway for the button. ``"primary"`` fills with the accent,
-                which is what a panel's main action wants; ``"secondary"``
-                outlines instead, for the ones that sit beside it.
+            color: Colorway for the button. ``"default"`` outlines, which is
+                what most buttons want; ``"inverse"`` fills with the accent
+                instead, for the one action a panel is really about.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1713,7 +1713,7 @@ class GuiApi(GuiContainer):
         *,
         filename: str | None = None,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: Literal["default", "inverse"] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1738,9 +1738,9 @@ class GuiApi(GuiContainer):
             filename: Name the file is shown under. Optional only when the
                 contents come from a path, whose own name is then used.
             label: Optional label for the row; see :meth:`add_button`.
-            color: Colorway for the button. ``"primary"`` fills with the accent,
-                which is what a panel's main action wants; ``"secondary"``
-                outlines instead, for the ones that sit beside it.
+            color: Colorway for the button. ``"default"`` outlines, which is
+                what most buttons want; ``"inverse"`` fills with the accent
+                instead, for the one action a panel is really about.
             visible: Whether the button is visible.
             disabled: Whether the button is disabled.
             hint: Optional hint to display on hover.
@@ -1839,7 +1839,7 @@ class GuiApi(GuiContainer):
         *,
         initial_value: bool = False,
         label: str | None = None,
-        color: Literal["primary", "secondary"] = "primary",
+        color: Literal["default", "inverse"] = "default",
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
@@ -1854,7 +1854,7 @@ class GuiApi(GuiContainer):
         *,
         initial_value: str | Sequence[str] | None = None,
         label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "default",
         multiple: bool = False,
         required: bool | None = None,
         merge: bool | Sequence[bool] = True,
@@ -1871,7 +1871,7 @@ class GuiApi(GuiContainer):
         *,
         initial_value: bool | str | Sequence[str] | None = None,
         label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "primary",
+        color: ButtonColor | Sequence[ButtonColor] = "default",
         multiple: bool = False,
         required: bool | None = None,
         merge: bool | Sequence[bool] = True,

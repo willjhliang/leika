@@ -329,7 +329,7 @@ class RemoveNotificationMessage(Message, entity=EntityLifecycle("notification", 
     uuid: str
 
 
-ButtonColor = Literal["primary", "secondary"]
+ButtonColor = Literal["default", "inverse"]
 """The two roles a button or toggle can take."""
 
 

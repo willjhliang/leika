@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { GuiToggleGroupMessage } from "../WebsocketMessages";
 import ToggleGroupComponent from "./ToggleGroup";
 
-type Color = "primary" | "secondary";
+type Color = "inverse" | "default";
 
 const OPTIONS = ["Bold", "Italic", "Under"];
 
@@ -13,7 +13,7 @@ function renderToggleGroup({
   value = ["Bold"],
   multiple = false,
   required = false,
-  color = "primary" as Color | Color[],
+  color = "inverse" as Color | Color[],
   merge = [true, true],
 }: {
   value?: string[];
@@ -74,12 +74,12 @@ describe("ToggleGroupComponent", () => {
 
   it("colors toggles one at a time when the row asks for it", () => {
     const mixed = renderToggleGroup({
-      color: ["secondary", "primary", "primary"],
+      color: ["default", "inverse", "inverse"],
     });
     const roles = [...mixed.matchAll(/data-leika-button-color="(\w+)"/g)].map(
       (match) => match[1],
     );
-    expect(roles).toEqual(["secondary", "primary", "primary"]);
+    expect(roles).toEqual(["default", "inverse", "inverse"]);
 
     // The hairline between joined toggles is for two filled ones meeting; the
     // outlined half of a pair brings a border of its own. It is drawn in the
@@ -87,9 +87,9 @@ describe("ToggleGroupComponent", () => {
     const hairline = /border-l-\(--leika-panel-surface\)/g;
     expect(mixed.match(hairline)).toHaveLength(1);
     expect(
-      renderToggleGroup({ color: "primary" }).match(hairline),
+      renderToggleGroup({ color: "inverse" }).match(hairline),
     ).toHaveLength(2);
-    expect(renderToggleGroup({ color: "secondary" })).not.toContain(
+    expect(renderToggleGroup({ color: "default" })).not.toContain(
       "border-l-(--leika-panel-surface)",
     );
   });

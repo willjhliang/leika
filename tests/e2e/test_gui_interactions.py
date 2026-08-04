@@ -65,7 +65,7 @@ def test_button_and_upload_hints_and_visibility(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.add_button("Hinted action", hint="Runs the action once.")
+    leika_server.gui.add_button("Hinted action", hint="Runs the action once.", color="inverse")
     leika_server.gui.add_button("Hidden action", visible=False)
     leika_server.gui.add_upload_button(
         "Import image", hint="Choose a PNG image.", mime_type="image/png"
@@ -124,7 +124,7 @@ def test_a_form_opens_from_one_row_into_a_popout(
     trigger = row.locator("[data-leika-form-trigger]")
     expect(trigger).to_have_text("Open form")
     # Secondary: the way into a form does not carry the panel's accent.
-    expect(trigger).to_have_attribute("data-leika-button-color", "secondary")
+    expect(trigger).to_have_attribute("data-leika-button-color", "default")
     # Closed, the form is a row and nothing else -- no fields on the panel.
     expect(leika_page.get_by_label("Name")).to_have_count(0)
 
@@ -504,7 +504,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     leika_server.gui.add_multi_slider(
         "Styled range", min=0.0, max=1.0, step=0.1, initial_value=(0.2, 0.8)
     )
-    leika_server.gui.add_button(("A", "B", "C"), label="Styled actions")
+    leika_server.gui.add_button(("A", "B", "C"), label="Styled actions", color="inverse")
     leika_server.gui.add_checkbox("Styled checkbox", initial_value=True)
     leika_server.gui.add_text("Styled text", initial_value="compact")
     leika_server.gui.add_dropdown("Styled dropdown", options=("First", "Second"))
@@ -640,7 +640,8 @@ def test_controls_use_semantic_tokens_and_compact_density(
     assert checkbox["background"] == primary
     assert range_fill["background"] == primary
     # A group's selected option carries the accent, the way a filled button
-    # does: `color` is one setting across both, and it defaults to primary.
+    # does: `color` is one setting across both, and "inverse" means the same
+    # thing to each.
     assert action["background"] == primary
     assert floating_panel["background"] == card
     # The thumb carries the app-wide focus treatment: a resting outline in
@@ -940,15 +941,15 @@ def test_button_and_toggle_colorways_are_roles(
     """Two roles, not two palettes: one carries the accent, one does not --
     across a single button, a whole group, and one option at a time (a Submit
     with a Reset beside it). All of them live props."""
-    primary = leika_server.gui.add_button("Run")
-    leika_server.gui.add_button("Cancel", color="secondary")
-    group = leika_server.gui.add_button(("A", "B"), label="Filled")
-    leika_server.gui.add_button(("C", "D"), label="Marked", color="secondary")
+    inverse = leika_server.gui.add_button("Run", color="inverse")
+    plain = leika_server.gui.add_button("Cancel")
+    group = leika_server.gui.add_button(("A", "B"), label="Filled", color="inverse")
+    leika_server.gui.add_button(("C", "D"), label="Marked")
     leika_server.gui.add_button(
-        ("Reset", "Submit"), label="Actions", color=("secondary", "primary"), merge=True
+        ("Reset", "Submit"), label="Actions", color=("default", "inverse"), merge=True
     )
     leika_server.gui.add_toggle(
-        ("Draft", "Live"), label="Stage", color=("secondary", "primary"), multiple=True
+        ("Draft", "Live"), label="Stage", color=("default", "inverse"), multiple=True
     )
 
     run = leika_page.get_by_role("button", name="Run", exact=True)
@@ -962,10 +963,12 @@ def test_button_and_toggle_colorways_are_roles(
     assert run_fill != cancel_fill, (run_fill, cancel_fill)
     assert cancel.evaluate("e => parseFloat(getComputedStyle(e).borderTopWidth)") >= 1
 
-    # The default is the filled one, and the role is a live prop.
-    assert primary.color == "primary"
-    primary.color = "secondary"
-    expect(run).to_have_attribute("data-leika-button-color", "secondary", timeout=5_000)
+    # The outlined one is what a button is unless asked otherwise, and the
+    # role is a live prop.
+    assert plain.color == "default"
+    assert inverse.color == "inverse"
+    inverse.color = "default"
+    expect(run).to_have_attribute("data-leika-button-color", "default", timeout=5_000)
 
     # A group is a row of buttons, so the colorway is what a button's is: it
     # applies to every option alike.
@@ -979,10 +982,10 @@ def test_button_and_toggle_colorways_are_roles(
     assert fill(marked.nth(0)) == fill(marked.nth(1))
     assert fill(filled.nth(0)) != fill(marked.nth(0))
 
-    assert group.color == ("primary", "primary")
-    group.color = "secondary"
+    assert group.color == ("inverse", "inverse")
+    group.color = "default"
     expect(
-        find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="secondary"]')
+        find_gui_row(leika_page, "Filled").locator('[data-leika-button-color="default"]')
     ).to_have_count(2, timeout=5_000)
     # The fill is a transition, so this polls rather than reading one frame of
     # it: settled, the two groups are the same control in the same role.
@@ -994,8 +997,8 @@ def test_button_and_toggle_colorways_are_roles(
         expect(options.first).to_be_visible(timeout=5_000)
         assert options.count() == 2, row
         quiet, loud = options.nth(0), options.nth(1)
-        assert quiet.get_attribute("data-leika-button-color") == "secondary", row
-        assert loud.get_attribute("data-leika-button-color") == "primary", row
+        assert quiet.get_attribute("data-leika-button-color") == "default", row
+        assert loud.get_attribute("data-leika-button-color") == "inverse", row
         fills = [
             option.evaluate("e => getComputedStyle(e).backgroundColor") for option in (quiet, loud)
         ]
@@ -1075,7 +1078,7 @@ def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
     # stock group's border overlap, which has no edge to overlap between runs.
     leika_server.gui.add_toggle(("A", "B", "C"), label="Toggles", merge=(True, False))
     leika_server.gui.add_button(
-        ("Reset", "Submit"), label="Half", color=("secondary", "primary"), merge=True
+        ("Reset", "Submit"), label="Half", color=("default", "inverse"), merge=True
     )
 
     def gaps(row_label: str, kind: str = "button") -> list[float]:
@@ -1119,10 +1122,10 @@ def test_a_toggle_wears_the_button_pressed_look_in_both_themes(
     with its neighbours.
     """
     # No label may be a substring of another: rows are found by label text.
-    toggle = leika_server.gui.add_toggle("Face", label="Filled toggle")
-    leika_server.gui.add_button("Face", label="Filled button")
-    outlined = leika_server.gui.add_toggle("Face", label="Thin toggle", color="secondary")
-    leika_server.gui.add_button("Face", label="Thin button", color="secondary")
+    toggle = leika_server.gui.add_toggle("Face", label="Filled toggle", color="inverse")
+    leika_server.gui.add_button("Face", label="Filled button", color="inverse")
+    outlined = leika_server.gui.add_toggle("Face", label="Thin toggle", color="default")
+    leika_server.gui.add_button("Face", label="Thin button", color="default")
 
     def control(row: str, kind: str) -> Locator:
         return find_gui_row(leika_page, row).locator(f"[data-leika-{kind}]")

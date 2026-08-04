@@ -92,8 +92,8 @@ export default function ToggleGroupComponent({
                 // joined pair with an outlined half already has that half's
                 // border.
                 !startsRun &&
-                  color[index] === "primary" &&
-                  color[index - 1] === "primary" &&
+                  color[index] === "inverse" &&
+                  color[index - 1] === "inverse" &&
                   "border-l-(--leika-panel-surface)",
               )}
               data-leika-toggle

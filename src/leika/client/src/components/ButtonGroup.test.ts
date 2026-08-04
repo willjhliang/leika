@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import ButtonGroupComponent from "./ButtonGroup";
 
-type Color = "primary" | "secondary";
+type Color = "inverse" | "default";
 
 function renderButtonGroup(
   disabled = false,
-  color: Color | Color[] = "primary",
+  color: Color | Color[] = "inverse",
   merge: boolean[] = [false, false],
 ): string {
   const options = ["Ocean", "Magma", "Viridis"];
@@ -51,26 +51,26 @@ describe("ButtonGroupComponent", () => {
   });
 
   it("gives every option one role, the row's own unless told otherwise", () => {
-    const primary = renderButtonGroup(false, "primary");
-    const secondary = renderButtonGroup(false, "secondary");
+    const inverse = renderButtonGroup(false, "inverse");
+    const outlined = renderButtonGroup(false, "default");
     // Whatever the colorway resolves to, all three options share it: nothing
     // in the row is styled differently from its neighbours.
-    for (const markup of [primary, secondary]) {
+    for (const markup of [inverse, outlined]) {
       const classes = [...markup.matchAll(/<button[^>]*class="([^"]*)"/g)].map(
         (match) => match[1],
       );
       expect(classes).toHaveLength(3);
       expect(new Set(classes).size).toBe(1);
     }
-    expect(primary).not.toEqual(secondary);
+    expect(inverse).not.toEqual(outlined);
   });
 
   it("colors options one at a time when the row asks for it", () => {
-    const mixed = renderButtonGroup(false, ["secondary", "primary", "primary"]);
+    const mixed = renderButtonGroup(false, ["default", "inverse", "inverse"]);
     const roles = [...mixed.matchAll(/data-leika-button-color="(\w+)"/g)].map(
       (match) => match[1],
     );
-    expect(roles).toEqual(["secondary", "primary", "primary"]);
+    expect(roles).toEqual(["default", "inverse", "inverse"]);
     const classes = [...mixed.matchAll(/<button[^>]*class="([^"]*)"/g)].map(
       (match) => match[1],
     );
@@ -85,13 +85,13 @@ describe("ButtonGroupComponent", () => {
     // them; an outlined neighbour brings one of its own.
     const mixed = renderButtonGroup(
       false,
-      ["primary", "secondary", "primary"],
+      ["inverse", "default", "inverse"],
       [true, true],
     );
     expect(mixed).not.toContain("button-group-separator");
     const twoFilled = renderButtonGroup(
       false,
-      ["primary", "primary", "secondary"],
+      ["inverse", "inverse", "default"],
       [true, true],
     );
     expect(twoFilled.match(/data-slot="button-group-separator"/g)).toHaveLength(
@@ -103,22 +103,18 @@ describe("ButtonGroupComponent", () => {
     // The row's own group plus one nested group per run.
     const groups = (markup: string) =>
       (markup.match(/data-slot="button-group"/g) ?? []).length - 1;
-    expect(groups(renderButtonGroup(false, "secondary", [true, true]))).toBe(1);
-    expect(groups(renderButtonGroup(false, "secondary", [false, false]))).toBe(
-      3,
-    );
-    expect(groups(renderButtonGroup(false, "secondary", [true, false]))).toBe(
-      2,
-    );
+    expect(groups(renderButtonGroup(false, "default", [true, true]))).toBe(1);
+    expect(groups(renderButtonGroup(false, "default", [false, false]))).toBe(3);
+    expect(groups(renderButtonGroup(false, "default", [true, false]))).toBe(2);
   });
 
   it("divides merged filled buttons, and leaves outlined ones to their borders", () => {
-    const filled = renderButtonGroup(false, "primary", [true, true]);
-    const outlined = renderButtonGroup(false, "secondary", [true, true]);
+    const filled = renderButtonGroup(false, "inverse", [true, true]);
+    const outlined = renderButtonGroup(false, "default", [true, true]);
     expect(filled.match(/data-slot="button-group-separator"/g)).toHaveLength(2);
     expect(outlined).not.toContain("button-group-separator");
     // Parted buttons have a gap doing the dividing, so no hairline either.
-    expect(renderButtonGroup(false, "primary", [false, false])).not.toContain(
+    expect(renderButtonGroup(false, "inverse", [false, false])).not.toContain(
       "button-group-separator",
     );
   });

@@ -81,8 +81,8 @@ def test_an_icon_beside_a_label_steps_back_without_taking_the_label(
 ) -> None:
     # The half of the rule that reaches buttons somebody adds from Python:
     # the icon quiets down, the words it labels do not.
-    leika_server.gui.add_button("Refresh", icon=leika.Icon.REFRESH_CW, color="secondary")
-    leika_server.gui.add_button("Save workspace", icon=leika.Icon.SAVE)
+    leika_server.gui.add_button("Refresh", icon=leika.Icon.REFRESH_CW, color="default")
+    leika_server.gui.add_button("Save workspace", icon=leika.Icon.SAVE, color="inverse")
 
     outlined = leika_page.get_by_role("button", name="Refresh")
     expect(outlined).to_be_visible()
@@ -115,7 +115,7 @@ def test_a_pressed_toggle_brings_its_icon_forward(
 ) -> None:
     # Pressed fills an outlined toggle with `muted`, which is the color its
     # icon rests at; left there the icon would disappear into its own button.
-    leika_server.gui.add_toggle("Grid", icon=leika.Icon.GRID_3X3, color="secondary")
+    leika_server.gui.add_toggle("Grid", icon=leika.Icon.GRID_3X3, color="default")
     toggle = leika_page.get_by_role("button", name="Grid")
     expect(toggle).to_be_visible()
 

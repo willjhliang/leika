@@ -153,13 +153,13 @@ ENTRIES = [
                 slug="toggle",
                 title="Toggle",
                 ref="add_toggle",
-                code='gui.add_toggle("Pin the view", color="secondary")',
+                code='gui.add_toggle("Pin the view")',
             ),
             Entry(
                 slug="toggle-group",
                 title="Toggle group",
                 ref="add_toggle",
-                code='gui.add_toggle(("Ocean", "Magma", "Viridis"), label="Palette", color="secondary")',
+                code='gui.add_toggle(("Ocean", "Magma", "Viridis"), label="Palette")',
             ),
             Entry(
                 slug="rgb",

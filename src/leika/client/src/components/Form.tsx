@@ -111,7 +111,7 @@ function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
           className="w-full"
           disabled={isEmpty}
           data-leika-button
-          data-leika-button-color="secondary"
+          data-leika-button-color="default"
           data-leika-form-trigger
         />
       }

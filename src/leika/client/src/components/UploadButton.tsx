@@ -30,7 +30,7 @@ export default function UploadButtonComponent({
     <Button
       id={uuid}
       // The same two roles the plain button takes, resolved the same way.
-      variant={color === "secondary" ? "outline" : "default"}
+      variant={color === "inverse" ? "default" : "outline"}
       className="w-full"
       data-leika-button-color={color}
       onClick={() => {

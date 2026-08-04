@@ -126,7 +126,7 @@ export interface GuiButtonMessage {
     visible: boolean;
     disabled: boolean;
     text: string;
-    color: "primary" | "secondary";
+    color: "default" | "inverse";
     _icon_html: string | null;
     _hold_callback_freqs: number[];
   };
@@ -146,7 +146,7 @@ export interface GuiUploadButtonMessage {
     visible: boolean;
     disabled: boolean;
     text: string;
-    color: "primary" | "secondary";
+    color: "default" | "inverse";
     _icon_html: string | null;
     mime_type: string;
   };
@@ -269,7 +269,7 @@ export interface GuiToggleMessage {
     visible: boolean;
     disabled: boolean;
     text: string;
-    color: "primary" | "secondary";
+    color: "default" | "inverse";
     _icon_html: string | null;
   };
 }
@@ -288,7 +288,7 @@ export interface GuiToggleGroupMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    color: ("primary" | "secondary")[];
+    color: ("default" | "inverse")[];
     options: string[];
     multiple: boolean;
     required: boolean;
@@ -446,7 +446,7 @@ export interface GuiButtonGroupMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    color: ("primary" | "secondary")[];
+    color: ("default" | "inverse")[];
     options: string[];
     _merge: boolean[];
   };

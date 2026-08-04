@@ -18,11 +18,12 @@
  * the same specificity, so the resting one won on order alone and an ON toggle
  * in dark mode was indistinguishable from an OFF one.
  */
-export const TOGGLE_CLASSES: Record<"primary" | "secondary", string> = {
-  // Filled, like a default button. On, it takes the same step that button
-  // takes under the pointer -- the same value in either theme, since the
-  // accent it steps from is itself theme-dependent.
-  primary: [
+export const TOGGLE_CLASSES: Record<"default" | "inverse", string> = {
+  // Filled, like a shadcn `default` button -- which is the opposite of what
+  // leika's own "default" role means, hence the name below. On, it takes the
+  // same step that button takes under the pointer: the same value in either
+  // theme, since the accent it steps from is itself theme-dependent.
+  inverse: [
     "border border-transparent bg-primary text-primary-foreground",
     "hover:bg-primary/80 hover:text-primary-foreground",
     "aria-pressed:bg-primary/80! aria-pressed:text-primary-foreground",
@@ -34,7 +35,7 @@ export const TOGGLE_CLASSES: Record<"primary" | "secondary", string> = {
   // Outlined, like an outline button: transparent at rest, filling under a
   // press with `muted` in light and the same `input/50` that button hovers to
   // in dark.
-  secondary: [
+  default: [
     "border border-border bg-background text-foreground",
     "hover:bg-muted hover:text-foreground",
     "aria-pressed:bg-muted! aria-pressed:text-foreground",

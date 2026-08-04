@@ -69,10 +69,12 @@ export default function ButtonComponent({
   const button = (
     <Button
       id={uuid}
-      // "secondary" is the settings pane's own outlined button rather than the
-      // stock `secondary` variant, which is a second FILLED tone -- the point of
-      // the pairing is one button that carries the accent and one that does not.
-      variant={color === "secondary" ? "outline" : "default"}
+      // Leika's roles and shadcn's variant names collide head-on: our
+      // "default" is the OUTLINED one, while shadcn's `default` variant is the
+      // filled one. Stock `secondary` is no use as the outlined role either --
+      // it is a second FILLED tone, and the point of the pairing is one button
+      // that carries the accent and one that does not.
+      variant={color === "inverse" ? "default" : "outline"}
       className="w-full"
       data-leika-button
       data-leika-button-color={color}

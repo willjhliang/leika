@@ -405,7 +405,7 @@ export function EntryStack<T>({
           disabled={disabled}
           onClick={append}
           data-leika-button
-          data-leika-button-color="secondary"
+          data-leika-button-color="default"
           data-leika-list-add
         >
           <PlusIcon data-icon="inline-start" />

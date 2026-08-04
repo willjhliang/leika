@@ -279,20 +279,16 @@ def main() -> None:
             initial_value=(-1.5, 1.5),
             min_range=0.5,
         )
-        reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW)
+        reset = server.gui.add_button("Reset timeline", icon=leika.Icon.REFRESH_CW, color="inverse")
 
     with server.gui.add_folder("Image appearance"):
-        palette = server.gui.add_toggle(
-            ("Ocean", "Magma", "Viridis"), label="Palette", color="secondary"
-        )
-        nudge = server.gui.add_button(
-            ("Left", "Right"), label="Nudge", color="secondary", merge=False
-        )
+        palette = server.gui.add_toggle(("Ocean", "Magma", "Viridis"), label="Palette")
+        nudge = server.gui.add_button(("Left", "Right"), label="Nudge", merge=False)
         with server.gui.add_folder("Color adjustments"):
             offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
             tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
             plot_color = server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
-            revert = server.gui.add_button("Revert", label="Colors", color="secondary")
+            revert = server.gui.add_button("Revert", label="Colors")
         gui_preview = server.gui.add_image(
             initial[::4, ::4],
             format="jpeg",
@@ -310,7 +306,7 @@ def main() -> None:
             "Point size", min=0.005, max=0.06, step=0.005, initial_value=0.02
         )
         cloud_color = server.gui.add_rgb("Cloud color", initial_value=(230, 180, 80))
-        spin = server.gui.add_toggle("Spin the cloud", color="secondary")
+        spin = server.gui.add_toggle("Spin the cloud")
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
@@ -325,7 +321,6 @@ def main() -> None:
             label="Overlays",
             multiple=True,
             initial_value="Grid",
-            color="secondary",
         )
         gui_plot = server.gui.add_plotly(
             plot_figure,
@@ -339,7 +334,6 @@ def main() -> None:
             "Inspect a file",
             mime_type="image/*,.txt,.json",
             icon=leika.Icon.UPLOAD,
-            color="secondary",
         )
 
         def signal_csv(event: leika.GuiEvent[Any]) -> bytes:
@@ -353,21 +347,18 @@ def main() -> None:
             signal_csv,
             filename="leika-signal.csv",
             icon=leika.Icon.DOWNLOAD,
-            color="secondary",
         )
         server.gui.add_preview_button(
             "Preview signal CSV",
             signal_csv,
             filename="leika-signal.csv",
             icon=leika.Icon.EYE,
-            color="secondary",
         )
         server.gui.add_preview_button(
             "Read the notes",
             NOTES_MD.encode(),
             filename="notes.md",
             icon=leika.Icon.BOOK_OPEN,
-            color="secondary",
         )
 
         def field_png(event: leika.GuiEvent[Any]) -> bytes:
@@ -386,20 +377,16 @@ def main() -> None:
             field_png,
             filename="leika-field.png",
             icon=leika.Icon.IMAGE,
-            color="secondary",
         )
         server.gui.add_preview_button(
             "Watch the ripple",
             ASSETS / "ripple.mp4",
             icon=leika.Icon.FILM,
-            color="secondary",
         )
         with server.gui.add_form(label="Annotation") as annotation:
             note_title = server.gui.add_text("Title", "Interesting spike")
             note_body = server.gui.add_text("Note", "", multiline=True)
-            note_level = server.gui.add_toggle(
-                ("Info", "Warning"), label="Level", color="secondary"
-            )
+            note_level = server.gui.add_toggle(("Info", "Warning"), label="Level")
         log = server.gui.add_text(
             None, "_Nothing logged yet._", editable=False, markdown=True, multiline=True
         )

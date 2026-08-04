@@ -100,18 +100,18 @@ describe("an icon beside a label", () => {
 
 describe("a toggle, which is a button that stays pressed", () => {
   it("treats its icon the way the button it borrows from does", () => {
-    const outlined = classes(TOGGLE_CLASSES.secondary);
+    const outlined = classes(TOGGLE_CLASSES.default);
     expect(outlined).toContain(ICON_RESTING);
     expect(outlined).toContain(ICON_HOVER);
 
     // Filled, so the icon reads as the label does -- as in the filled button.
-    expect(classes(TOGGLE_CLASSES.primary)).not.toContain(ICON_RESTING);
+    expect(classes(TOGGLE_CLASSES.inverse)).not.toContain(ICON_RESTING);
   });
 
   it("brings the outlined toggle's icon forward while it is on", () => {
     // Pressed fills an outlined toggle with `muted` itself, so an icon left
     // at the muted foreground would be a step back onto its own color.
-    expect(classes(TOGGLE_CLASSES.secondary)).toContain(
+    expect(classes(TOGGLE_CLASSES.default)).toContain(
       "aria-pressed:[&_[data-icon]]:text-foreground",
     );
   });

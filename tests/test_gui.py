@@ -379,8 +379,8 @@ def test_removed_visual_customization_arguments_are_rejected(
     # two names they accept are all they accept, and an actual color still
     # fails. The other three below never regained it.
     for add_a_button in (server.gui.add_button, server.gui.add_upload_button):
-        add_a_button("Run", color="primary")
-        add_a_button("Run", color="secondary")
+        add_a_button("Run", color="inverse")
+        add_a_button("Run", color="default")
         with pytest.raises(ValueError):
             add_a_button("Run", color="blue")  # type: ignore[arg-type]
     with pytest.raises(TypeError):
@@ -393,29 +393,29 @@ def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> N
     """A row usually wants one weight throughout, and sometimes wants its accent
     behind one action only. Both are ``color=``; the wire always carries one
     role per element."""
-    row = server.gui.add_button(("Reset", "Submit"), color=("secondary", "primary"))
-    assert row.color == ("secondary", "primary")
+    row = server.gui.add_button(("Reset", "Submit"), color=("default", "inverse"))
+    assert row.color == ("default", "inverse")
     # A single role still answers for the whole row, and reads back per button.
-    plain = server.gui.add_toggle(("A", "B", "C"), color="secondary")
-    assert plain.color == ("secondary", "secondary", "secondary")
+    plain = server.gui.add_toggle(("A", "B", "C"), color="default")
+    assert plain.color == ("default", "default", "default")
 
     # Live, with the same latitude as the constructor.
-    plain.color = ("primary", "secondary", "primary")
-    assert plain.color == ("primary", "secondary", "primary")
-    plain.color = "primary"
-    assert plain.color == ("primary", "primary", "primary")
+    plain.color = ("inverse", "default", "inverse")
+    assert plain.color == ("inverse", "default", "inverse")
+    plain.color = "inverse"
+    assert plain.color == ("inverse", "inverse", "inverse")
 
     with pytest.raises(ValueError, match="one role per button"):
-        server.gui.add_button(("One", "Two"), color=("primary",))
+        server.gui.add_button(("One", "Two"), color=("inverse",))
     with pytest.raises(ValueError, match="one role per toggle"):
-        server.gui.add_toggle(("One", "Two"), color=("primary", "primary", "primary"))
-    with pytest.raises(ValueError, match="must be 'primary' or 'secondary'"):
-        server.gui.add_button(("One", "Two"), color=("primary", "blue"))  # type: ignore[arg-type]
+        server.gui.add_toggle(("One", "Two"), color=("inverse", "inverse", "inverse"))
+    with pytest.raises(ValueError, match="must be 'default' or 'inverse'"):
+        server.gui.add_button(("One", "Two"), color=("inverse", "blue"))  # type: ignore[arg-type]
     # A single button is one button: the sequence form has nothing to spread.
     with pytest.raises(ValueError, match="a single button is one button"):
-        server.gui.add_button("Solo", color=("primary",))  # type: ignore[arg-type]
+        server.gui.add_button("Solo", color=("inverse",))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="a single toggle is one toggle"):
-        server.gui.add_toggle("Solo", color=("primary",))  # type: ignore[arg-type]
+        server.gui.add_toggle("Solo", color=("inverse",))  # type: ignore[arg-type]
 
 
 def test_gui_images_always_span_the_panel(server: leika.Server) -> None:

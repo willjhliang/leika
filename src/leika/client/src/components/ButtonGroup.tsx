@@ -81,14 +81,12 @@ export default function ButtonGroupComponent({
                     by a hairline in their own foreground. An outlined one on
                     either side brings a border of its own and needs nothing. */}
                 {place > 0 &&
-                  color[option] === "primary" &&
-                  color[run[place - 1]] === "primary" && (
+                  color[option] === "inverse" &&
+                  color[run[place - 1]] === "inverse" && (
                     <ButtonGroupSeparator className="bg-primary-foreground/25" />
                   )}
                 <Button
-                  variant={
-                    color[option] === "secondary" ? "outline" : "default"
-                  }
+                  variant={color[option] === "inverse" ? "default" : "outline"}
                   className="min-w-fit flex-1"
                   disabled={disabled}
                   data-leika-button
