@@ -40,7 +40,7 @@ tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-net
 and prints a public URL:
 
 ```
-Leika listening at http://localhost:8080
+Leika listening at http://127.0.0.1:8080
 Leika share URL: https://drop-formal-lake-born.trycloudflare.com
 Leika password (auto-generated): mV4nP-xq2Lw9
 ```

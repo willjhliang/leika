@@ -20,8 +20,9 @@ Two caveats when picking a name off the website:
   client. Icons added to Lucide after that release are not available until the
   pin moves and ``_icons_generate_enum.py`` is rerun.
 * Attribute access is not validated. ``leika.Icon`` resolves any name through
-  ``__getattr__``, so a misspelled or unavailable icon returns the converted
-  string rather than raising, and the browser renders no icon.
+  ``__getattr__``, so a misspelled or unavailable icon yields the converted
+  string rather than raising there. Passing that string to an ``icon=``
+  argument is what fails, with a ``ValueError`` naming the icon.
 
 .. autoclass:: Icon
 

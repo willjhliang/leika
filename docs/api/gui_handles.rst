@@ -127,3 +127,12 @@ Events and commands
 
 .. autoclass:: CommandEvent
    :members:
+
+Types
+-----
+
+.. autodata:: FileContent
+
+.. autodata:: DownloadContent
+
+.. autodata:: PreviewContent

@@ -3,11 +3,11 @@
 ## Bootstrap
 
 ```bash
-python -m pip install -e ".[dev]"
-leika-build-client
+make install   # or: python -m pip install -e ".[dev]" && leika-build-client
 ```
 
-The Python package serves `src/leika/client/build/index.html`.
+The Python package serves `src/leika/client/build/index.html`. `make help`
+lists every target.
 
 ## Building the client
 
@@ -50,17 +50,27 @@ make lint
 make typecheck
 make client-test
 make test
+python scripts/check_docs.py
 make test-e2e
 make package
 ```
 
-Run the first four before opening a change; add `make test-e2e` for
+Run the first five before opening a change; add `make test-e2e` for
 browser-facing changes and `make package` for packaging changes.
+`check_docs.py` resolves every local Markdown link and compiles every shipped
+example. It has no `make` target but CI runs it, so skipping it locally is a
+way to go red on a broken link.
+
+Unit tests must work without the optional plotting libraries unless marked
+`plotly` or `matplotlib`. `make package` builds the distributions and validates
+them with `scripts/check_wheel.py` and `scripts/check_sdist.py`: the browser
+bundle must be present, files that do not belong in a release wheel are
+rejected, and a 5,000,000-byte ceiling is enforced.
 
 ## Documentation
 
 ```bash
-python -m pip install -e ".[docs]"
+make install-docs   # or: python -m pip install -e ".[docs]"
 make docs
 ```
 
@@ -74,11 +84,6 @@ through `.github/workflows/docs.yml`.
 Adding a public class or method to `leika` means adding it to the matching page
 in `docs/api/`; autodoc will not discover it otherwise.
 
-Unit tests must work without Plotly unless marked `plotly`. Package tests build
-the wheel from a clean client artifact, require the browser bundle to be
-present, reject files that do not belong in a release wheel, and enforce a
-5,000,000-byte ceiling.
-
 ## Releases
 
 Bump `__version__` in `src/leika/__init__.py`, rerun `python
@@ -91,9 +96,11 @@ gh release create vX.Y.Z --title "vX.Y.Z"
 ```
 
 Publishing the release runs `.github/workflows/package.yml`, which checks the
-generated protocol and version, reruns the Python, client, and browser suites,
-builds the distributions, validates and smoke-tests both the wheel and source
-archive, and only then uploads to PyPI through Trusted Publishing.
+generated protocol and version, reruns the Python, client, docs, and browser
+suites, builds the distributions, validates and smoke-tests both the wheel and
+source archive, and only then uploads to PyPI through Trusted Publishing. Every
+one of those gates blocks the upload, so a failing docs build stops the
+release.
 
 PyPI releases are immutable. A version number cannot be reused even after a
 release is deleted, so a mistake means moving to the next patch version.
@@ -109,10 +116,11 @@ python -m playwright install chromium
 ```
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
-multi-slider cancellation, the color picker, modal dismissal, notifications,
-the titlebar, light/dark theming, multi-client updates, image/Plotly pane
-lifecycle, resizing and persistence, and responsive floating/mobile control
-panels.
+multi-slider cancellation, the color picker, checklists, markdown, download and
+preview buttons, modal dismissal, notifications, the titlebar, icon buttons,
+settings, the connection pane, light/dark theming, multi-client updates, the
+lifecycle of every pane type, resizing and persistence, and responsive
+floating/mobile control panels.
 
 `test_dock.py` covers the docking surface's pointer gestures. The dock's layout
 model is unit-tested in TypeScript (`src/leika/client/src/dock/*.test.ts`); the gesture

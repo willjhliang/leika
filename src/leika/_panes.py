@@ -1298,9 +1298,9 @@ class Panes:
         """Create a group that lays out added panes side by side with equal
         widths.
 
-        Panes added through the returned group's ``add_image`` and
-        ``add_plotly`` methods are placed along a shared row and re-divided
-        equally on each addition, so three panes yield exact thirds. (Divisions
+        Panes added through the returned group's ``add_*`` methods are placed
+        along a shared row and re-divided equally on each addition, so three
+        panes yield exact thirds. (Divisions
         snap to the workspace grid; in workspaces small enough that minimum
         pane sizes dominate, they are as equal as the grid allows.) ``relative_to``
         positions the group's first pane; like all placement hints, it only
@@ -1344,9 +1344,9 @@ class Panes:
         """Create a group that lays out added panes in an equally divided
         grid.
 
-        Panes added through the returned grid's ``add_image`` and
-        ``add_plotly`` methods fill left to right, top to bottom, wrapping to
-        a new row after every ``columns`` panes. Rows and columns are
+        Panes added through the returned grid's ``add_*`` methods fill left to
+        right, top to bottom, wrapping to a new row after every ``columns``
+        panes. Rows and columns are
         re-divided equally on each addition, so a filled grid has equal
         cells. The grid counterpart of :meth:`add_row`; see it for placement
         semantics.
