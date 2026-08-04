@@ -57,6 +57,14 @@ jobs:
 
   release-docs:
     if: github.event_name == 'release'
+    # A called workflow may not request more than its caller grants, and this
+    # file grants `contents: read`. docs.yml's deploy job asks for Pages, so
+    # without these the whole workflow is rejected before any job starts. The
+    # deploy itself still skips on a tag ref; only its declaration is checked.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/docs.yml
 
   release-e2e:
