@@ -118,8 +118,11 @@ function MdCode({
   ...props
 }: React.ComponentPropsWithoutRef<"code"> & { block?: boolean }) {
   return block ? (
+    // The scroll is kept and its bar is not: a document sits in a narrow panel
+    // row, and a scrollbar under every fenced block would be a bar of furniture
+    // across the prose. The block still scrolls by wheel and by touch.
     <pre
-      className={`${BLOCK_GAP} overflow-x-auto rounded-lg bg-muted p-4 text-[0.9em]`}
+      className={`${BLOCK_GAP} no-scrollbar overflow-x-auto rounded-lg bg-muted p-4 text-[0.9em]`}
     >
       <code {...props}>{children}</code>
     </pre>
