@@ -1730,6 +1730,13 @@ class GuiApi(GuiContainer):
         instead. The type is read off `filename`, so an extension is worth
         having even when the contents are bytes.
 
+        Writing gets a reading dialog: markdown and plain text are set in a
+        column about 65 characters wide, at a size meant for paragraphs rather
+        than for labels, in a frame as tall as the window allows. Everything
+        else opens in a fixed frame, since a picture or a player is fitted into
+        one rather than scrolled through. Either way the dialog is the same
+        size whatever the file turns out to hold.
+
         Args:
             text: Text on the button's face.
             content: What to show, as in :meth:`add_download_button`: bytes, a
@@ -1751,10 +1758,9 @@ class GuiApi(GuiContainer):
             order: Optional ordering, smallest values will be displayed first.
 
         Note:
-            Markdown is rendered the way :meth:`add_text` renders it, which
-            evaluates expressions in the document. Previewing markdown that
-            arrived from somewhere you do not trust runs it in the viewer's
-            browser.
+            Markdown is rendered the way :meth:`add_text` renders it: as
+            GitHub renders it, with nothing in the document evaluated. A file
+            previews the same whether you wrote it or found it.
 
         Returns:
             A handle that can be used to interact with the GUI element.
@@ -2078,6 +2084,12 @@ class GuiApi(GuiContainer):
 
             server.gui.add_text(None, "## Notes", editable=False,
                                 markdown=True, multiline=True)
+
+        Markdown is GitHub's: CommonMark plus GFM's tables, task lists,
+        strikethrough and autolinks, and the same subset of inline HTML GitHub
+        keeps -- ``<br>`` and ``<sub>`` work, ``<script>`` and event handlers
+        are dropped. Nothing in the document is evaluated, so a file renders
+        here the way it renders on GitHub and a page cannot be a program.
 
         Args:
             label: Label to display beside the text, or None for text that fills

@@ -2,10 +2,12 @@ import { DownloadIcon, FileIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   closeFilePreview,
   filePreviewStore,
   formatBytes,
+  isReadingKind,
   previewKindFor,
   type FilePreview,
   type PreviewKind,
@@ -79,6 +81,27 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
   );
 }
 
+/** The column a document is read in.
+ *
+ * Two things make writing readable, and neither is about the file: a measure
+ * short enough that the eye finds the start of the next line -- `max-w-prose`,
+ * around 65 characters -- and type set for reading rather than for fitting.
+ *
+ * The size is the one thing this adds that the panel does not. Body copy in a
+ * GUI row is 13px so that it lines up with the inputs around it, which is a
+ * size for labels rather than for paragraphs. A preview has no inputs to line
+ * up with, so it takes GitHub's 16px less the pixel this UI runs below stock
+ * everywhere else. Everything the markdown renderer draws is sized in `em`,
+ * so headings, code and tables all follow from this one number.
+ */
+function ReadingColumn({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-auto w-full max-w-prose px-2 text-[0.9375rem]">
+      {children}
+    </div>
+  );
+}
+
 /** Render content within the dialog's fixed preview frame. */
 function PreviewBody({
   kind,
@@ -129,18 +152,22 @@ function PreviewBody({
           />
         </object>
       );
-    // Prose and Markdown use a readable line length.
     case "markdown":
       return (
-        <div className="mx-auto w-full max-w-prose px-2">
+        <ReadingColumn>
           {text === null ? null : <MarkdownRenderer>{text}</MarkdownRenderer>}
-        </div>
+        </ReadingColumn>
       );
     case "prose":
       return (
-        <pre className="mx-auto w-full max-w-prose px-2 font-mono text-xs whitespace-pre-wrap">
-          {text ?? ""}
-        </pre>
+        <ReadingColumn>
+          {/* Unrendered writing, so the lines are the author's: monospace,
+              a touch smaller than prose that has been typeset, and wrapped
+              rather than scrolled because a paragraph is not a record. */}
+          <pre className="font-mono text-[0.85em] leading-[1.5] whitespace-pre-wrap">
+            {text ?? ""}
+          </pre>
+        </ReadingColumn>
       );
     case "text":
       return (
@@ -178,6 +205,24 @@ export function FilePreviewHost() {
   );
 }
 
+/** How tall the frame holding the file is.
+ *
+ * Fixed either way, so a preview opens the same size whatever the file turns
+ * out to hold -- a one-line log and a thousand-line one are the same window,
+ * and nothing jumps as the contents arrive.
+ *
+ * A document gets everything the window has left: the 6rem taken off is the
+ * dialog's margin, its padding and its title bar, so `reading` is the tallest
+ * frame that still fits without the dialog itself scrolling. More page per
+ * screen is the whole of what a preview is for. Media stops short of that,
+ * because a picture or a player is fitted into its frame rather than scrolled
+ * through, and the extra height would only be empty space around it.
+ */
+const FRAME_HEIGHT = {
+  reading: "h-[calc(100dvh-6rem)]",
+  fitted: "h-[70dvh]",
+} as const;
+
 /** Fixed-size dialog shared by every preview type. */
 export function FilePreviewDialog({
   preview,
@@ -198,7 +243,12 @@ export function FilePreviewDialog({
       width="min(72rem, calc(100vw - 2rem))"
     >
       <DownloadCorner filename={preview.filename} url={preview.url} />
-      <div className="h-[70dvh] overflow-auto">
+      <div
+        className={cn(
+          "overflow-auto",
+          FRAME_HEIGHT[isReadingKind(kind) ? "reading" : "fitted"],
+        )}
+      >
         <PreviewBody kind={kind} preview={preview} />
       </div>
     </MediaDialog>

@@ -20,6 +20,18 @@ export type PreviewKind =
   | "pdf"
   | "unsupported";
 
+/** Whether a viewer holds writing to be read down, rather than something to
+ * be looked at or scanned.
+ *
+ * The distinction is what the dialog sizes itself from: reading is done by
+ * scrolling through a column, so a document wants a short measure and as much
+ * height as the window will give it, while a picture or a player is fitted
+ * into its frame and gains nothing from a taller one.
+ */
+export function isReadingKind(kind: PreviewKind): boolean {
+  return kind === "markdown" || kind === "prose";
+}
+
 /** Extensions whose files are text that no MIME type admits to.
  *
  * `mimetypes.guess_type` on the server answers "application/octet-stream" for

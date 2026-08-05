@@ -121,7 +121,9 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
         _press(preview_page, label)
         expect(_dialog(preview_page)).to_be_visible()
         box = _column(preview_page, selector)
-        assert box["column"] < box["dialog"] / 1.5, (label, box)
+        # A measure, not a width: it is set in characters, so it stays well
+        # inside the frame and centred there however wide the window is.
+        assert box["column"] < box["dialog"] * 0.75, (label, box)
         assert abs(box["left"] - box["right"]) < 2.0, (label, box)
         assert box["left"] > 40.0, (label, box)
         preview_page.keyboard.press("Escape")
@@ -129,47 +131,107 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
 
     _press(preview_page, "Show readings")
     data = _column(preview_page, "pre")
-    assert data["column"] > data["dialog"] / 1.5, data
+    assert data["column"] > data["dialog"] * 0.9, data
     assert page_errors == []
 
 
-def test_every_preview_opens_the_same_size(
+def _opened_size(page: Page, label: str) -> tuple[int, int]:
+    """The dialog's size once it has finished opening."""
+    _press(page, label)
+    dialog = _dialog(page)
+    expect(dialog).to_be_visible()
+    size = dialog.evaluate(
+        """async (el) => {
+          await Promise.all(
+            el.getAnimations().map((animation) => animation.finished.catch(() => {}))
+          );
+          const box = el.getBoundingClientRect();
+          return [Math.round(box.width), Math.round(box.height)];
+        }"""
+    )
+    page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    return tuple(size)
+
+
+def test_a_preview_opens_the_same_size_whatever_the_file_holds(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # Every preview uses the same stable frame, independent of its contents.
+    # The frame is the viewer's, never the file's: a one-line log and a
+    # thousand-line one open identically, so nothing resizes as content lands.
     leika_server.gui.add_preview_button("Show one line", b"t,v\n", filename="tiny.csv")
     leika_server.gui.add_preview_button(
         "Show many lines", ("t,v\n" * 500).encode(), filename="long.csv"
     )
-    leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
     leika_server.gui.add_preview_button("Show field", _png(8, 6), filename="field.png")
     leika_server.gui.add_preview_button("Show weights", b"\x00\x01", filename="weights.bin")
+    leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
+    leika_server.gui.add_preview_button(
+        "Show long notes", b"# Hi\n\n" + b"word " * 500, filename="long.md"
+    )
+    leika_server.gui.add_preview_button("Show plain", b"a line\n", filename="notes.txt")
 
-    sizes = {}
-    for label in (
-        "Show one line",
-        "Show many lines",
-        "Show notes",
-        "Show field",
-        "Show weights",
-    ):
-        _press(preview_page, label)
-        dialog = _dialog(preview_page)
-        expect(dialog).to_be_visible()
-        # Measure after the dialog's opening animation.
-        sizes[label] = dialog.evaluate(
-            """async (el) => {
-              await Promise.all(
-                el.getAnimations().map((animation) => animation.finished.catch(() => {}))
-              );
-              const box = el.getBoundingClientRect();
-              return [Math.round(box.width), Math.round(box.height)];
-            }"""
+    sizes = {
+        label: _opened_size(preview_page, label)
+        for label in (
+            "Show one line",
+            "Show many lines",
+            "Show field",
+            "Show weights",
+            "Show notes",
+            "Show long notes",
+            "Show plain",
         )
-        preview_page.keyboard.press("Escape")
-        expect(dialog).to_have_count(0)
+    }
 
-    assert len(set(tuple(size) for size in sizes.values())) == 1, sizes
+    fitted = {
+        sizes[label] for label in ("Show one line", "Show many lines", "Show field", "Show weights")
+    }
+    reading = {sizes[label] for label in ("Show notes", "Show long notes", "Show plain")}
+    assert len(fitted) == 1, sizes
+    assert len(reading) == 1, sizes
+    # Writing is read by scrolling, so its frame takes the height the window
+    # has rather than the share a fitted picture needs.
+    assert reading.pop()[1] > fitted.pop()[1], sizes
+    assert page_errors == []
+
+
+def test_a_document_is_set_larger_than_the_panel_sets_it(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The same markdown, in a panel row and in a preview. The document takes
+    # its size from whatever shows it: the panel's own size in a row, and a
+    # reading size in a dialog that has nothing else in it.
+    leika_server.gui.add_text(
+        "Notes",
+        "# Heading\n\nSome prose.\n",
+        editable=False,
+        markdown=True,
+        multiline=True,
+    )
+    leika_server.gui.add_preview_button(
+        "Show notes", b"# Heading\n\nSome prose.\n", filename="notes.md"
+    )
+
+    def size_of(scope: Locator, selector: str) -> float:
+        return scope.locator(selector).evaluate("(el) => parseFloat(getComputedStyle(el).fontSize)")
+
+    panel = preview_page.locator("[data-leika-text-markdown]")
+    expect(panel.locator("h1")).to_be_visible(timeout=15_000)
+    panel_body = size_of(panel, "p")
+    panel_heading = size_of(panel, "h1")
+    # The panel's text size, not the browser's default.
+    assert panel_body < 16.0, panel_body
+
+    _press(preview_page, "Show notes")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_be_visible()
+    preview_body = size_of(dialog, "p")
+    preview_heading = size_of(dialog, "h1")
+
+    assert preview_body > panel_body
+    # Everything scales together: the heading keeps its ratio to the body.
+    assert preview_heading / preview_body == pytest.approx(panel_heading / panel_body, rel=0.01)
     assert page_errors == []
 
 

@@ -17,7 +17,11 @@ const EDITABLE_ROWS = 3;
 /** Text the viewer reads rather than writes. `bg-muted` is the tone the panel
  * already uses for a part that is not the viewer's to work -- the inactive
  * length of a slider's track -- as opposed to the disabled tone: nothing here
- * is disabled, there was never anything to type into. */
+ * is disabled, there was never anything to type into.
+ *
+ * `text-sm` is also the base a markdown document is set from here: the panel's
+ * own size, so prose lines up with the inputs above and below it. A preview
+ * dialog, which has no inputs to line up with, sets a larger one. */
 const READING = "min-w-0 rounded-lg bg-muted px-2.5 text-sm";
 
 export default function TextInputComponent({

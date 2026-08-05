@@ -1239,8 +1239,7 @@ def test_text_can_be_read_only_and_rendered_as_markdown(
 ) -> None:
     """One element for text the viewer writes and text it only reads. Read-only
     it is not an input at all: no box to type in, a tint to say so, and markdown
-    drawn as markdown -- which only the browser can show, the renderer being
-    asynchronous and contributing nothing to server-rendered markup."""
+    drawn as markdown."""
     prose = leika_server.gui.add_text(
         None, "## Heading\n\nWith **bold** in it.", editable=False, markdown=True, multiline=True
     )
