@@ -129,7 +129,7 @@ def test_dockable_tabs_keep_inactive_panel_dom_mounted(
     assert page_errors == []
 
 
-def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
+def test_narrow_plain_tabs_scroll_and_button_groups_wrap_without_page_overflow(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -181,12 +181,26 @@ def test_narrow_plain_tabs_and_button_groups_scroll_without_page_overflow(
         "[data-leika-button-group]", has=page.get_by_role("button", name="Interactive preview")
     )
     expect(group).to_be_visible()
+    # Tabs scroll; a row of options does not. A tab that is off the edge still
+    # reads as a tab, and the strip is a thing a reader expects to page
+    # through. A button cut in half by the panel's edge is just a button whose
+    # label lies, so the options wrap onto another line instead -- and nothing
+    # is left behind an edge with no scrollbar to admit it.
     group_metrics = group.evaluate(
-        "element => ({clientWidth: element.clientWidth, scrollWidth: element.scrollWidth})"
+        """element => ({
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          height: element.getBoundingClientRect().height,
+        })"""
     )
-    assert group_metrics["scrollWidth"] > group_metrics["clientWidth"]
+    assert group_metrics["scrollWidth"] <= group_metrics["clientWidth"]
     last_option = group.get_by_role("button", name="Presentation mode", exact=True)
-    last_option.scroll_into_view_if_needed()
+    # Reachable where it stands, with nothing scrolled into view first.
+    expect(last_option).to_be_in_viewport()
+    option_height = last_option.bounding_box()
+    assert option_height is not None
+    # Four options this wide cannot share one line: the row is several deep.
+    assert group_metrics["height"] > option_height["height"] * 1.5
     last_option.click()
 
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

@@ -57,23 +57,28 @@ export default function ButtonGroupComponent({
         // every option is a button that reads out its own text.
         aria-label={label ?? undefined}
         // Options keep their own width and share what is left over; past the
-        // width of the row they scroll rather than wrap, so the row stays one
-        // row however many options it is given. The gap is the panel's own
-        // step, tighter than the stock 8px this component ships with.
+        // width of the row they wrap onto another line. Scrolling was the
+        // earlier answer, and it hid an option behind an edge with no
+        // scrollbar to say so -- a button whose words are cut in half is not a
+        // button anyone can read. The gap is the panel's own step, tighter
+        // than the stock 8px this component ships with.
         // The stock group overlaps its children by a pixel so joined buttons
         // share an edge. Between RUNS there is no edge to share, and the
         // overlap would eat a pixel of the gap, so it is put back to zero: the
         // step between parted buttons is the panel's own 4px, the same one the
         // toggles use.
         className={cn(
-          "no-scrollbar w-full min-w-0 gap-1 overflow-x-auto",
+          "w-full min-w-0 flex-wrap gap-1",
           "has-[>[data-slot=button-group]]:gap-1",
           "[&>[data-slot]~[data-slot]]:ml-0",
         )}
         data-leika-button-group
       >
         {runs.map((run) => (
-          <ButtonGroup key={options[run[0]]} className="min-w-fit flex-1">
+          <ButtonGroup
+            key={options[run[0]]}
+            className="min-w-fit flex-1 flex-wrap"
+          >
             {run.map((option, place) => (
               <React.Fragment key={options[option]}>
                 {/* Filled buttons meeting edge to edge would read as one bar

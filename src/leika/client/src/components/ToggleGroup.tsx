@@ -61,7 +61,7 @@ export default function ToggleGroupComponent({
         // are put back per item below.
         spacing={0}
         variant="outline"
-        className="no-scrollbar w-full min-w-0 justify-start overflow-x-auto"
+        className="w-full min-w-0 flex-wrap justify-start"
         data-leika-toggle-group
       >
         {options.map((option, index) => {

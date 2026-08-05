@@ -40,14 +40,17 @@ describe("ButtonGroupComponent", () => {
     expect(markup.match(/data-leika-button(?![-\w])/g)).toHaveLength(3);
     expect(markup.match(/data-slot="button"/g)).toHaveLength(3);
     expect(markup).toContain('aria-label="Palette"');
-    expect(markup).toContain("no-scrollbar");
-    expect(markup).toContain("overflow-x-auto");
+    // Options too wide for the row move onto another line rather than past
+    // its edge. Scrolling was the earlier answer and cut a label in half with
+    // no scrollbar to say anything had been hidden.
+    expect(markup).toContain("flex-wrap");
+    expect(markup).not.toContain("no-scrollbar");
+    expect(markup).not.toContain("overflow-x-auto");
     expect(markup).toContain("min-w-fit flex-1");
     // Buttons, not toggles: the group's value picks nothing out of the row.
     expect(markup).not.toContain("aria-pressed");
     expect(markup).not.toContain("data-state=");
     expect(markup).not.toContain("toggle-group");
-    expect(markup).not.toContain("flex-wrap");
   });
 
   it("gives every option one role, the row's own unless told otherwise", () => {

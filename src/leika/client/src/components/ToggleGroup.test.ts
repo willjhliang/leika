@@ -52,6 +52,16 @@ describe("ToggleGroupComponent", () => {
     expect(markup.match(/aria-pressed="false"/g)).toHaveLength(1);
   });
 
+  it("wraps its options rather than running them past the row", () => {
+    // The same answer the buttons give: a toggle whose words are cut in half
+    // at the panel's edge is one nobody can read, and the row scrolled with no
+    // scrollbar to say that anything had been hidden there.
+    const markup = renderToggleGroup();
+    expect(markup).toContain("flex-wrap");
+    expect(markup).not.toContain("no-scrollbar");
+    expect(markup).not.toContain("overflow-x-auto");
+  });
+
   it("says whether several may be on at once", () => {
     expect(renderToggleGroup({ multiple: true })).toContain("data-multiple");
     expect(renderToggleGroup({ multiple: false })).not.toContain(
