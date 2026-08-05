@@ -30,11 +30,11 @@ describe("SliderAnnotations", () => {
       markup.match(/left:100%;transform:translateX\(-100%\)/g),
     ).toHaveLength(2);
     expect(markup).toContain("truncate");
-    // Marks land at 0%, 50% and 100%, so the room between the midpoints gives
-    // the ends a quarter of the track each and the middle one half of it --
-    // which tiles the track exactly, leaving no two labels a point in common.
-    expect(markup).toContain("max-width:25%");
-    expect(markup).toContain("max-width:50%");
+    // Rendered without a browser there is nothing to measure, and a label asks
+    // for room by its own text. The cap until then is the track itself, which
+    // the anchoring makes exactly the width at which a label reaches an end
+    // and no further -- so nothing can leave the track while waiting.
+    expect(markup.match(/max-width:100%/g)).toHaveLength(3);
   });
 
   it("places degenerate-range marks at the safe leading edge", () => {

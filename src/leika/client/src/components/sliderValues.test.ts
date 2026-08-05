@@ -19,42 +19,61 @@ describe("MultiSlider value geometry", () => {
 });
 
 describe("markLabelMaxWidths", () => {
-  it("gives a lone mark the whole track", () => {
-    expect(markLabelMaxWidths([40])).toEqual([100]);
+  it("leaves labels alone when they do not reach each other", () => {
+    // The whole point: a long label beside a short one is not a problem until
+    // the two actually meet, and nothing here is rationed in advance.
+    expect(markLabelMaxWidths([0, 100], [40, 10])).toEqual([100, 100]);
+    expect(markLabelMaxWidths([0, 50, 100], [20, 20, 20])).toEqual([
+      100, 100, 100,
+    ]);
   });
 
-  it("splits the track between two ends, so neither can reach the other", () => {
-    // Each label lies wholly on one side of its own tick, so half the track
-    // each is exactly the room available before they would touch.
-    expect(markLabelMaxWidths([0, 100])).toEqual([50, 50]);
+  it("lets one label take almost the whole track if nothing is beside it", () => {
+    expect(markLabelMaxWidths([40], [100])).toEqual([100]);
   });
 
-  it("tiles the track across three marks", () => {
-    const widths = markLabelMaxWidths([0, 50, 100]);
-    expect(widths).toEqual([25, 50, 25]);
-    // The middle label is centred on its mark, so half of its 50% lies either
-    // side of the midpoint -- meeting, and never crossing, the ends' 25%.
-    expect(widths[1] / 2 + widths[0]).toBe(50);
+  it("splits a contested gap in proportion to what each label wanted", () => {
+    // Both lean wholly into the gap between them -- one at each end -- and
+    // together they want 150% of the 100% available, so each keeps two thirds.
+    const widths = markLabelMaxWidths([0, 100], [100, 50]);
+    expect(widths[0]).toBeCloseTo((100 * 100) / 150, 10);
+    expect(widths[1]).toBeCloseTo((100 * 50) / 150, 10);
+    // Which is exactly the track: they meet and neither crosses.
+    expect(widths[0] + widths[1]).toBeCloseTo(100, 10);
+  });
+
+  it("cuts back only the pair that collides", () => {
+    // The first two want more of their gap than it holds; the third is far
+    // enough away to be untouched by any of it.
+    const widths = markLabelMaxWidths([0, 20, 100], [40, 40, 5]);
+    expect(widths[0]).toBeLessThan(40);
+    expect(widths[1]).toBeLessThan(40);
+    expect(widths[2]).toBe(100);
+  });
+
+  it("keeps the two labels in proportion to what each asked for", () => {
+    // Whatever the positions, a cut-back pair ends up sharing the gap in the
+    // ratio of their natural widths: a label four times the length of its
+    // neighbour keeps four times the room. Neither is cut to the other's size.
+    const widths = markLabelMaxWidths([0, 20], [80, 20]);
+    expect(widths[0] / widths[1]).toBeCloseTo(4, 10);
   });
 
   it("reads neighbours by position rather than by the order given", () => {
-    expect(markLabelMaxWidths([100, 0, 50])).toEqual([25, 25, 50]);
+    const inOrder = markLabelMaxWidths([0, 50, 100], [80, 80, 80]);
+    const shuffled = markLabelMaxWidths([100, 0, 50], [80, 80, 80]);
+    expect(shuffled).toEqual([inOrder[2], inOrder[0], inOrder[1]]);
   });
 
-  it("leaves nothing for marks stacked on one position", () => {
-    // There is nowhere for the second label to go; saying so beats drawing
-    // one on top of the other.
-    expect(markLabelMaxWidths([30, 30])).toEqual([0, 0]);
+  it("never lets a label off the ends of the track", () => {
+    // Anchored at its own tick, a label of 100% reaches exactly one end and
+    // no further, so that is the cap even where nothing is beside it.
+    expect(markLabelMaxWidths([50], [400])).toEqual([100]);
   });
 
-  it("scales the room by how much of the label sits on each side", () => {
-    // The room is divided at the midpoint, 40%, but a label does not sit
-    // squarely in its share: at 20% four fifths of it lies to the right of the
-    // tick, so filling the 20% of room on that side takes a label of 25%. The
-    // mark at 60% keeps only a third of the track for the same reason,
-    // measured against the 20% on its left.
-    const widths = markLabelMaxWidths([20, 60]);
-    expect(widths[0]).toBe(25);
-    expect(widths[1]).toBeCloseTo(100 / 3, 10);
+  it("leaves nothing for the label that loses a stacked position", () => {
+    // There is nowhere for it to go; saying so beats drawing one on top of
+    // the other.
+    expect(markLabelMaxWidths([30, 30], [20, 20])).toEqual([0, 0]);
   });
 });

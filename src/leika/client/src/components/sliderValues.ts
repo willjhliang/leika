@@ -20,43 +20,62 @@ export function defaultMarks(min: number, max: number): SliderMark[] {
  * A label is anchored on its own mark and pulled back by its own width in
  * proportion to where that mark sits: at the left end it runs entirely to the
  * right of the tick, at the right end entirely to the left, and in between it
- * is split in that ratio. So the room a label has is not simply the gap to its
- * neighbour -- it is that gap divided by the share of the label lying on that
- * side.
+ * is split in that ratio. That share is what decides how far a label of a
+ * given width REACHES into the gap beside it, which is the quantity two
+ * neighbours actually contend over.
  *
- * Each mark is given the space up to the midpoint between it and the mark on
- * either side, which tiles the track: two labels can then never reach the same
- * point, whatever they say. Without this a slider told to name three points on
- * a 190px track drew them straight through each other.
+ * Nothing is rationed in advance. Each pair of neighbours is asked only
+ * whether what they naturally want to occupy adds up to more than the gap
+ * between them; if it does not -- a long label beside a short one that still
+ * clears it -- both keep every pixel they asked for. Only a pair that would
+ * genuinely collide is cut back, and then the gap is split between them in
+ * proportion to what each wanted, so neither is punished for its neighbour's
+ * length alone.
  *
- * Positions are expected already clamped to 0..100 and may arrive in any
- * order. Marks sharing one position leave each other no room and are capped to
- * nothing, which is the honest answer -- there is nowhere for the second label
- * to go.
+ * `naturalWidths` is each label's own content width, in the same percentage
+ * units. Positions are expected already clamped to 0..100 and may arrive in
+ * any order; the 100 cap that remains is the track itself, which the anchoring
+ * makes exactly the width at which a label reaches an end and no further.
  */
-export function markLabelMaxWidths(positions: number[]): number[] {
+export function markLabelMaxWidths(
+  positions: number[],
+  naturalWidths: number[],
+): number[] {
   const byPosition = positions
     .map((position, index) => ({ position, index }))
     .sort((a, b) => a.position - b.position);
 
   const widths = new Array<number>(positions.length).fill(100);
-  byPosition.forEach(({ position, index }, place) => {
-    const before = place === 0 ? null : byPosition[place - 1].position;
-    const after =
-      place === byPosition.length - 1 ? null : byPosition[place + 1].position;
-    const leftBound = before === null ? 0 : (before + position) / 2;
-    const rightBound = after === null ? 100 : (position + after) / 2;
-    // At either end one of the two constraints does not bind: nothing of the
-    // label lies on that side of the tick to run into anything.
-    const fromLeft =
-      position <= 0 ? Infinity : ((position - leftBound) * 100) / position;
-    const fromRight =
-      position >= 100
-        ? Infinity
-        : ((rightBound - position) * 100) / (100 - position);
-    widths[index] = Math.max(0, Math.min(100, fromLeft, fromRight));
-  });
-  return widths;
+  for (let place = 0; place < byPosition.length - 1; place += 1) {
+    const left = byPosition[place];
+    const right = byPosition[place + 1];
+    const gap = right.position - left.position;
+    // What each of the two reaches into the gap at its natural width. A label
+    // on the left end of the track leans entirely right; one on the right end
+    // leans entirely left, and reaches nothing.
+    const leftReach =
+      ((naturalWidths[left.index] ?? 0) * (100 - left.position)) / 100;
+    const rightReach =
+      ((naturalWidths[right.index] ?? 0) * right.position) / 100;
+    const wanted = leftReach + rightReach;
+    if (wanted <= gap) continue;
+
+    const boundary =
+      left.position + (wanted === 0 ? gap / 2 : (gap * leftReach) / wanted);
+    if (left.position < 100) {
+      widths[left.index] = Math.min(
+        widths[left.index],
+        ((boundary - left.position) * 100) / (100 - left.position),
+      );
+    }
+    if (right.position > 0) {
+      widths[right.index] = Math.min(
+        widths[right.index],
+        ((right.position - boundary) * 100) / right.position,
+      );
+    }
+  }
+  return widths.map((width) => Math.max(0, Math.min(100, width)));
 }
 
 /** Snap from the range minimum, rather than from zero. */
