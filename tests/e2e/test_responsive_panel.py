@@ -129,7 +129,7 @@ def test_dockable_tabs_keep_inactive_panel_dom_mounted(
     assert page_errors == []
 
 
-def test_narrow_plain_tabs_scroll_and_button_groups_wrap_without_page_overflow(
+def test_a_narrow_panel_wraps_its_tabs_and_its_option_rows(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -169,11 +169,24 @@ def test_narrow_plain_tabs_scroll_and_button_groups_wrap_without_page_overflow(
     tabs_list = page.locator("[data-leika-tabs-list]")
     expect(tabs_list).to_be_visible(timeout=5_000)
     tab_metrics = tabs_list.evaluate(
-        "element => ({clientWidth: element.clientWidth, scrollWidth: element.scrollWidth})"
+        """element => ({
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          lines: new Set(
+            [...element.querySelectorAll("[role=tab]")].map(
+              (tab) => Math.round(tab.getBoundingClientRect().top),
+            ),
+          ).size,
+        })"""
     )
-    assert tab_metrics["scrollWidth"] > tab_metrics["clientWidth"]
+    # Four labels this long cannot share one line of a 320px panel, and the
+    # strip wraps rather than scrolling: a tab cut off at an edge, with the
+    # scrollbar hidden, is one nobody can read and nothing says is there.
+    assert tab_metrics["lines"] > 1, tab_metrics
+    assert tab_metrics["scrollWidth"] <= tab_metrics["clientWidth"], tab_metrics
     last_tab = page.get_by_role("tab", name=tab_labels[-1], exact=True)
-    last_tab.scroll_into_view_if_needed()
+    # Reachable where it stands, with nothing scrolled into view first.
+    expect(last_tab).to_be_in_viewport()
     last_tab.click()
     expect(page.get_by_text("Panel content 4", exact=True)).to_be_visible()
 
@@ -181,11 +194,8 @@ def test_narrow_plain_tabs_scroll_and_button_groups_wrap_without_page_overflow(
         "[data-leika-button-group]", has=page.get_by_role("button", name="Interactive preview")
     )
     expect(group).to_be_visible()
-    # Tabs scroll; a row of options does not. A tab that is off the edge still
-    # reads as a tab, and the strip is a thing a reader expects to page
-    # through. A button cut in half by the panel's edge is just a button whose
-    # label lies, so the options wrap onto another line instead -- and nothing
-    # is left behind an edge with no scrollbar to admit it.
+    # A row of options wraps for the same reason the strip above it does:
+    # nothing is left behind an edge with no scrollbar to admit it.
     group_metrics = group.evaluate(
         """element => ({
           clientWidth: element.clientWidth,

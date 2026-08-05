@@ -7,12 +7,8 @@ import React from "react";
 import { CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { ScrollArea } from "../components/ui/scroll-area";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "../components/ui/tabs";
+import { TabStrip } from "../components/TabStrip";
+import { Tabs, TabsContent } from "../components/ui/tabs";
 import { cn } from "../lib/utils";
 import { prefersReducedMotion } from "../utils/motion";
 import {
@@ -332,51 +328,31 @@ export function TabGroupFrame({
           }
         />
       )}
-      <TabsList
-        ref={stripRef}
-        variant="line"
-        data-dock-strip={group.id}
-        // A strip of panel tabs wraps, so its height is whatever its tabs need
-        // -- and `h-auto` has to be marked important to say so. The stock list
-        // sets a one-line height from the tabs root above it, which outranks a
-        // plain class here: the strip stayed 32px tall while holding two lines
-        // of tabs, and since it does not clip, the second line was painted over
-        // whatever the panel had below it.
-        className="h-auto! w-full flex-wrap justify-start"
-        onPointerDown={(event) => {
-          if ((event.target as HTMLElement).closest("[data-dock-tab]")) {
-            return;
-          }
-          if (stripDragsGroup) dock.startGroupDrag(event, group.id);
-        }}
-      >
-        {group.panelIds.map((panelId) => {
-          const dragging = panelId === dock.draggingTabId;
+      {/* The same strip a GUI tab group draws for itself when there is no dock
+          to drag it into. What the dock adds is the dragging, not the look. */}
+      <TabStrip
+        tabs={group.panelIds.map((panelId) => {
           const panel = panels[panelId];
-          return (
-            <TabsTrigger
-              key={panelId}
-              value={panelId}
-              data-dock-tab={panelId}
-              title={panel?.title ?? panelId}
-              className="max-w-56"
-              onPointerDown={(event) =>
-                dock.startTabDrag(event, group.id, panelId)
-              }
-              style={{
-                position: dragging ? "relative" : undefined,
-                zIndex: dragging ? 5 : undefined,
-                opacity: dragging ? 1 : undefined,
-              }}
-            >
-              {panel?.icon !== undefined && (
+          return {
+            id: panelId,
+            label: panel?.title ?? panelId,
+            icon:
+              panel?.icon === undefined ? undefined : (
                 <span data-icon="inline-start">{panel.icon}</span>
-              )}
-              <span className="truncate">{panel?.title ?? panelId}</span>
-            </TabsTrigger>
-          );
+              ),
+          };
         })}
-      </TabsList>
+        drag={{
+          groupId: group.id,
+          draggingId: dock.draggingTabId,
+          stripRef,
+          onStripPointerDown: (event) => {
+            if (stripDragsGroup) dock.startGroupDrag(event, group.id);
+          },
+          onTabPointerDown: (event, panelId) =>
+            dock.startTabDrag(event, group.id, panelId),
+        }}
+      />
       {group.panelIds.map((panelId) => {
         const panelBody = renderPanelBody(panelId);
         return (
