@@ -117,13 +117,21 @@ function SelectItem({
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
+      // Leika: the gutter for the check is only kept when there is a check to
+      // put in it. Reserved on every row, an option that fits stops short of an
+      // edge nothing occupies; reserved on none, a long option ran under the
+      // tick and out of the row entirely, since the text below could neither
+      // shrink nor truncate.
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-1.5 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 data-[selected]:pr-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
       )}
       {...props}
     >
-      <SelectPrimitive.ItemText className="flex flex-1 shrink-0 gap-2 whitespace-nowrap">
+      {/* Leika: `truncate` rather than `flex ... whitespace-nowrap`. A flex box
+          cannot ellipsize its own text, and `shrink-0` kept it at full width
+          whatever the row could spare. */}
+      <SelectPrimitive.ItemText className="min-w-0 flex-1 truncate">
         {children}
       </SelectPrimitive.ItemText>
       <SelectPrimitive.ItemIndicator
