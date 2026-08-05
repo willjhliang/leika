@@ -2073,8 +2073,7 @@ class GuiApi(GuiContainer):
         markdown if ``markdown`` is set. Prose in a panel is the read-only,
         markdown, unlabelled case::
 
-            server.gui.add_text(None, "## Notes", editable=False,
-                                markdown=True, multiline=True)
+            server.gui.add_text(None, "## Notes", editable=False, markdown=True)
 
         Markdown is GitHub's: CommonMark plus GFM's tables, task lists,
         strikethrough and autolinks, and the same subset of inline HTML GitHub
@@ -2089,10 +2088,12 @@ class GuiApi(GuiContainer):
             editable: Whether the viewer can type in it.
             markdown: Whether the value is drawn as markdown rather than as the
                 characters it is made of. Only for text that is not editable: what
-                is edited is the source, so an editable field shows it.
+                is edited is the source, so an editable field shows it. A document
+                is blocks and takes the lines it needs, so ``multiline`` says
+                nothing about it.
             multiline: Whether the text runs to several lines, delimited with the \n
                 character. One line otherwise, ending in an ellipsis if it does not
-                fit.
+                fit. Ignored when ``markdown`` is set.
             rows: Height in lines, or None to leave it to the field. Given, it is the
                 height the box keeps, scrolling its own text rather than growing.
                 Left out, an editable box is three lines and a read-only one fits

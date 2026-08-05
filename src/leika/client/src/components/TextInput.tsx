@@ -41,21 +41,33 @@ export default function TextInputComponent({
   const { setValue } = React.useContext(GuiComponentContext)!;
 
   if (!editable) {
+    // A document is blocks -- headings, lists, code -- and takes as many lines
+    // as it has. `multiline` says whether a plain STRING runs to more than one
+    // line, which is not a question a markdown document is asked: rendered
+    // into the one-line box, its ink was sliced through the middle and the
+    // rest of it thrown away.
+    const stacked = multiline || markdown;
     return (
       <GuiInputRow
         {...{ uuid, hint, label, disabled }}
         // A div takes no caret, so a `<label for>` would promise something to
         // focus; and a block beside a label aligns to its first line.
         associateLabel={false}
-        alignLabelToFirstRow={multiline}
+        alignLabelToFirstRow={stacked}
       >
         <div
           id={uuid}
           className={cn(
             READING,
-            multiline
+            stacked
               ? cn(
                   "py-2 leading-snug",
+                  // A path or a URL is one long "word" with nowhere to break:
+                  // left alone it runs out of the box and takes a scrollbar
+                  // with it, rather than wrapping like the prose around it.
+                  // Code keeps its own scroll -- `pre` forbids wrapping, so
+                  // this cannot reach inside one.
+                  "break-words",
                   // An asked-for height scrolls; left out, the box fits its text.
                   rows !== null && "overflow-y-auto",
                   // Markdown's blocks bring their own spacing; keeping the
@@ -67,7 +79,7 @@ export default function TextInputComponent({
                 "flex h-6 items-center",
           )}
           style={
-            multiline && rows !== null
+            stacked && rows !== null
               ? // `lh` is the box's own line-height, so the height follows
                 // the leading instead of restating it.
                 { height: `calc(${rows} * 1lh + 1rem)` }
@@ -84,7 +96,7 @@ export default function TextInputComponent({
             >
               <MarkdownRenderer>{_source}</MarkdownRenderer>
             </ErrorBoundary>
-          ) : multiline ? (
+          ) : stacked ? (
             value
           ) : (
             // The one-line box centres its text by being a flex box, and
