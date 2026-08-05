@@ -29,8 +29,12 @@ describe("SliderAnnotations", () => {
     expect(
       markup.match(/left:100%;transform:translateX\(-100%\)/g),
     ).toHaveLength(2);
-    expect(markup).toContain("max-w-full");
     expect(markup).toContain("truncate");
+    // Marks land at 0%, 50% and 100%, so the room between the midpoints gives
+    // the ends a quarter of the track each and the middle one half of it --
+    // which tiles the track exactly, leaving no two labels a point in common.
+    expect(markup).toContain("max-width:25%");
+    expect(markup).toContain("max-width:50%");
   });
 
   it("places degenerate-range marks at the safe leading edge", () => {

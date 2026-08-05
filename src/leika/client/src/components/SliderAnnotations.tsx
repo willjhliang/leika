@@ -1,4 +1,5 @@
 import { Separator } from "@/components/ui/separator";
+import { markLabelMaxWidths } from "./sliderValues";
 
 export type SliderMark = { value: number; label?: string | null };
 
@@ -12,6 +13,14 @@ export function SliderAnnotations({
   min: number;
   max: number;
 }) {
+  const positions = marks.map((mark) => {
+    const raw = max === min ? 0 : ((mark.value - min) / (max - min)) * 100;
+    return Math.min(100, Math.max(0, raw));
+  });
+  // Each label is capped at its own share of the track, so a long one ends in
+  // an ellipsis rather than running through the label beside it.
+  const labelWidths = markLabelMaxWidths(positions);
+
   return (
     <div
       // Decorative only. Without `pointer-events-none` this box swallows the
@@ -23,9 +32,7 @@ export function SliderAnnotations({
       data-leika-slider-annotations
     >
       {marks.map((mark, index) => {
-        const rawPosition =
-          max === min ? 0 : ((mark.value - min) / (max - min)) * 100;
-        const position = Math.min(100, Math.max(0, rawPosition));
+        const position = positions[index];
         const positionStyle = {
           left: `${position}%`,
           transform: `translateX(-${position}%)`,
@@ -44,8 +51,11 @@ export function SliderAnnotations({
             />
             {mark.label == null ? null : (
               <span
-                className="absolute top-1 block max-w-full truncate whitespace-nowrap"
-                style={positionStyle}
+                className="absolute top-1 block truncate whitespace-nowrap"
+                style={{
+                  ...positionStyle,
+                  maxWidth: `${labelWidths[index]}%`,
+                }}
                 data-leika-slider-mark-label
               >
                 {mark.label}
