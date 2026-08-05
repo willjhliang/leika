@@ -19,9 +19,6 @@
   --text-xs: 0.6875rem; /* 11px */
   --text-sm: 0.8125rem; /* 13px */
   --leading-tight: 1;
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -52,7 +49,7 @@
 /* shadcn's neutral palette, unmodified. Only the restatements are collapsed:
    a token that carries the same value as another in BOTH themes points at it
    instead of repeating it, which is what leaves `.dark` restating anchors
-   alone. Any token that genuinely differs between the two -- `sidebar` and
+   alone. Any token that genuinely differs between the two --
    `secondary-foreground` among them -- keeps its own value in each. */
 :root {
   --background: oklch(1 0 0);
@@ -74,15 +71,11 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.25rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: var(--foreground);
-  --sidebar-border: var(--border);
   /* Whatever the control panel is painted on, for the things inside it that
-     have to hide what is behind them -- a list entry lifted off its list, say.
-     The panel is a card when it floats or sits at the bottom of a phone and
-     the sidebar's own colour when it is docked to an edge, and something
-     drawn inside it cannot know which. The sidebar says so on its container;
-     the card is the default because the other two are cards. */
+     have to hide what is behind them -- a list entry lifted off its list,
+     say. Every chrome the panel takes is a card, so this is the card -- but
+     as a variable, so what is inside the panel names the surface rather than
+     restating that fact. */
   --leika-panel-surface: var(--card);
 }
 
@@ -99,7 +92,6 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.205 0 0);
 }
 
 @layer base {

@@ -667,7 +667,7 @@ export interface WorkspaceConfigurationMessage {
  */
 export interface ThemeConfigurationMessage {
   type: "ThemeConfigurationMessage";
-  control_layout: "floating" | "collapsible" | "fixed";
+  control_layout: "floating" | "left" | "right";
   dark_mode: boolean | "auto";
 }
 /** Signal that a file is about to be sent.

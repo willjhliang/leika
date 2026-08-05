@@ -2,7 +2,14 @@
 // shapes produced by top/bottom docking.
 
 import { describe, it, expect } from "vitest";
-import { DockLayout, DockNode, GroupId, MAX_PANEL_WIDTH_PX } from "./types";
+import {
+  DEFAULT_REGION_PX,
+  DockLayout,
+  DockNode,
+  GroupId,
+  MAX_PANEL_WIDTH_PX,
+} from "./types";
+import { CONTROL_WIDTH_PX } from "../ControlPanel/controlWidth";
 import {
   topColumns,
   widthColumns,
@@ -311,5 +318,14 @@ describe("column-rooted region width bounds reflect the inner row", () => {
     const sum = cols.reduce((s, c) => s + c.weight, 0);
     expect(cols.map((c) => collectLeafGroups(c)[0])).toEqual(["a", "b"]);
     expect(sum).toBe(600);
+  });
+});
+
+describe("DEFAULT_REGION_PX", () => {
+  it("is the control panel's own width", () => {
+    // One width however a panel lands on an edge: dragged there, configured
+    // there by the server, or sent home. The dock restates the value rather
+    // than importing the panel's constant; this is what keeps them together.
+    expect(DEFAULT_REGION_PX).toBe(CONTROL_WIDTH_PX);
   });
 });

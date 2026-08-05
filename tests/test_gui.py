@@ -360,6 +360,27 @@ def test_theme_rejects_unknown_wire_values(server: leika.Server) -> None:
         server.gui.configure_theme(control_layout="wide")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="dark_mode"):
         server.gui.configure_theme(dark_mode=1)  # type: ignore[arg-type]
+    # The removed sidebar layouts fail with the replacement named, not as
+    # anonymous typos: code written against 0.3.0 gets told where to go.
+    with pytest.raises(ValueError, match="left"):
+        server.gui.configure_theme(control_layout="fixed")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="left"):
+        server.gui.configure_theme(control_layout="collapsible")  # type: ignore[arg-type]
+
+
+def test_theme_sends_the_docked_edge_on_the_wire(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layout is a starting position the client applies verbatim, so the
+    wire value is the API value -- no mapping in between to drift."""
+    sent: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", sent.append)
+
+    server.gui.configure_theme()
+    server.gui.configure_theme(control_layout="left")
+    server.gui.configure_theme(control_layout="right")
+
+    assert [message.control_layout for message in sent] == ["floating", "left", "right"]
 
 
 def test_removed_visual_customization_arguments_are_rejected(

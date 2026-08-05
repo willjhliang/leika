@@ -773,22 +773,32 @@ class GuiApi(GuiContainer):
     def configure_theme(
         self,
         *,
-        control_layout: Literal["floating", "collapsible", "fixed"] = "floating",
+        control_layout: Literal["floating", "left", "right"] = "floating",
         dark_mode: bool | Literal["auto"] = "auto",
     ) -> None:
         """Configures the visual appearance of the Leika front-end.
 
         Args:
-            control_layout: The layout of control elements, options are "floating",
-                            "collapsible", or "fixed".
+            control_layout: Where the control panel starts. ``"floating"`` puts
+                            it in a card over the canvas; ``"left"`` and
+                            ``"right"`` start it docked to that edge. This is a
+                            starting position, not a constraint: in every mode
+                            the viewer can drag the panel out or to an edge, and
+                            collapse it by clicking its header. On a phone the
+                            controls are a bottom sheet and the value is
+                            ignored.
             dark_mode: ``True`` or ``False`` to pin the scheme for every client.
                        The default, ``"auto"``, follows each browser's own
                        ``prefers-color-scheme`` and tracks it if the viewer
                        changes their OS setting mid-session.
         """
 
-        if control_layout not in ("floating", "collapsible", "fixed"):
-            raise ValueError("control_layout must be 'floating', 'collapsible', or 'fixed'.")
+        if control_layout not in ("floating", "left", "right"):
+            raise ValueError(
+                "control_layout must be 'floating', 'left', or 'right'. The"
+                " 'collapsible' and 'fixed' sidebar layouts were removed; use"
+                " 'left' or 'right' to start the panel docked to that edge."
+            )
         if dark_mode != "auto" and type(dark_mode) is not bool:
             raise ValueError("dark_mode must be True, False, or 'auto'.")
 

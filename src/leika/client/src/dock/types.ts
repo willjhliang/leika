@@ -45,8 +45,14 @@ export const MINIMIZED_STRIP_PX = 36;
 export const SPLIT_DIVIDER_PX = 7;
 
 /** Width (px) a docked region starts at (and that a newly docked column gets)
- * before the user resizes it. */
-export const DEFAULT_REGION_PX = 300;
+ * before the user resizes it.
+ *
+ * The same 320px as the control panel's own CONTROL_WIDTH_PX, so every way of
+ * landing on an edge -- a drag, a server-configured start, the reset gesture
+ * -- gives one width, and docking a floating panel does not change its size.
+ * Restated rather than imported (the dock does not reach into the panel's
+ * code); a test pins the two together. */
+export const DEFAULT_REGION_PX = 320;
 
 /** Breathing room (px) an auto-height window keeps above and below itself: its
  * height budget is the container's height less twice this. Shared with the

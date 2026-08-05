@@ -1013,7 +1013,10 @@ class WorkspaceConfigurationMessage(Message):
 class ThemeConfigurationMessage(Message):
     """Message from server->client to configure parts of the GUI."""
 
-    control_layout: Literal["floating", "collapsible", "fixed"]
+    control_layout: Literal["floating", "left", "right"]
+    """Where the control panel starts on desktop: floating over the canvas, or
+    docked to an edge. The viewer may rearrange it afterwards."""
+
     dark_mode: Union[bool, Literal["auto"]]
     """``True``/``False`` pin the scheme; ``"auto"`` defers to the browser's
     ``prefers-color-scheme``."""

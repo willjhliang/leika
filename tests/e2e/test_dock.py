@@ -26,7 +26,9 @@ from .utils import Point, center, drag
 MIN_PANEL_WIDTH_PX = 220.0
 MAX_PANEL_WIDTH_PX = 600.0
 MINIMIZED_STRIP_PX = 36.0
-DEFAULT_REGION_PX = 300.0
+# Deliberately the control panel's own width (CONTROL_WIDTH_PX below): every
+# way of landing on an edge gives one width. A client test pins the equality.
+DEFAULT_REGION_PX = 320.0
 
 # Conftest's viewport.
 VIEWPORT_W = 960.0
@@ -779,3 +781,131 @@ def test_a_tab_strip_grows_to_hold_the_tabs_that_wrap(
     # Nothing is left outside the strip, which would be painted over the panel.
     assert metrics["below"] <= 1.0, metrics
     assert metrics["scrollHeight"] - metrics["clientHeight"] <= 1, metrics
+
+
+# --- server-chosen starting placement ---------------------------------------
+
+# The panel's own width (src/ControlPanel/controlWidth.ts), which is also what
+# DEFAULT_REGION_PX above mirrors: floating, dragged to an edge, or seeded
+# there, the panel is one size.
+CONTROL_WIDTH_PX = 320.0
+
+
+def goto_docked(page: Page, leika_server: leika.Server, side: str, label: str = "Value") -> Page:
+    """Load a workspace whose theme starts the control panel docked to `side`."""
+    leika_server.gui.configure_theme(control_layout=side, dark_mode=True)  # type: ignore[arg-type]
+    leika_server.gui.add_slider(label, min=0.0, max=1.0, step=0.01, initial_value=0.5)
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+    expect(control_panel(page)).to_have_attribute("data-dock-side", side, timeout=5_000)
+    return page
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_theme_starts_the_panel_docked_and_insets_the_canvas(
+    side: str,
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """`control_layout="left"/"right"` seeds the panel already docked, with no
+    gesture -- at the panel's own width, so a configured dock and a floating
+    panel are the same size."""
+    goto_docked(page, leika_server, side)
+
+    assert window_ids(page) == []
+    docked = bounds(control_panel(page))
+    assert docked["width"] == pytest.approx(CONTROL_WIDTH_PX, abs=1.0)
+    workspace = bounds(page.locator("[data-viewport-workspace]"))
+    if side == "left":
+        # The canvas is pushed in from the left by the docked region.
+        assert workspace["x"] == pytest.approx(CONTROL_WIDTH_PX, abs=2.0)
+    else:
+        # And gives up the same width on the right.
+        assert workspace["x"] == pytest.approx(0.0, abs=1.0)
+        assert workspace["width"] == pytest.approx(VIEWPORT_W - CONTROL_WIDTH_PX, abs=2.0)
+    assert page_errors == []
+
+
+def test_a_server_docked_panel_collapses_to_the_rail_and_floats_out(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """A seeded dock keeps every freedom a dragged-there dock has: the header
+    click folds it to the vertical rail, the rail expands back, and the panel
+    tears out into a floating window."""
+    goto_docked(page, leika_server, "left")
+
+    control_handle(page).click()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+    assert canvas_inset(page) == pytest.approx(MINIMIZED_STRIP_PX, abs=1.0)
+    expect(page.get_by_text("Control panel", exact=True)).to_be_visible()
+
+    strip.locator("[data-dock-minimize]").click()
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "left")
+    assert canvas_inset(page) == pytest.approx(CONTROL_WIDTH_PX, abs=1.0)
+
+    drag(page, center(control_handle(page)), CANVAS)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+    assert len(window_ids(page)) == 1
+    assert canvas_inset(page) == pytest.approx(0.0, abs=1.0)
+    assert page_errors == []
+
+
+def test_double_click_sends_the_panel_home_to_its_configured_edge(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """Home is the CONFIGURED placement: for an app that starts docked right,
+    the restore gesture re-docks rather than floating to a corner the app
+    never used."""
+    goto_docked(page, leika_server, "right")
+
+    drag(page, center(control_handle(page)), CANVAS, PARK_LOWER)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+
+    handle = center(control_handle(page))
+    page.mouse.click(*handle)
+    page.mouse.click(*handle)
+
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "right", timeout=5_000)
+    assert bounds(control_panel(page))["width"] == pytest.approx(CONTROL_WIDTH_PX, abs=1.0)
+    # The pair is a toggle and its undo, so it lands expanded as it started.
+    assert page.locator("[data-dock-collapsed]").count() == 0
+    assert page_errors == []
+
+
+def test_mid_session_theme_change_redocks_the_panel(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """A configure_theme call mid-session re-places the panel -- once. The
+    server wins at the moment it asks; a viewer who then drags the panel away
+    keeps their arrangement, since an unchanged value never re-asserts."""
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.add_slider("Value", min=0.0, max=1.0, step=0.01, initial_value=0.5)
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+    assert len(window_ids(page)) == 1
+
+    leika_server.gui.configure_theme(control_layout="left", dark_mode=True)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "left", timeout=5_000)
+    assert window_ids(page) == []
+
+    # The viewer's next move is theirs to keep.
+    drag(page, center(control_handle(page)), CANVAS)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+    page.wait_for_timeout(400)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none")
+    assert page_errors == []

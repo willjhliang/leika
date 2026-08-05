@@ -222,23 +222,26 @@ def test_the_gear_goes_with_the_connection(
     assert page_errors == []
 
 
-def test_the_gear_reaches_the_sidebar_and_mobile_chromes(
+def test_the_gear_reaches_the_docked_and_mobile_chromes(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
 ) -> None:
-    """The control panel has three chromes. The floating one is covered above;
-    these two place the gear differently, since the mobile handle is itself one
-    big button and cannot hold another."""
-    leika_server.gui.configure_theme(control_layout="fixed")
+    """The floating chrome is covered above; these are the other two places the
+    panel can be. Docked, the header is the same cluster; on the phone the
+    handle is itself one big button and cannot hold the gear."""
+    leika_server.gui.configure_theme(control_layout="right")
     leika_server.gui.add_checkbox("Enabled", initial_value=True)
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
     page.wait_for_function(
         "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
     )
+    expect(page.get_by_test_id("control-panel")).to_have_attribute(
+        "data-dock-side", "right", timeout=5_000
+    )
 
-    # Sidebar: same cluster as the floating header, gear before the pill.
+    # Docked: same cluster as the floating header, gear before the pill.
     expect(page.locator(TRIGGER)).to_be_visible(timeout=5_000)
     # Both edges in ONE read: the header re-renders as the connection settles,
     # and two separate measurements can land either side of that, leaving the

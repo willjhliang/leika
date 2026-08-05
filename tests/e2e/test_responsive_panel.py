@@ -134,7 +134,8 @@ def test_a_narrow_panel_wraps_its_tabs_and_its_option_rows(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="fixed", dark_mode=True)
+    # 320px is the mobile view, whose bottom sheet ignores the layout value.
+    leika_server.gui.configure_theme(dark_mode=True)
     tabs = leika_server.gui.add_tab_group()
     tab_labels = (
         "Overview dashboard",
@@ -320,19 +321,21 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     assert page_errors == []
 
 
-@pytest.mark.parametrize("control_layout", ["fixed", "collapsible"])
-def test_tall_sidebar_scrolls_internally_and_stays_inside_viewport(
+@pytest.mark.parametrize("control_layout", ["left", "right"])
+def test_tall_docked_panel_scrolls_internally_and_stays_inside_viewport(
     control_layout: str,
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
 ) -> None:
+    """A server-docked panel with more controls than the window is tall scrolls
+    its own body rather than growing past the viewport."""
     leika_server.gui.configure_theme(
-        control_layout=control_layout,
+        control_layout=control_layout,  # type: ignore[arg-type]
         dark_mode=True,
     )
     for index in range(60):
-        leika_server.gui.add_checkbox(f"Sidebar control {index + 1}", initial_value=index % 2 == 0)
+        leika_server.gui.add_checkbox(f"Docked control {index + 1}", initial_value=index % 2 == 0)
 
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -340,21 +343,24 @@ def test_tall_sidebar_scrolls_internally_and_stays_inside_viewport(
         "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
     )
 
-    last_control = page.get_by_text("Sidebar control 60", exact=True)
+    panel = page.get_by_test_id("control-panel")
+    expect(panel).to_have_attribute("data-dock-side", control_layout, timeout=5_000)
+
+    last_control = page.get_by_text("Docked control 60", exact=True)
     expect(last_control).to_be_attached(timeout=5_000)
-    scroll_viewport = last_control.locator("xpath=ancestor::*[@data-slot='sidebar-content'][1]")
-    sidebar = scroll_viewport.locator("xpath=ancestor::*[@data-slot='sidebar'][1]")
-    expect(sidebar).to_be_visible()
+    scroll_viewport = last_control.locator(
+        "xpath=ancestor::*[@data-slot='scroll-area-viewport'][1]"
+    )
     expect(scroll_viewport).to_be_visible()
 
     viewport = page.viewport_size
-    sidebar_bounds = sidebar.bounding_box()
+    panel_bounds = panel.bounding_box()
     scroll_bounds = scroll_viewport.bounding_box()
-    assert viewport is not None and sidebar_bounds is not None and scroll_bounds is not None
-    assert sidebar_bounds["x"] >= -0.5
-    assert sidebar_bounds["y"] >= -0.5
-    assert sidebar_bounds["x"] + sidebar_bounds["width"] <= viewport["width"] + 0.5
-    assert sidebar_bounds["y"] + sidebar_bounds["height"] <= viewport["height"] + 0.5
+    assert viewport is not None and panel_bounds is not None and scroll_bounds is not None
+    assert panel_bounds["x"] >= -0.5
+    assert panel_bounds["y"] >= -0.5
+    assert panel_bounds["x"] + panel_bounds["width"] <= viewport["width"] + 0.5
+    assert panel_bounds["y"] + panel_bounds["height"] <= viewport["height"] + 0.5
     assert scroll_bounds["y"] + scroll_bounds["height"] <= viewport["height"] + 0.5
 
     scroll_metrics = scroll_viewport.evaluate(

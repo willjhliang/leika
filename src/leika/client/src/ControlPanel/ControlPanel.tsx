@@ -7,12 +7,8 @@ import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import React from "react";
 import { ConnectionBadge } from "./ConnectionPane";
 import BottomPanel from "./BottomPanel";
-import { CONTROL_WIDTH_CSS } from "./controlWidth";
-import { ThemeConfigurationMessage } from "../WebsocketMessages";
-import { useMobileView } from "../hooks/useMediaQuery";
 import { SettingsButton } from "./SettingsPane";
 import { useControlsShown } from "./SettingsPanelController";
-import SidebarPanel from "./SidebarPanel";
 import { useShowGenerated } from "./useShowGenerated";
 
 // Must match constant in Python.
@@ -20,8 +16,8 @@ const ROOT_CONTAINER_ID = "root";
 
 const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
 
-/** The control panel's body: the generated GUI. Shared by every panel chrome
- * (bottom sheet, sidebar, and the dock-library floating panel). */
+/** The control panel's body: the generated GUI. Shared by both panel chromes
+ * (the phone's bottom sheet and the desktop dock panel). */
 export function ControlPanelContents() {
   const hasGenerated = useShowGenerated();
   // The handle's flag. The controls stay MOUNTED when hidden rather than being
@@ -44,45 +40,30 @@ export function ControlPanelContents() {
   );
 }
 
-export default function ControlPanel(props: {
-  control_layout: ThemeConfigurationMessage["control_layout"];
-}) {
-  const mobileView = useMobileView();
-  const panelContents = <ControlPanelContents />;
-
-  // Floating controls use ControlPanelDockSurface instead.
-  if (mobileView) {
-    /* Mobile layout. The whole handle is the collapse button, so neither the
-       gear nor the connection badge -- both buttons of their own -- can sit
-       inside the header the way they do elsewhere; they go beside it, in the
-       order the header would have put them. */
-    return (
-      <BottomPanel>
-        <BottomPanel.Handle
-          actions={
-            <span className="flex items-center gap-2">
-              <ConnectionBadge />
-              <SettingsButton />
-            </span>
-          }
-        >
-          <PanelHeader badge={null} />
-        </BottomPanel.Handle>
-        <BottomPanel.Contents>{panelContents}</BottomPanel.Contents>
-      </BottomPanel>
-    );
-  }
-
+/** The phone's control panel: a bottom sheet. Desktop always uses the dock
+ * (ControlPanelDockSurface); App renders this only in the mobile view.
+ *
+ * The whole handle is the collapse button, so neither the gear nor the
+ * connection badge -- both buttons of their own -- can sit inside the header
+ * the way they do elsewhere; they go beside it, in the order the header would
+ * have put them. */
+export default function ControlPanel() {
   return (
-    <SidebarPanel
-      width={CONTROL_WIDTH_CSS}
-      collapsible={props.control_layout === "collapsible"}
-    >
-      <SidebarPanel.Handle>
-        <PanelHeader actions={<SettingsButton />} />
-      </SidebarPanel.Handle>
-      <SidebarPanel.Contents>{panelContents}</SidebarPanel.Contents>
-    </SidebarPanel>
+    <BottomPanel>
+      <BottomPanel.Handle
+        actions={
+          <span className="flex items-center gap-2">
+            <ConnectionBadge />
+            <SettingsButton />
+          </span>
+        }
+      >
+        <PanelHeader badge={null} />
+      </BottomPanel.Handle>
+      <BottomPanel.Contents>
+        <ControlPanelContents />
+      </BottomPanel.Contents>
+    </BottomPanel>
   );
 }
 

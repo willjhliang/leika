@@ -167,3 +167,34 @@ def test_notification_auto_closes(
     expect(toast).to_have_count(1, timeout=5_000)
     expect(toast).to_have_count(0, timeout=5_000)
     assert page_errors == []
+
+
+def test_toasts_clear_a_left_docked_panel_from_the_start(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """Toasts anchor bottom-left, which is exactly where a left-docked panel
+    stands. The inset that clears a DRAGGED-there panel has to hold when the
+    panel starts there by configuration instead."""
+    leika_server.gui.configure_theme(control_layout="left", dark_mode=True)
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
+    )
+    panel = page.get_by_test_id("control-panel")
+    expect(panel).to_have_attribute("data-dock-side", "left", timeout=5_000)
+    panel_bounds = panel.bounding_box()
+    assert panel_bounds is not None
+
+    leika_server.gui.add_notification("Export finished", "Wrote 12 files.", auto_close_seconds=None)
+    toast = toast_titled(page, "Export finished")
+    expect(toast).to_be_visible(timeout=5_000)
+    toast_bounds = toast.bounding_box()
+    assert toast_bounds is not None
+    assert toast_bounds["x"] >= panel_bounds["x"] + panel_bounds["width"] - 1.0, (
+        toast_bounds,
+        panel_bounds,
+    )
+    assert page_errors == []

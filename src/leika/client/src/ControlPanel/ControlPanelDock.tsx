@@ -1,11 +1,13 @@
-// The "floating" control-panel layout, on the docking library.
+// The desktop control panel, on the docking library.
 //
 // Mounts a DockManager over the canvas area and seeds it with ONE panel: the
-// control panel, as an unmergeable floating window in the top-right corner.
-// It supports drag, docking to either edge with a canvas inset, resizing from
-// both edges, and click-the-handle to minimize. Because it's an ordinary dock
-// panel, it also composes with any other panels later added to the surface
-// (e.g. GUI tabs dragged out of a nested dockable area).
+// control panel, placed where the theme asks -- a floating window in the
+// top-right corner, or docked to an edge. That is a starting position only:
+// the panel is an ordinary dock panel, so the viewer can drag it, dock it to
+// either edge with a canvas inset, resize it from both edges, and
+// click-the-handle to minimize -- and it composes with any other panels later
+// added to the surface (e.g. GUI tabs dragged out of a nested dockable area).
+// The one chrome not drawn here is the phone's bottom sheet (ControlPanel).
 
 import React from "react";
 import { ViewerContext, ViewerContextContents } from "../ViewerContext";
@@ -13,6 +15,7 @@ import { DockMetricsContext, useDock } from "../dock/DockContext";
 import { DockManager } from "../dock/DockManager";
 import * as ops from "../dock/layoutOps";
 import { PanelRegistry, emptyLayout } from "../dock/types";
+import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { ControlPanelContents, PanelHeader } from "./ControlPanel";
 import { useShowGenerated } from "./useShowGenerated";
 import GeneratedGuiContainer from "./Generated";
@@ -48,10 +51,13 @@ export interface ControlDockState {
 
 export function ControlPanelDockSurface({
   children,
+  controlLayout,
   onDockStateChange,
 }: {
   /** Center content (the canvas layers), inset when the panel is docked. */
   children: React.ReactNode;
+  /** Where the server asked the panel to start (theme `control_layout`). */
+  controlLayout: ThemeConfigurationMessage["control_layout"];
   onDockStateChange?: (state: ControlDockState) => void;
 }) {
   const viewer = React.useContext(ViewerContext)!;
@@ -116,6 +122,7 @@ export function ControlPanelDockSurface({
       <DockManager initialLayout={initialLayout} panels={panels}>
         {children}
         <ControlPanelDockSync
+          controlLayout={controlLayout}
           onDockStateChange={onDockStateChange}
           resetLayoutRef={resetLayoutRef}
         />
@@ -224,9 +231,11 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
  * Test ids are NOT applied here: the panel spec declares `testId` and the dock
  * library renders it (plus `-handle` / `-resize-*`) itself. */
 function ControlPanelDockSync({
+  controlLayout,
   onDockStateChange,
   resetLayoutRef,
 }: {
+  controlLayout: ThemeConfigurationMessage["control_layout"];
   onDockStateChange?: (state: ControlDockState) => void;
   /** Filled in here and called from the panel spec, which is built OUTSIDE the
    * DockManager and so cannot reach `useDock` itself. */
@@ -260,17 +269,50 @@ function ControlPanelDockSync({
     };
   }, [fitToContainer]);
 
-  // Initial placement: top-right corner.
-  // Runs once on mount (addFloatingPanel no-ops if the panel is already
-  // placed, so a StrictMode double-run is harmless).
+  // Placement: put the panel where the theme asks, and only when the theme
+  // ASKS. The dock mounts before the server's theme message can arrive, so
+  // placement has to be reactive rather than one-shot -- but it must react to
+  // the VALUE, not the message: the theme is replayed on every reconnect, and
+  // a replayed "left" must not stomp a layout the viewer has since rearranged.
+  // The primitive selector upstream gives exactly that -- this effect fires on
+  // mount and on genuine changes, nothing else. (The flip side, noted for
+  // whoever needs it: calling configure_theme again with the UNCHANGED value
+  // cannot force a re-place for connected viewers.)
+  //
+  // Every branch is guarded so a re-run against a layout that already
+  // satisfies it changes nothing: addFloatingPanel no-ops when placed, the
+  // docked branch returns early when already on the target edge (a bare
+  // dockToEdge would detach and re-dock, churning a user's region
+  // arrangement), and the floating branch only moves a panel that is NOT
+  // already floating (so it can never teleport a window the viewer has moved).
   React.useLayoutEffect(() => {
-    const { x, y, width } = defaultRect();
-    dock.api.apply(
-      (layout) =>
-        ops.addFloatingPanel(layout, CONTROL_PANEL_ID, x, y, width).layout,
-    );
-    // Initial placement only; the user can resize the window afterwards.
-  }, []);
+    dock.api.apply((layout) => {
+      let next = layout;
+      let groupId = ops.findPanelGroup(next, CONTROL_PANEL_ID);
+      if (groupId === null) {
+        const { x, y, width } = defaultRect();
+        next = ops.addFloatingPanel(next, CONTROL_PANEL_ID, x, y, width).layout;
+        groupId = ops.findPanelGroup(next, CONTROL_PANEL_ID);
+        if (groupId === null) return next;
+      }
+      const location = ops.findGroupLocation(next, groupId);
+      if (controlLayout === "left" || controlLayout === "right") {
+        if (location?.kind === "docked" && location.edge === controlLayout) {
+          return next;
+        }
+        // No width to set: a fresh region opens at DEFAULT_REGION_PX, which
+        // IS the panel's width -- and a region the viewer already has on this
+        // edge keeps whatever width they gave it.
+        return ops.dockToEdge(next, [groupId], controlLayout);
+      }
+      if (location !== null && location.kind !== "floating") {
+        const { x, y, width } = defaultRect();
+        return ops.floatGroup(next, groupId, x, y, width).layout;
+      }
+      return next;
+    });
+    // defaultRect and dock.api are stable; the placement follows the theme.
+  }, [controlLayout]);
 
   // Keep the dock group aligned with the generated controls' visibility.
   const bodyVisible = useControlsShown();
@@ -282,20 +324,28 @@ function ControlPanelDockSync({
     dock.toggleCollapsed(groupId);
   }, [bodyVisible, dock]);
 
-  // What a double-click on the handle restores. `floatGroup` rather than a
-  // move-and-resize because it is the one op that covers every place the panel
-  // can have got to: floating and moved, stacked into another window, or docked
-  // to an edge. It detaches from wherever that is and remakes the window at the
-  // rect above, dropping any height the user dragged so it auto-sizes again.
+  // What a double-click on the handle restores: the CONFIGURED placement, not
+  // a fixed corner -- a viewer of an app that starts docked left is sent home
+  // to docked left. Unlike the placement effect above, nothing here is
+  // guarded: reset is an explicit gesture, and detach-and-redock (or
+  // float-and-remake, which also drops any height the user dragged so the
+  // window auto-sizes again) IS "send it home", wherever the panel had got to
+  // -- floating and moved, stacked into another window, or docked elsewhere.
   React.useEffect(() => {
     resetLayoutRef.current = () =>
       dock.api.apply((layout) => {
         const groupId = ops.findPanelGroup(layout, CONTROL_PANEL_ID);
         if (groupId === null) return layout;
+        if (controlLayout === "left" || controlLayout === "right") {
+          const next = ops.dockToEdge(layout, [groupId], controlLayout);
+          // Home is a size as well as a place: unlike the seed, reset puts a
+          // resized region back to the panel's width.
+          return ops.setRegionWidth(next, controlLayout, CONTROL_WIDTH_PX);
+        }
         const { x, y, width } = defaultRect();
         return ops.floatGroup(layout, groupId, x, y, width).layout;
       });
-  }, [dock.api, defaultRect, resetLayoutRef]);
+  }, [dock.api, defaultRect, resetLayoutRef, controlLayout]);
 
   // Where is the control panel now?
   const controlGroupId = ops.findPanelGroup(dock.layout, CONTROL_PANEL_ID);

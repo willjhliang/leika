@@ -23,6 +23,7 @@ import {
   warnDisconnectedSend,
 } from "./ViewerContext";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
+import { ThemeConfigurationMessage } from "./WebsocketMessages";
 import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useAccentColor } from "./hooks/useAccentColor";
@@ -113,10 +114,9 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
 function AppLayout({
   controlLayout,
 }: {
-  controlLayout: "floating" | "collapsible" | "fixed";
+  controlLayout: ThemeConfigurationMessage["control_layout"];
 }) {
   const mobileView = useMobileView();
-  const dockFloating = controlLayout === "floating" && !mobileView;
   const [controlDock, setControlDock] = React.useState<ControlDockState>({
     side: null,
     widthPx: 320,
@@ -124,12 +124,15 @@ function AppLayout({
   });
 
   React.useEffect(() => {
-    if (!dockFloating) {
+    // The dock surface unmounts on the way into the mobile view, and a stale
+    // `side: "left"` would keep the toasts inset off a panel that is no longer
+    // there.
+    if (mobileView) {
       setControlDock((previous) =>
         previous.side === null ? previous : { ...previous, side: null },
       );
     }
-  }, [dockFloating]);
+  }, [mobileView]);
 
   return (
     <div className="relative flex size-full flex-col">
@@ -142,15 +145,21 @@ function AppLayout({
           }
         />
         <div className="relative h-full flex-1 overflow-hidden bg-background">
-          {dockFloating ? (
-            <ControlPanelDockSurface onDockStateChange={setControlDock}>
+          {/* Desktop always gets the dock; `controlLayout` is where the panel
+              STARTS, which the dock surface applies. The phone's bottom sheet
+              is the one chrome the dock cannot absorb. */}
+          {mobileView ? (
+            <ViewportWorkspace />
+          ) : (
+            <ControlPanelDockSurface
+              controlLayout={controlLayout}
+              onDockStateChange={setControlDock}
+            >
               <ViewportWorkspace />
             </ControlPanelDockSurface>
-          ) : (
-            <ViewportWorkspace />
           )}
         </div>
-        {!dockFloating && <ControlPanel control_layout={controlLayout} />}
+        {mobileView && <ControlPanel />}
       </div>
     </div>
   );
