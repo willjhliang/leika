@@ -489,6 +489,28 @@ def test_minimize_all_collapses_a_floating_stack_and_restores_it(
     assert page_errors == []
 
 
+def test_double_clicking_a_torn_out_tab_sends_it_home(
+    dock_page: Page, page_errors: list[str]
+) -> None:
+    """A torn-out tab's home is the tab group it came from: double-clicking its
+    title re-inserts it at its declared place, the same gesture that sends the
+    control panel home."""
+    page = dock_page
+    torn = tear_out_tab(page, "Alpha", PARK_LOWER)
+    expect(gui_area(page).locator("[data-dock-tab]")).to_have_count(1)
+
+    torn.get_by_role("tab", name="Alpha", exact=True).dblclick()
+
+    # Back in the area, in declaration order -- Alpha was the FIRST tab, so
+    # home is its old slot, not the end of the strip.
+    tabs = gui_area(page).locator("[data-dock-tab]")
+    expect(tabs).to_have_count(2, timeout=5_000)
+    expect(tabs).to_have_text(["Alpha", "Beta"])
+    # The emptied window went with it.
+    expect(floating_windows(page)).to_have_count(1)  # the control panel
+    assert page_errors == []
+
+
 def test_double_clicking_the_handle_sends_the_panel_home(dock_page: Page) -> None:
     """Single-click collapses; twice in quick succession restores the panel's
     default size and position.
@@ -608,6 +630,9 @@ def test_clicking_the_active_tab_folds_a_torn_out_window(
     assert bounds(window)["height"] < expanded_height
     expect(page.get_by_text("Alpha body", exact=True)).not_to_be_visible()
 
+    # Past the double-click window, so this second click is a plain unfold
+    # rather than the fold-undo-and-go-home pair.
+    page.wait_for_timeout(400)
     tab.click()
     expect(window.locator("[data-dock-collapsed='true']")).to_have_count(0, timeout=5_000)
     expect(page.get_by_text("Alpha body", exact=True)).to_be_visible()

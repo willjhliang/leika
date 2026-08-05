@@ -14,7 +14,7 @@ import { ViewerContext, ViewerContextContents } from "../ViewerContext";
 import { DockMetricsContext, useDock } from "../dock/DockContext";
 import { DockManager } from "../dock/DockManager";
 import * as ops from "../dock/layoutOps";
-import { PanelRegistry, emptyLayout } from "../dock/types";
+import { DockLayout, PanelRegistry, emptyLayout } from "../dock/types";
 import { ThemeConfigurationMessage } from "../WebsocketMessages";
 import { ControlPanelContents, PanelHeader } from "./ControlPanel";
 import { useShowGenerated } from "./useShowGenerated";
@@ -41,6 +41,9 @@ const CONTROL_PANEL_TESTID = "control-panel";
 // Boundary pad between the panel and the container edge on first placement.
 const PANEL_PAD_PX = 15;
 
+/** The dock's `api.apply`, as specs built outside the DockManager see it. */
+type ApplyLayout = (transform: (layout: DockLayout) => DockLayout) => void;
+
 /** Where the control panel currently sits, reported up to App so the
  * notifications layer can offset itself clear of a left-docked panel. */
 export interface ControlDockState {
@@ -64,8 +67,13 @@ export function ControlPanelDockSurface({
 
   // GUI tab groups rendered inside the dock surface register here (via
   // GuiDockContext); the registry hook owns the lifetime of their tabs' panel
-  // specs.
-  const { guiPanels, registerTabGroup } = useGuiTabPanelRegistry(viewer);
+  // specs. Like the control panel's reset, their specs are built OUTSIDE the
+  // DockManager and reach its layout through a ref the sync node fills.
+  const applyLayoutRef = React.useRef<ApplyLayout | null>(null);
+  const { guiPanels, registerTabGroup } = useGuiTabPanelRegistry(
+    viewer,
+    applyLayoutRef,
+  );
   const guiDockValue = React.useMemo(
     () => ({ registerTabGroup }),
     [registerTabGroup],
@@ -125,6 +133,7 @@ export function ControlPanelDockSurface({
           controlLayout={controlLayout}
           onDockStateChange={onDockStateChange}
           resetLayoutRef={resetLayoutRef}
+          applyLayoutRef={applyLayoutRef}
         />
       </DockManager>
     </GuiDockContext.Provider>
@@ -139,7 +148,10 @@ export function ControlPanelDockSurface({
  * Spec lifetime deliberately does NOT follow component mount state: a nested
  * tab group unmounts whenever an ancestor tab goes inactive, which must not
  * tear down its panels. */
-function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
+function useGuiTabPanelRegistry(
+  viewer: ViewerContextContents,
+  applyRef: React.MutableRefObject<ApplyLayout | null>,
+): {
   guiPanels: PanelRegistry;
   registerTabGroup: (uuid: string) => void;
 } {
@@ -179,7 +191,7 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
           if (!ownedBefore.has(pid)) next[pid] = spec;
         }
         if (tabConf === null) return next;
-        tabConf.props._tabs.forEach((tab) => {
+        tabConf.props._tabs.forEach((tab, index) => {
           const cid = tab.container_id;
           const iconHtml = tab.icon_html;
           next[cid] = {
@@ -193,6 +205,25 @@ function useGuiTabPanelRegistry(viewer: ViewerContextContents): {
                 />
               ),
             render: () => <MemoizedGeneratedGuiContainer containerUuid={cid} />,
+            // Home is the tab group the panel came from, at its declared
+            // place among whichever tabs are still there. Reached the way
+            // every panel's home is: a double-click on its title.
+            onResetLayout: () => {
+              applyRef.current?.((layout) => {
+                const groupId = ops.findPanelGroup(layout, cid);
+                const location =
+                  groupId === null
+                    ? null
+                    : ops.findGroupLocation(layout, groupId);
+                if (location?.kind === "area") return layout;
+                return ops.addPanelToArea(
+                  ops.removePanel(layout, cid),
+                  `gui-tabs-${uuid}`,
+                  cid,
+                  index,
+                );
+              });
+            },
           };
         });
         return next;
@@ -234,14 +265,23 @@ function ControlPanelDockSync({
   controlLayout,
   onDockStateChange,
   resetLayoutRef,
+  applyLayoutRef,
 }: {
   controlLayout: ThemeConfigurationMessage["control_layout"];
   onDockStateChange?: (state: ControlDockState) => void;
   /** Filled in here and called from the panel spec, which is built OUTSIDE the
    * DockManager and so cannot reach `useDock` itself. */
   resetLayoutRef: React.MutableRefObject<() => void>;
+  /** Same arrangement for the GUI tab panels' own resets. */
+  applyLayoutRef: React.MutableRefObject<ApplyLayout | null>;
 }) {
   const dock = useDock();
+  React.useEffect(() => {
+    applyLayoutRef.current = dock.api.apply;
+    return () => {
+      applyLayoutRef.current = null;
+    };
+  }, [dock.api, applyLayoutRef]);
   const metrics = React.useContext(DockMetricsContext);
   // Anchor for measuring the dock container: this component renders nothing
   // visible, so it keeps a hidden node to walk up from.
