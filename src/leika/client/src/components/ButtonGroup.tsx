@@ -9,22 +9,13 @@ import { cn } from "@/lib/utils";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
-
-/** Split the options into runs of buttons that are joined to each other, as
- * indices into the row -- an option's place is what says which colorway it
- * wears, so the runs carry that rather than the text.
- *
- * `merge[i]` answers for the gap between option `i` and `i + 1`, so a false
- * starts a new run. One option per run means every button stands alone; one
- * run means the whole row is a single block. */
-function runsOf(options: string[], merge: boolean[]): number[][] {
-  const runs: number[][] = [];
-  options.forEach((_option, index) => {
-    if (index > 0 && merge[index - 1]) runs[runs.length - 1].push(index);
-    else runs.push([index]);
-  });
-  return runs;
-}
+import { GroupRun } from "./GroupRun";
+import {
+  GROUP_RUN_ITEM_CLASS,
+  runCornerClasses,
+  runSeamClasses,
+  runsOf,
+} from "./groupRuns";
 
 /** A row of buttons.
  *
@@ -34,9 +25,9 @@ function runsOf(options: string[], merge: boolean[]): number[][] {
  * option wears its own colorway, exactly as if it were an `add_button` of its
  * own; a row that names one role for all of them arrives as that role repeated.
  *
- * Joined runs nest a ButtonGroup inside the row's own, which is how the stock
- * component composes: the inner one shares the edges between its buttons, the
- * outer one puts the gaps between the runs.
+ * Joined runs are boxes inside the row: each shares the edges between its own
+ * buttons, and the row puts the gaps between the runs. The rounding belongs to
+ * the buttons themselves -- see `useRunPlacements`.
  */
 export default function ButtonGroupComponent({
   uuid,
@@ -60,49 +51,57 @@ export default function ButtonGroupComponent({
         // width of the row they wrap onto another line. Scrolling was the
         // earlier answer, and it hid an option behind an edge with no
         // scrollbar to say so -- a button whose words are cut in half is not a
-        // button anyone can read. The gap is the panel's own step, tighter
-        // than the stock 8px this component ships with.
-        // The stock group overlaps its children by a pixel so joined buttons
-        // share an edge. Between RUNS there is no edge to share, and the
-        // overlap would eat a pixel of the gap, so it is put back to zero: the
-        // step between parted buttons is the panel's own 4px, the same one the
-        // toggles use.
-        className={cn(
-          "w-full min-w-0 flex-wrap gap-1",
-          "has-[>[data-slot=button-group]]:gap-1",
-          "[&>[data-slot]~[data-slot]]:ml-0",
-        )}
+        // button anyone can read. The step between parted runs is the panel's
+        // own 4px, the same one the toggles use, rather than the stock 8px this
+        // component ships with.
+        className="w-full min-w-0 flex-wrap gap-1"
         data-leika-button-group
       >
+        {/* A box per run, not a nested ButtonGroup: that component rounds the
+            last child of a run from the parent, which is an answer about the
+            run rather than about the line a button landed on. */}
         {runs.map((run) => (
-          <ButtonGroup
-            key={options[run[0]]}
-            className="min-w-fit flex-1 flex-wrap"
-          >
-            {run.map((option, place) => (
-              <React.Fragment key={options[option]}>
-                {/* Filled buttons meeting edge to edge would read as one bar
-                    with words at intervals, so a joined pair of them is divided
-                    by a hairline in their own foreground. An outlined one on
-                    either side brings a border of its own and needs nothing. */}
-                {place > 0 &&
-                  color[option] === "inverse" &&
-                  color[run[place - 1]] === "inverse" && (
-                    <ButtonGroupSeparator className="bg-primary-foreground/25" />
-                  )}
-                <Button
-                  variant={color[option] === "inverse" ? "default" : "outline"}
-                  className="min-w-fit flex-1"
-                  disabled={disabled}
-                  data-leika-button
-                  data-leika-button-color={color[option]}
-                  onClick={() => setValue(uuid, options[option])}
-                >
-                  {options[option]}
-                </Button>
-              </React.Fragment>
-            ))}
-          </ButtonGroup>
+          <GroupRun key={options[run[0]]} count={run.length}>
+            {(placements) =>
+              run.map((option, place) => (
+                <React.Fragment key={options[option]}>
+                  {/* Filled buttons meeting edge to edge would read as one bar
+                      with words at intervals, so a joined pair of them is divided
+                      by a hairline in their own foreground. An outlined one on
+                      either side brings a border of its own and needs nothing. */}
+                  {place > 0 &&
+                    color[option] === "inverse" &&
+                    color[run[place - 1]] === "inverse" && (
+                      <ButtonGroupSeparator className="bg-primary-foreground/25" />
+                    )}
+                  <Button
+                    variant={
+                      color[option] === "inverse" ? "default" : "outline"
+                    }
+                    className={cn(
+                      GROUP_RUN_ITEM_CLASS,
+                      runCornerClasses(placements[place]),
+                      // Along a line, neighbours share one edge rather than
+                      // stacking two -- but only along one: a button that OPENS
+                      // a line has nothing to its left, and pulling left would
+                      // hang it a pixel off the run. `-mt-px` joins the lines.
+                      runSeamClasses(placements[place]),
+                    )}
+                    disabled={disabled}
+                    data-leika-button
+                    data-leika-run-item
+                    data-leika-joined={
+                      !placements[place].startsLine || undefined
+                    }
+                    data-leika-button-color={color[option]}
+                    onClick={() => setValue(uuid, options[option])}
+                  >
+                    {options[option]}
+                  </Button>
+                </React.Fragment>
+              ))
+            }
+          </GroupRun>
         ))}
       </ButtonGroup>
     </GuiInputRow>

@@ -34,6 +34,14 @@ function renderButtonGroup(
   );
 }
 
+/** The class list of each button in the row, so a rule meant for the buttons
+ * is not confused with one the row itself merely names in a variant. */
+function buttonClasses(markup: string): string[] {
+  return [...markup.matchAll(/<button[^>]*\sclass="([^"]*)"/g)].map(
+    (match) => match[1],
+  );
+}
+
 describe("ButtonGroupComponent", () => {
   it("is a row of ordinary buttons, with nothing marked as selected", () => {
     const markup = renderButtonGroup();
@@ -103,12 +111,36 @@ describe("ButtonGroupComponent", () => {
   });
 
   it("makes one run per stretch of merged buttons", () => {
-    // The row's own group plus one nested group per run.
-    const groups = (markup: string) =>
-      (markup.match(/data-slot="button-group"/g) ?? []).length - 1;
-    expect(groups(renderButtonGroup(false, "default", [true, true]))).toBe(1);
-    expect(groups(renderButtonGroup(false, "default", [false, false]))).toBe(3);
-    expect(groups(renderButtonGroup(false, "default", [true, false]))).toBe(2);
+    // One block per run. Each is the box that carries the run's rounding, so
+    // counting them counts the blocks a reader sees.
+    const runs = (markup: string) =>
+      (markup.match(/data-leika-group-run/g) ?? []).length;
+    expect(runs(renderButtonGroup(false, "default", [true, true]))).toBe(1);
+    expect(runs(renderButtonGroup(false, "default", [false, false]))).toBe(3);
+    expect(runs(renderButtonGroup(false, "default", [true, false]))).toBe(2);
+  });
+
+  it("rounds the buttons themselves rather than clipping them to the run", () => {
+    // The run box cannot carry the rounding: what clipping cuts off is the
+    // button's OUTLINE, and that border is the part that changes color under
+    // the pointer, so the corner would sit out its own hover. Rendered without
+    // a browser there are no lines to measure, so a run reads as one.
+    const markup = renderButtonGroup(false, "default", [true, true]);
+    expect(markup).not.toContain("overflow-hidden");
+    const [first, middle, last] = buttonClasses(markup);
+    expect(first).toContain("rounded-tl-lg!");
+    expect(first).toContain("rounded-bl-lg!");
+    expect(first).toContain("rounded-tr-none!");
+    expect(middle).toContain("rounded-tl-none!");
+    expect(middle).toContain("rounded-br-none!");
+    expect(last).toContain("rounded-tr-lg!");
+    expect(last).toContain("rounded-br-lg!");
+    expect(last).toContain("rounded-bl-none!");
+    // Lines meet on one shared edge, as buttons along a line already do.
+    for (const button of buttonClasses(markup))
+      expect(button).toContain("-mt-px");
+    // Two of the three share an edge with the button before them.
+    expect(markup.match(/data-leika-joined/g)).toHaveLength(2);
   });
 
   it("divides merged filled buttons, and leaves outlined ones to their borders", () => {

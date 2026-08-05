@@ -1601,3 +1601,97 @@ def test_a_frozen_list_keeps_its_length_and_order(
     expect(leika_page.locator("[data-leika-list-add]")).to_have_count(1, timeout=5_000)
     expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(2)
     assert page_errors == []
+
+
+def test_a_wrapped_row_of_options_rounds_its_own_controls(
+    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
+) -> None:
+    """A run too wide for the row wraps, and the block it makes keeps four
+    rounded corners -- drawn by the controls themselves.
+
+    The run's box cannot carry them: clipping a rounded box cuts the control's
+    OUTLINE off at the corner, and that outline is the part that answers the
+    pointer, so the corner would sit out its own hover. Which control holds
+    which corner is a question about lines, so it is measured.
+    """
+    leika_server.gui.add_button(("Start the capture", "Stop the capture"), label="Capture")
+    # A toggle row too. The stock toggle pulls every item but the first of its
+    # box left for itself, so a wrapped toggle needs that pull actively undone
+    # where a button merely needs it left off -- and a test that only drove the
+    # buttons passed either way.
+    leika_server.gui.add_toggle(("Start the capture", "Stop the capture"), label="Palette")
+    runs = leika_page.locator("[data-leika-group-run]")
+    expect(runs).to_have_count(2, timeout=5_000)
+
+    # A corner is measured, so it arrives a render after the run is laid out --
+    # and the controls transition, so it eases in rather than snapping. Poll for
+    # the settled shape rather than catching the radius mid-flight.
+    leika_page.wait_for_function(
+        """() => {
+          const runs = [...document.querySelectorAll("[data-leika-group-run]")];
+          if (runs.length !== 2) return false;
+          return runs.every((run) => {
+            const items = [...run.querySelectorAll("[data-leika-run-item]")];
+            if (items.length !== 2) return false;
+            const radii = items.map((el) => {
+              const style = getComputedStyle(el);
+              return [
+                style.borderTopLeftRadius,
+                style.borderTopRightRadius,
+                style.borderBottomRightRadius,
+                style.borderBottomLeftRadius,
+              ].join(",");
+            });
+            return (
+              radii[0] === "4px,4px,0px,0px" && radii[1] === "0px,0px,4px,4px"
+            );
+          });
+        }""",
+        timeout=5_000,
+    )
+
+    def measure(run: Locator) -> dict:
+        return run.evaluate(
+            """(run) => {
+          const box = run.getBoundingClientRect();
+          const items = [...run.querySelectorAll("[data-leika-run-item]")];
+          return {
+            clips: getComputedStyle(run).overflowX,
+            runRadius: getComputedStyle(run).borderTopLeftRadius,
+            tops: items.map((el) =>
+              Math.round(el.getBoundingClientRect().top - box.top),
+            ),
+            lefts: items.map((el) =>
+              +(el.getBoundingClientRect().left - box.left).toFixed(2),
+            ),
+            rights: items.map((el) =>
+              +(el.getBoundingClientRect().right - box.left).toFixed(2),
+            ),
+            borders: items.map((el) => getComputedStyle(el).borderTopWidth),
+          };
+        }"""
+        )
+
+    for index in range(runs.count()):
+        measured = measure(runs.nth(index))
+        # Both controls are too wide to share a line, so the run is two deep --
+        # which is what makes the corners a statement about lines rather than
+        # about the first and last control.
+        assert len(set(measured["tops"])) == 2, measured
+        # Nothing is clipped, and the box draws no corner of its own: every
+        # control keeps its own outline the whole way round, hover and all.
+        assert measured["clips"] == "visible", measured
+        assert measured["runRadius"] == "0px", measured
+        assert measured["borders"] == ["1px", "1px"], measured
+
+        # Each line opens on the run's own left edge. A control shares an edge
+        # with the one BESIDE it by pulling a border's width left, and a control
+        # that opens a line has nothing beside it -- pulled anyway, it hung a
+        # pixel out past the line above, which is the sort of thing a reader
+        # sees before they can say what it is.
+        assert measured["lefts"] == [0.0, 0.0], measured
+        # And every line fills the run, which is what makes the block a
+        # rectangle and its four corners the run's own.
+        assert len(set(measured["rights"])) == 1, measured
+
+    assert page_errors == []

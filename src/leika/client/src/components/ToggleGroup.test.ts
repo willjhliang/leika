@@ -45,6 +45,14 @@ function renderToggleGroup({
   );
 }
 
+/** The class list of each toggle, so a rule meant for the toggles is not
+ * confused with one the group itself merely names in a variant. */
+function toggleClasses(markup: string): string[] {
+  return [...markup.matchAll(/<button[^>]*\sclass="([^"]*)"/g)].map(
+    (match) => match[1],
+  );
+}
+
 describe("ToggleGroupComponent", () => {
   it("marks exactly the options that are on", () => {
     const markup = renderToggleGroup({ value: ["Bold", "Under"] });
@@ -69,17 +77,30 @@ describe("ToggleGroupComponent", () => {
     );
   });
 
-  it("rounds the ends of each run and parts one run from the next", () => {
-    // Joined: one run, so only its two ends are rounded.
+  it("rounds the toggles themselves rather than clipping them to the run", () => {
+    // Same reason as the buttons: clipping would cut the outline off at the
+    // corner, and the outline is what the pointer changes.
     const joined = renderToggleGroup({ merge: [true, true] });
-    expect(joined.match(/rounded-l-lg!/g)).toHaveLength(1);
-    expect(joined.match(/rounded-r-lg!/g)).toHaveLength(1);
-    expect(joined).not.toContain("ml-1!");
+    expect(joined.match(/data-leika-group-run/g)).toHaveLength(1);
+    expect(joined).not.toContain("overflow-hidden");
+    const [first, , last] = toggleClasses(joined);
+    expect(first).toContain("rounded-tl-lg!");
+    expect(first).toContain("rounded-tr-none!");
+    expect(last).toContain("rounded-br-lg!");
+    expect(last).toContain("rounded-bl-none!");
+    for (const toggle of toggleClasses(joined))
+      expect(toggle).toContain("-mt-px");
+    expect(joined.match(/data-leika-joined/g)).toHaveLength(2);
 
-    // Parted: every toggle is its own run, and each gap gets the row's step.
+    // Parted: every toggle is its own block, so each is rounded all round and
+    // none of them shares an edge.
     const parted = renderToggleGroup({ merge: [false, false] });
-    expect(parted.match(/rounded-l-lg!/g)).toHaveLength(3);
-    expect(parted.match(/ml-1!/g)).toHaveLength(2);
+    expect(parted.match(/data-leika-group-run/g)).toHaveLength(3);
+    for (const toggle of toggleClasses(parted)) {
+      expect(toggle).toContain("rounded-tl-lg!");
+      expect(toggle).toContain("rounded-br-lg!");
+    }
+    expect(parted).not.toContain("data-leika-joined");
   });
 
   it("colors toggles one at a time when the row asks for it", () => {
