@@ -590,11 +590,11 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
               : {}),
           }}
         >
-          {/* For a multi-group stack, a window header drags the whole window; each
-        group also keeps its own grip bar (which tears it out). A single group
-        needs no header -- its own grip bar moves the window. The header's
-        minimize-all button collapses every group at once (and restores the
-        previous min/max mix on expand). */}
+          {/* For a multi-group stack, a window header drags the whole window;
+        each group's tab strip is its own title bar (dragging it tears the
+        group out). A single group needs no header -- its strip moves the
+        window. The header's minimize-all button collapses every group at once
+        (and restores the previous min/max mix on expand). */}
           {multi && (
             <StackHandleBar
               attrs={{ "data-floating-handle": win.id }}

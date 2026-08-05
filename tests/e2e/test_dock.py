@@ -133,9 +133,9 @@ def tear_out_tab(page: Page, name: str, park: Point = CANVAS) -> Locator:
     return page.locator(f'[data-floating-window="{new_ids.pop()}"]')
 
 
-def grip_of(window: Locator) -> Locator:
-    """A floating window's own grip bar (the drag handle of its single group)."""
-    return window.locator("[data-dock-griphandle]").first
+def handle_of(window: Locator) -> Locator:
+    """A floating window's title bar: its single group's tab strip."""
+    return window.locator("[data-dock-strip]").first
 
 
 # --- docking to an edge -----------------------------------------------------
@@ -326,7 +326,7 @@ def test_tab_tears_out_into_a_window_and_merges_back_into_the_area(
 
     # Dropping it back over the area's tab strip re-inserts it as a tab.
     strip = gui_area(page).locator("[data-dock-strip]")
-    drag(page, center(grip_of(torn)), CANVAS, center(strip))
+    drag(page, center(handle_of(torn)), CANVAS, center(strip))
 
     expect(floating_windows(page)).to_have_count(1)
     expect(gui_area(page).locator("[data-dock-tab]")).to_have_count(2)
@@ -357,8 +357,16 @@ def test_two_floating_windows_snap_into_one_stack(dock_page: Page, page_errors: 
     beta = tear_out_tab(page, "Beta", PARK_UPPER)
     expect(floating_windows(page)).to_have_count(3)  # + the control panel
 
-    # Dropping over a window's grip bar snaps in above that group.
-    drag(page, center(grip_of(beta)), CANVAS, center(grip_of(alpha)))
+    # Dropping in the band above a window's tabs -- the strip's own top
+    # padding, where the grip bar used to be -- snaps in above that group.
+    # (Dropping ON the tabs would merge in as a tab instead.)
+    alpha_strip = bounds(handle_of(alpha))
+    drag(
+        page,
+        center(handle_of(beta)),
+        CANVAS,
+        (alpha_strip["x"] + alpha_strip["width"] / 2, alpha_strip["y"] + 5.0),
+    )
 
     expect(floating_windows(page)).to_have_count(2)
     stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
@@ -383,7 +391,7 @@ def test_dropping_below_a_docked_panel_splits_the_region(
         leaf["x"] + leaf["width"] / 2,
         leaf["y"] + leaf["height"] - 25.0,
     )
-    page.mouse.move(*center(grip_of(torn)))
+    page.mouse.move(*center(handle_of(torn)))
     page.mouse.down()
     try:
         page.mouse.move(*CANVAS, steps=6)
@@ -423,7 +431,7 @@ def split_control_panel_below(page: Page) -> None:
     leaf = bounds(page.locator("[data-dock-leaf]"))
     drag(
         page,
-        center(grip_of(torn)),
+        center(handle_of(torn)),
         CANVAS,
         (leaf["x"] + leaf["width"] / 2, leaf["y"] + leaf["height"] - 25.0),
     )
@@ -456,7 +464,13 @@ def test_minimize_all_collapses_a_floating_stack_and_restores_it(
     page = dock_page
     alpha = tear_out_tab(page, "Alpha", PARK_LOWER)
     beta = tear_out_tab(page, "Beta", PARK_UPPER)
-    drag(page, center(grip_of(beta)), CANVAS, center(grip_of(alpha)))
+    alpha_strip = bounds(handle_of(alpha))
+    drag(
+        page,
+        center(handle_of(beta)),
+        CANVAS,
+        (alpha_strip["x"] + alpha_strip["width"] / 2, alpha_strip["y"] + 5.0),
+    )
     stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
     expect(stacked.locator("[data-dock-group]")).to_have_count(2)
     expanded_height = bounds(stacked)["height"]
@@ -560,22 +574,45 @@ def test_the_handle_reaches_the_edges_of_its_card(dock_page: Page) -> None:
     expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
 
 
-def test_a_grip_bar_reaches_the_top_of_its_window(dock_page: Page) -> None:
-    """The same band above a tabbed group's grip bar, which drags in place of a
-    header. Its own height is unchanged by taking the band on: the pill stays
-    centred in the bar rather than in the bar plus the padding above it."""
+def test_the_tab_strip_is_the_torn_out_windows_title_bar(dock_page: Page) -> None:
+    """A torn-out window has no separate grip bar: the strip is the title bar.
+
+    It sits flush against the top of the card and takes the card's inset as its
+    own padding, so the band above the tabs drags (and clicks) as part of it --
+    the same treatment the unmergeable header gets. And there is no minimize
+    button, because folding is what clicking the tab does.
+    """
     page = dock_page
     window = tear_out_tab(page, "Alpha", PARK_UPPER)
     card = bounds(window)
-    grip = bounds(grip_of(window))
-    assert grip["y"] <= card["y"] + 0.5, (grip, card)
-    assert grip["height"] == pytest.approx(32.0 + 16.0, abs=0.5), grip
-    assert _sits_on(
-        page, (card["x"] + card["width"] / 2, card["y"] + 8.0), "[data-dock-griphandle]"
-    )
+    strip = bounds(handle_of(window))
+    assert strip["y"] <= card["y"] + 0.5, (strip, card)
+    assert _sits_on(page, (card["x"] + card["width"] / 2, card["y"] + 8.0), "[data-dock-strip]")
+    expect(window.locator("[data-dock-griphandle]")).to_have_count(0)
+    expect(window.locator("[data-dock-minimize]")).to_have_count(0)
 
-    pill = bounds(grip_of(window).locator('[data-slot="separator"]'))
-    assert pill["y"] + pill["height"] / 2 == pytest.approx(card["y"] + 16.0 + 16.0, abs=0.5)
+
+def test_clicking_the_active_tab_folds_a_torn_out_window(
+    dock_page: Page, page_errors: list[str]
+) -> None:
+    """The strip answers clicks the way the control panel's header does: the
+    active tab is the group's name, so clicking it folds the body away and a
+    second click brings it back."""
+    page = dock_page
+    window = tear_out_tab(page, "Alpha", PARK_LOWER)
+    expanded_height = bounds(window)["height"]
+
+    tab = window.get_by_role("tab", name="Alpha", exact=True)
+    tab.click()
+    expect(window.locator("[data-dock-collapsed='true']")).to_have_count(1, timeout=5_000)
+    assert bounds(window)["height"] < expanded_height
+    expect(page.get_by_text("Alpha body", exact=True)).not_to_be_visible()
+
+    tab.click()
+    expect(window.locator("[data-dock-collapsed='true']")).to_have_count(0, timeout=5_000)
+    expect(page.get_by_text("Alpha body", exact=True)).to_be_visible()
+    assert bounds(window)["height"] == pytest.approx(expanded_height, abs=2.0)
+    assert page_errors == []
 
 
 def _draws_a_shadow(box_shadow: str) -> bool:

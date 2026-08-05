@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { cn } from "@/lib/utils";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** One tab, however it is being drawn: a GUI tab group's own tab, or a panel
@@ -50,16 +51,27 @@ export type TabStripDrag = {
 export function TabStrip({
   tabs,
   drag,
+  className,
 }: {
   tabs: TabStripItem[];
   /** Left out, the tabs are fixed in place; given, they can be dragged. */
   drag?: TabStripDrag;
+  /** Extra layout the host hangs on the strip -- a card inset it has taken
+   * over, say. Look-and-feel stays here. */
+  className?: string;
 }) {
   return (
     <TabsList
       ref={drag?.stripRef}
       variant="line"
-      className="h-auto! w-full min-w-0 flex-wrap justify-start"
+      className={cn(
+        "h-auto! w-full min-w-0 flex-wrap justify-start",
+        // Where the strip is a group's handle, it reads as one: the grab
+        // cursor on its whitespace, with each tab keeping its own pointer.
+        drag !== undefined &&
+          "cursor-grab touch-none select-none [&_[data-leika-tab]]:cursor-pointer",
+        className,
+      )}
       data-leika-tabs-list
       data-dock-strip={drag?.groupId}
       onPointerDown={
@@ -81,7 +93,9 @@ export function TabStrip({
             key={tab.id}
             value={tab.id}
             title={tab.label}
-            className="max-w-56 min-w-fit"
+            // A lone tab is the group's whole title and takes the whole row;
+            // the cap exists so that in a CROWD no one tab hogs the strip.
+            className={cn("min-w-fit", tabs.length > 1 && "max-w-56")}
             data-leika-tab
             data-dock-tab={drag === undefined ? undefined : tab.id}
             onPointerDown={

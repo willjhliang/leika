@@ -476,20 +476,28 @@ export function hitTest(
     return mergeResult();
   }
 
-  // 3a. Above the tab strip -> dock above (docked) / snap above (floating).
+  // 3a. Above the TABS -> dock above (docked) / snap above (floating).
   // For docked panels this is "span all above" territory at the very top (the
   // region-edge zone, checked earlier, usually wins for a multi-column row);
   // per-panel "above THIS one" lives in the content top band (3c).
   //
-  // An UNMERGEABLE group has no grip bar; its full-width header sits flush at
-  // the panel top, so there is nothing "above the strip" -- the header itself
-  // plays the grip bar's role and IS the above/snap-above zone. (It can't be a
+  // "Above the tabs", not "above the strip": the strip sits flush at the top
+  // of its card and wears the card's inset as its own padding, so the band a
+  // grip bar used to offer this zone from is now the strip's own top band --
+  // above the tab row but inside the strip rect.
+  //
+  // An UNMERGEABLE group has no tab strip at all; its full-width header sits
+  // flush at the panel top and IS the above/snap-above zone. (It can't be a
   // tab-insert target anyway, and without this a lone unmergeable docked panel
   // offers no way to dock above at all: the region's top band is suppressed as
   // redundant for single-leaf regions.)
+  const tabsTop =
+    g.tabs.length > 0
+      ? Math.min(...g.tabs.map((tab) => tab.rect.top))
+      : (strip?.top ?? r.top);
   if (
     strip !== null &&
-    (clientY < strip.top || (g.unmergeable === true && clientY <= strip.bottom))
+    (clientY < tabsTop || (g.unmergeable === true && clientY <= strip.bottom))
   ) {
     if (g.ctx.kind === "docked") {
       return {

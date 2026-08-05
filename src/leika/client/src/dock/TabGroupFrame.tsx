@@ -1,7 +1,6 @@
 // Renders one tab group: stock shadcn tab chrome plus mounted panel bodies.
 // Docking, dragging, resizing, and FLIP animation remain model concerns.
 
-import { MinusIcon, PlusIcon } from "lucide-react";
 import React from "react";
 
 import { CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -15,9 +14,7 @@ import {
   CARD_INSET_BOTTOM,
   CARD_INSET_BOTTOM_OVERLAP,
   CARD_INSET_TOP,
-  CARD_INSET_TOP_BAR,
 } from "./cardInset";
-import { GripPill, HandleIconButton } from "./handles";
 import { toggleGroupVisibility, useDock } from "./DockContext";
 import { DOUBLE_CLICK_MS, PanelSpec, TAB_GLIDE_MS, TabGroup } from "./types";
 
@@ -78,53 +75,6 @@ const PanelBody = React.memo(function PanelBody({
     </ScrollArea>
   );
 });
-
-function GripBar({
-  collapsed,
-  onToggle,
-  startDrag,
-  insetTop,
-}: {
-  collapsed: boolean;
-  onToggle: () => void;
-  startDrag: (
-    event: React.PointerEvent<HTMLDivElement>,
-    opts?: { onClick?: () => void; expandOnDrag?: boolean },
-  ) => void;
-  insetTop: boolean;
-}) {
-  return (
-    <CardHeader
-      data-dock-griphandle
-      className={`relative flex min-h-8 shrink-0 cursor-grab flex-row items-center justify-center touch-none select-none${
-        insetTop ? ` ${CARD_INSET_TOP_BAR}` : ""
-      }`}
-      onPointerDown={(event) => {
-        const fromButton =
-          (event.target as HTMLElement).closest("[data-dock-minimize]") !==
-          null;
-        startDrag(
-          event,
-          fromButton
-            ? { onClick: onToggle, expandOnDrag: collapsed }
-            : undefined,
-        );
-      }}
-    >
-      <GripPill />
-      <HandleIconButton
-        attrs={{ "data-dock-minimize": "true" }}
-        label={collapsed ? "Expand panel" : "Minimize panel"}
-        title={collapsed ? "Expand" : "Minimize"}
-        expanded={!collapsed}
-        onActivate={onToggle}
-        dragThrough
-      >
-        {collapsed ? <PlusIcon /> : <MinusIcon />}
-      </HandleIconButton>
-    </CardHeader>
-  );
-}
 
 export function TabGroupFrame({
   group,
@@ -310,27 +260,34 @@ export function TabGroupFrame({
       data-dock-area={dockAreaId}
       data-dock-group={group.id}
       data-dock-collapsed={collapsed ? "true" : undefined}
-      // With a grip bar, the top inset goes to the bar (a handle, and the thing
-      // the band reads as belonging to). Without one there is nothing to hand
-      // it to, so the frame keeps it as plain padding.
+      // The top inset goes to the strip when the strip is the group's handle
+      // (a press in the band above the tabs is a press on the title bar);
+      // otherwise there is nothing to hand it to and the frame keeps it as
+      // plain padding. Folded, the strip is also the LAST thing in the card,
+      // so it covers the bottom inset the way the unmergeable header does --
+      // otherwise the card would end on a band of nothing below the title.
       className={`${rootClassName} gap-0${
         insetTop && !stripDragsGroup ? ` ${CARD_INSET_TOP}` : ""
-      }${insetBottom ? ` ${CARD_INSET_BOTTOM}` : ""}`}
+      }${
+        insetBottom
+          ? ` ${collapsed && !fill ? CARD_INSET_BOTTOM_OVERLAP : CARD_INSET_BOTTOM}`
+          : ""
+      }`}
       style={rootStyle}
     >
-      {stripDragsGroup && (
-        <GripBar
-          collapsed={collapsed}
-          insetTop={insetTop}
-          onToggle={handleClick}
-          startDrag={(event, options) =>
-            dock.startGroupDrag(event, group.id, options)
-          }
-        />
-      )}
       {/* The same strip a GUI tab group draws for itself when there is no dock
-          to drag it into. What the dock adds is the dragging, not the look. */}
+          to drag it into. Where the group stands alone -- a floating window, a
+          docked column -- the strip is also the group's whole title bar, the
+          way the control panel's header is: drag it to move the group, click
+          the active tab (or the strip's whitespace) to fold the group away and
+          back. There used to be a separate grip bar above the strip carrying a
+          pill and a minimize button, which was a second title bar saying
+          nothing the strip cannot say itself. */}
       <TabStrip
+        // Half the card's inset, not all of it: the strip is a title BAR, and
+        // a full card-spacing above a short tab row read as dead space. The
+        // band is still real -- it drags the group and takes snap-above drops.
+        className={insetTop && stripDragsGroup ? "pt-2" : undefined}
         tabs={group.panelIds.map((panelId) => {
           const panel = panels[panelId];
           return {
@@ -347,10 +304,32 @@ export function TabGroupFrame({
           draggingId: dock.draggingTabId,
           stripRef,
           onStripPointerDown: (event) => {
-            if (stripDragsGroup) dock.startGroupDrag(event, group.id);
+            if (stripDragsGroup)
+              dock.startGroupDrag(event, group.id, { onClick: handleClick });
           },
           onTabPointerDown: (event, panelId) =>
-            dock.startTabDrag(event, group.id, panelId),
+            dock.startTabDrag(
+              event,
+              group.id,
+              panelId,
+              // As a title bar, the strip answers clicks the way a title bar
+              // does: the ACTIVE tab is the group's name, so clicking it folds
+              // the group away and back. An inactive tab still activates --
+              // and expands a folded group, since switching tabs on a body
+              // that stays hidden would be a change with nothing to show.
+              stripDragsGroup
+                ? {
+                    onClick: () => {
+                      if (panelId === group.activeId) {
+                        handleClick();
+                        return;
+                      }
+                      dock.activateTab(group.id, panelId);
+                      if (collapsed) dock.toggleCollapsed(group.id);
+                    },
+                  }
+                : undefined,
+            ),
         }}
       />
       {group.panelIds.map((panelId) => {
@@ -360,10 +339,12 @@ export function TabGroupFrame({
             key={panelId}
             value={panelId}
             keepMounted
+            // Folded, the gap between strip and body would hang below the
+            // title as whitespace with no body to be separated from.
             className={
               fill
                 ? "mt-2 flex min-h-0 flex-1 basis-0 flex-col overflow-hidden"
-                : "mt-2 min-h-0"
+                : cn("min-h-0", !collapsed && "mt-2")
             }
           >
             {fill ? (

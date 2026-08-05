@@ -61,12 +61,15 @@ export interface DockContextValue {
     edge: DockEdge,
     columnNodeId: NodeId,
   ) => void;
-  /** Begin a press on a tab: a click activates it, a drag tears the panel out
-   * into its own floating window. */
+  /** Begin a press on a tab: a click activates it (or does whatever
+   * `opts.onClick` says instead -- the strip uses this to make a click on the
+   * ACTIVE tab collapse its group), a drag tears the panel out into its own
+   * floating window. */
   startTabDrag: (
     event: React.PointerEvent<HTMLElement>,
     groupId: GroupId,
     panelId: PanelId,
+    opts?: { onClick?: () => void },
   ) => void;
   /** Drag the entire floating window (its whole snap-stack) by its header. */
   startWindowDrag: (

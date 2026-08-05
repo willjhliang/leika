@@ -827,6 +827,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
     event,
     groupId,
     panelId,
+    opts,
   ) => {
     const stripEl = (event.target as HTMLElement).closest<HTMLElement>(
       "[data-dock-strip]",
@@ -1074,7 +1075,8 @@ export function createDragController(deps: DragControllerDeps): DragController {
         activeCleanup.current = cleanup;
         raf = requestAnimationFrame(apply);
       },
-      () => applyOp(ops.setActiveTab(layoutRef.current, groupId, panelId)),
+      opts?.onClick ??
+        (() => applyOp(ops.setActiveTab(layoutRef.current, groupId, panelId))),
     );
   };
 
