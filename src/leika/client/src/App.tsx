@@ -16,7 +16,6 @@ import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
 import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
-import { Titlebar } from "./Titlebar";
 import {
   ViewerContext,
   ViewerContextContents,
@@ -134,7 +133,6 @@ function AppLayout({
 
   return (
     <div className="relative flex size-full flex-col">
-      <Titlebar />
       <div className="relative flex w-full flex-1 overflow-hidden">
         <NotificationsPanel
           dockedLeftInsetPx={

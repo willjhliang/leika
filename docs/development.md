@@ -128,7 +128,7 @@ python -m playwright install chromium
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
 multi-slider cancellation, the color picker, checklists, markdown, download and
-preview buttons, modal dismissal, notifications, the titlebar, icon buttons,
+preview buttons, modal dismissal, notifications, icon buttons,
 settings, the connection pane, light/dark theming, multi-client updates, the
 lifecycle of every pane type, resizing and persistence, and responsive
 floating/mobile control panels.

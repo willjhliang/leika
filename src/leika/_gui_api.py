@@ -29,7 +29,7 @@ from typing_extensions import (
     assert_never,
 )
 
-from . import _messages, theme
+from . import _messages
 from ._gui_handles import (
     PREVIEW_MAX_BYTES,
     CommandEvent,
@@ -773,14 +773,12 @@ class GuiApi(GuiContainer):
     def configure_theme(
         self,
         *,
-        titlebar_content: theme.TitlebarConfig | None = None,
         control_layout: Literal["floating", "collapsible", "fixed"] = "floating",
         dark_mode: bool | Literal["auto"] = "auto",
     ) -> None:
         """Configures the visual appearance of the Leika front-end.
 
         Args:
-            titlebar_content: Optional configuration for the title bar.
             control_layout: The layout of control elements, options are "floating",
                             "collapsible", or "fixed".
             dark_mode: ``True`` or ``False`` to pin the scheme for every client.
@@ -796,13 +794,6 @@ class GuiApi(GuiContainer):
 
         self._websock_interface.queue_message(
             _messages.ThemeConfigurationMessage(
-                # Icon names resolve to SVG here, so the client never needs to
-                # know an icon name.
-                titlebar_content=(
-                    None
-                    if titlebar_content is None
-                    else theme._resolve_titlebar_icons(titlebar_content)
-                ),
                 control_layout=control_layout,
                 dark_mode=dark_mode,
             ),

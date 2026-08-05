@@ -56,10 +56,10 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
 
-  --shadow-color: oklch(0 0 0 / 0.16);
-  --shadow-sm: 0 0 4px var(--shadow-color);
-  --shadow-md: 0 0 8px var(--shadow-color);
-  --shadow-lg: 0 0 16px var(--shadow-color);
+  /* Tailwind's stock `shadow-md`, spelled out: this sheet is plain CSS and
+   * cannot reach the scale the client gets from Tailwind itself. */
+  --shadow-md:
+    0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
 
   /* Not client tokens: the keyword and string colors of the pygments pair
    * the code blocks use (a11y-light here, native in dark). API signatures
@@ -360,8 +360,8 @@ body .toc-tree a.reference:hover {
 
 /* -------------------------------------------------------- mobile header */
 
-/* Furo casts a directional drop shadow once scrolled; the house shadow is
- * an even glow, and floating chrome keeps its hairline. */
+/* Furo's own scrolled shadow, restated on the house scale, with the hairline
+ * floating chrome keeps. */
 body .mobile-header.scrolled {
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-md);
@@ -574,9 +574,8 @@ body .related-pages a:hover svg.furo-related-icon > use {
 
 /* -------------------------------------------------------- floating chrome */
 
-/* Anything floating gets the house treatment: hairline border and the even
- * glow the client puts on floating windows, instead of Furo's directional
- * drop shadows. */
+/* Anything floating gets the house treatment: hairline border and the same
+ * shadow the client puts on floating windows, in place of Furo's own. */
 body .back-to-top {
   border: 1px solid var(--border);
   border-radius: 9999px;

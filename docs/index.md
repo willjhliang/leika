@@ -29,5 +29,4 @@ api/panes
 api/gui
 api/gui_handles
 api/icons
-api/theme
 ```

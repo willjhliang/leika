@@ -667,17 +667,6 @@ export interface WorkspaceConfigurationMessage {
  */
 export interface ThemeConfigurationMessage {
   type: "ThemeConfigurationMessage";
-  titlebar_content: {
-    buttons:
-      | { text: string | null; icon_html: string | null; href: string | null }[]
-      | null;
-    image: {
-      image_url_light: string;
-      image_url_dark: string | null;
-      image_alt: string;
-      href: string | null;
-    } | null;
-  } | null;
   control_layout: "floating" | "collapsible" | "fixed";
   dark_mode: boolean | "auto";
 }
