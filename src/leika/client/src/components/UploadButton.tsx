@@ -5,7 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { ViewerContext, ViewerContextContents } from "../ViewerContext";
 import { GuiUploadButtonMessage } from "../WebsocketMessages";
 import { randomUuid } from "../utils/randomUuid";
-import { GuiButtonRow, IconHtml } from "./common";
+import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 
 export default function UploadButtonComponent({
   uuid,
@@ -41,7 +41,7 @@ export default function UploadButtonComponent({
       disabled={disabled || isUploading}
     >
       {iconHtml === null ? null : <IconHtml html={iconHtml} />}
-      {text}
+      <ButtonLabel>{text}</ButtonLabel>
     </Button>
   );
   return (

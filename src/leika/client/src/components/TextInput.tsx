@@ -62,7 +62,9 @@ export default function TextInputComponent({
                   // source's newlines too would blank-line between each.
                   !markdown && "whitespace-pre-wrap",
                 )
-              : "flex h-6 items-center truncate",
+              : // The value inside carries the truncation; this box is here to
+                // hold it on one 24px line, centred against the row's label.
+                "flex h-6 items-center",
           )}
           style={
             multiline && rows !== null
@@ -82,8 +84,14 @@ export default function TextInputComponent({
             >
               <MarkdownRenderer>{_source}</MarkdownRenderer>
             </ErrorBoundary>
-          ) : (
+          ) : multiline ? (
             value
+          ) : (
+            // The one-line box centres its text by being a flex box, and
+            // `text-overflow` does nothing on one -- so the ellipsis this row
+            // promises has to be asked for on a box inside it. See
+            // `ButtonLabel`, which is the same fix on a button's face.
+            <span className="min-w-0 truncate">{value}</span>
           )}
         </div>
       </GuiInputRow>

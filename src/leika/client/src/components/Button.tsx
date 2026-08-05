@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
-import { GuiButtonRow, IconHtml } from "./common";
+import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 
 export default function ButtonComponent({
   uuid,
@@ -97,7 +97,7 @@ export default function ButtonComponent({
       disabled={disabled}
     >
       {iconHtml === null ? null : <IconHtml html={iconHtml} />}
-      {text}
+      <ButtonLabel>{text}</ButtonLabel>
     </Button>
   );
   return (

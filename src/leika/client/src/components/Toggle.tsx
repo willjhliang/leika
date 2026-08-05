@@ -4,7 +4,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { GuiToggleMessage } from "../WebsocketMessages";
-import { GuiButtonRow, IconHtml } from "./common";
+import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 import { TOGGLE_CLASSES } from "./toggleStyles";
 
 /** One toggle: a button that stays pressed, laid out exactly like a button. */
@@ -25,7 +25,7 @@ export default function ToggleComponent({
       data-leika-button-color={color}
     >
       {iconHtml === null ? null : <IconHtml html={iconHtml} />}
-      {text}
+      <ButtonLabel>{text}</ButtonLabel>
     </Toggle>
   );
   return (

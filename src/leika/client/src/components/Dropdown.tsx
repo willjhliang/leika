@@ -53,7 +53,13 @@ function PlainDropdown({
       disabled={disabled}
     >
       <SelectTrigger id={uuid} className="w-full" disabled={disabled}>
-        <SelectValue />
+        {/* The trigger already asks for a clamped line, but it makes the value
+            a flex box in the same breath, and neither `line-clamp` nor
+            `text-overflow` survives that -- a long option was cut off mid-word
+            against the chevron. Forced back to a block, and marked important
+            because the rule losing here is the trigger's own child selector,
+            which outranks a class on the child. */}
+        <SelectValue className="block! min-w-0 truncate" />
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>

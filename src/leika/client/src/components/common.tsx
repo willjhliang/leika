@@ -100,7 +100,7 @@ export function GuiInputRow({
       <FieldLabel
         htmlFor={associateLabel ? uuid : undefined}
         className={cn(
-          "w-full min-w-0 truncate",
+          "w-full min-w-0",
           // Top-aligned, the label still centres against the row it names --
           // that row being the panel's own 24px.
           alignLabelToFirstRow && "flex min-h-6 items-center",
@@ -108,7 +108,13 @@ export function GuiInputRow({
         )}
         title={label}
       >
-        {label}
+        {/* The ellipsis has to be asked for on a box of its own. `FieldLabel`
+            is a flex container, and `text-overflow` does nothing on one: the
+            words are laid out in an anonymous item it cannot style, so a long
+            label was cut through the middle of a letter with no sign that
+            anything was missing. As a flex ITEM this span is blockified, which
+            is the box `truncate` needs. */}
+        <span className="min-w-0 truncate">{label}</span>
       </FieldLabel>
       {hint === undefined || hint === null ? (
         content
@@ -119,6 +125,17 @@ export function GuiInputRow({
       )}
     </Field>
   );
+}
+
+/** The words on a button's face, in a box that can give way.
+ *
+ * A button is `inline-flex` and `whitespace-nowrap`, so bare text inside one
+ * is an anonymous flex item: it cannot be shrunk and it cannot be styled, and
+ * a label longer than the button paints straight out of both sides of it and
+ * over the panel. Wrapped, the label is an item the button can shrink, and it
+ * ends in an ellipsis at the border instead of ignoring it. */
+export function ButtonLabel({ children }: { children: React.ReactNode }) {
+  return <span className="min-w-0 truncate">{children}</span>;
 }
 
 /** Server-rendered icon markup, sized to sit inline before a control's text. */
