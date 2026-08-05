@@ -728,3 +728,54 @@ def test_a_keyboard_dismissal_leaves_the_panel_where_focus_is(dock_page: Page) -
     # Once focus leaves too, there is nothing left holding it.
     page.evaluate("() => document.activeElement?.blur()")
     expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
+
+
+def test_a_tab_strip_grows_to_hold_the_tabs_that_wrap(
+    leika_server: leika.Server, page: Page, page_errors: list[str]
+) -> None:
+    """A strip of panel tabs wraps, and a wrapped strip is taller than one line.
+
+    The stock tabs list sets a one-line height from the tabs root above it,
+    which outranks a plain class on the strip -- so the strip stayed 32px tall
+    while holding two lines of tabs. It does not clip, so the second line was
+    painted over whatever the panel had below it, and the tab itself could not
+    be read.
+    """
+    del page_errors  # Registers the pageerror listener; asserted on below.
+    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    tabs = leika_server.gui.add_tab_group()
+    labels = ("Overview dashboard", "Experiment controls", "Detailed diagnostics")
+    for label in labels:
+        with tabs.add_tab(label):
+            leika_server.gui.add_text(None, f"The {label} tab.", editable=False, markdown=True)
+
+    page.goto(leika_server.url)
+    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+    page.wait_for_function(
+        '() => !document.body.innerText.includes("Connecting...")', timeout=15_000
+    )
+    strip = page.locator("[data-dock-strip]").filter(has_text=labels[0]).last
+    expect(strip).to_be_visible(timeout=5_000)
+
+    metrics = strip.evaluate(
+        """(element) => {
+          const tabs = [...element.querySelectorAll('[role=tab]')];
+          const box = element.getBoundingClientRect();
+          return {
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            lines: new Set(tabs.map((tab) => Math.round(tab.getBoundingClientRect().top))).size,
+            below: Math.max(
+              0,
+              ...tabs.map((tab) => tab.getBoundingClientRect().bottom - box.bottom),
+            ),
+          };
+        }"""
+    )
+
+    # These labels are too wide for one line of a panel: the point of the test
+    # is the strip that holds more than one.
+    assert metrics["lines"] > 1, metrics
+    # Nothing is left outside the strip, which would be painted over the panel.
+    assert metrics["below"] <= 1.0, metrics
+    assert metrics["scrollHeight"] - metrics["clientHeight"] <= 1, metrics

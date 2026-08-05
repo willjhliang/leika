@@ -336,7 +336,13 @@ export function TabGroupFrame({
         ref={stripRef}
         variant="line"
         data-dock-strip={group.id}
-        className="h-auto w-full flex-wrap justify-start"
+        // A strip of panel tabs wraps, so its height is whatever its tabs need
+        // -- and `h-auto` has to be marked important to say so. The stock list
+        // sets a one-line height from the tabs root above it, which outranks a
+        // plain class here: the strip stayed 32px tall while holding two lines
+        // of tabs, and since it does not clip, the second line was painted over
+        // whatever the panel had below it.
+        className="h-auto! w-full flex-wrap justify-start"
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest("[data-dock-tab]")) {
             return;
