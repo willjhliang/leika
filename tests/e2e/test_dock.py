@@ -120,13 +120,19 @@ def dock_control_panel_left(page: Page) -> None:
 
 
 def tear_out_tab(page: Page, name: str, park: Point = CANVAS) -> Locator:
-    """Drag a GUI tab out of its strip into its own floating window at `park`."""
+    """Drag a GUI tab out of its strip into its own floating window at `park`.
+
+    By the tab's GRIP -- the handle that appears on hover, as a list entry's
+    does. The tab's face belongs to the strip's surface and drags the whole
+    container instead."""
     before = set(window_ids(page))
     tab = page.get_by_role("tab", name=name, exact=True)
-    tab_box = bounds(tab)
-    start = center(tab)
+    tab.hover()
+    grip = tab.locator("[data-leika-tab-drag-handle]")
+    expect(grip).to_be_visible()
+    start = center(grip)
     # Straight down, past the strip's tear threshold, then out to `park`.
-    drag(page, start, (start[0], tab_box["y"] + tab_box["height"] + 60.0), park)
+    drag(page, start, (start[0], start[1] + 90.0), park)
     expect(floating_windows(page)).to_have_count(len(before) + 1, timeout=5_000)
     new_ids = set(window_ids(page)) - before
     assert len(new_ids) == 1, new_ids
@@ -339,8 +345,11 @@ def test_tabs_reorder_within_their_strip(dock_page: Page, page_errors: list[str]
     expect(tabs).to_have_text(["Alpha", "Beta"])
 
     beta = bounds(page.get_by_role("tab", name="Beta", exact=True))
-    start = center(page.get_by_role("tab", name="Alpha", exact=True))
-    # Stay inside the strip vertically -- leaving it would tear the tab out.
+    alpha = page.get_by_role("tab", name="Alpha", exact=True)
+    alpha.hover()
+    # By the tab's grip: the face would drag the whole panel. Stay inside the
+    # strip vertically -- leaving it would tear the tab out.
+    start = center(alpha.locator("[data-leika-tab-drag-handle]"))
     drag(page, start, (beta["x"] + beta["width"] - 2.0, start[1]))
 
     expect(tabs).to_have_text(["Beta", "Alpha"])
@@ -357,22 +366,19 @@ def test_two_floating_windows_snap_into_one_stack(dock_page: Page, page_errors: 
     beta = tear_out_tab(page, "Beta", PARK_UPPER)
     expect(floating_windows(page)).to_have_count(3)  # + the control panel
 
-    # Dropping in the band above a window's tabs -- the strip's own top
-    # padding, where the grip bar used to be -- snaps in above that group.
-    # (Dropping ON the tabs would merge in as a tab instead.)
-    alpha_strip = bounds(handle_of(alpha))
+    # Dropping on the upper half of a window's BODY snaps in above that
+    # group. (Dropping ON the tabs would merge in as a tab instead.)
+    alpha_body = bounds(alpha)
     drag(
         page,
         center(handle_of(beta)),
         CANVAS,
-        (alpha_strip["x"] + alpha_strip["width"] / 2, alpha_strip["y"] + 5.0),
+        (alpha_body["x"] + alpha_body["width"] / 2, alpha_body["y"] + alpha_body["height"] * 0.55),
     )
 
     expect(floating_windows(page)).to_have_count(2)
     stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
     expect(stacked.locator("[data-dock-group]")).to_have_count(2)
-    # A multi-group window grows a header that drags the whole stack.
-    expect(stacked.locator("[data-floating-handle]")).to_have_count(1)
     expect(stacked.get_by_role("tab", name="Beta", exact=True)).to_be_visible()
     assert page_errors == []
 
@@ -449,8 +455,8 @@ def test_column_handle_floats_the_whole_docked_column(
 
     expect(floating_windows(page)).to_have_count(1)
     window = floating_windows(page)
-    # Both panels came along, under one stack header.
-    expect(window.locator("[data-floating-handle]")).to_have_count(1)
+    # Both panels came along; the floated stack carries no window-level bar.
+    expect(window.locator("[data-floating-handle]")).to_have_count(0)
     expect(window.get_by_test_id("control-panel-handle")).to_be_visible()
     expect(window.get_by_role("tab", name="Beta", exact=True)).to_be_visible()
     expect(page.locator("[data-dock-leaf]")).to_have_count(0)
@@ -480,45 +486,47 @@ def test_dropping_a_window_on_anothers_body_stacks_them(
     stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
     # Two GROUPS in one window -- a stack, not a two-tab group.
     expect(stacked.locator("[data-dock-group]")).to_have_count(2)
-    expect(stacked.locator("[data-floating-handle]")).to_have_count(1)
     assert page_errors == []
 
 
-def test_clicking_a_stack_header_folds_every_member_and_restores_them(
+def test_a_stacked_window_has_no_header_and_moves_by_any_members_strip(
     dock_page: Page, page_errors: list[str]
 ) -> None:
-    """The stack header is a slim pill band, not a bar with a minimize icon:
-    clicking it folds every member group at once and a second click restores
-    the open/closed mix they had -- the same click-the-title semantics every
-    member's own strip has."""
+    """A stack is its members and nothing else: no window-level bar above them.
+    Any member's strip drags the whole window; a member's tab folds just that
+    member; a member leaves by its tab's grip."""
     page = dock_page
     alpha = tear_out_tab(page, "Alpha", PARK_LOWER)
     beta = tear_out_tab(page, "Beta", PARK_UPPER)
-    alpha_strip = bounds(handle_of(alpha))
+    alpha_body = bounds(alpha)
     drag(
         page,
         center(handle_of(beta)),
         CANVAS,
-        (alpha_strip["x"] + alpha_strip["width"] / 2, alpha_strip["y"] + 5.0),
+        (alpha_body["x"] + alpha_body["width"] / 2, alpha_body["y"] + alpha_body["height"] * 0.55),
     )
     stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
     expect(stacked.locator("[data-dock-group]")).to_have_count(2)
-    expanded_height = bounds(stacked)["height"]
-
-    header = stacked.locator("[data-floating-handle]")
-    # No icon button left anywhere in the window; the band itself is the toggle.
+    # No extra chrome: no stack header, no minimize buttons anywhere.
+    expect(stacked.locator("[data-floating-handle]")).to_have_count(0)
     expect(stacked.locator("[data-dock-minimize-all]")).to_have_count(0)
     expect(stacked.locator("[data-dock-minimize]")).to_have_count(0)
-    expect(header).to_have_attribute("aria-label", "Minimize all panels")
-    header.click()
 
-    expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(2)
-    assert bounds(stacked)["height"] < expanded_height
-    expect(header).to_have_attribute("aria-label", "Expand all panels")
+    # Dragging the LOWER member's strip moves the window whole: still one
+    # window, both groups aboard, at the new place.
+    before = bounds(stacked)
+    lower = stacked.locator("[data-dock-strip]").last
+    start = center(lower)
+    drag(page, start, (start[0] - 120.0, start[1] - 60.0))
+    after = bounds(stacked)
+    assert after["x"] == pytest.approx(before["x"] - 120.0, abs=2.0)
+    expect(stacked.locator("[data-dock-group]")).to_have_count(2)
+    expect(floating_windows(page)).to_have_count(2)  # + the control panel
 
-    header.click()
-    expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(0)
-    assert bounds(stacked)["height"] == pytest.approx(expanded_height, abs=2.0)
+    # A member's tab folds just that member.
+    stacked.get_by_role("tab", name="Beta", exact=True).click()
+    expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(1)
+    expect(page.get_by_text("Alpha body", exact=True)).to_be_visible()
     assert page_errors == []
 
 

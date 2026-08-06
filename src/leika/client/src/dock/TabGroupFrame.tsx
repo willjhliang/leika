@@ -15,6 +15,7 @@ import {
   CARD_INSET_BOTTOM_OVERLAP,
   CARD_INSET_TOP,
 } from "./cardInset";
+import * as ops from "./layoutOps";
 import { toggleGroupVisibility, useDock } from "./DockContext";
 import { DOUBLE_CLICK_MS, PanelSpec, TAB_GLIDE_MS, TabGroup } from "./types";
 
@@ -167,6 +168,24 @@ export function TabGroupFrame({
     if (isDouble) panels[group.activeId]?.onResetLayout?.();
   };
 
+  /** A press on the strip's surface (its whitespace or a tab's face): the
+   * drag of whatever the strip is the title OF. For a floating group that is
+   * the whole window -- a stack moves as one, from any member's strip -- and
+   * for a docked group it is the group, undocking as it goes. Where the strip
+   * titles nothing (a nested area), the press is a click at most. */
+  const containerPress = (
+    event: React.PointerEvent<HTMLElement>,
+    onClick: () => void,
+  ) => {
+    if (!stripDragsGroup) return;
+    const location = ops.findGroupLocation(dock.layout, group.id);
+    if (location?.kind === "floating") {
+      dock.startWindowDrag(event, location.windowId, { onClick });
+      return;
+    }
+    dock.startGroupDrag(event, group.id, { onClick });
+  };
+
   const renderPanelBody = (panelId: string) => (
     <PanelBody
       panel={panels[panelId]}
@@ -284,10 +303,13 @@ export function TabGroupFrame({
           pill and a minimize button, which was a second title bar saying
           nothing the strip cannot say itself. */}
       <TabStrip
-        // Half the card's inset, not all of it: the strip is a title BAR, and
-        // a full card-spacing above a short tab row read as dead space. The
-        // band is still real -- it drags the group and takes snap-above drops.
-        className={insetTop && stripDragsGroup ? "pt-2" : undefined}
+        // A sliver of the card's inset, not the inset itself: the title
+        // should sit as far from the top of its card as it does from its own
+        // underline, and the underline hangs ~5px below the tab. The band
+        // gave up its other jobs when the drag model split -- the whole strip
+        // moves the window now, and a snap-above drop also lands anywhere on
+        // the target's upper body.
+        className={insetTop && stripDragsGroup ? "pt-1" : undefined}
         tabs={group.panelIds.map((panelId) => {
           const panel = panels[panelId];
           return {
@@ -303,33 +325,25 @@ export function TabGroupFrame({
           groupId: group.id,
           draggingId: dock.draggingTabId,
           stripRef,
-          onStripPointerDown: (event) => {
-            if (stripDragsGroup)
-              dock.startGroupDrag(event, group.id, { onClick: handleClick });
-          },
+          onStripPointerDown: (event) => containerPress(event, handleClick),
+          // A tab's FACE is the strip's surface: dragging it moves the
+          // container, and clicking it answers the way a title answers. The
+          // ACTIVE tab is the group's name, so clicking it folds the group
+          // away and back; an inactive tab activates -- and expands a folded
+          // group, since switching tabs on a body that stays hidden would be
+          // a change with nothing to show.
           onTabPointerDown: (event, panelId) =>
-            dock.startTabDrag(
-              event,
-              group.id,
-              panelId,
-              // As a title bar, the strip answers clicks the way a title bar
-              // does: the ACTIVE tab is the group's name, so clicking it folds
-              // the group away and back. An inactive tab still activates --
-              // and expands a folded group, since switching tabs on a body
-              // that stays hidden would be a change with nothing to show.
-              stripDragsGroup
-                ? {
-                    onClick: () => {
-                      if (panelId === group.activeId) {
-                        handleClick();
-                        return;
-                      }
-                      dock.activateTab(group.id, panelId);
-                      if (collapsed) dock.toggleCollapsed(group.id);
-                    },
-                  }
-                : undefined,
-            ),
+            containerPress(event, () => {
+              if (panelId === group.activeId) {
+                handleClick();
+                return;
+              }
+              dock.activateTab(group.id, panelId);
+              if (collapsed) dock.toggleCollapsed(group.id);
+            }),
+          // The tab's GRIP is the tab's own drag: reorder, or tear out.
+          onTabGripPointerDown: (event, panelId) =>
+            dock.startTabDrag(event, group.id, panelId),
         }}
       />
       {group.panelIds.map((panelId) => {

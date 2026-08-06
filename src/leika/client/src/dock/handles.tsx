@@ -84,16 +84,16 @@ export function HandleIconButton({
   );
 }
 
-/** Slim handle that drags a whole stack of groups: a floating multi-group
- * window or a docked pure column. Nothing but the pill -- the stack's members
- * each carry a full title bar of their own, so this bar only has to say
- * "all of them at once": drag it to move the stack, click it to fold every
- * member away and back (minimizeStack/expandStack remember which were open).
- * It used to be a 32px band with a minimize-all icon button, which read as a
- * second title bar saying less than the member titles below it.
+/** Slim handle that drags a whole docked pure COLUMN of groups. A column
+ * needs it because its members' strips undock the members one at a time --
+ * there is no surface that means "all of them" without this. (A floating
+ * stack has no such bar: there, every member strip moves the whole window,
+ * and a member leaves by its tab's grip.) Nothing but the pill: drag moves
+ * the column, click folds every member away and back
+ * (minimizeStack/expandStack remember which were open).
  *
- * `narrow` is the exception: on a fully-minimized ~36px strip the members have
- * no titles to click, so the bar keeps a real expand-all (+) button. */
+ * `narrow` is the exception: on a fully-minimized ~36px strip the members
+ * have no titles to click, so the bar keeps a real expand-all (+) button. */
 export function StackHandleBar({
   onPointerDown,
   attrs,

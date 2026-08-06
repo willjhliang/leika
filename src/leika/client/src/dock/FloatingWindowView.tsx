@@ -10,8 +10,7 @@ import { Separator } from "../components/ui/separator";
 import { PeekHold, PeekHoldContext, useDock } from "./DockContext";
 import { dragGesture } from "./gestures";
 import { prefersReducedMotion } from "../utils/motion";
-import { cascadeResize, expandStack, minimizeStack } from "./layoutOps";
-import { StackHandleBar } from "./handles";
+import { cascadeResize } from "./layoutOps";
 import { TabGroupFrame } from "./TabGroupFrame";
 import {
   AUTO_HEIGHT_BOUNDARY_PAD_PX,
@@ -251,14 +250,6 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   const anchorRight =
     containerWidth > 0 && win.x + win.width / 2 > containerWidth / 2;
 
-  // The stack header's one action, reached by clicking its pill band.
-  const toggleAll = React.useCallback(
-    () =>
-      dock.api.apply((l) =>
-        collapsed ? expandStack(l, win.stack) : minimizeStack(l, win.stack),
-      ),
-    [dock.api, collapsed, win.stack],
-  );
   const horizontalPosition = anchorRight
     ? { left: undefined, right: containerWidth - win.x - win.width }
     : { left: win.x, right: undefined };
@@ -599,23 +590,9 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
               : {}),
           }}
         >
-          {/* For a multi-group stack, a window header drags the whole window;
-        each group's tab strip is its own title bar (dragging it tears the
-        group out). A single group needs no header -- its strip moves the
-        window. The header's minimize-all button collapses every group at once
-        (and restores the previous min/max mix on expand). */}
-          {multi && (
-            <StackHandleBar
-              attrs={{ "data-floating-handle": win.id }}
-              insetTop
-              collapsed={collapsed}
-              onPointerDown={(event) =>
-                dock.startWindowDrag(event, win.id, { onClick: toggleAll })
-              }
-              onToggle={toggleAll}
-            />
-          )}
-
+          {/* No window header: every member's tab strip is a handle on the
+        whole window (a stack moves as one, from any of its strips), and a
+        member is pulled OUT by its tab's grip. */}
           <div
             ref={stackRef}
             style={
@@ -658,7 +635,7 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
                   // each edge of the card: the stack's first and last groups,
                   // except at the top of a multi-group window, where the window
                   // header is already there to take it.
-                  insetTop={!multi && index === 0}
+                  insetTop={index === 0}
                   insetBottom={index === win.stack.length - 1}
                   stripDragsGroup
                 />

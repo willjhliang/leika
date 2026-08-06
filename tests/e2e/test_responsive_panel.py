@@ -78,13 +78,15 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     expect(control_group.locator(':scope > [data-slot="tabs"]')).to_have_count(0)
 
     nested_tab = page.get_by_role("tab", name="Nested tab")
-    tab_bounds = nested_tab.bounding_box()
-    assert tab_bounds is not None
-    tab_x = tab_bounds["x"] + tab_bounds["width"] / 2
-    tab_y = tab_bounds["y"] + tab_bounds["height"] / 2
-    page.mouse.move(tab_x, tab_y)
+    nested_tab.hover()
+    # The tab's grip is the tab's drag; its face belongs to the strip.
+    grip_bounds = nested_tab.locator("[data-leika-tab-drag-handle]").bounding_box()
+    assert grip_bounds is not None
+    grip_x = grip_bounds["x"] + grip_bounds["width"] / 2
+    grip_y = grip_bounds["y"] + grip_bounds["height"] / 2
+    page.mouse.move(grip_x, grip_y)
     page.mouse.down()
-    page.mouse.move(tab_x, tab_bounds["y"] + tab_bounds["height"] + 48, steps=8)
+    page.mouse.move(grip_x, grip_y + 90, steps=8)
     page.mouse.up()
 
     expect(page.locator("[data-floating-window]")).to_have_count(2)
