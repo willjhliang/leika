@@ -132,6 +132,15 @@ export interface PanelSpec {
    * rest arrives -- collapsing instead would throw away what the click was
    * asking for. Anything else falls through to the toggle. */
   onHandleClick?: () => boolean;
+  /** Take an "expand this panel" request before the default collapsed-flag
+   * clear. Fired when a gesture wants the panel OPEN wherever it lands -- a
+   * drop that gives it a new placement, a drag from a rail's + button.
+   *
+   * Return true to say the request has been dealt with. A panel whose fold
+   * mirrors state it owns (the control panel folds because its controls
+   * section is closed) must be expanded by opening that state: clearing the
+   * group's flag directly would only get re-folded by the panel's sync. */
+  onExpand?: () => boolean;
   /** Collapsed, fade this window away once the pointer leaves it.
    *
    * A panel that is nothing but a header when collapsed still paints a card

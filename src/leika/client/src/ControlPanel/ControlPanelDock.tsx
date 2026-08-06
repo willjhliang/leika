@@ -105,6 +105,13 @@ export function ControlPanelDockSurface({
           controlsSection.toggle();
           return true;
         },
+        // Expansion requests (a drop that lands the panel somewhere new) go
+        // the same way: open the section, and the sync node's mirror unfolds
+        // the group. Clearing the group flag directly would be re-folded.
+        onExpand: () => {
+          controlsSection.open();
+          return true;
+        },
         // Folded away, this panel is a 320px bar of empty card sitting over the
         // visualization. Let it go, and leave the connection badge behind as
         // the thing to hover to get it back.

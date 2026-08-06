@@ -960,6 +960,77 @@ def test_a_server_docked_panel_collapses_to_the_rail_and_floats_out(
     assert page_errors == []
 
 
+def test_a_folded_rail_dragged_to_the_other_edge_lands_expanded(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """A drop that switches the panel's placement opens it: carrying the rail
+    stub across the canvas and docking it on the other edge asks to USE the
+    panel there, not to file the stub away."""
+    goto_docked(page, leika_server, "left")
+
+    control_handle(page).click()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+
+    drag(page, center(strip), CANVAS, (VIEWPORT_W - 16.0, 300.0))
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "right", timeout=5_000)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
+    # Expanded means the full region, not a 36px rail on the new edge.
+    assert bounds(control_panel(page))["width"] == pytest.approx(DEFAULT_REGION_PX, abs=1.0)
+    assert page_errors == []
+
+
+def test_a_folded_rail_dragged_onto_the_canvas_lands_expanded(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """Dragging the rail stub out to float is the docked-to-floating half of
+    the same rule: the window that lands is the open panel, not a folded bar."""
+    goto_docked(page, leika_server, "left")
+
+    control_handle(page).click()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+
+    drag(page, center(strip), CANVAS)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+    assert len(window_ids(page)) == 1
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
+    # The body really arrived: the app's slider is on screen, not just a title.
+    expect(page.get_by_text("Value", exact=True).first).to_be_visible()
+    assert page_errors == []
+
+
+def test_a_folded_floating_panel_docks_expanded(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """And the floating-to-docked half: folding the floating panel and dragging
+    it onto an edge lands the full region there, not a rail. Nudging a folded
+    window around the canvas, by contrast, keeps the fold -- that is a move
+    within the same placement, not a switch."""
+    goto_docked(page, leika_server, "left")
+    drag(page, center(control_handle(page)), CANVAS, PARK_LOWER)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+
+    control_handle(page).click()
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+
+    # A folded window dropped on neutral canvas stays folded.
+    drag(page, center(control_handle(page)), PARK_UPPER)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1)
+
+    drag(page, center(control_handle(page)), CANVAS, (16.0, 300.0))
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "left", timeout=5_000)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
+    assert canvas_inset(page) == pytest.approx(DEFAULT_REGION_PX, abs=1.0)
+    assert page_errors == []
+
+
 def test_double_click_sends_the_panel_home_to_its_configured_edge(
     leika_server: leika.Server,
     page: Page,

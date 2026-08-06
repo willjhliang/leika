@@ -112,6 +112,45 @@ export function floatingStackGroupElements(
   });
 }
 
+/** Expand a group, giving its panel first refusal (spec.onExpand): a panel
+ * whose fold mirrors state it owns is opened through that state, and the
+ * group's collapsed flag is left for the panel's own sync to clear --
+ * clearing it here would only get re-folded by that sync. */
+export function expandGroupThroughPanel(
+  layout: DockLayout,
+  panels: PanelRegistry,
+  groupId: GroupId,
+): DockLayout {
+  const handled = (layout.groups[groupId]?.panelIds ?? []).some(
+    (panelId) => panels[panelId]?.onExpand?.() === true,
+  );
+  return handled ? layout : ops.expandGroup(layout, groupId);
+}
+
+/** A drop that gives a group a NEW placement -- docked to floating, floating
+ * to docked, or onto a different edge -- lands it expanded: the gesture asked
+ * to PUT the panel somewhere, and arriving as the folded stub it was dragged
+ * as reads as the drop having failed. Same-place drops (nudging a floating
+ * window, re-docking where it came from) keep the fold: those are moves, not
+ * switches. `origin` is the layout the gesture started from; groups it does
+ * not know (a freshly torn-out tab's) count as switched. */
+export function expandPlacementChanges(
+  next: DockLayout,
+  origin: DockLayout,
+  panels: PanelRegistry,
+  stack: readonly GroupId[],
+  landed: { kind: "floating" } | { kind: "docked"; edge: DockEdge },
+): DockLayout {
+  return stack.reduce((acc, groupId) => {
+    const from = ops.findGroupLocation(origin, groupId);
+    const switched =
+      landed.kind === "docked"
+        ? from?.kind !== "docked" || from.edge !== landed.edge
+        : from?.kind === "docked";
+    return switched ? expandGroupThroughPanel(acc, panels, groupId) : acc;
+  }, next);
+}
+
 export function createDragController(deps: DragControllerDeps): DragController {
   const {
     containerRef,
@@ -487,24 +526,52 @@ export function createDragController(deps: DragControllerDeps): DragController {
         // keeps all its panels, not just the top one). Unmergeable policy is
         // hitTest's: it never returns merge/insertTab for an unmergeable drag.
         const stack = base.floating.find((w) => w.id === windowId)?.stack ?? [];
+        // Where each group lived BEFORE the gesture, for the land-expanded
+        // rule: a deferred drag carries its pre-commit snapshot; a plain
+        // window drag started floating, which the current layout still says.
+        const origin = restoreOnCancel ?? base;
+        const landed = (
+          next: DockLayout,
+          at: { kind: "floating" } | { kind: "docked"; edge: DockEdge },
+        ) => expandPlacementChanges(next, origin, panelsRef.current, stack, at);
         if (result === null || stack.length === 0) {
-          applyOp(ops.moveWindow(base, windowId, finalX, finalY));
+          applyOp(
+            landed(ops.moveWindow(base, windowId, finalX, finalY), {
+              kind: "floating",
+            }),
+          );
           return;
         }
         // Widths are reconciled centrally in applyOp, so these just apply the
         // structural op (no per-path region-width juggling).
         if (result.kind === "edge") {
-          applyOp(ops.dockToEdge(base, stack, result.edge));
+          applyOp(
+            landed(ops.dockToEdge(base, stack, result.edge), {
+              kind: "docked",
+              edge: result.edge,
+            }),
+          );
         } else if (result.kind === "regionEdge") {
-          applyOp(ops.dockToRegionEdge(base, stack, result.edge, result.side));
+          applyOp(
+            landed(
+              ops.dockToRegionEdge(base, stack, result.edge, result.side),
+              {
+                kind: "docked",
+                edge: result.edge,
+              },
+            ),
+          );
         } else if (result.kind === "split") {
           applyOp(
-            ops.dropOnDockedLeaf(
-              base,
-              stack,
-              result.edge,
-              result.nodeId,
-              result.region,
+            landed(
+              ops.dropOnDockedLeaf(
+                base,
+                stack,
+                result.edge,
+                result.nodeId,
+                result.region,
+              ),
+              { kind: "docked", edge: result.edge },
             ),
           );
         } else if (result.kind === "merge") {
@@ -530,7 +597,10 @@ export function createDragController(deps: DragControllerDeps): DragController {
           );
         } else {
           applyOp(
-            ops.snapToWindowStack(base, stack, result.windowId, result.index),
+            landed(
+              ops.snapToWindowStack(base, stack, result.windowId, result.index),
+              { kind: "floating" },
+            ),
           );
         }
       },
@@ -731,7 +801,13 @@ export function createDragController(deps: DragControllerDeps): DragController {
               // dragAfterCommit and Escape restores the minimized state.
               dragAfterCommit(e, () => {
                 flushSync(() =>
-                  applyOp(ops.expandGroup(layoutRef.current, groupId)),
+                  applyOp(
+                    expandGroupThroughPanel(
+                      layoutRef.current,
+                      panelsRef.current,
+                      groupId,
+                    ),
+                  ),
                 );
                 return { windowId, groupIdForDim: null, grabX, grabY };
               });
@@ -774,7 +850,13 @@ export function createDragController(deps: DragControllerDeps): DragController {
           // produce a full panel, not a minimized stub.
           flushSync(() =>
             applyOp(
-              expandOnDrag ? ops.expandGroup(res.layout, groupId) : res.layout,
+              expandOnDrag
+                ? expandGroupThroughPanel(
+                    res.layout,
+                    panelsRef.current,
+                    groupId,
+                  )
+                : res.layout,
             ),
           );
           const crect = containerRect();
