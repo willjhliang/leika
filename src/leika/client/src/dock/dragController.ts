@@ -46,6 +46,7 @@ import {
   NodeId,
   PanelId,
   PanelRegistry,
+  regionWidthsOf,
   WindowId,
 } from "./types";
 
@@ -732,6 +733,25 @@ export function createDragController(deps: DragControllerDeps): DragController {
     };
   };
 
+  /** The width a drag-to-float should give a window leaving a docked edge
+   * when its source renders as a minimized strip. The strip is 36px, and
+   * clamping that up to MIN_PANEL_WIDTH_PX floats the panel at 220px --
+   * while every other way of arriving anywhere gives it its real width. Use
+   * the edge's preserved regionWidth instead: it survives full minimization
+   * exactly so a restore can know the expanded width, and it carries any
+   * resize the viewer gave the region. When several width columns share the
+   * region, one column's share is not recoverable from the sum; fall back
+   * to the default. */
+  const railFloatWidth = (layout: DockLayout, edge: DockEdge): number => {
+    const tree = layout.docked[edge];
+    const singleColumn = tree !== null && ops.widthColumns(tree).length === 1;
+    return clamp(
+      singleColumn ? regionWidthsOf(layout)[edge] : DEFAULT_REGION_PX,
+      MIN_PANEL_WIDTH_PX,
+      MAX_PANEL_WIDTH_PX,
+    );
+  };
+
   /** Move a freshly floated window under the pointer and return the grab
    * offsets that hold it there: the cursor lands on the window's title bar
    * (its strip, or an unmergeable panel's header). For when grab offsets
@@ -896,6 +916,15 @@ export function createDragController(deps: DragControllerDeps): DragController {
       (e) => {
         dragAfterCommit(e, () => {
           const rect = floatRectFor(`[data-dock-group="${groupId}"]`);
+          // A collapsed docked group was measured as its rail cell, whose
+          // width is the strip, not a panel width; see railFloatWidth.
+          const current = layoutRef.current;
+          const locNow = ops.findGroupLocation(current, groupId);
+          const width =
+            locNow?.kind === "docked" &&
+            current.groups[groupId]?.collapsed === true
+              ? railFloatWidth(current, locNow.edge)
+              : rect.width;
           // A panel whose body is a full-bleed nested area needs a definite
           // height to fill (it collapses to 0 in an auto-height window). Give
           // the undocked window the panel's current rendered height in that
@@ -908,7 +937,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
             groupId,
             rect.x,
             rect.y,
-            rect.width,
+            width,
             needsHeight ? rect.height : undefined,
           );
           // Null only for an area's backing group, which no UI surface offers a
@@ -960,13 +989,26 @@ export function createDragController(deps: DragControllerDeps): DragController {
           // Measure the COLUMN wrapper (not the 1em handle): floatRectFor clamps
           // width/height into sane floating ranges, same as a group undock.
           const rect = floatRectFor(`[data-dock-column="${columnNodeId}"]`);
+          // A fully-minimized column renders as the 36px rail; float it at
+          // the width it would expand back to (see railFloatWidth).
+          const current = layoutRef.current;
+          const tree = current.docked[edge];
+          const column =
+            tree === null
+              ? undefined
+              : ops.topColumns(tree).find((c) => c.id === columnNodeId);
+          const width =
+            column !== undefined &&
+            ops.isColumnMinimized(column, current.groups)
+              ? railFloatWidth(current, edge)
+              : rect.width;
           const res = ops.floatColumn(
             layoutRef.current,
             edge,
             columnNodeId,
             rect.x,
             rect.y,
-            rect.width,
+            width,
             rect.height,
           );
           // Null when the column was restructured under us or isn't a pure

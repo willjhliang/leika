@@ -1001,6 +1001,35 @@ def test_a_folded_rail_dragged_onto_the_canvas_lands_expanded(
     expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
     # The body really arrived: the app's slider is on screen, not just a title.
     expect(page.get_by_text("Value", exact=True).first).to_be_visible()
+    # And at the panel's width: the rail cell it was dragged as is 36px, but
+    # what floats is the panel, not the strip.
+    assert bounds(control_panel(page))["width"] == pytest.approx(CONTROL_WIDTH_PX, abs=1.0)
+    assert page_errors == []
+
+
+def test_a_viewers_region_resize_rides_through_fold_and_float(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """regionWidth survives full minimization so a restore can know the
+    expanded width; the drag-to-float reads the same number, so a widened
+    region floats out at the viewer's width, not the default."""
+    goto_docked(page, leika_server, "left")
+
+    resizer = page.locator("[data-dock-region-resize='left']")
+    grip = center(resizer)
+    drag(page, grip, (grip[0] + 80.0, grip[1]))
+    assert bounds(control_panel(page))["width"] == pytest.approx(CONTROL_WIDTH_PX + 80.0, abs=2.0)
+
+    control_handle(page).click()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+
+    drag(page, center(strip), CANVAS)
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(0, timeout=5_000)
+    assert bounds(control_panel(page))["width"] == pytest.approx(CONTROL_WIDTH_PX + 80.0, abs=2.0)
     assert page_errors == []
 
 
