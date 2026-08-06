@@ -131,19 +131,21 @@ function ColumnHandle({ node, edge }: { node: DockSplit; edge: DockEdge }) {
     c.type === "leaf" ? [c.group] : [],
   );
   const minimized = isColumnMinimized(node, dock.groups);
+  const toggleAll = () =>
+    dock.api.apply((l) =>
+      minimized ? expandStack(l, groupIds) : minimizeStack(l, groupIds),
+    );
   return (
     <StackHandleBar
       attrs={{ "data-dock-column-handle": node.id }}
-      onPointerDown={(event) => dock.startColumnDrag(event, edge, node.id)}
-      collapsed={minimized}
-      // A fully-minimized column renders as a ~36px strip: no room for the
-      // pill, the button fills the bar instead.
-      narrow={minimized}
-      onToggle={() =>
-        dock.api.apply((l) =>
-          minimized ? expandStack(l, groupIds) : minimizeStack(l, groupIds),
-        )
+      onPointerDown={(event) =>
+        dock.startColumnDrag(event, edge, node.id, { onClick: toggleAll })
       }
+      collapsed={minimized}
+      // A fully-minimized column renders as a ~36px strip: no member titles
+      // to fold with, so the bar keeps a real expand-all button.
+      narrow={minimized}
+      onToggle={toggleAll}
     />
   );
 }

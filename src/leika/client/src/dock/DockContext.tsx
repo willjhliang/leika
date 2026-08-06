@@ -55,11 +55,13 @@ export interface DockContextValue {
     },
   ) => void;
   /** Begin dragging a whole top-level docked column by its slim handle: floats
-   * the column as one stacked window, then drags it. */
+   * the column as one stacked window, then drags it. A motionless press fires
+   * `opts.onClick` instead (the handle's fold-all). */
   startColumnDrag: (
     event: React.PointerEvent<HTMLElement>,
     edge: DockEdge,
     columnNodeId: NodeId,
+    opts?: { onClick?: () => void },
   ) => void;
   /** Begin a press on a tab: a click activates it (or does whatever
    * `opts.onClick` says instead -- the strip uses this to make a click on the
@@ -71,10 +73,12 @@ export interface DockContextValue {
     panelId: PanelId,
     opts?: { onClick?: () => void },
   ) => void;
-  /** Drag the entire floating window (its whole snap-stack) by its header. */
+  /** Drag the entire floating window (its whole snap-stack) by its header. A
+   * motionless press fires `opts.onClick` instead (the header's fold-all). */
   startWindowDrag: (
     event: React.PointerEvent<HTMLElement>,
     windowId: string,
+    opts?: { onClick?: () => void },
   ) => void;
   activateTab: (groupId: GroupId, panelId: PanelId) => void;
   /** Toggle a group's minimized state (tap on its handle). */

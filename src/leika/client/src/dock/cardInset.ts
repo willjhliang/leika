@@ -14,13 +14,6 @@
 export const CARD_INSET_TOP = "pt-(--card-spacing)";
 export const CARD_INSET_BOTTOM = "pb-(--card-spacing)";
 
-/** The top inset on a handle BAR, which needs two things a header does not:
- * `box-content`, because padding sits inside the border box and the bar's
- * min-height would otherwise swallow the inset rather than grow by it; and the
- * variable, which keeps the bar's anchored icon button off the inset band (see
- * HandleIconButton). */
-export const CARD_INSET_TOP_BAR = `box-content ${CARD_INSET_TOP} [--handle-inset-top:var(--card-spacing)]`;
-
 /** A handle that is the LAST thing in its card covers the bottom inset without
  * adding to it: the (zero-height) body still follows it in the flow. */
 export const CARD_INSET_BOTTOM_OVERLAP = `${CARD_INSET_BOTTOM} -mb-(--card-spacing)`;

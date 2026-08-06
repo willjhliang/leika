@@ -250,6 +250,15 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   // unchanged, so there is no intermediate jump or persistence drift.
   const anchorRight =
     containerWidth > 0 && win.x + win.width / 2 > containerWidth / 2;
+
+  // The stack header's one action, reached by clicking its pill band.
+  const toggleAll = React.useCallback(
+    () =>
+      dock.api.apply((l) =>
+        collapsed ? expandStack(l, win.stack) : minimizeStack(l, win.stack),
+      ),
+    [dock.api, collapsed, win.stack],
+  );
   const horizontalPosition = anchorRight
     ? { left: undefined, right: containerWidth - win.x - win.width }
     : { left: win.x, right: undefined };
@@ -599,15 +608,11 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
             <StackHandleBar
               attrs={{ "data-floating-handle": win.id }}
               insetTop
-              onPointerDown={(event) => dock.startWindowDrag(event, win.id)}
               collapsed={collapsed}
-              onToggle={() =>
-                dock.api.apply((l) =>
-                  collapsed
-                    ? expandStack(l, win.stack)
-                    : minimizeStack(l, win.stack),
-                )
+              onPointerDown={(event) =>
+                dock.startWindowDrag(event, win.id, { onClick: toggleAll })
               }
+              onToggle={toggleAll}
             />
           )}
 

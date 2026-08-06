@@ -484,9 +484,13 @@ def test_dropping_a_window_on_anothers_body_stacks_them(
     assert page_errors == []
 
 
-def test_minimize_all_collapses_a_floating_stack_and_restores_it(
+def test_clicking_a_stack_header_folds_every_member_and_restores_them(
     dock_page: Page, page_errors: list[str]
 ) -> None:
+    """The stack header is a slim pill band, not a bar with a minimize icon:
+    clicking it folds every member group at once and a second click restores
+    the open/closed mix they had -- the same click-the-title semantics every
+    member's own strip has."""
     page = dock_page
     alpha = tear_out_tab(page, "Alpha", PARK_LOWER)
     beta = tear_out_tab(page, "Beta", PARK_UPPER)
@@ -501,15 +505,18 @@ def test_minimize_all_collapses_a_floating_stack_and_restores_it(
     expect(stacked.locator("[data-dock-group]")).to_have_count(2)
     expanded_height = bounds(stacked)["height"]
 
-    minimize_all = stacked.locator("[data-dock-minimize-all]")
-    expect(minimize_all).to_have_attribute("aria-label", "Minimize all panels")
-    minimize_all.click()
+    header = stacked.locator("[data-floating-handle]")
+    # No icon button left anywhere in the window; the band itself is the toggle.
+    expect(stacked.locator("[data-dock-minimize-all]")).to_have_count(0)
+    expect(stacked.locator("[data-dock-minimize]")).to_have_count(0)
+    expect(header).to_have_attribute("aria-label", "Minimize all panels")
+    header.click()
 
     expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(2)
     assert bounds(stacked)["height"] < expanded_height
-    expect(minimize_all).to_have_attribute("aria-label", "Expand all panels")
+    expect(header).to_have_attribute("aria-label", "Expand all panels")
 
-    minimize_all.click()
+    header.click()
     expect(stacked.locator("[data-dock-collapsed='true']")).to_have_count(0)
     assert bounds(stacked)["height"] == pytest.approx(expanded_height, abs=2.0)
     assert page_errors == []

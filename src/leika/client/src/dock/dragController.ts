@@ -667,6 +667,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
   const startWindowDrag: DragController["startWindowDrag"] = (
     event,
     windowId,
+    opts,
   ) => {
     if (layoutRef.current.floating.every((w) => w.id !== windowId)) return;
     // Press-time POINTER coordinates, but the window's CURRENT model position
@@ -675,18 +676,22 @@ export function createDragController(deps: DragControllerDeps): DragController {
     // position would teleport it back on the first drag frame.
     const pressX = event.clientX;
     const pressY = event.clientY;
-    armPress(event, (e) => {
-      const win = layoutRef.current.floating.find((w) => w.id === windowId);
-      if (win === undefined) return;
-      const crect = containerRect();
-      beginWindowDrag(
-        windowId,
-        null,
-        e.pointerId,
-        pressX - crect.left - win.x,
-        pressY - crect.top - win.y,
-      );
-    });
+    armPress(
+      event,
+      (e) => {
+        const win = layoutRef.current.floating.find((w) => w.id === windowId);
+        if (win === undefined) return;
+        const crect = containerRect();
+        beginWindowDrag(
+          windowId,
+          null,
+          e.pointerId,
+          pressX - crect.left - win.x,
+          pressY - crect.top - win.y,
+        );
+      },
+      opts?.onClick,
+    );
   };
 
   const startGroupDrag: DragController["startGroupDrag"] = (
@@ -789,38 +794,43 @@ export function createDragController(deps: DragControllerDeps): DragController {
     event,
     edge,
     columnNodeId,
+    opts,
   ) => {
-    armPress(event, (e) => {
-      dragAfterCommit(e, () => {
-        // Measure the COLUMN wrapper (not the 1em handle): floatRectFor clamps
-        // width/height into sane floating ranges, same as a group undock.
-        const rect = floatRectFor(`[data-dock-column="${columnNodeId}"]`);
-        const res = ops.floatColumn(
-          layoutRef.current,
-          edge,
-          columnNodeId,
-          rect.x,
-          rect.y,
-          rect.width,
-          rect.height,
-        );
-        // Null when the column was restructured under us or isn't a pure
-        // column anymore; just don't drag.
-        if (res.windowId === null) return null;
-        // applyOp reconciles region widths: removing this column from the
-        // edge's column set lets survivors keep their px and shrinks the
-        // region.
-        flushSync(() => applyOp(res.layout));
-        const crect = containerRect();
-        return {
-          // No single origin group to dim; the whole column left the tree.
-          windowId: res.windowId,
-          groupIdForDim: null,
-          grabX: e.clientX - crect.left - rect.x,
-          grabY: e.clientY - crect.top - rect.y,
-        };
-      });
-    });
+    armPress(
+      event,
+      (e) => {
+        dragAfterCommit(e, () => {
+          // Measure the COLUMN wrapper (not the 1em handle): floatRectFor clamps
+          // width/height into sane floating ranges, same as a group undock.
+          const rect = floatRectFor(`[data-dock-column="${columnNodeId}"]`);
+          const res = ops.floatColumn(
+            layoutRef.current,
+            edge,
+            columnNodeId,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+          );
+          // Null when the column was restructured under us or isn't a pure
+          // column anymore; just don't drag.
+          if (res.windowId === null) return null;
+          // applyOp reconciles region widths: removing this column from the
+          // edge's column set lets survivors keep their px and shrinks the
+          // region.
+          flushSync(() => applyOp(res.layout));
+          const crect = containerRect();
+          return {
+            // No single origin group to dim; the whole column left the tree.
+            windowId: res.windowId,
+            groupIdForDim: null,
+            grabX: e.clientX - crect.left - rect.x,
+            grabY: e.clientY - crect.top - rect.y,
+          };
+        });
+      },
+      opts?.onClick,
+    );
   };
 
   const startTabDrag: DragController["startTabDrag"] = (
