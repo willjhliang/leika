@@ -13,6 +13,8 @@ from playwright.sync_api import Locator, Page, expect
 
 import leika
 
+from .utils import box
+
 TRIGGER = "[data-leika-settings-trigger]"
 PANE = "[data-leika-settings-pane]"
 POPOVER = "[data-leika-settings-popover]"
@@ -375,15 +377,16 @@ def test_a_scheme_choice_survives_a_reload(
     assert page_errors == []
 
 
-def test_pane_titles_stay_visible_without_a_pointer_on_them(
+def test_pane_titles_reveal_over_the_bar_and_pin_above_the_content(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """The setting adds an always-on title without taking hover away: the pane
-    under the pointer is titled either way, and only the other one changes.
+    """Hidden titles reveal only when the pointer is over the bar's own strip
+    (not the pane at large); the setting pins every bar and slides the content
+    down beneath it.
 
-    The label fades over 150ms, so these read through Playwright's retrying
+    The label fades over 250ms, so these read through Playwright's retrying
     assertions rather than sampling the computed style once.
     """
     row = leika_server.panes.add_row()
@@ -393,26 +396,43 @@ def test_pane_titles_stay_visible_without_a_pointer_on_them(
     other = leika_page.locator('[data-viewport-pane-title="right"]')
     expect(hovered).to_have_count(1, timeout=5_000)
 
-    # Park the pointer on the left pane, and leave it there throughout.
+    # A pointer on the bar's strip reveals that pane's title alone...
     leika_page.mouse.move(4, 4)
     expect(hovered).to_have_css("opacity", "1")
     expect(other).to_have_css("opacity", "0")
 
-    pane = open_settings(leika_page)
-    switch = pane.get_by_role("switch", name="Pane titles")
+    # ...and one on the pane's body, below the strip, reveals nothing at all.
+    pane_box = box(leika_page, '[data-viewport-pane="left"]')
+    body_point = (
+        pane_box["x"] + pane_box["width"] / 2,
+        pane_box["y"] + pane_box["height"] / 2,
+    )
+    leika_page.mouse.move(*body_point)
+    expect(hovered).to_have_css("opacity", "0")
+    expect(other).to_have_css("opacity", "0")
+
+    settings = open_settings(leika_page)
+    switch = settings.get_by_role("switch", name="Pane titles")
     expect(switch).to_have_attribute("aria-checked", "false")
     switch.click()
     close_settings(leika_page)
-    leika_page.mouse.move(4, 4)
+    leika_page.mouse.move(*body_point)
     expect(hovered).to_have_css("opacity", "1")
     expect(other).to_have_css("opacity", "1")
+    # Pinned, the bar is a real top bar: the content starts beneath it rather
+    # than underneath it.
+    bar = box(leika_page, '[data-viewport-pane-title="left"]')
+    content = box(leika_page, '[data-viewport-pane-content="left"]')
+    assert abs(content["y"] - (bar["y"] + bar["height"])) < 1
 
-    pane = open_settings(leika_page)
-    pane.get_by_role("switch", name="Pane titles").click()
+    settings = open_settings(leika_page)
+    settings.get_by_role("switch", name="Pane titles").click()
     close_settings(leika_page)
-    leika_page.mouse.move(4, 4)
-    expect(hovered).to_have_css("opacity", "1")
-    expect(other).to_have_css("opacity", "0")
+    leika_page.mouse.move(*body_point)
+    expect(hovered).to_have_css("opacity", "0")
+    # Hidden again, the bar goes back to overlaying the content.
+    content = box(leika_page, '[data-viewport-pane-content="left"]')
+    assert abs(content["y"] - pane_box["y"]) < 1
     assert page_errors == []
 
 

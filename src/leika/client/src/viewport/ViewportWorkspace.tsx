@@ -6,6 +6,7 @@ import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
 
 import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
+import { guiLabelClassName } from "../components/guiLabelStyles";
 import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
 import { ViewerContext } from "../ViewerContext";
 import { motionExceedsThreshold } from "../dragUtils";
@@ -44,7 +45,10 @@ import {
   ViewportViserPane,
 } from "./ViewportState";
 
-const PANE_BORDER_SIZE_PX = 1;
+/** The pane title bar matches the dock's 24px label rows. A constant rather
+ * than a class so the content offset below an in-flow bar cannot drift from
+ * the bar's own height. */
+const PANE_TITLE_BAR_PX = 24;
 const DIVIDER_HIT_SIZE_PX = 24;
 /** One pixel, which cannot straddle a grid line: it comes out of the pane
  * after the line rather than being split across both. Centring it instead
@@ -856,13 +860,12 @@ function ViewportPaneHost({
 
   const isHiddenRootHost = rect === null;
   const title = paneTitle(pane);
+  const hasTitleBar = !hideChrome && !isHiddenRootHost;
   return (
     <Card
       data-viewport-pane={isHiddenRootHost ? undefined : paneId}
       role="region"
       aria-hidden={isHiddenRootHost || undefined}
-      onPointerEnter={() => setIsHovered(true)}
-      onPointerLeave={() => setIsHovered(false)}
       className={cn(
         // Panes tile the canvas edge to edge, so they get neither rounding nor
         // a ring: Card's ring is drawn OUTSIDE its box, which put every pane's
@@ -894,6 +897,9 @@ function ViewportPaneHost({
         style={{
           position: "absolute",
           inset: 0,
+          // With titles on, the bar is a real top bar and the content starts
+          // beneath it; off, the bar overlays the content instead.
+          top: hasTitleBar && showPaneTitles ? PANE_TITLE_BAR_PX : 0,
           minWidth: 0,
           minHeight: 0,
           overflow: "hidden",
@@ -902,11 +908,9 @@ function ViewportPaneHost({
         <ViewportPaneRenderer pane={pane} />
       </div>
 
-      {!hideChrome && !isHiddenRootHost && (
-        <Button
+      {hasTitleBar && (
+        <button
           type="button"
-          variant="secondary"
-          size="sm"
           data-viewport-pane-header={paneId}
           data-viewport-pane-title={paneId}
           title={title}
@@ -922,18 +926,24 @@ function ViewportPaneHost({
           onKeyDown={(event) => onHeaderKeyDown(event, paneId)}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
+          // Hover tracks the bar itself, not the whole pane: when titles are
+          // hidden, only a pointer over the strip the bar occupies reveals it.
+          onPointerEnter={() => setIsHovered(true)}
+          onPointerLeave={() => setIsHovered(false)}
           onPointerMove={onHeaderPointerMove}
           onPointerUp={onHeaderPointerUp}
           onPointerCancel={onHeaderPointerCancel}
           onLostPointerCapture={onHeaderLostPointerCapture}
-          // The header tucks into the pane's top-left corner and overlaps both
-          // edges, so three of its corners sit on the seam. Only the one over
-          // the pane's own interior is rounded; the size-sm radius is repeated
-          // rather than inherited, since `rounded-none` clears it first.
-          className="absolute z-20 max-w-[calc(100%-0.5rem)] rounded-none rounded-br-[min(var(--radius-md),12px)]"
+          // Dock chrome on a pane: the dock's card surface, square corners
+          // (every corner of the bar sits on a pane seam), and the muted
+          // field-label type the dock's rows use. Focus is border-only, like
+          // every other control.
+          className={cn(
+            "absolute inset-x-0 top-0 z-20 flex items-center rounded-none border border-transparent bg-card px-2 text-sm outline-none select-none focus-visible:border-ring",
+            guiLabelClassName,
+          )}
           style={{
-            left: -PANE_BORDER_SIZE_PX,
-            top: -PANE_BORDER_SIZE_PX,
+            height: PANE_TITLE_BAR_PX,
             // A drag still hides it whatever the setting says: the header is
             // the thing being dragged, and the drag preview stands in for it.
             opacity:
@@ -943,8 +953,8 @@ function ViewportPaneHost({
             touchAction: "none",
           }}
         >
-          {title}
-        </Button>
+          <span className="truncate">{title}</span>
+        </button>
       )}
     </Card>
   );

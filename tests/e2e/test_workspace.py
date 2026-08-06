@@ -69,16 +69,15 @@ def test_image_panes_tile_resize_persist_and_update(
     assert page_errors == []
 
 
-def test_pane_header_rounds_only_the_corner_over_the_pane(
+def test_pane_header_is_a_square_bar_across_the_pane_top(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """The label tucks into the pane's top-left corner, overlapping both edges.
-
-    Three of its corners therefore sit on the seam between panes, where a
-    radius would show the canvas through a notch. Only the fourth, which sits
-    over the pane's own interior, should be rounded.
+    """The title is a bar spanning the pane's full width, styled like the
+    dock: card surface, left-aligned label, and no rounding anywhere -- every
+    corner of the bar sits on a pane seam, where a radius would show the
+    canvas through a notch.
     """
     row = leika_server.panes.add_row()
     row.add_image(np.zeros((24, 32, 3), dtype=np.uint8), pane_id="left", title="Left")
@@ -94,10 +93,11 @@ def test_pane_header_rounds_only_the_corner_over_the_pane(
                 topLeft: style.borderTopLeftRadius,
                 topRight: style.borderTopRightRadius,
                 bottomLeft: style.borderBottomLeftRadius,
-                roundedBottomRight: parseFloat(style.borderBottomRightRadius) > 0,
-                // Negative offsets are what put the other three corners on the
-                // seam in the first place.
-                overlapsPaneEdges: self.left <= pane.left && self.top <= pane.top,
+                bottomRight: style.borderBottomRightRadius,
+                spansPaneWidth:
+                    Math.abs(self.left - pane.left) < 1 &&
+                    Math.abs(self.right - pane.right) < 1 &&
+                    Math.abs(self.top - pane.top) < 1,
             };
         }"""
     )
@@ -105,8 +105,8 @@ def test_pane_header_rounds_only_the_corner_over_the_pane(
         "topLeft": "0px",
         "topRight": "0px",
         "bottomLeft": "0px",
-        "roundedBottomRight": True,
-        "overlapsPaneEdges": True,
+        "bottomRight": "0px",
+        "spansPaneWidth": True,
     }
     assert page_errors == []
 
