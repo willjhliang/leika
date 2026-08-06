@@ -458,6 +458,32 @@ def test_column_handle_floats_the_whole_docked_column(
     assert page_errors == []
 
 
+def test_dropping_a_window_on_anothers_body_stacks_them(
+    dock_page: Page, page_errors: list[str]
+) -> None:
+    """A drop anywhere on another window's BODY stacks the two windows; only a
+    drop on the tab strip merges them into one group. Dissolving a window into
+    a tab was too much of a surprise for "I dropped it nearby"."""
+    page = dock_page
+    alpha = tear_out_tab(page, "Alpha", PARK_LOWER)
+    beta = tear_out_tab(page, "Beta", PARK_UPPER)
+
+    body = bounds(alpha)
+    drag(
+        page,
+        center(handle_of(beta)),
+        CANVAS,
+        # Squarely mid-body: not the strip, not the thin snap bands.
+        (body["x"] + body["width"] / 2, body["y"] + body["height"] * 0.6),
+    )
+
+    stacked = floating_windows(page).filter(has=page.get_by_role("tab", name="Alpha", exact=True))
+    # Two GROUPS in one window -- a stack, not a two-tab group.
+    expect(stacked.locator("[data-dock-group]")).to_have_count(2)
+    expect(stacked.locator("[data-floating-handle]")).to_have_count(1)
+    assert page_errors == []
+
+
 def test_minimize_all_collapses_a_floating_stack_and_restores_it(
     dock_page: Page, page_errors: list[str]
 ) -> None:

@@ -624,11 +624,18 @@ describe("floating snap zones", () => {
     expect(out.hint.top).toBeCloseTo(frame.bottom - CONTAINER.top - 2);
   });
 
-  it("content center of a floating group -> merge (no split for floating)", () => {
+  it("a floating BODY stacks: upper half above, lower half below", () => {
+    // Merging as tabs is the strip's job alone -- dissolving a window into a
+    // tab was too much of a surprise for "I dropped it nearby". The body
+    // splits at its midpoint instead: content [230..500], midpoint 365.
     const tgt = floatingTarget("g", "w1", 0, frame);
-    const out = run(layout, [tgt], 550, 350)!;
-    expect(out.result).toEqual({ kind: "merge", targetGroupId: "g" });
-    expect(out.hint.variant).toBe("merge");
+    const upper = run(layout, [tgt], 550, 350)!;
+    expect(upper.result).toEqual({ kind: "snap", windowId: "w1", index: 0 });
+    expect(upper.hint.variant).toBe("line");
+    const lower = run(layout, [tgt], 550, 380)!;
+    expect(lower.result).toEqual({ kind: "snap", windowId: "w1", index: 1 });
+    expect(lower.hint.variant).toBe("line");
+    expect(lower.hint.top).toBeCloseTo(frame.bottom - CONTAINER.top - 2);
   });
 
   it("over the strip of a floating group -> insertTab still applies", () => {
@@ -847,9 +854,11 @@ describe("BUG #4 (fixed): overlapping drop targets resolve to the one on TOP", (
         floatTarget("b", "w2", rect(420, 320, 200, 240)),
       ],
     };
-    // (500, 400) is inside BOTH windows; w2 is visually on top.
+    // (500, 400) is inside BOTH windows; w2 is visually on top. The body
+    // offers a stack, and it is w2's stack that gets offered.
     const r = hitTest(l, REGION_W, CONTAINER, targets, 500, 400);
-    expect(r?.result).toEqual({ kind: "merge", targetGroupId: "b" }); // FIXED: top wins
+    expect(r?.result.kind).toBe("snap");
+    expect((r?.result as { windowId: string }).windowId).toBe("w2"); // FIXED: top wins
   });
 
   it("a floating window over the docked region -> hits the FLOATING window", () => {
@@ -876,7 +885,8 @@ describe("BUG #4 (fixed): overlapping drop targets resolve to the one on TOP", (
     };
     // (180, 420): inside the floating window AND the docked region's content area.
     const r = hitTest(l, REGION_W, CONTAINER, targets, 180, 420);
-    expect(r?.result).toEqual({ kind: "merge", targetGroupId: "f" }); // FIXED: float on top wins
+    expect(r?.result.kind).toBe("snap");
+    expect((r?.result as { windowId: string }).windowId).toBe("wf"); // FIXED: float on top wins
   });
 
   it("counter-case (works): non-overlapping windows resolve correctly", () => {
@@ -896,14 +906,12 @@ describe("BUG #4 (fixed): overlapping drop targets resolve to the one on TOP", (
       ],
     };
     // Distinct, non-overlapping centers hit the right windows.
-    expect(hitTest(l, REGION_W, CONTAINER, targets, 125, 400)?.result).toEqual({
-      kind: "merge",
-      targetGroupId: "a",
-    });
-    expect(hitTest(l, REGION_W, CONTAINER, targets, 575, 400)?.result).toEqual({
-      kind: "merge",
-      targetGroupId: "b",
-    });
+    const onA = hitTest(l, REGION_W, CONTAINER, targets, 125, 400)?.result;
+    expect(onA?.kind).toBe("snap");
+    expect((onA as { windowId: string }).windowId).toBe("w1");
+    const onB = hitTest(l, REGION_W, CONTAINER, targets, 575, 400)?.result;
+    expect(onB?.kind).toBe("snap");
+    expect((onB as { windowId: string }).windowId).toBe("w2");
   });
 });
 
@@ -956,7 +964,7 @@ describe("unmergeable target", () => {
     expect((out.result as { region: string }).region).toBe("right");
   });
 
-  it("floating UNMERGEABLE: center is null, snap-below still works", () => {
+  it("floating UNMERGEABLE: the body stacks, even though nothing merges", () => {
     const fl = layoutWith({});
     const fr = rect(400, 200, 300, 300);
     const ft: GroupTarget = {
@@ -967,11 +975,13 @@ describe("unmergeable target", () => {
       ctx: { kind: "floating", windowId: "w1", index: 0 },
       unmergeable: true,
     };
-    // Center -> no merge.
-    expect(run(fl, [ft], 550, 350)).toBeNull();
-    // Snap below (bottom band) -> snap, unaffected by unmergeable.
+    // Stacking is not merging, so the unmergeable body is a stack target
+    // like any other -- where it used to offer nothing at all.
+    const center = run(fl, [ft], 550, 350)!;
+    expect(center.result.kind).toBe("snap");
     const below = run(fl, [ft], 550, 200 + 300 - 5)!;
     expect(below.result.kind).toBe("snap");
+    expect((below.result as { index: number }).index).toBe(1);
   });
 });
 
@@ -992,21 +1002,22 @@ describe("draggingUnmergeable suppresses merge/insertTab from the SOURCE side", 
     return l;
   }
 
-  it("content-area merge becomes null; the same point merges when mergeable", () => {
+  it("the body stacks for an unmergeable drag too: stacking is not merging", () => {
     const l = floatingLayoutAB();
     const targets: DropTargets = {
       groups: [floatTarget("a", "w1", rect(400, 300, 200, 240))],
     };
-    // Mid-content point (past the strip, outside the snap-below band).
+    // Mid-content point. The body offers a stack to both kinds of drag; the
+    // merge this flag exists to suppress lives on the strip alone now.
     const without = hitTest(l, REGION_W, CONTAINER, targets, 500, 400);
-    expect(without?.result).toEqual({ kind: "merge", targetGroupId: "a" });
+    expect(without?.result.kind).toBe("snap");
     const withFlag = hitTest(l, REGION_W, CONTAINER, targets, 500, 400, {
       draggingUnmergeable: true,
     });
-    expect(withFlag).toBeNull();
+    expect(withFlag?.result.kind).toBe("snap");
   });
 
-  it("tab-strip insertTab becomes null", () => {
+  it("tab-strip insertTab is suppressed; a stack is offered instead", () => {
     const l = floatingLayoutAB();
     const targets: DropTargets = {
       groups: [floatTarget("a", "w1", rect(400, 300, 200, 240))],
@@ -1014,10 +1025,12 @@ describe("draggingUnmergeable suppresses merge/insertTab from the SOURCE side", 
     // Over the strip (top + 12..40), right of the only tab.
     const without = hitTest(l, REGION_W, CONTAINER, targets, 560, 326);
     expect(without?.result.kind).toBe("insertTab");
+    // An unmergeable drag cannot become a tab, so the strip point falls
+    // through to the body's stack offer rather than advertising nothing.
     const withFlag = hitTest(l, REGION_W, CONTAINER, targets, 560, 326, {
       draggingUnmergeable: true,
     });
-    expect(withFlag).toBeNull();
+    expect(withFlag?.result.kind).toBe("snap");
   });
 
   it("snap into a floating stack is still offered (snap-below band)", () => {

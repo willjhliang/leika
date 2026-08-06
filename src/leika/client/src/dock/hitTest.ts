@@ -587,15 +587,27 @@ export function hitTest(
         hint: splitLine(region),
       };
     }
-  } else if (ry > 1 - vBand) {
+  } else {
+    // A floating BODY stacks: upper half snaps the dragged window in above
+    // this group, lower half below. Merging as tabs is the strip's job alone
+    // -- a deliberate drop on the tabs -- because dissolving a whole window
+    // into a tab is too much of a surprise for "I dropped it nearby". (This
+    // also gives an unmergeable target's body a use: the control panel's
+    // window could not merge and so offered nothing at all here.)
+    const below = ry > 0.5;
     return {
       result: {
         kind: "snap",
         windowId: g.ctx.windowId,
-        index: g.ctx.index + 1,
+        index: g.ctx.index + (below ? 1 : 0),
       },
       hint: rel(
-        { left: r.left, top: r.bottom - 2, width: r.width, height: 4 },
+        {
+          left: r.left,
+          top: (below ? r.bottom : r.top) - 2,
+          width: r.width,
+          height: 4,
+        },
         "line",
       ),
     };
