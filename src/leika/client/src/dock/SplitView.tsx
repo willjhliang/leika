@@ -295,7 +295,11 @@ function DockLeafView({ node, edge }: { node: DockNode; edge: DockEdge }) {
       // `py-0`: the leaf's vertical inset is carried by the handles at its top
       // and bottom instead, so the whole band around them drags (see
       // CARD_INSET_TOP in cardInset).
-      className="min-h-0 min-w-0 flex-1 overflow-hidden py-0"
+      // `rounded-none`: a docked card is flush with the viewport edge and
+      // tiles against the canvas and its split neighbors -- rounding is the
+      // floating window's lifted-off-the-surface affordance, and here it just
+      // opens pinhole gaps at the screen edge.
+      className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-none py-0"
       style={{
         flexGrow: 1,
         minWidth: 0,

@@ -920,6 +920,9 @@ def test_theme_starts_the_panel_docked_and_insets_the_canvas(
     goto_docked(page, leika_server, side)
 
     assert window_ids(page) == []
+    # Docked cards tile flush against the viewport edge: square corners
+    # (rounding is the floating window's lifted-off-the-surface affordance).
+    expect(control_panel(page)).to_have_css("border-radius", "0px")
     docked = bounds(control_panel(page))
     assert docked["width"] == pytest.approx(CONTROL_WIDTH_PX, abs=1.0)
     workspace = bounds(page.locator("[data-viewport-workspace]"))
@@ -948,6 +951,10 @@ def test_a_server_docked_panel_collapses_to_the_rail_and_floats_out(
     expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
     assert canvas_inset(page) == pytest.approx(MINIMIZED_STRIP_PX, abs=1.0)
     expect(page.get_by_text("Control panel", exact=True)).to_be_visible()
+    # The rail is flush with the edge like the expanded card: square too.
+    expect(strip.locator("xpath=ancestor::*[@data-slot='card']")).to_have_css(
+        "border-radius", "0px"
+    )
 
     strip.locator("[data-dock-minimize]").click()
     expect(control_panel(page)).to_have_attribute("data-dock-side", "left")

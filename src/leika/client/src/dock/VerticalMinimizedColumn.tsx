@@ -24,7 +24,9 @@ export function VerticalMinimizedColumn({
   const leaves = collectLeaves(node);
   return (
     <Card
-      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+      // Square like the expanded docked cards (see DockLeafView): the rail is
+      // flush with the viewport edge too.
+      className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-none"
       style={{
         flexGrow: 1,
         minWidth: 0,
