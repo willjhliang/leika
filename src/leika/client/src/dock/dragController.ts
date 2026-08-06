@@ -732,6 +732,77 @@ export function createDragController(deps: DragControllerDeps): DragController {
     };
   };
 
+  /** Move a freshly floated window under the pointer and return the grab
+   * offsets that hold it there: the cursor lands on the window's title bar
+   * (its strip, or an unmergeable panel's header). For when grab offsets
+   * measured against the drag's SOURCE geometry don't land inside the window
+   * that actually rendered -- a tear-out (the pointer has already left the
+   * strip it tore from), or a minimized rail cell (a 36px-wide, region-tall
+   * box that floats as a full-width bar). Without this the window rides
+   * hundreds of px from the cursor, and the drop zones -- which read the
+   * cursor -- stop having anything to do with what the eye is dragging. */
+  const anchorGrabToTitle = (
+    e: PointerEvent,
+    windowId: WindowId,
+  ): { grabX: number; grabY: number } => {
+    const crect = containerRect();
+    const winEl = containerRef.current?.querySelector<HTMLElement>(
+      `[data-floating-window="${windowId}"]`,
+    );
+    let grabX = 40;
+    let grabY = 18;
+    if (winEl != null) {
+      const winRect = winEl.getBoundingClientRect();
+      grabX = Math.min(40, winRect.width / 2);
+      const titleEl = winEl.querySelector<HTMLElement>(
+        "[data-dock-strip], [data-dock-header]",
+      );
+      if (titleEl != null) {
+        const tRect = titleEl.getBoundingClientRect();
+        grabY = tRect.top - winRect.top + tRect.height / 2;
+      } else {
+        // No title bar found (defensive): anchor within the window's actual
+        // height rather than a fixed 18px that may overshoot a short window.
+        grabY = Math.min(18, winRect.height / 2);
+      }
+    }
+    flushSync(() =>
+      applyOp(
+        ops.moveWindow(
+          layoutRef.current,
+          windowId,
+          e.clientX - crect.left - grabX,
+          e.clientY - crect.top - grabY,
+        ),
+      ),
+    );
+    return { grabX, grabY };
+  };
+
+  /** The grab offsets a float-then-drag should use: the source-measured
+   * offsets when they land inside the rendered window (the pointer keeps
+   * holding the spot it pressed), else re-anchored onto the window's title
+   * bar (see anchorGrabToTitle). */
+  const grabForFloatedWindow = (
+    e: PointerEvent,
+    windowId: WindowId,
+    sourceGrabX: number,
+    sourceGrabY: number,
+  ): { grabX: number; grabY: number } => {
+    const winRect = containerRef.current
+      ?.querySelector<HTMLElement>(`[data-floating-window="${windowId}"]`)
+      ?.getBoundingClientRect();
+    const inside =
+      winRect !== undefined &&
+      sourceGrabX >= 0 &&
+      sourceGrabX <= winRect.width &&
+      sourceGrabY >= 0 &&
+      sourceGrabY <= winRect.height;
+    return inside
+      ? { grabX: sourceGrabX, grabY: sourceGrabY }
+      : anchorGrabToTitle(e, windowId);
+  };
+
   // --- Gesture starters --------------------------------------------------
 
   const startWindowDrag: DragController["startWindowDrag"] = (
@@ -863,8 +934,12 @@ export function createDragController(deps: DragControllerDeps): DragController {
           return {
             windowId: res.windowId,
             groupIdForDim: groupId,
-            grabX: e.clientX - crect.left - rect.x,
-            grabY: e.clientY - crect.top - rect.y,
+            ...grabForFloatedWindow(
+              e,
+              res.windowId,
+              e.clientX - crect.left - rect.x,
+              e.clientY - crect.top - rect.y,
+            ),
           };
         });
       },
@@ -906,8 +981,15 @@ export function createDragController(deps: DragControllerDeps): DragController {
             // No single origin group to dim; the whole column left the tree.
             windowId: res.windowId,
             groupIdForDim: null,
-            grabX: e.clientX - crect.left - rect.x,
-            grabY: e.clientY - crect.top - rect.y,
+            // A fully-minimized column floats as a stack of bars far smaller
+            // than the region-tall wrapper the grab was measured against;
+            // re-anchor onto the window when the measured grab misses it.
+            ...grabForFloatedWindow(
+              e,
+              res.windowId,
+              e.clientX - crect.left - rect.x,
+              e.clientY - crect.top - rect.y,
+            ),
           };
         });
       },
@@ -1022,40 +1104,12 @@ export function createDragController(deps: DragControllerDeps): DragController {
 
         // Anchor the new window so the cursor lands on its tab strip. Unlike
         // a group drag (which floats on the first 3px of motion), a tear-out
-        // only triggers after the pointer has left the strip, so we can't
-        // reuse the accumulated offset -- re-measure the new window's strip
-        // and reposition.
-        const crect = containerRect();
-        const winEl = containerRef.current?.querySelector<HTMLElement>(
-          `[data-floating-window="${res.windowId}"]`,
-        );
-        let grabX = 40;
-        let grabY = 18;
-        if (winEl != null) {
-          const winRect = winEl.getBoundingClientRect();
-          grabX = Math.min(40, winRect.width / 2);
-          const stripEl2 =
-            winEl.querySelector<HTMLElement>("[data-dock-strip]");
-          if (stripEl2 != null) {
-            const sRect = stripEl2.getBoundingClientRect();
-            grabY = sRect.top - winRect.top + sRect.height / 2;
-          } else {
-            // Strip not found (defensive): anchor within the window's actual
-            // height rather than a fixed 18px that may overshoot a short
-            // window.
-            grabY = Math.min(18, winRect.height / 2);
-          }
-        }
-        const newX = e.clientX - crect.left - grabX;
-        const newY = e.clientY - crect.top - grabY;
-        flushSync(() =>
-          applyOp(ops.moveWindow(layoutRef.current, res.windowId, newX, newY)),
-        );
+        // only triggers after the pointer has left the strip, so the
+        // source-measured offset never applies.
         return {
           windowId: res.windowId,
           groupIdForDim: res.floatingGroupId,
-          grabX,
-          grabY,
+          ...anchorGrabToTitle(e, res.windowId),
         };
       });
     };

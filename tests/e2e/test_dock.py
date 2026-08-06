@@ -1004,6 +1004,34 @@ def test_a_folded_rail_dragged_onto_the_canvas_lands_expanded(
     assert page_errors == []
 
 
+def test_the_dragged_rail_stub_rides_under_the_cursor(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """The rail cell is a 36px-wide, region-tall box, but it floats as a
+    full-width bar. Grab offsets measured against the cell would put that bar
+    hundreds of px from the cursor -- and the drop zones read the cursor, so
+    what docks would stop matching what the eye is dragging. The float must
+    re-anchor the cursor onto the bar."""
+    goto_docked(page, leika_server, "left")
+
+    control_handle(page).click()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+
+    page.mouse.move(*center(strip))
+    page.mouse.down()
+    try:
+        page.mouse.move(*CANVAS, steps=8)
+        window = bounds(floating_windows(page).first)
+        assert window["x"] <= CANVAS[0] <= window["x"] + window["width"], (window, CANVAS)
+        assert window["y"] <= CANVAS[1] <= window["y"] + window["height"], (window, CANVAS)
+    finally:
+        page.mouse.up()
+    assert page_errors == []
+
+
 def test_a_folded_floating_panel_docks_expanded(
     leika_server: leika.Server,
     page: Page,
