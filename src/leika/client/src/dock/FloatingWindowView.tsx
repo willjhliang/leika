@@ -518,11 +518,24 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           peek && PEEK_TRANSITION_CLASSES,
           faded && FADED_CLASSES,
         )}
-        onPointerDownCapture={() => onFront(win.id)}
+        onPointerDownCapture={() => {
+          onFront(win.id);
+          // A press inside the card proves the pointer is inside it, whether
+          // or not an enter ever fired (see onPointerMove).
+          setPointerInside(true);
+        }}
         // Enter fires for the peek element too: entering a descendant from
         // outside is entering the card. That is the way back in once the card
         // itself has stopped taking the pointer.
         onPointerEnter={() => setPointerInside(true)}
+        // A window BORN under the cursor -- dragged out of the dock, the
+        // pointer captured to it from its first frame -- may never receive
+        // that enter: boundary events chase crossings, and this pointer never
+        // crossed in. Left untracked, collapsing the fresh window folds it
+        // down to its peek badge with the cursor still on the header. Any
+        // traffic inside the card says what the missing enter would have (a
+        // same-value set is a no-op re-render-wise).
+        onPointerMove={() => setPointerInside(true)}
         onPointerLeave={() => setPointerInside(false)}
         style={{
           position: "absolute",
