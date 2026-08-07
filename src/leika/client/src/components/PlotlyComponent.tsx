@@ -3,7 +3,7 @@ import React from "react";
 import { GuiPlotlyMessage } from "../WebsocketMessages";
 import { useElementSize } from "../hooks/useElementSize";
 import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
-import { MediaDialog, MediaSurface } from "./MediaExpand";
+import { MediaPreview, MediaSurface } from "./MediaPreview";
 
 type PlotDescription = {
   data: unknown;
@@ -85,13 +85,12 @@ export default function PlotlyComponent({
         aspect={aspect}
         onExpand={expand}
       />
-      <MediaDialog
-        open={opened}
-        onOpenChange={setOpened}
-        title="Expanded Plotly plot"
-      >
+      {/* "Plot" for the same reason an unlabelled image says "Image": the
+          protocol gives a plot no label to show, so the preview names its
+          kind rather than going untitled. */}
+      <MediaPreview open={opened} onOpenChange={setOpened} title="Plot">
         <PlotWithAspect jsonStr={plotlyJsonString} aspect={aspect} />
-      </MediaDialog>
+      </MediaPreview>
     </>
   );
 }

@@ -8,6 +8,7 @@ import {
   closeFilePreview,
   filePreviewStore,
   formatBytes,
+  isMediaKind,
   isReadingKind,
   previewKindFor,
   type FileContents,
@@ -16,7 +17,8 @@ import {
 } from "../filePreview";
 import { HintTooltip } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { MediaDialog } from "./MediaExpand";
+import { MediaPreview } from "./MediaPreview";
+import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
 
 /** Read a textual blob without briefly rendering an empty document.
  *
@@ -123,18 +125,21 @@ function ReadingColumn({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** What the frame holds while there is nothing to hold yet: the file still
+/** What the popup holds while there is nothing to hold yet: the file still
  * arriving, or a document still being read out of it. One mark for both, so
- * the wait reads as one wait however it is being spent. */
+ * the wait reads as one wait however it is being spent.
+ *
+ * Fills a document's frame, and carries its own height where there is no
+ * frame -- media has none, and a spinner in a box of no height is nothing. */
 function PendingBody() {
   return (
-    <div className="flex h-full items-center justify-center">
+    <div className="flex h-full min-h-40 items-center justify-center">
       <Spinner className="text-muted-foreground size-6" />
     </div>
   );
 }
 
-/** Render content within the dialog's fixed preview frame. */
+/** Render the file, in the frame a document gets and media does not. */
 function PreviewBody({
   kind,
   preview,
@@ -150,28 +155,24 @@ function PreviewBody({
   const text = useBlobText(blob, isTextual);
 
   switch (kind) {
+    // The three that are shown at their own size. The popup has already been
+    // opened at the media's width -- see `mediaPreviewWidth` at the bottom of
+    // this file -- so each of these fills it, rather than being centered in
+    // something wider with a column of empty dialog down either side.
     case "image":
       return (
-        <div className="flex h-full items-center justify-center">
-          <img
-            src={url}
-            alt={filename}
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
-        </div>
+        <img
+          src={url}
+          alt={filename}
+          className="mx-auto block h-auto w-full rounded-lg"
+        />
       );
     case "video":
       return (
-        <div className="flex h-full items-center justify-center">
-          <video src={url} controls className="max-h-full w-full rounded-lg" />
-        </div>
+        <video src={url} controls className="block h-auto w-full rounded-lg" />
       );
     case "audio":
-      return (
-        <div className="flex h-full items-center justify-center">
-          <audio src={url} controls className="w-full max-w-prose" />
-        </div>
-      );
+      return <audio src={url} controls className="block w-full" />;
     case "pdf":
       // Let browsers without a PDF viewer render the fallback children.
       return (
@@ -245,25 +246,37 @@ export function FilePreviewHost() {
   );
 }
 
-/** How tall the frame holding the file is.
+/** How tall the frame holding a DOCUMENT is.
  *
- * Fixed either way, so a preview opens the same size whatever the file turns
- * out to hold -- a one-line log and a thousand-line one are the same window,
- * and nothing jumps as the contents arrive.
+ * Fixed, so a preview opens the same size whatever the file turns out to hold
+ * -- a one-line log and a thousand-line one are the same window, and nothing
+ * jumps as the contents arrive. Media has no frame at all; see
+ * {@link isMediaKind}.
  *
- * A document gets everything the window has left: the 6rem taken off is the
+ * Writing gets everything the window has left: the 6rem taken off is the
  * dialog's margin, its padding and its title bar, so `reading` is the tallest
  * frame that still fits without the dialog itself scrolling. More page per
- * screen is the whole of what a preview is for. Media stops short of that,
- * because a picture or a player is fitted into its frame rather than scrolled
- * through, and the extra height would only be empty space around it.
+ * screen is the whole of what a preview is for. The rest stops short of that,
+ * because a PDF or a card is looked at rather than read down, and the extra
+ * height would only be empty space around it.
  */
 const FRAME_HEIGHT = {
   reading: "h-[calc(100dvh-6rem)]",
   fitted: "h-[70dvh]",
 } as const;
 
-/** Fixed-size dialog shared by every preview type. */
+/** How wide a document opens: as much of the window as it can have, short of
+ * the edges. A document has no width of its own to ask for. */
+const DOCUMENT_WIDTH = "min(72rem, calc(100vw - 2rem))";
+
+/** A file, in the popup its kind calls for.
+ *
+ * Media opens at its own size, in the same popup a pane's expand button
+ * opens; a document opens in a fixed frame. Which of the two is settled by
+ * the name and the MIME type, both of which arrive with the transfer's first
+ * message -- so the popup is the right shape from the click, and only the
+ * contents wait.
+ */
 export function FilePreviewDialog({
   preview,
   onClose,
@@ -272,15 +285,28 @@ export function FilePreviewDialog({
   onClose: () => void;
 }) {
   const kind = previewKindFor(preview.mimeType, preview.filename);
+  const media = isMediaKind(kind);
+  // Only a picture says how big it is. Audio has no size at all, and a
+  // video's is not worth a second decode to learn, so both open at the floor.
+  const imageSize = useMediaSize(
+    kind === "image" ? (preview.contents?.url ?? null) : null,
+  );
+
+  const body =
+    preview.contents === null ? (
+      <PendingBody />
+    ) : (
+      <PreviewBody kind={kind} preview={preview} contents={preview.contents} />
+    );
+
   return (
-    <MediaDialog
+    <MediaPreview
       open
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
       title={preview.filename}
-      showTitle
-      width="min(72rem, calc(100vw - 2rem))"
+      width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
     >
       {preview.contents !== null && (
         <DownloadCorner
@@ -288,22 +314,18 @@ export function FilePreviewDialog({
           url={preview.contents.url}
         />
       )}
-      <div
-        className={cn(
-          "overflow-auto",
-          FRAME_HEIGHT[isReadingKind(kind) ? "reading" : "fitted"],
-        )}
-      >
-        {preview.contents === null ? (
-          <PendingBody />
-        ) : (
-          <PreviewBody
-            kind={kind}
-            preview={preview}
-            contents={preview.contents}
-          />
-        )}
-      </div>
-    </MediaDialog>
+      {media ? (
+        body
+      ) : (
+        <div
+          className={cn(
+            "overflow-auto",
+            FRAME_HEIGHT[isReadingKind(kind) ? "reading" : "fitted"],
+          )}
+        >
+          {body}
+        </div>
+      )}
+    </MediaPreview>
   );
 }

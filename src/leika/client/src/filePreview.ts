@@ -32,6 +32,23 @@ export function isReadingKind(kind: PreviewKind): boolean {
   return kind === "markdown" || kind === "prose";
 }
 
+/** Whether a viewer holds something that arrives with a size of its own.
+ *
+ * The distinction the popup takes its own size from. A picture was made at a
+ * width and a player is as tall as it is; the popup is that, and the media
+ * fills it. Everything else -- a document, a table of records, a card saying
+ * there is no viewer -- has no size until something decides one for it, so it
+ * gets a frame instead, and the frame is fixed so that a one-line log and a
+ * thousand-line one open the same window.
+ *
+ * A PDF is a document by this reckoning even though it is drawn by a viewer:
+ * it is pages, read by scrolling, and its page size is not the size to show
+ * it at.
+ */
+export function isMediaKind(kind: PreviewKind): boolean {
+  return kind === "image" || kind === "video" || kind === "audio";
+}
+
 /** Extensions whose files are text that no MIME type admits to.
  *
  * `mimetypes.guess_type` on the server answers "application/octet-stream" for

@@ -4,6 +4,8 @@ import {
   closeFilePreview,
   filePreviewStore,
   formatBytes,
+  isMediaKind,
+  isReadingKind,
   openFilePreview,
   previewKindFor,
   resolveFilePreview,
@@ -78,6 +80,32 @@ describe("previewKindFor", () => {
     expect(previewKindFor("application/octet-stream", ".gitignore")).toBe(
       "unsupported",
     );
+  });
+});
+
+describe("isMediaKind", () => {
+  it("claims the three kinds that arrive with a size of their own", () => {
+    expect(isMediaKind("image")).toBe(true);
+    expect(isMediaKind("video")).toBe(true);
+    expect(isMediaKind("audio")).toBe(true);
+  });
+
+  it("leaves the ones a frame has to be picked for", () => {
+    // A PDF is drawn by a viewer and is still a document: it is pages, read
+    // by scrolling, and its page size is not the size to show it at.
+    expect(isMediaKind("pdf")).toBe(false);
+    expect(isMediaKind("markdown")).toBe(false);
+    expect(isMediaKind("prose")).toBe(false);
+    expect(isMediaKind("text")).toBe(false);
+    expect(isMediaKind("unsupported")).toBe(false);
+  });
+
+  it("takes nothing that a document is read down", () => {
+    // The two splits are answering different questions and must not be
+    // confused: `isReadingKind` picks a frame's height, this picks whether
+    // there is a frame at all.
+    expect(isReadingKind("image")).toBe(false);
+    expect(isMediaKind("markdown")).toBe(false);
   });
 });
 

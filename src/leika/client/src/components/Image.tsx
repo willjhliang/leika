@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 
 import { Field, FieldLabel } from "@/components/ui/field";
 import { GuiImageMessage } from "../WebsocketMessages";
-import { MediaDialog, MediaSurface } from "./MediaExpand";
+import { MediaPreview, MediaSurface } from "./MediaPreview";
+import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
 import { guiLabelClassName } from "./guiLabelStyles";
 
 const ImageWithExpand = React.memo(function ImageWithExpand({
@@ -33,39 +34,24 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
   );
 });
 
-const XL_SIZE_PX = 880;
-
 function ImageComponent({ props }: GuiImageMessage) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [imageWidth, setImageWidth] = useState<number | null>(null);
   const [opened, setOpened] = useState(false);
   // Stable, so the memo above can actually skip re-renders of the inline copy.
   const expand = React.useCallback(() => setOpened(true), []);
+  // What the preview opens at. Measured off the URL rather than beside it, so
+  // the size follows the picture wherever it is being shown from.
+  const imageSize = useMediaSize(imageUrl);
 
   useEffect(() => {
-    let active = true;
     const nextUrl = URL.createObjectURL(
       new Blob([props._data], { type: `image/${props._format}` }),
     );
-    setImageWidth(null);
     setImageUrl(nextUrl);
-    const image = new Image();
-    image.onload = () => {
-      if (active) setImageWidth(image.naturalWidth);
-    };
-    image.src = nextUrl;
-    return () => {
-      active = false;
-      image.onload = null;
-      URL.revokeObjectURL(nextUrl);
-    };
+    return () => URL.revokeObjectURL(nextUrl);
   }, [props._data, props._format]);
 
   if (imageUrl === null) return null;
-  const dialogWidth =
-    imageWidth === null
-      ? `${XL_SIZE_PX}px`
-      : `min(90vw, max(${XL_SIZE_PX}px, ${imageWidth}px))`;
 
   return (
     <>
@@ -74,19 +60,18 @@ function ImageComponent({ props }: GuiImageMessage) {
         label={props.label}
         onExpand={expand}
       />
-      <MediaDialog
+      <MediaPreview
         open={opened}
         onOpenChange={setOpened}
         title={props.label ?? "Image"}
-        showTitle
-        width={dialogWidth}
+        width={mediaPreviewWidth(imageSize)}
       >
         <img
           src={imageUrl}
           alt={props.label ?? ""}
           className="mx-auto block h-auto w-full rounded-lg"
         />
-      </MediaDialog>
+      </MediaPreview>
     </>
   );
 }

@@ -10,8 +10,12 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { HintTooltip } from "./common";
+import { guiLabelClassName } from "./guiLabelStyles";
 
-/** The control that opens a media element's expanded view.
+/** The control that opens a media element's preview.
+ *
+ * Still called "expand" on its face, because that is what pressing it does to
+ * the picture already in front of you. {@link MediaPreview} is what it opens.
  *
  * Chrome for the media, not part of it: revealed on hover. Keyboard focus and
  * coarse pointers (which never hover) reveal it too, so it is never
@@ -52,8 +56,8 @@ function ExpandButton({
 /** A media element together with its expand affordance.
  *
  * Owns the `group/media` the button's hover reveal keys off, so no caller has
- * to remember it. `onExpand` is optional: the expanded copy of a media element
- * renders through here too, and must not offer to expand itself again.
+ * to remember it. `onExpand` is optional: the copy inside the preview renders
+ * through here too, and must not offer to expand itself again.
  */
 export function MediaSurface({
   subject,
@@ -80,10 +84,23 @@ export function MediaSurface({
   );
 }
 
-/** The expanded view of a media element.
+/** A piece of media, shown at its own size.
  *
- * `title` names the dialog for screen readers whether or not it is drawn, so
- * media with no label of its own still passes one in.
+ * The one popup media opens in, whether it was expanded from a pane or sent
+ * by the server as a file to look at. Both are the same act -- something with
+ * a size of its own, given the room to be seen at it -- and they were drawn
+ * two different ways for long enough to drift: one sized to its picture, the
+ * other fitting the picture into a frame it had picked in advance, which left
+ * a portrait image marooned between two columns of empty dialog.
+ *
+ * So there is no frame here. The popup is the width its caller asks for --
+ * `mediaPreviewWidth` in ./mediaPreviewSize -- and the media fills it.
+ *
+ * `title` is drawn, always. It is the one line of chrome a preview has, and
+ * what it says is which of the things on the page you are now looking at --
+ * a question the media itself cannot answer, since it looks the same here as
+ * it did in the panel. Media with no label of its own names its own kind, the
+ * way an unlabelled image says "Image".
  *
  * Focus is handled as a viewer, not as a form. On open it lands on the frame
  * itself rather than the first button in it: a viewer's tabbable elements are
@@ -94,18 +111,16 @@ export function MediaSurface({
  * and sending focus back to the button that opened it draws a focus ring (and,
  * from Escape, that button's tooltip) that nobody asked for.
  */
-export function MediaDialog({
+export function MediaPreview({
   open,
   onOpenChange,
   title,
-  showTitle = false,
   width,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  showTitle?: boolean;
   /** CSS width for the dialog. Defaults to the stock 4xl content width. */
   width?: string;
   children: React.ReactNode;
@@ -123,8 +138,15 @@ export function MediaDialog({
         )}
         style={width === undefined ? undefined : { width }}
       >
-        <DialogHeader className={showTitle ? undefined : "sr-only"}>
-          <DialogTitle>{title}</DialogTitle>
+        <DialogHeader>
+          {/* Quiet, the way a GUI label is quiet, and for the same reason: it
+              names what is under it, and a name set as loudly as a heading
+              competes with the one thing the popup was opened to show. A
+              modal's title is a heading because a modal is a page of its own;
+              a preview's is a caption. */}
+          <DialogTitle className={cn(guiLabelClassName, "text-sm")}>
+            {title}
+          </DialogTitle>
         </DialogHeader>
         {children}
       </DialogContent>

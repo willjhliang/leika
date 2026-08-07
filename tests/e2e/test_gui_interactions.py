@@ -904,6 +904,57 @@ def test_media_chrome_is_shared_and_labelled_like_the_panel(
     assert page_errors == []
 
 
+@pytest.mark.plotly
+def test_a_plots_preview_is_titled_like_an_images(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Expanding a plot draws a title, the way expanding an image does.
+
+    Drawing it was once optional and a plot took the default, so a plot's
+    preview opened with a name only a screen reader could reach. The title is
+    the one line of chrome a preview has, and what it says is which of the
+    things on the page you are now looking at -- a question the media itself
+    cannot answer, since it looks the same here as it did in the panel.
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    leika_server.gui.add_image(np.zeros((20, 30, 3), dtype=np.uint8), label="Preview")
+    figure = go.Figure(data=[go.Scatter(x=[0, 1, 2], y=[0, 1, 0])])
+    leika_server.gui.add_plotly(figure, aspect=2.0, config={"staticPlot": True})
+
+    title = leika_page.locator('[data-slot="dialog-title"]')
+    # Typography and flow only. The two popups are different widths -- each is
+    # the size of its own media -- and so their title boxes are too.
+    probe = """el => {
+        const style = getComputedStyle(el);
+        return {
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            lineHeight: style.lineHeight,
+            color: style.color,
+            position: style.position,
+        };
+    }"""
+
+    seen = {}
+    for control, expected in (("Expand image", "Preview"), ("Expand plot", "Plot")):
+        button = leika_page.get_by_role("button", name=control)
+        expect(button).to_be_attached(timeout=15_000)
+        button.click()
+        # Visible, not merely present: `sr-only` would still satisfy a text
+        # assertion, and being reachable by sight is the whole point.
+        expect(title).to_be_visible(timeout=5_000)
+        expect(title).to_have_text(expected)
+        seen[control] = title.evaluate(probe)
+        leika_page.keyboard.press("Escape")
+        expect(title).to_have_count(0)
+
+    # Same line of chrome, not two that happen to both be drawn.
+    assert seen["Expand image"] == seen["Expand plot"], seen
+    assert page_errors == []
+
+
 def test_the_slider_number_box_is_opt_in(
     leika_server: leika.Server,
     leika_page: Page,

@@ -3,6 +3,10 @@
  * foreground heading; a panel full of those competes with the values, so
  * labels are muted and normal-weight instead. Layout is left to the caller.
  *
+ * Also worn by the settings rows and by a media preview's title, which are
+ * not GUI labels but are doing the same job: naming a thing without drowning
+ * it out. Changing this changes all three.
+ *
  * Its own module rather than `common.tsx` so that file keeps exporting only
  * components, which is what fast refresh needs to swap them in place. */
 export const guiLabelClassName =

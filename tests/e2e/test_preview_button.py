@@ -370,16 +370,17 @@ def _opened_size(page: Page, label: str) -> tuple[int, int]:
     return tuple(size)
 
 
-def test_a_preview_opens_the_same_size_whatever_the_file_holds(
+def test_a_document_preview_opens_the_same_size_whatever_the_file_holds(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # The frame is the viewer's, never the file's: a one-line log and a
-    # thousand-line one open identically, so nothing resizes as content lands.
+    # A document has no size of its own, so the frame is the viewer's: a
+    # one-line log and a thousand-line one open identically, and nothing
+    # resizes as the content lands. Media is the exception, and has its own
+    # test below.
     leika_server.gui.add_preview_button("Show one line", b"t,v\n", filename="tiny.csv")
     leika_server.gui.add_preview_button(
         "Show many lines", ("t,v\n" * 500).encode(), filename="long.csv"
     )
-    leika_server.gui.add_preview_button("Show field", _png(8, 6), filename="field.png")
     leika_server.gui.add_preview_button("Show weights", b"\x00\x01", filename="weights.bin")
     leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
     leika_server.gui.add_preview_button(
@@ -392,7 +393,6 @@ def test_a_preview_opens_the_same_size_whatever_the_file_holds(
         for label in (
             "Show one line",
             "Show many lines",
-            "Show field",
             "Show weights",
             "Show notes",
             "Show long notes",
@@ -400,15 +400,42 @@ def test_a_preview_opens_the_same_size_whatever_the_file_holds(
         )
     }
 
-    fitted = {
-        sizes[label] for label in ("Show one line", "Show many lines", "Show field", "Show weights")
-    }
+    fitted = {sizes[label] for label in ("Show one line", "Show many lines", "Show weights")}
     reading = {sizes[label] for label in ("Show notes", "Show long notes", "Show plain")}
     assert len(fitted) == 1, sizes
     assert len(reading) == 1, sizes
     # Writing is read by scrolling, so its frame takes the height the window
-    # has rather than the share a fitted picture needs.
+    # has rather than the share a fitted card needs.
     assert reading.pop()[1] > fitted.pop()[1], sizes
+    assert page_errors == []
+
+
+def test_a_picture_preview_is_the_shape_of_the_picture(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """Media opens at its own size, which is the whole difference from a document.
+
+    A document's popup is a frame picked in advance; a picture's popup is the
+    picture. Fitting a portrait into the document's frame left it marooned
+    between two columns of empty dialog, which is what this rules out: the two
+    shapes must not open the same box, and the taller picture must open the
+    taller and narrower one.
+    """
+    leika_server.gui.add_preview_button("Show wide", _png(600, 200), filename="wide.png")
+    leika_server.gui.add_preview_button("Show tall", _png(200, 600), filename="tall.png")
+    leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
+
+    wide = _opened_size(preview_page, "Show wide")
+    tall = _opened_size(preview_page, "Show tall")
+    document = _opened_size(preview_page, "Show notes")
+
+    assert wide != tall, (wide, tall)
+    assert tall[0] < wide[0], (wide, tall)
+    assert tall[1] > wide[1], (wide, tall)
+    # Neither is the frame a document gets, which is the shape both used to be
+    # forced into.
+    assert wide[0] != document[0], (wide, document)
+    assert tall[0] != document[0], (tall, document)
     assert page_errors == []
 
 
