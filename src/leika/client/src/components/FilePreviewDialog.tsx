@@ -260,7 +260,10 @@ function PreviewBody({
       if (text === null) return <PendingBody />;
       return (
         <ReadingColumn>
-          <MarkdownRenderer>{text}</MarkdownRenderer>
+          {/* The one surface with margins to put a contents list in: the
+              writing keeps to its measure, and what is left over on either
+              side is room a preview has and a panel row does not. */}
+          <MarkdownRenderer contents>{text}</MarkdownRenderer>
         </ReadingColumn>
       );
     case "prose":

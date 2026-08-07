@@ -754,3 +754,342 @@ def test_a_file_a_script_sent_has_nothing_to_reload(
     # The rest of the corner is unaffected: the file is still here to save.
     expect(dialog.get_by_role("link", name="Download sent.md")).to_be_visible()
     assert page_errors == []
+
+
+_FILLER = "Prose that is here to make the document longer than the frame.\n\n" * 12
+
+CONTENTS_DOCUMENT = f"""# Training report
+
+{_FILLER}
+## Setup
+
+{_FILLER}
+### Seeds
+
+Every configuration was given the same one.
+
+## Results
+
+{_FILLER}
+##### An aside
+
+Too deep for the list: it is four levels under the shallowest heading here.
+""".encode()
+
+
+def _contents(page: Page) -> Locator:
+    return _dialog(page).locator("[data-leika-document-contents]")
+
+
+def _settle(page: Page) -> None:
+    """Wait out the dialog's opening before measuring anything in it.
+
+    It opens by scaling up, so a rect read during that is a frame of the box
+    rather than the box -- and a scroll computed from one lands short by
+    however much of the zoom was left, which is a test failing for a reason
+    that has nothing to do with what it is testing.
+    """
+    _dialog(page).evaluate(
+        """async (el) => {
+          await Promise.all(
+            el.getAnimations({subtree: true})
+              .map((animation) => animation.finished.catch(() => {}))
+          );
+        }"""
+    )
+
+
+def _writing_gaps(page: Page) -> tuple[float, float]:
+    """How much room there is either side of the column of writing."""
+    _settle(page)
+    gaps = _dialog(page).evaluate(
+        """(el) => {
+          const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
+          const text = el.querySelector('.typeset > p').getBoundingClientRect();
+          return [text.left - frame.left, frame.right - text.right];
+        }"""
+    )
+    return (gaps[0], gaps[1])
+
+
+def test_a_document_lists_its_own_contents_beside_it(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """The contents list: what is in it, and what following one does."""
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    contents = _contents(preview_page)
+    expect(contents).to_be_visible()
+
+    # Three levels down from the shallowest heading, and no further: a list of
+    # every subsection is the document again, in outline.
+    expect(contents.get_by_role("link")).to_have_text(
+        ["Training report", "Setup", "Seeds", "Results"]
+    )
+
+    # In the right-hand margin: past the writing, not before it.
+    _settle(preview_page)
+    assert _dialog(preview_page).evaluate(
+        """el => {
+             const list = el.querySelector('[data-leika-document-contents]');
+             const text = el.querySelector('.typeset > p');
+             return list.getBoundingClientRect().left
+                    >= text.getBoundingClientRect().right;
+           }"""
+    )
+
+    frame = _dialog(preview_page).locator("div.overflow-auto").first
+    assert frame.evaluate("el => el.scrollTop") == 0
+    address = preview_page.url
+
+    contents.get_by_role("link", name="Results").click()
+    # Carried, and by the same code that carries a link written in the file:
+    # the document scrolls and the app's address is untouched.
+    expect(_dialog(preview_page)).to_be_visible()
+    preview_page.wait_for_function(
+        "() => document.querySelector('[data-slot=dialog-content] div.overflow-auto').scrollTop > 0"
+    )
+    assert preview_page.url == address
+
+    # And the list stays where it is while the document moves under it.
+    assert (
+        contents.evaluate(
+            "el => Math.round(el.getBoundingClientRect().top"
+            " - el.closest('div.overflow-auto').getBoundingClientRect().top)"
+        )
+        == 0
+    )
+    assert page_errors == []
+
+
+def test_the_contents_column_does_not_move_the_writing(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # What the empty mirrored column on the far side is for. The writing is
+    # centred in the frame because of the measure it is set to, and a contents
+    # list appearing beside it must not shove it off centre -- a reader who
+    # widens the window would watch the column they are reading slide left.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show listed", CONTENTS_DOCUMENT, filename="listed.md")
+    leika_server.gui.add_preview_button(
+        "Show unlisted", CONTENTS_DOCUMENT.replace(b"#", b""), filename="unlisted.md"
+    )
+
+    _press(preview_page, "Show listed")
+    expect(_contents(preview_page)).to_be_visible()
+    left, right = _writing_gaps(preview_page)
+    assert abs(left - right) < 2.0, (left, right)
+    preview_page.keyboard.press("Escape")
+    expect(_dialog(preview_page)).to_have_count(0)
+
+    # The same document with its headings taken away: no list, and the writing
+    # in the same place it was.
+    _press(preview_page, "Show unlisted")
+    expect(_dialog(preview_page)).to_be_visible()
+    expect(_contents(preview_page)).to_have_count(0)
+    bare_left, bare_right = _writing_gaps(preview_page)
+    assert abs(bare_left - bare_right) < 2.0, (bare_left, bare_right)
+    assert abs(bare_left - left) < 2.0, (bare_left, left)
+    assert page_errors == []
+
+
+def test_a_narrow_preview_keeps_its_width_for_the_document(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # There is no margin to put a list in, so there is no list. The document
+    # gets the width, which is what it was going to be shown at anyway.
+    preview_page.set_viewport_size({"width": 900, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    expect(_dialog(preview_page)).to_contain_text("Training report")
+    expect(_contents(preview_page)).to_be_hidden()
+
+    # Widen the window and it appears, without the preview being reopened.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    expect(_contents(preview_page)).to_be_visible()
+    assert page_errors == []
+
+
+def test_a_document_in_the_panel_has_no_contents_column(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A panel row is the width of a panel: there is no margin there to put a
+    # list in, and asking for one is a decision the preview makes alone.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_text(
+        None, CONTENTS_DOCUMENT.decode(), editable=False, markdown=True, multiline=True
+    )
+
+    expect(preview_page.get_by_role("heading", name="Training report")).to_be_visible()
+    assert preview_page.locator("[data-leika-document-contents]").count() == 0
+    assert page_errors == []
+
+
+def _marked(page: Page) -> list[str]:
+    """The contents entries wearing the mark. Exactly one, always."""
+    return _contents(page).locator("a[aria-current]").all_inner_texts()
+
+
+def test_the_contents_marks_the_section_being_read(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """The entry for the section at the top of the view, marked as you go."""
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    expect(_contents(preview_page)).to_be_visible()
+    _settle(preview_page)
+    frame = _dialog(preview_page).locator("div.overflow-auto").first
+
+    # At the top of a document, before any heading has been scrolled past, the
+    # reader is in its first section.
+    assert _marked(preview_page) == ["Training report"]
+
+    # Scrolled until the next heading is at the top of the frame, the mark is
+    # on it -- and off the one before.
+    setup = _dialog(preview_page).get_by_role("heading", name="Setup")
+    frame.evaluate(
+        """(el, heading) => {
+             el.scrollTop += heading.getBoundingClientRect().top
+                             - el.getBoundingClientRect().top;
+           }""",
+        setup.element_handle(),
+    )
+    expect(_contents(preview_page).get_by_role("link", name="Setup")).to_have_attribute(
+        "aria-current", "true"
+    )
+    assert _marked(preview_page) == ["Setup"]
+
+    # The rule down the left of the entry is marked with it. It is the part of
+    # the mark that can be seen without reading anything.
+    rules = _contents(preview_page).evaluate(
+        """el => {
+             const colour = (link) => getComputedStyle(
+               link.closest('li')).borderLeftColor;
+             return {
+               marked: colour(el.querySelector('a[aria-current]')),
+               rest: colour(el.querySelector('a:not([aria-current])')),
+             };
+           }"""
+    )
+    assert rules["marked"] != rules["rest"], rules
+
+    # Following an entry marks the section it lands in, which is the same rule
+    # answering the same question: what is at the top of the view now.
+    _contents(preview_page).get_by_role("link", name="Results").click()
+    expect(_contents(preview_page).get_by_role("link", name="Results")).to_have_attribute(
+        "aria-current", "true"
+    )
+
+    # And back where it started, so the mark is not a one-way trip.
+    frame.evaluate("el => { el.scrollTop = 0; }")
+    expect(_contents(preview_page).get_by_role("link", name="Training report")).to_have_attribute(
+        "aria-current", "true"
+    )
+    assert page_errors == []
+
+
+def test_a_section_the_scroll_cannot_reach_is_still_marked(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A document whose last sections are shorter than the frame runs out of
+    # scroll before their headings reach the top of it. The mark must not be
+    # left on a section that has gone off the screen, so at the bottom the
+    # question is asked of what is visible instead.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    document = (
+        f"# Report\n\n{_FILLER}## Long middle\n\n{_FILLER}"
+        "## Nearly the end\n\nOne line.\n\n## The end\n\nAnd one more.\n"
+    ).encode()
+    leika_server.gui.add_preview_button("Show notes", document, filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    expect(_contents(preview_page)).to_be_visible()
+    _settle(preview_page)
+    frame = _dialog(preview_page).locator("div.overflow-auto").first
+    frame.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    # The mark is measured on an animation frame, so it lands a beat after the
+    # scroll rather than with it. There is no particular entry to wait for --
+    # which one is right is what this is asking -- so it is a wait for the
+    # measuring to have happened at all.
+    preview_page.wait_for_timeout(300)
+
+    marked = _contents(preview_page).locator("a[aria-current]")
+    expect(marked).to_have_count(1)
+    # Whatever it landed on, it is on the screen -- which is the whole rule.
+    assert marked.evaluate(
+        """el => {
+             const frame = el.closest('div.overflow-auto').getBoundingClientRect();
+             const id = 'user-content-' + el.getAttribute('href').slice(1);
+             const heading = document.getElementById(id).getBoundingClientRect();
+             return heading.top >= frame.top - 1 && heading.top < frame.bottom;
+           }"""
+    ), marked.inner_text()
+    assert page_errors == []
+
+
+def test_a_document_that_fits_marks_its_first_section(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A document shorter than the frame is scrolled to its end from the
+    # moment it opens, by the arithmetic -- but the reader is at the top of
+    # it, and the top of it is the first section. Getting this wrong marked
+    # the second entry of every short file.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button(
+        "Show notes",
+        b"# Report\n\nOne paragraph.\n\n## Files\n\nAnd one more.\n",
+        filename="notes.md",
+    )
+
+    _press(preview_page, "Show notes")
+    expect(_contents(preview_page)).to_be_visible()
+    _settle(preview_page)
+    preview_page.wait_for_timeout(300)
+    assert _marked(preview_page) == ["Report"]
+    assert page_errors == []
+
+
+def _contents_offset(page: Page) -> dict[str, float]:
+    """Where the contents sit relative to the document, and to the frame."""
+    _settle(page)
+    return _dialog(page).evaluate(
+        """el => {
+             const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
+             const doc = el.querySelector('.typeset').getBoundingClientRect();
+             const list = el.querySelector('[data-leika-document-contents]')
+                            .getBoundingClientRect();
+             return {
+               fromDocument: list.left - doc.right,
+               fromFrame: frame.right - list.right,
+             };
+           }"""
+    )
+
+
+def test_the_contents_hang_off_the_document_not_the_window(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The list is a list of what is beside it, so it stays beside it. Sized
+    # from the frame instead, it was pinned to the frame's edge -- and filling
+    # the window walked it another hundred pixels away from the document while
+    # the reader watched.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    expect(_contents(preview_page)).to_be_visible()
+    windowed = _contents_offset(preview_page)
+
+    preview_page.get_by_role("button", name="Fill the window").click()
+    expect(_dialog(preview_page)).to_have_attribute("data-preview-fullscreen", "true")
+    full = _contents_offset(preview_page)
+
+    assert abs(full["fromDocument"] - windowed["fromDocument"]) < 1.0, (windowed, full)
+    # And it really is a wider window: the frame's own edge moved well away.
+    assert full["fromFrame"] - windowed["fromFrame"] > 50.0, (windowed, full)
+    assert page_errors == []

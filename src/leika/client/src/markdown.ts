@@ -154,6 +154,101 @@ function rehypeRestoreEmbeds() {
   };
 }
 
+/** One heading, as a contents list needs it. */
+export interface DocumentHeading {
+  /** What a link to this heading is written as, without the `#`.
+   *
+   * The id off the page less {@link DOCUMENT_ID_PREFIX} -- which is to say,
+   * exactly what an author writing a link to their own heading would put.
+   * Stored that way so a contents entry is an ordinary in-document link and
+   * is followed by the same code that follows one written in the file.
+   */
+  fragment: string;
+  /** 1 for `#`, 6 for `######`. What a contents list indents by. */
+  level: number;
+  /** The heading as it reads: its text, with any markup in it flattened. */
+  text: string;
+}
+
+const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+
+/** Take down the document's headings as it is rendered.
+ *
+ * Here rather than in a pass of its own so that there is one parse and one
+ * set of ids. A contents list is only usable if every entry points at a
+ * heading that exists under exactly that name, and the way to guarantee that
+ * is to read the names off the tree the page is about to be built from --
+ * after slugging, after sanitation's rename, after a heading written as
+ * inline HTML has become a heading like any other.
+ *
+ * Left out rather than listed dead: a heading with no id, one whose id did not
+ * come from the rename above -- no link written with a `#` could reach it --
+ * and one with nothing to show for a name.
+ */
+function rehypeCollectHeadings() {
+  return (tree: Root, file: { data: { headings?: DocumentHeading[] } }) => {
+    const headings: DocumentHeading[] = [];
+    const textOf = (node: Nodes): string =>
+      node.type === "text"
+        ? node.value
+        : "children" in node
+          ? node.children.map(textOf).join("")
+          : "";
+    const visit = (node: Nodes): void => {
+      if (node.type === "element" && HEADING_TAGS.has(node.tagName)) {
+        const id = node.properties.id;
+        const text = textOf(node).trim();
+        if (
+          typeof id === "string" &&
+          id.startsWith(DOCUMENT_ID_PREFIX) &&
+          text !== ""
+        ) {
+          headings.push({
+            fragment: id.slice(DOCUMENT_ID_PREFIX.length),
+            level: Number(node.tagName.slice(1)),
+            text,
+          });
+        }
+        // A heading holds no headings; nothing below it to walk.
+        return;
+      }
+      if ("children" in node) node.children.forEach(visit);
+    };
+    visit(tree);
+    file.data.headings = headings;
+  };
+}
+
+/** How many levels below the shallowest heading a contents list goes.
+ *
+ * Three levels in all. A contents list is for finding the part of a document
+ * you want, and past three levels it stops being a list of parts and becomes
+ * the document again, in outline. Counted from the shallowest heading present
+ * rather than from `h1`, because plenty of files are written with `##` as
+ * their top level -- and one written that way is not a document whose
+ * contents are all subsections. */
+const CONTENTS_DEPTH = 2;
+
+/** The entries a contents list shows, out of everything a document heads.
+ *
+ * Fewer than two is not a list: one entry is the document's own title said
+ * twice, and none is a file with no headings at all. Both give nothing back.
+ */
+export function contentsOf(headings: DocumentHeading[]): DocumentHeading[] {
+  if (headings.length === 0) return [];
+  const shallowest = Math.min(...headings.map((heading) => heading.level));
+  const listed = headings.filter(
+    (heading) => heading.level <= shallowest + CONTENTS_DEPTH,
+  );
+  return listed.length < 2 ? [] : listed;
+}
+
+/** A rendered document: the tree to draw, and what is in it. */
+export interface RenderedDocument {
+  element: ReactElement;
+  headings: DocumentHeading[];
+}
+
 /**
  * Build a renderer that turns markdown into React elements.
  *
@@ -183,6 +278,7 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
     .use(rehypeSanitize, schema)
     .use(rehypeRestoreEmbeds)
     .use(rehypeColorChips)
+    .use(rehypeCollectHeadings)
     .use(rehypeReact, {
       // React's own jsx-runtime types and the ones rehype-react asks for
       // describe the same three functions with different signatures, so the
@@ -194,8 +290,12 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
       components,
     } as RehypeReactOptions);
 
-  return (markdown: string): ReactElement => {
+  return (markdown: string): RenderedDocument => {
     const { lifted, embeds } = liftEmbeds(markdown);
-    return processor.processSync({ value: lifted, data: { embeds } }).result;
+    const file = processor.processSync({ value: lifted, data: { embeds } });
+    return {
+      element: file.result,
+      headings: (file.data as { headings?: DocumentHeading[] }).headings ?? [],
+    };
   };
 }

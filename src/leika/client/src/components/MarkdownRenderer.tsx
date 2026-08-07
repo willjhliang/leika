@@ -1,6 +1,11 @@
 import React from "react";
 
-import { DOCUMENT_ID_PREFIX } from "../markdown";
+import { cn } from "@/lib/utils";
+import {
+  contentsOf,
+  DOCUMENT_ID_PREFIX,
+  type DocumentHeading,
+} from "../markdown";
 import { renderMarkdown } from "./markdownDocument";
 
 /** The part of the document a `#fragment` names, as it was written.
@@ -29,6 +34,27 @@ function fragmentOf(href: string): string {
  * so a contents link pointing deep into a README turns into a glide.
  */
 const SCROLL_DURATION_MS = 200;
+
+/** The box the document is read through, whether or not it is scrolled.
+ *
+ * The frame a reader sees the document in. {@link scrollFrameOf} answers a
+ * different question with almost the same walk -- which box a carry should
+ * move -- and wants the first ancestor that is *actually* overflowing, since
+ * a frame with nothing to scroll is not the one a link should move. Here the
+ * frame is wanted for its edges, and a document that happens to fit in it has
+ * edges like any other.
+ */
+function readingFrameOf(element: HTMLElement): HTMLElement | null {
+  for (
+    let node = element.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return null;
+}
 
 /** The box the document actually scrolls in: dialog frame or panel body. */
 function scrollFrameOf(element: HTMLElement): HTMLElement | null {
@@ -119,6 +145,226 @@ function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
   carryTo(frame, target);
 }
 
+/** How far below the top of the frame a heading still counts as reached.
+ *
+ * A heading is the section you are in from the moment it reaches the top of
+ * what you can see. The slack is there because the two ways of arriving at
+ * one land it in slightly different places: a carried link stops it flush
+ * against the top edge, and the jump a reader who asked for less motion gets
+ * leaves the `scroll-margin` typeset gives it. Both have to read as arrived.
+ */
+const SECTION_LINE_PX = 24;
+
+/** Which of `headings` the reader is currently in front of.
+ *
+ * Measured rather than observed. An `IntersectionObserver` answers "is this
+ * heading on screen", which is not the question: a section longer than the
+ * frame has no heading on screen anywhere in the middle of it, and the
+ * contents list would go blank for exactly as long as the reader stayed in
+ * the section they were reading. What is wanted is the last heading that has
+ * gone past the line, which is always some heading, and is the one whose
+ * words are above whatever is in front of the reader now.
+ *
+ * The end of the document needs saying twice, not differently. A file whose
+ * last sections are shorter than the frame cannot scroll their headings up to
+ * the line at all -- the scroll runs out first -- and the rule above would
+ * leave the mark on a section that is no longer on the screen, which is the
+ * one thing it must never do. So at the bottom of the scroll the same
+ * question is asked of what is visible: the topmost heading still on screen
+ * is the section at the top of the view, line or no line. A last section long
+ * enough to fill the frame is unaffected, having no heading on screen to
+ * prefer.
+ */
+function useCurrentSection(
+  headings: DocumentHeading[],
+  navRef: React.RefObject<HTMLElement | null>,
+): string | null {
+  const [current, setCurrent] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const nav = navRef.current;
+    if (nav === null) return;
+    const frame = readingFrameOf(nav);
+    if (frame === null) return;
+
+    let pending = 0;
+    const measure = () => {
+      pending = 0;
+      const box = frame.getBoundingClientRect();
+      const line = box.top + SECTION_LINE_PX;
+      // The scroll has run out with more document below. A frame the document
+      // fits inside is not that, however much its numbers look like it: there
+      // the reader is at the top and has been all along.
+      const atEnd =
+        frame.scrollHeight > frame.clientHeight &&
+        frame.scrollTop + frame.clientHeight >= frame.scrollHeight - 1;
+
+      // Before any of them has been reached, the reader is at the top of the
+      // document, which is the first section by every reckoning but the
+      // literal one.
+      let reached = headings[0]?.fragment ?? null;
+      let reachedTop = -Infinity;
+      let topmostOnScreen: string | null = null;
+      for (const heading of headings) {
+        const id = CSS.escape(DOCUMENT_ID_PREFIX + heading.fragment);
+        const element = frame.querySelector(`#${id}`);
+        if (!(element instanceof HTMLElement)) continue;
+        const top = element.getBoundingClientRect().top;
+        if (top <= line) {
+          reached = heading.fragment;
+          reachedTop = top;
+        } else if (topmostOnScreen === null && top < box.bottom) {
+          topmostOnScreen = heading.fragment;
+        }
+      }
+      // Only when the answer would otherwise be a section that is no longer
+      // on the screen. A heading sitting just above the line at the bottom of
+      // the scroll is still the one at the top of the view, and keeps the
+      // mark it earned the ordinary way.
+      if (atEnd && topmostOnScreen !== null && reachedTop < box.top) {
+        reached = topmostOnScreen;
+      }
+      setCurrent(reached);
+      keepInView(nav, reached);
+    };
+    const schedule = () => {
+      if (pending === 0) pending = requestAnimationFrame(measure);
+    };
+
+    measure();
+    frame.addEventListener("scroll", schedule, { passive: true });
+    // The document itself changes size -- a preview follows the file it was
+    // read from, and a section can be written while it is being read -- and
+    // that moves every heading under the reader without a scroll to say so.
+    const resizes = new ResizeObserver(schedule);
+    resizes.observe(frame);
+    const document_ = frame.querySelector(".typeset");
+    if (document_ !== null) resizes.observe(document_);
+    return () => {
+      if (pending !== 0) cancelAnimationFrame(pending);
+      frame.removeEventListener("scroll", schedule);
+      resizes.disconnect();
+    };
+  }, [headings, navRef]);
+  return current;
+}
+
+/** Keep the marked entry inside the contents list's own scroll.
+ *
+ * A list longer than the window scrolls on its own, and the whole use of
+ * marking an entry is being able to see it. Moved by hand rather than with
+ * `scrollIntoView`, which scrolls every scrollable ancestor it needs to --
+ * including the frame holding the document, which would mean the contents
+ * list scrolling the thing that is scrolling it.
+ */
+function keepInView(nav: HTMLElement, fragment: string | null): void {
+  if (fragment === null) return;
+  const entry = nav.querySelector(`a[href="#${CSS.escape(fragment)}"]`);
+  if (!(entry instanceof HTMLElement)) return;
+  const list = nav.getBoundingClientRect();
+  const box = entry.getBoundingClientRect();
+  if (box.top < list.top) nav.scrollTop -= list.top - box.top;
+  else if (box.bottom > list.bottom) nav.scrollTop += box.bottom - list.bottom;
+}
+
+/** The document's headings, in the margin to the right of it.
+ *
+ * A column of its own rather than something floating in the margin, and an
+ * empty mirror of it on the left rather than nothing: a table takes the whole
+ * width it is given, so a list overlapping the margin would be a list
+ * overlapping the table, and a document laid out with a gutter on one side
+ * only would have its writing sitting off-centre in the popup. With both, the
+ * column of writing is in the same place whether or not there is a contents
+ * list beside it, and only the widest blocks give up any room.
+ *
+ * It stays put while the document moves under it, which is the whole use of
+ * it -- a contents list you have to scroll back up to is the one at the top of
+ * the file. The height it may take is the window's less the popup's chrome,
+ * because what it sticks to is the frame the document scrolls in, and that is
+ * as tall as the window lets it be.
+ *
+ * It carries no heading of its own. A column of the file's own words beside
+ * the file: nothing about that needs announcing, and "Contents" over it would
+ * be the only word on the screen that the document did not write. Screen
+ * readers are told, since they cannot see the shape of it.
+ */
+function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
+  const shallowest = Math.min(...headings.map((heading) => heading.level));
+  const navRef = React.useRef<HTMLElement>(null);
+  const current = useCurrentSection(headings, navRef);
+  return (
+    <nav
+      ref={navRef}
+      aria-label="Contents"
+      // Hidden until the width is there: `hidden` is the answer for every
+      // surface, and the container query is what takes it back for the ones
+      // wide enough. The 67rem is arithmetic, not taste -- two 10rem columns
+      // and their 3rem gaps come out of it, and what is left has to still be
+      // the 65 characters the writing is set to. A contents list bought by
+      // narrowing the document would be a bad trade, and measured before this
+      // was tuned it was exactly that: the paragraphs came out 34px short.
+      //
+      // The gap has been widened twice, and each time the column paid for it
+      // rather than the writing. There is not much left to pay with: a
+      // document popup is at most 72rem, which leaves 1104px inside its
+      // padding, and this layout now asks for 1058 of them. A platform whose
+      // scrollbars take up room rather than floating over the page spends
+      // another 15, so anything much wider than this would mean no contents
+      // list at all on Windows.
+      className="sticky top-0 hidden max-h-[calc(100dvh-6rem)] self-start overflow-y-auto pt-1 no-scrollbar @min-[67rem]/document:col-start-3 @min-[67rem]/document:row-start-1 @min-[67rem]/document:block"
+      data-leika-document-contents
+    >
+      {/* Set at label size -- `text-sm`, which this app draws at 13px -- and
+          not at the size of the document beside it. These are not part of the
+          writing: they name its parts, the way a field's label names the
+          field, and a column of them set as large as the prose reads as a
+          second document competing with the first.
+
+          No gaps between the entries, so the rules down their left edges meet
+          and read as one rail with the document's shape marked on it. The
+          spacing is inside each entry instead. */}
+      <ul className="text-sm">
+        {headings.map((heading) => (
+          <li
+            key={heading.fragment}
+            // The rail is on the row rather than on the link, so that it stays
+            // one straight line while the text of a subsection steps in from
+            // it. Two pixels of it, in the accent, is the whole of the mark
+            // for the section being read -- the same word this app uses for
+            // the live one anywhere else: a checked box, a slider's filled
+            // track.
+            className={cn(
+              "border-l-2 transition-colors",
+              heading.fragment === current ? "border-primary" : "border-border",
+            )}
+          >
+            {/* An ordinary in-document link, so the click is answered by the
+                handler below exactly as a link written in the file is: the
+                document scrolls itself, and the address bar stays the app's. */}
+            <a
+              href={`#${heading.fragment}`}
+              aria-current={heading.fragment === current ? "true" : undefined}
+              // Colour, and no weight: this column is narrow enough that
+              // entries wrap, and a heading that re-wrapped as you scrolled
+              // past it would move every entry under it.
+              className={cn(
+                "block py-1 leading-snug transition-colors",
+                heading.fragment === current
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              style={{
+                paddingLeft: `${0.75 + (heading.level - shallowest) * 0.75}rem`,
+              }}
+            >
+              {heading.text}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 /**
  * Draw a markdown document, the way shadcn draws one.
  *
@@ -133,16 +379,74 @@ function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
  * size in the stylesheet is written against that one. `reading-measure` is
  * Leika's, and is how wide the blocks are allowed to run, which is the one
  * question typeset leaves to the surface asking it.
+ *
+ * `contents` asks for the document's headings beside it, which is a thing to
+ * ask for only where there is margin to put them in: a preview dialog has
+ * one, a panel row is the width of a panel. Whether the margin is wide enough
+ * on the day is settled in CSS -- see {@link DocumentContents} -- so this is a
+ * request rather than an instruction, and a document with too few headings to
+ * make a list of ignores it either way.
  */
-export function MarkdownRenderer(props: { children?: string }) {
+export function MarkdownRenderer(props: {
+  children?: string;
+  contents?: boolean;
+}) {
   const source = props.children ?? "";
-  const document = renderMarkdown(source);
+  const { element, headings } = renderMarkdown(source);
+  // Held still across renders, because it is what the marking of the current
+  // section watches: a fresh array every render is a fresh set of listeners
+  // every render. `headings` is already the same array for the same document,
+  // the render cache having answered with the same document.
+  const wanted = props.contents === true;
+  const listed = React.useMemo(
+    () => (wanted ? contentsOf(headings) : []),
+    [wanted, headings],
+  );
+
+  // One handler for the whole of it rather than a component for its links: a
+  // link into the same file is answered by where it lands, and where it lands
+  // is only knowable from here. A contents entry is such a link, so it sits
+  // inside the same handler and needs nothing of its own.
+  if (listed.length === 0) {
+    return (
+      <div
+        className="typeset reading-measure"
+        onClick={followLinkWithinDocument}
+      >
+        {element}
+      </div>
+    );
+  }
   return (
-    // One handler for the document rather than a component for its links: a
-    // link into the same file is answered by where it lands, and where it
-    // lands is only knowable from here.
-    <div className="typeset reading-measure" onClick={followLinkWithinDocument}>
-      {document}
+    <div className="@container/document" onClick={followLinkWithinDocument}>
+      {/* The contents are placed in the third column rather than written
+          there: first in the document, so that reaching them does not mean
+          reading past the file to get to them, and last on the screen, where
+          they were asked for. The first column is the empty mirror that keeps
+          the writing centred; see {@link DocumentContents}. */}
+      {/* The middle column is the width of the document, not the width of
+          what is left over: `fit-content` sizes it to the widest block in the
+          file -- the measure for writing, more for a table that needs it --
+          and the three columns are then centred in the frame together. So the
+          contents hang a fixed 1.5rem off the document's edge and stay there,
+          where a `1fr` middle column pinned them to the frame's edge instead
+          and let the gap grow with the window: going full-window walked them
+          another hundred pixels away from the thing they are a list of.
+
+          The floor is the measure, so a file of short lines still sets its
+          blocks to the column every other file uses rather than shrinking to
+          its own longest line. The cap is the space available, so a table
+          wider than the frame scrolls inside its own box, as it does
+          everywhere else, instead of widening the popup. */}
+      <div className="grid grid-cols-1 @min-[67rem]/document:grid-cols-[10rem_fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-12">
+        <DocumentContents headings={listed} />
+        {/* Both placed by hand, and both told which row: auto-placement
+            fills forwards only, so a document asking for the column to the
+            left of the contents would be put on the row below them. */}
+        <div className="typeset reading-measure @min-[67rem]/document:col-start-2 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]">
+          {element}
+        </div>
+      </div>
     </div>
   );
 }

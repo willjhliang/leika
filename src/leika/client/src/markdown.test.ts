@@ -10,12 +10,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { createMarkdownRenderer, DOCUMENT_ID_PREFIX } from "./markdown";
+import {
+  contentsOf,
+  createMarkdownRenderer,
+  DOCUMENT_ID_PREFIX,
+} from "./markdown";
 
 /** Unstyled, so the assertions read as HTML rather than as Tailwind. */
 const render = createMarkdownRenderer({});
 
-const html = (markdown: string) => renderToStaticMarkup(render(markdown));
+const html = (markdown: string) =>
+  renderToStaticMarkup(render(markdown).element);
 
 describe("what a document may contain", () => {
   test("braces are characters, not expressions", () => {
@@ -150,5 +155,84 @@ describe("what a document is drawn as", () => {
     // the renderer has no opinion about code to hold.
     expect(html("```\nx\n```")).toBe("<pre><code>x\n</code></pre>");
     expect(html("`x`")).toBe("<p><code>x</code></p>");
+  });
+});
+
+describe("what a document says it contains", () => {
+  const headings = (markdown: string) => render(markdown).headings;
+
+  test("a heading is listed by the link that reaches it", () => {
+    // The fragment, not the id: a contents entry has to be an ordinary
+    // in-document link, or it would need its own way of being followed.
+    expect(headings("# Setup\n\n## Running it")).toEqual([
+      { fragment: "setup", level: 1, text: "Setup" },
+      { fragment: "running-it", level: 2, text: "Running it" },
+    ]);
+  });
+
+  test("a heading with markup in it reads as its words", () => {
+    expect(headings("## The `--seed` flag")[0]).toMatchObject({
+      text: "The --seed flag",
+      fragment: "the---seed-flag",
+    });
+    expect(headings("## A [link](https://x.test) in a heading")[0].text).toBe(
+      "A link in a heading",
+    );
+  });
+
+  test("a heading written as HTML is listed like any other", () => {
+    // By the time these are collected the two are one tree, which is the
+    // reason to collect them there and not from the markdown source.
+    expect(headings('<h2 id="mine">Written by hand</h2>')).toEqual([
+      { fragment: "mine", level: 2, text: "Written by hand" },
+    ]);
+  });
+
+  test("what cannot be linked to is not listed", () => {
+    // Nothing to show for a name, and nothing a `#` could reach.
+    expect(headings("## \n\ntext")).toEqual([]);
+    expect(headings("Just prose.")).toEqual([]);
+  });
+
+  test("the same document lists the same headings its page carries", () => {
+    // The property the whole thing rests on: every entry names an id that is
+    // really on the page, since both come out of the one pass.
+    const source = "# Setup\n\n## Running it\n\n### Café\n";
+    const page = html(source);
+    for (const heading of headings(source)) {
+      expect(page).toContain(`id="${DOCUMENT_ID_PREFIX}${heading.fragment}"`);
+    }
+  });
+});
+
+describe("contentsOf", () => {
+  const of = (markdown: string) =>
+    contentsOf(render(markdown).headings).map((heading) => heading.text);
+
+  test("keeps three levels, counted from the shallowest one there is", () => {
+    // A file written with `##` at its top level is not a document whose
+    // contents are all subsections, so the depth is relative rather than
+    // measured from `h1`.
+    expect(of("## A\n\n### B\n\n#### C\n\n##### D")).toEqual(["A", "B", "C"]);
+    expect(of("# A\n\n## B\n\n### C\n\n#### D")).toEqual(["A", "B", "C"]);
+  });
+
+  test("is nothing at all when there is no list to be made", () => {
+    // One entry is the document's title said a second time, and no entry is
+    // a file with no headings. Neither is worth a column.
+    expect(of("# Just a title\n\ntext")).toEqual([]);
+    expect(of("Prose with no headings.")).toEqual([]);
+    // Deep headings under a single shallow one do count, once there are two.
+    expect(of("# Title\n\n## First\n\n## Second")).toEqual([
+      "Title",
+      "First",
+      "Second",
+    ]);
+  });
+
+  test("counts only the headings it would show towards being a list", () => {
+    // Two headings, but one of them is too deep to be listed -- so what is
+    // left is a list of one, which is not a list.
+    expect(of("# Title\n\n##### Aside")).toEqual([]);
   });
 });

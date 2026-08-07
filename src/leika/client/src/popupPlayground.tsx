@@ -338,6 +338,24 @@ See the [documentation](https://willjhliang.github.io/leika/) for the rest.
 - A list item.
 - Another, longer, so the measure has something to wrap against and the eye
   has to find the start of the next line the way it does in real prose.
+
+## Results
+
+The headings from here on are what the contents list in the margin is made
+of, so there are enough of them to judge one by.
+
+### Validation loss
+
+Lower throughout, and lowest at the doubled warmup.
+
+### Throughput
+
+Unchanged, which was the point: the warmup costs nothing at steady state.
+
+## What is left
+
+A heading long enough to wrap in a fourteen-rem column, which is a thing a
+contents list has to do gracefully.
 `;
 
 const SAMPLE_LOG = Array.from(

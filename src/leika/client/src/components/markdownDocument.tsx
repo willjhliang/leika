@@ -9,7 +9,11 @@
 
 import React from "react";
 
-import { createMarkdownRenderer, type MarkdownComponents } from "../markdown";
+import {
+  createMarkdownRenderer,
+  type MarkdownComponents,
+  type RenderedDocument,
+} from "../markdown";
 
 // What a document looks like is shadcn/typeset's, whole: `src/typeset.css`
 // draws every element markdown makes -- the heading scale, the leading, the
@@ -45,7 +49,7 @@ const render = createMarkdownRenderer(components);
  * report opened over and over; a handful of documents is a session's worth,
  * and holding elements for more would hold their whole trees in memory. */
 const RENDERED_LIMIT = 8;
-const rendered = new Map<string, React.ReactElement>();
+const rendered = new Map<string, RenderedDocument>();
 
 /** Turn markdown into elements, remembering the documents recently shown.
  *
@@ -56,7 +60,7 @@ const rendered = new Map<string, React.ReactElement>();
  * updating, since images are referenced by content-addressed URLs that
  * change with them -- is a different key and renders fresh.
  */
-export function renderMarkdown(source: string): React.ReactElement {
+export function renderMarkdown(source: string): RenderedDocument {
   const cached = rendered.get(source);
   if (cached !== undefined) {
     // Reinsert so the map's order stays the order of last use.
@@ -64,12 +68,12 @@ export function renderMarkdown(source: string): React.ReactElement {
     rendered.set(source, cached);
     return cached;
   }
-  const element = render(source);
-  rendered.set(source, element);
+  const document = render(source);
+  rendered.set(source, document);
   if (rendered.size > RENDERED_LIMIT) {
     rendered.delete(rendered.keys().next().value!);
   }
-  return element;
+  return document;
 }
 
 /** Ready a document before anyone has asked to read it.
