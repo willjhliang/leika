@@ -497,6 +497,37 @@ def test_a_file_on_disk_keeps_its_name_and_closes_cleanly(
     assert page_errors == []
 
 
+def test_escape_closes_a_hinted_preview_every_time_and_focuses_nothing(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A hinted button is a tooltip trigger, and tooltips are what once made
+    # Escape unreliable: closing with Escape put focus back on the button,
+    # whose tooltip opened, and the next dialog's auto-focused download corner
+    # then opened *its* tooltip -- which swallowed the next Escape, so every
+    # other close needed two presses. The dialog now takes focus on its frame
+    # rather than its corner buttons, and leaves focus alone on close, so no
+    # tooltip ever opens by itself and one Escape means one closed preview.
+    leika_server.gui.add_preview_button(
+        "Show notes", b"# Hi\n", filename="notes.md", hint="The project's docs"
+    )
+
+    for _ in range(4):
+        _press(preview_page, "Show notes")
+        expect(_dialog(preview_page)).to_be_visible()
+        # The frame itself takes focus once the dialog settles -- not the
+        # download corner, whose tooltip is what used to open.
+        preview_page.wait_for_function(
+            """() => document.activeElement ===
+                 document.querySelector('[data-slot="dialog-content"]')"""
+        )
+        preview_page.keyboard.press("Escape")
+        expect(_dialog(preview_page)).to_have_count(0)
+        # Closing is the end of reading, not a step somewhere: nothing is
+        # focused afterwards, so no ring and no tooltip appear in the dock.
+        assert preview_page.evaluate("document.activeElement === document.body")
+    assert page_errors == []
+
+
 def test_an_oversize_file_says_so_instead_of_opening(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:

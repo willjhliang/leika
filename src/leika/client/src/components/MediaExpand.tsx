@@ -84,6 +84,15 @@ export function MediaSurface({
  *
  * `title` names the dialog for screen readers whether or not it is drawn, so
  * media with no label of its own still passes one in.
+ *
+ * Focus is handled as a viewer, not as a form. On open it lands on the frame
+ * itself rather than the first button in it: a viewer's tabbable elements are
+ * chrome (download, close), some of them tooltipped, and focusing one of those
+ * under keyboard modality pops its tooltip open -- which then swallows the
+ * Escape meant for the dialog, since Escape closes the innermost open thing
+ * first. On close, focus is left alone: closing a viewer means "done reading",
+ * and sending focus back to the button that opened it draws a focus ring (and,
+ * from Escape, that button's tooltip) that nobody asked for.
  */
 export function MediaDialog({
   open,
@@ -101,9 +110,13 @@ export function MediaDialog({
   width?: string;
   children: React.ReactNode;
 }) {
+  const popupRef = React.useRef<HTMLDivElement | null>(null);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        ref={popupRef}
+        initialFocus={popupRef}
+        finalFocus={false}
         className={cn(
           "max-h-[calc(100dvh-2rem)] overflow-auto",
           width === undefined ? "sm:max-w-4xl" : "sm:max-w-none",
