@@ -161,6 +161,7 @@ export function MediaPreview({
   title,
   rememberAs,
   width,
+  height,
   children,
 }: {
   open: boolean;
@@ -172,6 +173,11 @@ export function MediaPreview({
   rememberAs: string;
   /** CSS width for the dialog. Defaults to the stock 4xl content width. */
   width?: string;
+  /** CSS height for the dialog. Left out, the popup is as tall as what it
+   * holds. Given, the contents take the room that is left instead -- which is
+   * what something that scrolls needs, since it has no height of its own to
+   * be asked for. */
+  height?: string;
   children: React.ReactNode;
 }) {
   const popupRef = React.useRef<HTMLDivElement | null>(null);
@@ -210,13 +216,20 @@ export function MediaPreview({
               // for, which is the scrolling this mode exists to end.
               "top-0 left-0 h-dvh max-w-none translate-x-0 translate-y-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-none shadow-none ring-0 sm:max-w-none"
             : cn(
-                "max-h-[calc(100dvh-2rem)] overflow-auto",
+                // Named here for the same reason the full-window box names
+                // them, and against the same failure: `auto` sizes the second
+                // row to what is in it, so a document taller than the screen
+                // grows the popup rather than scrolling inside it -- and the
+                // popup, being `overflow-auto` itself, becomes a second
+                // scroller wrapped around the one the reader is using.
+                // Reaching the end of a document then scrolls the dialog.
+                "max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] overflow-auto",
                 width === undefined ? "sm:max-w-4xl" : "sm:max-w-none",
               ),
         )}
-        // A width measured from the media is the wrong answer when the answer
-        // is "the window".
-        style={fullscreen || width === undefined ? undefined : { width }}
+        // A size measured for a centered box is the wrong answer when the
+        // answer is "the window".
+        style={fullscreen ? undefined : { width, height }}
         {...{ [PREVIEW_FULLSCREEN_ATTR]: fullscreen ? "true" : undefined }}
       >
         <DialogHeader>

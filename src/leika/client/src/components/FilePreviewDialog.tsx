@@ -370,29 +370,31 @@ export function FilePreviewHost() {
   );
 }
 
-/** How tall the frame holding a DOCUMENT is.
+/** How tall a DOCUMENT opens.
  *
  * Fixed, so a preview opens the same size whatever the file turns out to hold
  * -- a one-line log and a thousand-line one are the same window, and nothing
- * jumps as the contents arrive. Media has no frame at all; see
- * {@link isMediaKind}.
+ * jumps as the contents arrive, which matters because the popup is on screen
+ * before them. Media has no frame at all; see {@link isMediaKind}.
  *
- * Writing gets everything the window has left: the 6rem taken off is the
- * dialog's margin, its padding and its title bar, so `reading` is the tallest
- * frame that still fits without the dialog itself scrolling. More page per
- * screen is the whole of what a preview is for. The rest stops short of that,
- * because a PDF or a card is looked at rather than read down, and the extra
- * height would only be empty space around it.
+ * Writing gets everything the window has: the height is the POPUP's, and the
+ * frame inside it takes whatever the title bar and the padding leave, because
+ * the popup's grid hands its second row the remainder. It used to be the
+ * frame that carried a height -- the window less a hand-counted 6rem of
+ * chrome -- and the count was 3px short of what the chrome actually measured,
+ * which is enough to make the popup a scroller in its own right: scrolling to
+ * the end of a document then scrolled the dialog underneath it. A frame sized
+ * by layout cannot disagree with the box around it.
  *
- * Full-window, neither guess applies and the frame simply takes the body it
- * is given -- which is the popup less its title bar, measured rather than
- * subtracted.
+ * Which is what full-window has always done, there being no guess available
+ * to make: the frame takes the body it is given. The two are one case now.
+ *
+ * A PDF or a card keeps a frame of its own, and a shorter one, because it is
+ * looked at rather than read down and the extra height would only be empty
+ * space around it.
  */
-const FRAME_HEIGHT = {
-  reading: "h-[calc(100dvh-6rem)]",
-  fitted: "h-[70dvh]",
-  fullscreen: "h-full",
-} as const;
+const READING_HEIGHT = "calc(100dvh - 2rem)";
+const FITTED_FRAME_HEIGHT = "h-[70dvh]";
 
 /** How wide a document opens: as much of the window as it can have, short of
  * the edges. A document has no width of its own to ask for. */
@@ -449,6 +451,8 @@ export function FilePreviewDialog({
       <PreviewBody kind={kind} preview={preview} contents={preview.contents} />
     );
 
+  const reading = isReadingKind(kind);
+
   return (
     <MediaPreview
       open
@@ -462,6 +466,7 @@ export function FilePreviewDialog({
       // preview is filed under.
       rememberAs={preview.filename}
       width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
+      height={reading ? READING_HEIGHT : undefined}
     >
       {/* Both wait for the file. There is nothing to save before it lands,
           and nothing to ask for again either -- the first copy is still on
@@ -486,14 +491,16 @@ export function FilePreviewDialog({
       ) : (
         <div
           className={cn(
-            "overflow-auto",
-            FRAME_HEIGHT[
-              fullscreen
-                ? "fullscreen"
-                : isReadingKind(kind)
-                  ? "reading"
-                  : "fitted"
-            ],
+            // `min-h-0` is what lets the frame be shorter than the document
+            // in it, so the scroll happens here. `overscroll-contain` keeps
+            // that scroll here as well: reaching the end of a document is the
+            // end of it, not a nudge passed outwards to whatever box the
+            // popup happens to sit in.
+            "min-h-0 overflow-auto overscroll-contain",
+            // Both the full-window popup and the reading one are a definite
+            // height with a title bar above the frame, so the frame fills
+            // what is left of the row either way.
+            fullscreen || reading ? "h-full" : FITTED_FRAME_HEIGHT,
           )}
         >
           {body}

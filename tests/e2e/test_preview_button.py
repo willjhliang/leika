@@ -1093,3 +1093,61 @@ def test_the_contents_hang_off_the_document_not_the_window(
     # And it really is a wider window: the frame's own edge moved well away.
     assert full["fromFrame"] - windowed["fromFrame"] > 50.0, (windowed, full)
     assert page_errors == []
+
+
+def _long_document() -> bytes:
+    body = "\n\n".join(f"Paragraph {index} of the report." for index in range(120))
+    return f"# Report\n\n{body}\n".encode()
+
+
+def test_only_the_document_scrolls_not_the_dialog_around_it(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The popup holds a document's frame; the frame holds the scroll. When the
+    # frame carried a height of its own -- the window less a hand-counted 6rem
+    # of chrome -- the count came out 3px under what the chrome measured, and
+    # those 3px made the popup a scroller too. Reaching the end of a document
+    # then chained the scroll outwards and shifted the dialog under the reader,
+    # which on a page of live plots reads as a flicker. The frame is sized by
+    # layout now, so the two cannot disagree, and `overscroll-contain` keeps
+    # the end of a document from being passed outwards even if they did.
+    leika_server.gui.add_preview_button("Show report", _long_document(), filename="report.md")
+
+    _press(preview_page, "Show report")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_be_visible()
+    frame = dialog.locator("div.overflow-auto").first
+
+    measure = """(element) => element.scrollHeight - element.clientHeight"""
+    assert frame.evaluate(measure) > 0, "the document should have somewhere to scroll"
+    assert dialog.evaluate(measure) == 0, "the popup is a scroller in its own right"
+
+    # Scroll well past the end of the document, then back past the start.
+    frame.hover()
+    for _ in range(30):
+        preview_page.mouse.wheel(0, 400)
+    preview_page.wait_for_timeout(200)
+    assert frame.evaluate("(element) => element.scrollTop") > 0
+    assert dialog.evaluate("(element) => element.scrollTop") == 0
+
+    for _ in range(30):
+        preview_page.mouse.wheel(0, -400)
+    preview_page.wait_for_timeout(200)
+    assert dialog.evaluate("(element) => element.scrollTop") == 0
+    assert page_errors == []
+
+
+def test_a_long_filename_does_not_push_the_dialog_into_overflow(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The title is the one piece of the popup's chrome whose height is not
+    # known in advance, and a name long enough to wrap is what a counted
+    # deduction cannot survive. Layout absorbs it into the frame instead.
+    name = "a-report-with-a-name-long-enough-to-wrap-the-title-twice-over.md"
+    leika_server.gui.add_preview_button("Show report", _long_document(), filename=name)
+
+    _press(preview_page, "Show report")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text(name)
+    assert dialog.evaluate("(element) => element.scrollHeight - element.clientHeight") == 0
+    assert page_errors == []
