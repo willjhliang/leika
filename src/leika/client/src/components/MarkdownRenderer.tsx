@@ -1,212 +1,181 @@
 import React from "react";
 
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { createMarkdownRenderer, type MarkdownComponents } from "../markdown";
+  createMarkdownRenderer,
+  DOCUMENT_ID_PREFIX,
+  type MarkdownComponents,
+} from "../markdown";
 
-// How the document's elements are drawn. The pipeline in `../markdown` decides
-// what a document *contains*; everything here decides what it looks like in a
-// panel row or a preview dialog.
+// What a document looks like is shadcn/typeset's, whole: `src/typeset.css`
+// draws every element markdown makes -- the heading scale, the leading, the
+// space between blocks, the rules on a table, the underline on a link -- from
+// three values, and Leika sets none of them. There is nothing here that says
+// how a document looks, and nothing here should be.
 //
-// Body copy sets no size of its own: it is whatever the surface showing the
-// document asked for -- 13px in a panel row, where prose sits among inputs and
-// has to line up with them, and larger in a preview dialog, where the document
-// is the only thing on screen. Every other size here is written in `em`
-// against that one, so a whole document scales from a single number and its
-// proportions never depend on where it landed.
-//
-// Spacing works one way throughout: a block owns the room above it and none
-// below it. The gap between any two blocks is then a single value rather than
-// the sum of one block's bottom and the next one's top, a document never ends
-// on a margin, and nothing needs to know what follows it. `not-first:` is what
-// makes that safe -- the opening block sits flush with the top of whatever is
-// showing it, a panel row or a preview dialog.
-const BLOCK_GAP = "not-first:mt-4";
-/** The wider gap, for the two blocks that mark a break rather than continue
- * the text: a heading and a rule. */
-const BREAK_GAP = "not-first:mt-6";
-
-// Leading is set once, on the document, and inherited by everything in it --
-// paragraphs, list items, table cells, quotes alike. Set per-element instead,
-// every element anyone forgot falls back to the leading of the *surrounding
-// UI*, which is set for single-line labels beside inputs: a list would read
-// tighter than the paragraph above it for no reason a reader could see. 1.5 is
-// GitHub's, and headings override it below.
-const DOCUMENT_CLASS = "leading-[1.5]";
-
-function MdText(props: React.ComponentPropsWithoutRef<"p">) {
-  return <p className={BLOCK_GAP} {...props} />;
-}
-
-function MdAnchor(props: React.ComponentPropsWithoutRef<"a">) {
-  return (
-    <a
-      className="font-medium underline underline-offset-4"
-      rel="noreferrer"
-      {...props}
-    />
-  );
-}
-
-// A heading takes more room above it than below: the space over one belongs
-// to the break it makes from what came before, while the text under it is
-// what it names and reads as part of it. One value for every level -- the
-// break a heading makes is the same break whatever its rank, and the
-// descending sizes already say which is which.
-// The tighter leading is GitHub's too: a heading is short and large, and the
-// body's spacing would pull its own two lines apart.
-const HEADING_CLASS = `${BREAK_GAP} scroll-m-20 leading-[1.25] font-semibold tracking-tight`;
-// GitHub's heading scale, which is the one the rest of this renderer is
-// aiming at, and multiples of the body rather than sizes: a heading is a
-// proportion of the text it names, so it grows with it instead of being a
-// fixed jump that reads differently at each size.
-const HEADING_SIZE = {
-  h1: "text-[2em]",
-  h2: "text-[1.5em]",
-  h3: "text-[1.25em]",
-  h4: "text-[1em]",
-  h5: "text-[0.875em]",
-  h6: "text-[0.85em]",
-} as const;
-
-function mdHeading(tag: keyof typeof HEADING_SIZE) {
-  const Heading = (props: React.ComponentPropsWithoutRef<"h1">) => {
-    const Tag = tag;
-    return (
-      <Tag {...props} className={`${HEADING_CLASS} ${HEADING_SIZE[tag]}`} />
-    );
-  };
-  Heading.displayName = `Md${tag.toUpperCase()}`;
-  return Heading;
-}
-
-function mdList(tag: "ol" | "ul") {
-  const List = ({
-    className,
-    ...props
-  }: React.ComponentPropsWithoutRef<"ul">) => {
-    const Tag = tag;
-    const marker =
-      className === "contains-task-list"
-        ? "list-none"
-        : tag === "ol"
-          ? "list-decimal"
-          : "list-disc";
-    return <Tag {...props} className={`${BLOCK_GAP} ml-6 ${marker}`} />;
-  };
-  List.displayName = tag === "ol" ? "MdOrderedList" : "MdList";
-  return List;
-}
-
-// One component for both forms of code, told apart by the `block` prop the
-// pipeline sets on the `<code>` inside a `<pre>`. `pre` then renders only its
-// children, since the block form draws its own.
-//
-// Set at 0.9em rather than the body's own size, as GitHub sets it: a
-// monospaced face at the same nominal size reads a size larger than the prose
-// around it, and an inline span of it would otherwise sit in a sentence like a
-// heading.
-function MdCode({
-  block,
-  children,
-  ...props
-}: React.ComponentPropsWithoutRef<"code"> & { block?: boolean }) {
-  return block ? (
-    // The scroll is kept and its bar is not: a document sits in a narrow panel
-    // row, and a scrollbar under every fenced block would be a bar of furniture
-    // across the prose. The block still scrolls by wheel and by touch.
-    <pre
-      className={`${BLOCK_GAP} no-scrollbar overflow-x-auto rounded-lg bg-muted p-4 text-[0.9em]`}
-    >
-      <code {...props}>{children}</code>
-    </pre>
-  ) : (
-    <code
-      className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]"
-      {...props}
-    >
-      {children}
-    </code>
-  );
-}
-
-// The panel's table, which sizes itself for a panel. A table in a document is
-// part of the document: it reads at the size the prose around it does, and it
-// is spaced like any other block. The gap goes on a wrapper because `Table`
-// draws a scroll container of its own around the `<table>`, and it is the
-// outermost element that is the document's block.
-function MdTable(props: React.ComponentPropsWithoutRef<"table">) {
-  return (
-    <div className={BLOCK_GAP}>
-      <Table className="text-[1em]" {...props} />
-    </div>
-  );
-}
-
-// A rule is a break in the document, so it is spaced like the other one.
-function MdRule(props: React.ComponentPropsWithoutRef<"hr">) {
-  return <hr className={`${BREAK_GAP} border-t`} {...props} />;
-}
-
-function MdImage(props: React.ComponentPropsWithoutRef<"img">) {
-  return <img className="mx-auto max-w-60 rounded-lg" {...props} />;
-}
-
+// A component is worth writing only for what a tag *does*, or for structure a
+// stylesheet cannot add for itself. There are two.
 const components: MarkdownComponents = {
-  p: MdText,
-  a: MdAnchor,
-  h1: mdHeading("h1"),
-  h2: mdHeading("h2"),
-  h3: mdHeading("h3"),
-  h4: mdHeading("h4"),
-  h5: mdHeading("h5"),
-  h6: mdHeading("h6"),
-  ul: mdList("ul"),
-  ol: mdList("ol"),
-  // Items sit closer together than blocks do -- a list is one thing, and the
-  // gap only has to separate its lines from each other. In `em`, so it holds
-  // whatever the leading around it works out to.
-  li: (props) => <li className="not-first:mt-[0.25em]" {...props} />,
-  code: MdCode,
-  pre: (props) => <>{props.children}</>,
-  blockquote: (props) => (
-    <blockquote className={`${BLOCK_GAP} border-l-2 pl-4 italic`} {...props} />
+  // A document can be opened on a file from anywhere, and a link in one is a
+  // link out of Leika. The referrer is the one thing following it should not
+  // carry with it.
+  a: (props) => <a rel="noreferrer" {...props} />,
+  // typeset holds a table's headings on one line, so a table with long ones
+  // is wider than the page whatever the page does, and the wrapper is what it
+  // ships to say where that width is allowed to go: the table scrolls inside
+  // its own box instead of the document scrolling sideways and taking every
+  // paragraph in it along. Markdown cannot tell us which tables are wide, so
+  // every one gets it -- the box is only a scroll when there is something to
+  // scroll. The wrapper owns the space above it, which is why the table
+  // itself no longer carries any.
+  table: (props) => (
+    <div className="typeset-scroll">
+      <table {...props} />
+    </div>
   ),
-  hr: MdRule,
-  // Inline HTML the sanitizer keeps and GitHub authors reach for: a
-  // collapsed section is a block of the document like any other.
-  details: (props) => <details className={BLOCK_GAP} {...props} />,
-  table: MdTable,
-  thead: TableHeader,
-  tbody: TableBody,
-  tr: TableRow,
-  th: TableHead,
-  td: TableCell,
-  img: MdImage,
 };
 
 const render = createMarkdownRenderer(components);
 
+/** The part of the document a `#fragment` names, as it was written.
+ *
+ * A link's target is percent-encoded where a heading's text needed it -- a
+ * link to "## Café" is written `#caf%C3%A9` -- and the id it lands on is the
+ * text itself. Anything that is not encoding is left as it stands, because no
+ * document fails: a malformed escape is a fragment that matches nothing, not
+ * an error thrown out of a click.
+ */
+function fragmentOf(href: string): string {
+  const raw = href.slice(1);
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** How long the carry from a link to its heading takes.
+ *
+ * A fixed beat: long enough to read as motion through the document rather
+ * than a cut, short enough that the reader is never waiting on it. This is
+ * why the scroll is animated by hand at all -- the browser's own smooth
+ * scroll has no duration to set, and the one it picks grows with distance,
+ * so a contents link pointing deep into a README turns into a glide.
+ */
+const SCROLL_DURATION_MS = 200;
+
+/** The box the document actually scrolls in: dialog frame or panel body. */
+function scrollFrameOf(element: HTMLElement): HTMLElement | null {
+  for (
+    let node = element.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (node.scrollHeight > node.clientHeight) {
+      const { overflowY } = getComputedStyle(node);
+      if (overflowY === "auto" || overflowY === "scroll") return node;
+    }
+  }
+  return null;
+}
+
+// The scroll in flight, so a second click supersedes it rather than fighting
+// it frame by frame. One is enough: only one document is ever being carried.
+let cancelCarry: (() => void) | null = null;
+
+/** Scroll `frame` until `target` sits at its top, in one short eased move. */
+function carryTo(frame: HTMLElement, target: HTMLElement): void {
+  cancelCarry?.();
+  const from = frame.scrollTop;
+  const offset =
+    target.getBoundingClientRect().top - frame.getBoundingClientRect().top;
+  const to = Math.max(
+    0,
+    Math.min(from + offset, frame.scrollHeight - frame.clientHeight),
+  );
+  const started = performance.now();
+  let handle = requestAnimationFrame(function step(now: number) {
+    const at = Math.min(1, (now - started) / SCROLL_DURATION_MS);
+    // Ease-out: the move spends its speed early and lands softly, which is
+    // what makes a fast scroll read as travel rather than as a jolt.
+    frame.scrollTop = from + (to - from) * (1 - (1 - at) ** 3);
+    if (at < 1) handle = requestAnimationFrame(step);
+  });
+  cancelCarry = () => cancelAnimationFrame(handle);
+}
+
 /**
- * Draw a markdown document, the way GitHub would.
+ * Follow a link from one part of a document to another.
+ *
+ * A contents list at the top of a README is links into the same file, and the
+ * browser's own answer to one is to put the fragment in the address bar and
+ * jump. Neither half of that suits a document being *previewed*: the address
+ * is the app's, and a jump loses the reader the thread between where they were
+ * and where the link took them. So the click is answered here instead -- the
+ * document scrolls itself, and nothing outside it moves.
+ *
+ * The lookup undoes the rename sanitation did: every id on the page carries
+ * `DOCUMENT_ID_PREFIX` and no `href` does. It is scoped to the document that
+ * was clicked in, so a panel showing two files sends each link to its own.
+ *
+ * A link the document cannot answer -- to a heading that is not there, or to a
+ * file's own anchors when only part of it is shown -- stops here rather than
+ * navigating, which is the same nothing the reader saw before, minus the
+ * address that had changed to say otherwise.
+ */
+function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
+  const href = (event.target as HTMLElement).closest("a")?.getAttribute("href");
+  if (href === undefined || href === null || !href.startsWith("#")) return;
+  event.preventDefault();
+
+  const id = DOCUMENT_ID_PREFIX + fragmentOf(href);
+  const target = event.currentTarget.querySelector(`#${CSS.escape(id)}`);
+  if (!(target instanceof HTMLElement)) return;
+
+  // Reading resumes from the heading, for a caret and a screen reader as well
+  // as for the eye -- which is what the navigation this replaces would have
+  // done. The focus is placed before the scroll and told not to scroll itself,
+  // so the one move the reader sees is the animated one.
+  target.tabIndex = -1;
+  target.focus({ preventScroll: true });
+
+  // Briefly animated, because the point of the motion is that the reader can
+  // see where in the document they were carried from and to. A reader who has
+  // asked their system for less of that is answered by the jump instead.
+  const frame = scrollFrameOf(target);
+  if (
+    frame === null ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    target.scrollIntoView({ behavior: "auto", block: "start" });
+    return;
+  }
+  carryTo(frame, target);
+}
+
+/**
+ * Draw a markdown document, the way shadcn draws one.
  *
  * Rendering is synchronous and total: a document is a pure function of its
  * source, so it lands in the same paint as everything around it, and there is
  * no failure case to fall back from -- every string is a valid document.
  *
- * The element around it is the document itself, and holds what belongs to the
- * whole of one rather than to any tag in it. What a surface passes in -- the
- * text size -- is inherited through it; what the document decides for itself
- * -- its leading -- is set on it.
+ * The two classes are the whole of the styling. `typeset` is what draws the
+ * document, and takes its size from whatever is showing it -- 13px in a panel
+ * row, where prose sits among inputs and has to line up with them, and larger
+ * in a preview dialog, where the document is the only thing on screen; every
+ * size in the stylesheet is written against that one. `reading-measure` is
+ * Leika's, and is how wide the blocks are allowed to run, which is the one
+ * question typeset leaves to the surface asking it.
  */
 export function MarkdownRenderer(props: { children?: string }) {
   const source = props.children ?? "";
-  const document = React.useMemo(() => render(source), [source]);
-  return <div className={DOCUMENT_CLASS}>{document}</div>;
+  const document = render(source);
+  return (
+    // One handler for the document rather than a component for its links: a
+    // link into the same file is answered by where it lands, and where it
+    // lands is only knowable from here.
+    <div className="typeset reading-measure" onClick={followLinkWithinDocument}>
+      {document}
+    </div>
+  );
 }

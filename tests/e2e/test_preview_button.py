@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import struct
 import zlib
 from pathlib import Path
@@ -88,21 +89,33 @@ def test_markdown_is_rendered(
     assert page_errors == []
 
 
+def _columns(page: Page, *selectors: str) -> dict[str, dict]:
+    """Where each of a viewer's blocks sits inside the dialog.
+
+    Every block is measured in the one pass, because a frame settling around
+    contents that are still arriving is a different width from one moment to
+    the next, and two widths read a call apart are not comparable.
+    """
+    return _dialog(page).evaluate(
+        """(dialog, selectors) => {
+          const outer = dialog.getBoundingClientRect();
+          return Object.fromEntries(selectors.map((selector) => {
+            const inner = dialog.querySelector(selector).getBoundingClientRect();
+            return [selector, {
+              dialog: outer.width,
+              column: inner.width,
+              left: inner.left - outer.left,
+              right: outer.right - inner.right,
+            }];
+          }));
+        }""",
+        list(selectors),
+    )
+
+
 def _column(page: Page, selector: str) -> dict:
     """Where a viewer's content sits inside the dialog."""
-    return _dialog(page).evaluate(
-        """(dialog, selector) => {
-          const outer = dialog.getBoundingClientRect();
-          const inner = dialog.querySelector(selector).getBoundingClientRect();
-          return {
-            dialog: outer.width,
-            column: inner.width,
-            left: inner.left - outer.left,
-            right: outer.right - inner.right,
-          };
-        }""",
-        selector,
-    )
+    return _columns(page, selector)[selector]
 
 
 def test_writing_is_set_in_a_column_and_data_spans_the_width(
@@ -132,6 +145,152 @@ def test_writing_is_set_in_a_column_and_data_spans_the_width(
     _press(preview_page, "Show readings")
     data = _column(preview_page, "pre")
     assert data["column"] > data["dialog"] * 0.9, data
+    assert page_errors == []
+
+
+def _document(*blocks: bytes) -> bytes:
+    return b"Some prose.\n\n" + b"\n\n".join(blocks) + b"\n"
+
+
+def _fence(line: bytes) -> bytes:
+    return b"```\n" + line + b"\n```"
+
+
+#: A table of three short columns, and one whose columns cannot all be shown
+#: at once however wide the window is.
+SMALL_TABLE = b"| when | what | why |\n|---|---|---|\n| a | b | c |"
+BIG_TABLE = (
+    b"| " + b" | ".join(b"a column heading of some length" for _ in range(8)) + b" |\n"
+    b"|" + b"---|" * 8 + b"\n"
+    b"| " + b" | ".join(b"and a cell of about that width" for _ in range(8)) + b" |"
+)
+
+
+def test_a_table_is_as_wide_as_its_columns_need_and_nothing_else_is(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A table is read by the column a cell is under and the row it is in, so
+    # it is the one block the measure is lifted for -- and lifted is not
+    # stretched: what it asks for is what its columns come to. Everything else
+    # keeps the measure, a fence included, whose slab would otherwise put an
+    # edge in the document at a width nothing else in it shares.
+    leika_server.gui.add_preview_button(
+        "Show short",
+        _document(
+            SMALL_TABLE,
+            _fence(b"x = 1"),
+            # Wider than the measure, so what holds an image back shows in what
+            # it renders at rather than only in what it was asked for.
+            b"![field](data:image/png;base64," + base64.b64encode(_png(1200, 6)) + b")",
+        ),
+        filename="short.md",
+    )
+    leika_server.gui.add_preview_button(
+        "Show long",
+        _document(BIG_TABLE, _fence(b"x = 1  # " + b"a long line of code " * 8)),
+        filename="long.md",
+    )
+
+    _press(preview_page, "Show short")
+    # Decoded first, so the frame has finished settling around it.
+    expect(_dialog(preview_page).locator("img")).to_have_js_property("naturalWidth", 1200)
+    short = _columns(preview_page, "p", "table", "pre", "img")
+    prose = short["p"]
+
+    assert prose["column"] < prose["dialog"] * 0.75, prose
+    # Three short columns are three short columns: the table fits them and
+    # stops, rather than spreading them across the window. Centred, like the
+    # writing, so the widths a document takes read as one column of it
+    # widening and narrowing rather than as blocks that start in two places.
+    assert short["table"]["column"] < prose["column"] * 0.5, short["table"]
+    assert abs(short["table"]["left"] - short["table"]["right"]) < 2.0, short["table"]
+    # The margins of the text, not a cap of its own: a screenshot in a window
+    # with room for the whole of it used to be shown as a thumbnail.
+    assert abs(short["img"]["column"] - prose["column"]) < 1.0, (short["img"], prose)
+
+    preview_page.keyboard.press("Escape")
+    expect(_dialog(preview_page)).to_have_count(0)
+
+    _press(preview_page, "Show long")
+    long = _columns(preview_page, "p", "table", "pre")
+
+    # Wider than the writing, since its columns are, and scrolling within the
+    # frame once even the frame is not enough for them.
+    assert long["table"]["column"] > long["p"]["column"] * 1.25, long
+    # A fence keeps the measure whatever it holds, and scrolls the code that
+    # does not fit: one edge, in line with the writing, for every fence in
+    # the document.
+    for name, boxes in (("short", short), ("long", long)):
+        fence, text = boxes["pre"], boxes["p"]
+        assert abs(fence["column"] - text["column"]) < 1.0, (name, fence, text)
+    assert page_errors == []
+
+
+#: What a README opens with: a contents list of links into the file, and far
+#: enough below it that reaching one of them is a scroll rather than a nudge.
+CONTENTS_DOC = (
+    b"# Notes\n\n- [Setup](#setup)\n- [Results](#results)\n- [Elsewhere](#nowhere)\n\n"
+    + b"\n\n".join(b"A paragraph of the opening section." for _ in range(40))
+    + b"\n\n## Setup\n\nHow the runs were configured.\n\n"
+    + b"\n\n".join(b"A paragraph of the setup section." for _ in range(40))
+    + b"\n\n## Results\n\nWhat came of them.\n"
+)
+
+
+def _scroll_top(page: Page) -> float:
+    """How far the frame holding the document has been scrolled."""
+    return _dialog(page).evaluate(
+        """(dialog) => dialog.querySelector(".overflow-auto").scrollTop"""
+    )
+
+
+def test_a_link_to_a_heading_scrolls_the_document_to_it(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # A contents list is the first thing in most READMEs and the links in one
+    # point back into the same file. The browser's own answer -- put the
+    # fragment in the address bar and jump -- is wrong twice over here: the
+    # address belongs to the app rather than to the file being read, and there
+    # is no id to jump to unless the renderer names the headings.
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOC, filename="notes.md")
+    address = preview_page.url
+
+    _press(preview_page, "Show notes")
+    dialog = _dialog(preview_page)
+    # Exactly, because the dialog's own title is "notes.md" and role-name
+    # matching is by substring: warmed documents render at the open, so both
+    # headings are on screen at once.
+    expect(dialog.get_by_role("heading", name="Notes", exact=True)).to_be_visible()
+    assert _scroll_top(preview_page) == 0.0
+
+    # A link the document cannot answer is answered with nothing, rather than
+    # with an address that says the reader was taken somewhere.
+    dialog.get_by_role("link", name="Elsewhere").click()
+    assert _scroll_top(preview_page) == 0.0
+    assert preview_page.url == address
+
+    dialog.get_by_role("link", name="Setup").click()
+    # Smoothly, so where it lands is a moment later than the click -- and at
+    # the top of the frame rather than merely somewhere on screen, the section
+    # being what the reader asked to be shown. Its own section is followed by
+    # another, so the frame really can put it at the top: the last heading in a
+    # file would stop where the document ends however it was scrolled to.
+    preview_page.wait_for_function(
+        """() => {
+          const dialog = document.querySelector('[data-slot="dialog-content"]');
+          const frame = dialog.querySelector(".overflow-auto");
+          // By its text: the dialog's own title is an h2 as well.
+          const heading = [...dialog.querySelectorAll("h2")]
+            .find((el) => el.textContent === "Setup");
+          const offset = heading.getBoundingClientRect().top
+            - frame.getBoundingClientRect().top;
+          return offset >= 0 && offset < 40;
+        }"""
+    )
+    expect(dialog.get_by_role("heading", name="Setup")).to_be_in_viewport()
+    # The one thing that did not move. A preview is a window onto a file, and
+    # the file's own anchors are not the app's address.
+    assert preview_page.url == address
     assert page_errors == []
 
 

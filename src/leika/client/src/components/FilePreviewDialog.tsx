@@ -81,11 +81,21 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
   );
 }
 
-/** The column a document is read in.
+/** The measure writing is read at here: short enough that the eye finds the
+ * start of the next line, and the width `max-w-prose` is named for. */
+const MEASURE = "65ch";
+
+/** The surface a document is read on.
  *
  * Two things make writing readable, and neither is about the file: a measure
- * short enough that the eye finds the start of the next line -- `max-w-prose`,
- * around 65 characters -- and type set for reading rather than for fitting.
+ * short enough that the eye finds the start of the next line, and type set for
+ * reading rather than for fitting.
+ *
+ * The measure is named rather than imposed. This is the full width of the
+ * popup, and the document lays its own blocks out inside it: prose keeps to a
+ * reading column in the middle, and a table, which is not read a line at a
+ * time, takes the whole of what the window has. A column clamped here would
+ * have taken that choice away from every block at once.
  *
  * The size is the one thing this adds that the panel does not. Body copy in a
  * GUI row is 13px so that it lines up with the inputs around it, which is a
@@ -96,7 +106,10 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
  */
 function ReadingColumn({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-auto w-full max-w-prose px-2 text-[0.9375rem]">
+    <div
+      className="w-full px-2 text-[0.9375rem]"
+      style={{ "--measure": MEASURE } as React.CSSProperties}
+    >
       {children}
     </div>
   );
@@ -163,8 +176,10 @@ function PreviewBody({
         <ReadingColumn>
           {/* Unrendered writing, so the lines are the author's: monospace,
               a touch smaller than prose that has been typeset, and wrapped
-              rather than scrolled because a paragraph is not a record. */}
-          <pre className="font-mono text-[0.85em] leading-[1.5] whitespace-pre-wrap">
+              rather than scrolled because a paragraph is not a record. It is
+              the whole document, so it holds the measure itself rather than
+              leaving blocks to. */}
+          <pre className="mx-auto max-w-[var(--measure)] font-mono text-[0.85em] leading-[1.5] whitespace-pre-wrap">
             {text ?? ""}
           </pre>
         </ReadingColumn>

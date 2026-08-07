@@ -121,7 +121,7 @@ def test_a_document_opening_with_a_heading_starts_flush(
 def test_every_block_carries_its_own_gap_above_and_none_below(
     leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
-    # The spacing rule the whole renderer follows. A block that only had the
+    # The spacing rule the whole stylesheet follows. A block that only had the
     # following paragraph's gap under it would sit against the text above it,
     # which is what a table and a rule used to do.
     leika_server.gui.add_text(None, BLOCKS_DOC, editable=False, markdown=True, multiline=True)
@@ -130,10 +130,10 @@ def test_every_block_carries_its_own_gap_above_and_none_below(
     spacing = leika_page.evaluate(
         """() => Object.fromEntries(
           ["h2", "ul", "blockquote", "pre", "table", "hr"].map((tag) => {
-            // A table draws a scroll container of its own, so the block is
-            // the outermost element rather than the tag itself.
+            // A table is wrapped in the box it scrolls inside, and typeset
+            // puts the space above a block on whichever element is the block.
             const el = tag === "table"
-              ? document.querySelector("table").closest("div").parentElement
+              ? document.querySelector(".typeset-scroll")
               : document.querySelector(tag);
             const style = getComputedStyle(el);
             return [tag, [parseFloat(style.marginTop), parseFloat(style.marginBottom)]];
@@ -144,36 +144,62 @@ def test_every_block_carries_its_own_gap_above_and_none_below(
     for tag, (above, below) in spacing.items():
         assert above > 0.0, (tag, spacing)
         assert below == 0.0, (tag, spacing)
-    # A break in the document takes more room than a continuation of it.
-    assert spacing["hr"][0] == spacing["h2"][0]
-    assert spacing["hr"][0] > spacing["ul"][0]
+    # A break in the document takes more room than a continuation of it, and a
+    # rule -- which is nothing but the break -- takes the most of all.
+    assert spacing["hr"][0] > spacing["h2"][0]
+    assert spacing["h2"][0] > spacing["ul"][0]
     assert page_errors == []
 
 
 def test_text_is_led_the_same_wherever_it_sits_in_the_document(
     leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
-    # A list item, a table cell and a paragraph are all body text and are read
-    # the same way. Only the document says how far apart its lines are: left
-    # to inherit, these would take the leading of the UI around them, which is
+    # A list item, a quote and a paragraph are all prose and are read the same
+    # way. Only the document says how far apart its lines are: left to
+    # inherit, these would take the leading of the UI around them, which is
     # set for labels beside inputs and reads tighter than the prose above.
     leika_server.gui.add_text(None, BLOCKS_DOC, editable=False, markdown=True, multiline=True)
     expect(leika_page.get_by_role("heading", name="A heading")).to_be_visible(timeout=15_000)
 
     leading = leika_page.evaluate(
         """() => Object.fromEntries(
-          ["p", "li", "td", "blockquote", "h2"].map((tag) => {
+          ["p", "li", "td", "pre", "blockquote", "h2"].map((tag) => {
             const style = getComputedStyle(document.querySelector(tag));
             return [tag, parseFloat(style.lineHeight) / parseFloat(style.fontSize)];
           }),
         )"""
     )
 
-    body = [leading["p"], leading["li"], leading["td"], leading["blockquote"]]
-    assert max(body) - min(body) < 0.01, leading
+    prose = [leading["p"], leading["li"], leading["blockquote"]]
+    assert max(prose) - min(prose) < 0.01, leading
     # A heading is short and large; the body's spacing would pull its own two
     # lines apart.
     assert leading["h2"] < leading["p"]
+    # And what is not prose is set tighter than it. A cell is found by the
+    # column it is under, and a line of code is read as a line rather than as
+    # part of a paragraph, so neither is helped by the room between lines that
+    # keeps the eye on a running text.
+    assert leading["td"] < leading["p"], leading
+    assert leading["pre"] < leading["p"], leading
+    assert page_errors == []
+
+
+def test_a_link_out_of_a_document_carries_no_referrer(
+    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
+) -> None:
+    # The one thing about a document the renderer still decides, everything
+    # else about it being the stylesheet's. A document can be opened on a file
+    # from anywhere, and a link in one is a link out of Leika.
+    leika_server.gui.add_text(
+        None,
+        "[example](https://example.com)",
+        editable=False,
+        markdown=True,
+        multiline=True,
+    )
+    link = leika_page.get_by_role("link", name="example")
+    expect(link).to_be_visible(timeout=15_000)
+    expect(link).to_have_attribute("rel", "noreferrer")
     assert page_errors == []
 
 

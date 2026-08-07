@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* shadcn/typeset, vendored verbatim from the upstream file so it can be
+   diffed against it and replaced by a newer copy without a merge. It is not
+   in the registry the pinned `shadcn` resolves against, which is why it is a
+   file here rather than a dependency. Everything a markdown document is drawn
+   with comes from it; what Leika adds is below, and only where typeset takes
+   no position -- how wide a document is being the whole of it. */
+@import "./typeset.css";
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
@@ -177,6 +184,101 @@
   & [data-slot="input"] {
     @apply py-0;
   }
+}
+
+/* How wide a document is, which is the one thing typeset leaves to whoever
+   shows one: it sets the size, the leading and the space between blocks, and
+   says nothing about the room a block gets.
+
+   Every block keeps to the measure and is centred in what it was given, since
+   writing is read a line at a time and a line the eye cannot track back to the
+   start of is harder to read however much room the window has.
+
+   A table is the exception, and gets the whole width to lay its columns out
+   in: it is read by the column a cell is under and the row it is in, so the
+   measure buys it nothing and costs its columns the room they needed. What is
+   lifted is the limit, not the size -- typeset sets a table to `max-content`
+   inside its scroll box, so three short columns stay three short columns, and
+   the table is centred in the width rather than started at the edge of it, so
+   the widths a document takes read as one column of it widening and narrowing
+   rather than as blocks that begin in two places.
+
+   Only the blocks of the document itself, so a cell or a list item -- already
+   inside a block that keeps the measure -- is left alone. */
+@utility reading-measure {
+  & > * {
+    margin-inline: auto;
+    max-width: var(--measure);
+  }
+
+  & > .typeset-scroll {
+    max-width: 100%;
+  }
+
+  & > .typeset-scroll > table {
+    margin-inline: auto;
+  }
+}
+
+/* typeset's two weights, stepped down one to the scale this UI is set on.
+   It writes 600 for a heading and 500 for a link as literal numbers, which
+   are the right *distances* from the 400 body a stock shadcn app has: a
+   heading 200 above it, a link 100. Leika runs its body text a step lighter
+   than stock -- `--font-weight-normal` is 300 -- so those same numbers land
+   300 and 200 above it instead, and a document written the way this one's
+   are, opening most paragraphs with a bold lead, reads as slabs of black on
+   unusually light text. 500 and 400 restore the distances typeset was drawn
+   with while keeping the lighter voice of everything around it.
+
+   Ordered rather than merged: h5 and h6 are in both lists, and typeset means
+   them to be the lighter of the two. A link inside a heading takes the
+   heading's weight, which is typeset's rule and would otherwise be lost. */
+.typeset :is(h1, h2, h3, h4, h5, h6, strong, b) {
+  font-weight: 500;
+}
+
+.typeset :is(a, h5, h6, summary, kbd, dt, th) {
+  font-weight: 400;
+}
+
+.typeset :is(h1, h2, h3, h4, h5, h6) a {
+  font-weight: inherit;
+}
+
+/* Where a heading comes to rest when a link in the document is followed to it.
+   Scrolled flush, a heading arrives touching the top edge of the frame and
+   reads as the end of what came before it rather than the start of what
+   follows; the gap is the same one it would have had on the page. */
+.typeset :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-block-start: 1rem;
+}
+
+/* A block that scrolls sideways keeps the scroll and not the bar: a document
+   sits in a panel row as well as in a dialog, and a fence long enough to
+   scroll would hang a bar of furniture under the prose on every one of them,
+   whether or not the reader ever needs it. The block still scrolls by wheel
+   and by touch. typeset gives the overflow; what to do about the bar is a
+   question it leaves open. */
+.typeset :is(pre, .typeset-scroll) {
+  @apply no-scrollbar;
+}
+
+/* The measure a document's writing is set to: how wide a line of it may run,
+   named by the surface showing the document and read by every block in it.
+
+   Registered rather than left as a plain custom property, so that it is a
+   *length* -- resolved once, where it is set, against the size the document is
+   read at. Unregistered, a custom property is a piece of text substituted into
+   whoever asks for it, and `ch` would be re-resolved against each block's own
+   size: a 2em heading would take twice the measure of the paragraph under it,
+   and a 0.9em fence nine tenths of it, which is the opposite of a measure.
+
+   The initial value is the whole width, so a surface that names no measure
+   limits nothing and a document lays out as it did before there was one. */
+@property --measure {
+  syntax: "<length-percentage>";
+  inherits: true;
+  initial-value: 100%;
 }
 
 /* While a list entry is being carried, the whole document keeps the closed

@@ -24,21 +24,36 @@
  *     than one tick later.
  */
 
-import type { Root } from "hast";
 import type { ReactElement } from "react";
 import * as runtime from "react/jsx-runtime";
 import rehypeColorChips from "rehype-color-chips";
 import rehypeRaw from "rehype-raw";
 import rehypeReact, { type Options as RehypeReactOptions } from "rehype-react";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
-import { unified, type Transformer } from "unified";
-import { visit } from "unist-util-visit";
+import { unified } from "unified";
 
 /** How a tag name maps to the component that draws it. */
 export type MarkdownComponents = RehypeReactOptions["components"];
+
+/**
+ * What every id a document names is prefixed with once it is on the page.
+ *
+ * An id is global to the page, so a document that could name one freely could
+ * take over an id the app is already using -- `#search`, `#title` -- and quietly
+ * redirect a label or an `aria-describedby` that Leika wrote. Sanitation's
+ * answer, GitHub's too, is to leave the ids in place but move all of them into
+ * a namespace of their own, so a document can only ever collide with itself.
+ *
+ * The prefix is applied to ids and not to the `href`s that point at them, so a
+ * link written `#setup` lands on `#user-content-setup`: the same rewrite, done
+ * once, is what following a link in a document has to undo. That is the whole
+ * reason this is a name rather than a literal in the schema.
+ */
+export const DOCUMENT_ID_PREFIX = "user-content-";
 
 /**
  * GitHub's allowlist, plus the one protocol Leika needs on top of it.
@@ -58,6 +73,7 @@ export type MarkdownComponents = RehypeReactOptions["components"];
  */
 const schema = {
   ...defaultSchema,
+  clobberPrefix: DOCUMENT_ID_PREFIX,
   protocols: {
     ...defaultSchema.protocols,
     src: [...(defaultSchema.protocols?.src ?? []), "data"],
@@ -65,32 +81,20 @@ const schema = {
 };
 
 /**
- * Mark the `<code>` inside a `<pre>` so one component can draw both forms.
- *
- * Markdown gives a fenced block and an inline span the same tag name and
- * distinguishes them only by the parent, which a React component never sees.
- * Flattening that into a prop lets `code` own the difference instead of
- * splitting it across two renderers that have to agree.
- */
-function rehypeCodeBlock(): void | Transformer<Root, Root> {
-  return (tree) => {
-    visit(tree, "element", (node, _index, parent) => {
-      if (node.tagName !== "code") return;
-      if (parent && parent.type === "element" && parent.tagName === "pre") {
-        node.properties = { block: true, ...node.properties };
-      }
-    });
-  };
-}
-
-/**
  * Build a renderer that turns markdown into React elements.
  *
  * The pipeline is ordered by what each step is allowed to assume:
  * `remark-rehype` passes inline HTML through as raw text, `rehype-raw` parses
  * it into real elements, and only then does sanitation run -- on a tree where
- * every element is visible to it. Leika's own passes come last, so the marks
- * and styles they add are not mistaken for an author's and stripped.
+ * every element is visible to it. Leika's own pass comes last, so the marks it
+ * adds are not mistaken for an author's and stripped.
+ *
+ * Slugs are the exception, and run *before* sanitation on purpose. A heading's
+ * id is the document's name for one of its own parts, which is exactly what
+ * sanitation namespaces (`DOCUMENT_ID_PREFIX`); an id that skipped the rewrite
+ * would be the one thing in a document able to reach the page around it.
+ * Running here also means a heading written as inline HTML is given an id on
+ * the same terms as one written with hashes, since by now they are one tree.
  *
  * The processor is built once and reused: it holds no per-document state, and
  * assembling a unified pipeline is far more work than running one.
@@ -101,9 +105,9 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
     .use(remarkGfm)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
+    .use(rehypeSlug)
     .use(rehypeSanitize, schema)
     .use(rehypeColorChips)
-    .use(rehypeCodeBlock)
     .use(rehypeReact, {
       // React's own jsx-runtime types and the ones rehype-react asks for
       // describe the same three functions with different signatures, so the

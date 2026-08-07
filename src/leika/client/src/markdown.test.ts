@@ -10,7 +10,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
-import { createMarkdownRenderer } from "./markdown";
+import { createMarkdownRenderer, DOCUMENT_ID_PREFIX } from "./markdown";
 
 /** Unstyled, so the assertions read as HTML rather than as Tailwind. */
 const render = createMarkdownRenderer({});
@@ -79,15 +79,48 @@ describe("GitHub-flavored markdown", () => {
   });
 });
 
-describe("how code reaches its component", () => {
-  test("a fenced block is marked, an inline span is not", () => {
-    // Markdown gives both the same tag name and tells them apart only by the
-    // parent, which a React component never sees.
-    const marked = createMarkdownRenderer({
-      code: (props: { block?: boolean; children?: unknown }) =>
-        (props.block ? "BLOCK" : "INLINE") as never,
-    });
-    expect(renderToStaticMarkup(marked("```\nx\n```"))).toContain("BLOCK");
-    expect(renderToStaticMarkup(marked("`x`"))).toContain("INLINE");
+describe("links from one part of a document to another", () => {
+  test("a heading answers to the name GitHub gives it", () => {
+    // A contents list is written against the slugs GitHub derives, so these
+    // are the same ones -- punctuation dropped, spaces kept as the gaps they
+    // were, which is why two hyphens come out of "W24 / W25".
+    expect(html("## W24 / W25")).toContain(
+      `<h2 id="${DOCUMENT_ID_PREFIX}w24--w25">`,
+    );
+  });
+
+  test("a repeated heading is still a heading of its own", () => {
+    const out = html("# Setup\n\n# Setup");
+    expect(out).toContain(`id="${DOCUMENT_ID_PREFIX}setup"`);
+    expect(out).toContain(`id="${DOCUMENT_ID_PREFIX}setup-1"`);
+  });
+
+  test("every id a document names is namespaced, its own included", () => {
+    // The rule the renderer relies on to resolve a link: an id on the page is
+    // the prefix plus what the document asked for, and nothing else is. It
+    // holds for ids an author writes by hand, and for the ones the footnote
+    // machinery writes -- which arrive already prefixed and are prefixed
+    // again, so that their links, prefixed once, still find them.
+    expect(html('<h2 id="mine">x</h2>')).toContain(
+      `id="${DOCUMENT_ID_PREFIX}mine"`,
+    );
+    // The form a log written for GitHub uses to give a section a short name
+    // of its own, rather than the slug its whole title comes to.
+    expect(
+      html('<a id="w24-w25"></a>\n\n## W24/W25: the mixture ratio'),
+    ).toContain(`id="${DOCUMENT_ID_PREFIX}w24-w25"`);
+    const footnote = html("text[^1]\n\n[^1]: note");
+    const [, href] = /href="#([^"]+)"/.exec(footnote) ?? [];
+    expect(footnote).toContain(`id="${DOCUMENT_ID_PREFIX}${href}"`);
+  });
+});
+
+describe("what a document is drawn as", () => {
+  test("code reaches the page as the tags a stylesheet can find", () => {
+    // Nothing marks a fenced block any more. typeset tells one from an inline
+    // span the way CSS does, by the parent, so the tree stays plain HTML and
+    // the renderer has no opinion about code to hold.
+    expect(html("```\nx\n```")).toBe("<pre><code>x\n</code></pre>");
+    expect(html("`x`")).toBe("<p><code>x</code></p>");
   });
 });
