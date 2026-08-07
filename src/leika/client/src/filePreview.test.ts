@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { formatBytes, previewKindFor } from "./filePreview";
+import {
+  closeFilePreview,
+  filePreviewStore,
+  formatBytes,
+  openFilePreview,
+  previewKindFor,
+  resolveFilePreview,
+  warmedContents,
+  warmFilePreview,
+} from "./filePreview";
 
 describe("previewKindFor", () => {
   it("puts the media types in their own players", () => {
@@ -84,5 +93,89 @@ describe("formatBytes", () => {
   it("stops climbing units at the largest it knows", () => {
     expect(formatBytes(5 * 1024 ** 4)).toBe("5.0 TiB");
     expect(formatBytes(2048 * 1024 ** 4)).toBe("2048.0 TiB");
+  });
+});
+
+describe("the preview store", () => {
+  const metadata = (id: string) => ({
+    id,
+    filename: "notes.md",
+    mimeType: "text/markdown",
+    sizeBytes: 4,
+    contents: null,
+  });
+  const contents = () => ({
+    url: `blob:${crypto.randomUUID()}`,
+    blob: new Blob(["# hi"]),
+  });
+
+  afterEach(() => {
+    const open = filePreviewStore.snapshot();
+    if (open !== null) closeFilePreview(open.id);
+    vi.restoreAllMocks();
+  });
+
+  it("opens on metadata alone, and fills in the contents when they arrive", () => {
+    // The dialog answers the click from the transfer's first message; the
+    // bytes catch up under the same id, without reopening anything.
+    openFilePreview(metadata("a"));
+    expect(filePreviewStore.snapshot()?.contents).toBeNull();
+    const arrived = contents();
+    resolveFilePreview("a", arrived);
+    expect(filePreviewStore.snapshot()).toMatchObject({
+      id: "a",
+      contents: arrived,
+    });
+  });
+
+  it("lets go of contents whose dialog was closed while they were in flight", () => {
+    // A dismissed dialog stays dismissed: the late bytes are released, not
+    // shown.
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    closeFilePreview("a");
+    const arrived = contents();
+    resolveFilePreview("a", arrived);
+    expect(filePreviewStore.snapshot()).toBeNull();
+    expect(revoke).toHaveBeenCalledWith(arrived.url);
+  });
+
+  it("shows warmed contents at the press, then owns the fresh copy", () => {
+    // A file that arrived ahead of its press opens the dialog already full;
+    // the press's own transfer still lands, and replaces it -- revoking the
+    // URL the warmed copy was shown under, since the dialog owned that one.
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    warmFilePreview("notes.md", new Blob(["# early"]));
+
+    const early = warmedContents("notes.md");
+    expect(early).not.toBeNull();
+    openFilePreview({ ...metadata("a"), contents: early });
+
+    const fresh = contents();
+    resolveFilePreview("a", fresh);
+    expect(revoke).toHaveBeenCalledWith(early!.url);
+    expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
+    // The warmed blob itself is still held for the next press.
+    expect(warmedContents("notes.md")).not.toBeNull();
+  });
+
+  it("has nothing warmed for a file nobody warmed", () => {
+    expect(warmedContents("never.md")).toBeNull();
+  });
+
+  it("revokes what it was showing when a new file replaces it", () => {
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+    openFilePreview(metadata("b"));
+    expect(revoke).toHaveBeenCalledWith(first.url);
+    expect(filePreviewStore.snapshot()?.id).toBe("b");
   });
 });

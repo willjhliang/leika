@@ -562,6 +562,26 @@ class Server:
         """
         return self._websock_server.atomic()
 
+    def register_http_asset(self, path: Path) -> str:
+        """Serve one file over plain HTTP, returning the URL path it lives at.
+
+        The heavy constituents of an otherwise small payload -- the images a
+        previewed document refers to, say -- are better fetched by the browser
+        than carried inside a message: the message arrives at once, and the
+        browser loads the heavy parts in parallel, progressively, the way it
+        loads any page. The URL is the content's hash, so it caches forever
+        and names nothing about the machine; it is served behind the same
+        password gate as everything else.
+
+        Args:
+            path: File to serve. Read at registration to hash it, and again
+                per request, so it is never held in memory.
+
+        Returns:
+            Root-relative URL path (``/leika-assets/<hash><suffix>``).
+        """
+        return self._websock_server.register_http_asset(path)
+
     def send_file_download(
         self,
         filename: str,

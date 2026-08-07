@@ -129,6 +129,7 @@ export interface GuiButtonMessage {
     color: "default" | "inverse";
     _icon_html: string | null;
     _hold_callback_freqs: number[];
+    _prefetch: boolean;
   };
 }
 /** GuiUploadButtonMessage(uuid: 'str', container_uuid: 'str', props: 'GuiUploadButtonProps')
@@ -555,6 +556,19 @@ export interface GuiButtonHoldMessage {
   uuid: string;
   frequency: number;
 }
+/** Message sent from client->server when a preview button scrolls into view.
+ *
+ * Asks the server to begin the transfer the button's press would start, so
+ * that by the time the press comes the file is already in the browser. The
+ * server answers with an ordinary file transfer whose disposition is
+ * ``warm``; a press may never come, and nothing is shown for one.
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewWarmMessage {
+  type: "GuiPreviewWarmMessage";
+  uuid: string;
+}
 /** Sent client<->server when any property of a GUI component is changed.
  *
  * (automatically generated)
@@ -695,7 +709,7 @@ export interface FileTransferStartUpload {
  */
 export interface FileTransferStartDownload {
   type: "FileTransferStartDownload";
-  disposition: "save" | "link" | "preview";
+  disposition: "save" | "link" | "preview" | "warm";
   transfer_uuid: string;
   filename: string;
   mime_type: string;
@@ -888,6 +902,7 @@ export type Message =
   | GuiModalMessage
   | GuiCloseModalMessage
   | GuiButtonHoldMessage
+  | GuiPreviewWarmMessage
   | GuiUpdateMessage
   | ViewportImageMessage
   | ViewportMatplotlibMessage

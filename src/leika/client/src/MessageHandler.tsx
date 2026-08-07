@@ -2,7 +2,14 @@ import React, { useContext } from "react";
 
 import { applyGuiConfigUpdate } from "./ControlPanel/GuiState";
 import { toast } from "./components/ui/toast";
-import { openFilePreview } from "./filePreview";
+import {
+  openFilePreview,
+  previewKindFor,
+  resolveFilePreview,
+  warmedContents,
+  warmFilePreview,
+} from "./filePreview";
+import { warmMarkdownDocument } from "./components/markdownDocument";
 import {
   dismissNotification,
   fileDownloadToastOptions,
@@ -220,6 +227,20 @@ function useFileDownloadHandler(): (
         parts: [],
         bytesDownloaded: 0,
       };
+      if (message.disposition === "preview") {
+        // The dialog opens on the first message rather than the last: its
+        // name, viewer and size are all here, so the click is answered now
+        // and only the contents wait on the rest of the transfer -- or not
+        // even that, when a warm transfer already brought them: the document
+        // shows at once, and the arriving copy replaces it on landing.
+        openFilePreview({
+          id: message.transfer_uuid,
+          filename: message.filename,
+          mimeType: message.mime_type,
+          sizeBytes: message.size_bytes,
+          contents: warmedContents(message.filename),
+        });
+      }
     } else {
       const state = downloadStatesRef.current[message.transfer_uuid];
       if (state === undefined) {
@@ -247,8 +268,21 @@ function useFileDownloadHandler(): (
       { type: state.metadata.mime_type },
     );
     const url = URL.createObjectURL(blob);
-    const { filename, mime_type: mimeType, disposition } = state.metadata;
+    const { filename, disposition } = state.metadata;
     delete downloadStatesRef.current[message.transfer_uuid];
+
+    if (disposition === "warm") {
+      // Arrived ahead of its press, so nothing is shown: the file is held
+      // for the preview that a press would open, and a markdown document is
+      // readied the rest of the way -- parsed into the render cache, its
+      // images fetched into the browser's -- while the reader is elsewhere.
+      URL.revokeObjectURL(url);
+      warmFilePreview(filename, blob);
+      if (previewKindFor(state.metadata.mime_type, filename) === "markdown") {
+        void blob.text().then(warmMarkdownDocument, () => undefined);
+      }
+      return;
+    }
 
     if (disposition === "save") {
       // Hand the blob straight to the browser, which owns the download UI from
@@ -264,15 +298,9 @@ function useFileDownloadHandler(): (
 
     if (disposition === "preview") {
       // The dialog owns the URL from here: every viewer in it reads from the
-      // URL, so it is revoked when the dialog closes rather than now.
-      openFilePreview({
-        id: message.transfer_uuid,
-        filename,
-        mimeType,
-        sizeBytes: state.metadata.size_bytes,
-        url,
-        blob,
-      });
+      // URL, so it is revoked when the dialog closes rather than now -- or
+      // right away, if the dialog was closed while the file was in flight.
+      resolveFilePreview(message.transfer_uuid, { url, blob });
       return;
     }
 

@@ -382,6 +382,9 @@ class GuiApi(GuiContainer):
             _messages.GuiButtonHoldMessage, self._handle_gui_button_hold
         )
         self._websock_interface.register_handler(
+            _messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm
+        )
+        self._websock_interface.register_handler(
             _messages.GuiFormSubmitMessage, self._handle_gui_form_submit
         )
         self._websock_interface.register_handler(
@@ -495,6 +498,28 @@ class GuiApi(GuiContainer):
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
                 ).add_done_callback(print_threadpool_errors)
+
+    async def _handle_gui_preview_warm(
+        self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
+    ) -> None:
+        """A preview button has scrolled into view; start its press's transfer.
+
+        Advisory, so every mismatch is a quiet return rather than an error: a
+        stale uuid, a button that is not a preview button, a client gone
+        between queueing and dispatch. The press, if one comes, is unaffected
+        either way -- it always sends fresh.
+        """
+        handle = self._gui_input_handle_from_uuid.get(message.uuid, None)
+        if handle is None or handle._impl.removed:
+            return
+        if not isinstance(handle, GuiPreviewButtonHandle):
+            return
+        client = self._resolve_client(client_id)
+        if client is None:
+            return
+        self._thread_executor.submit(handle._warm, client).add_done_callback(
+            print_threadpool_errors
+        )
 
     async def _handle_gui_form_submit(
         self, client_id: ClientId, message: _messages.GuiFormSubmitMessage
@@ -1550,6 +1575,7 @@ class GuiApi(GuiContainer):
             color=color,
             _icon_html=None if icon is None else svg_from_icon(icon),
             _hold_callback_freqs=(),
+            _prefetch=False,
             disabled=disabled,
             visible=visible,
         )
@@ -1686,6 +1712,7 @@ class GuiApi(GuiContainer):
             color=color,
             _icon_html=None if icon is None else svg_from_icon(icon),
             _hold_callback_freqs=(),
+            _prefetch=False,
             disabled=disabled,
             visible=visible,
         )
@@ -1785,6 +1812,7 @@ class GuiApi(GuiContainer):
                 color=color,
                 _icon_html=None if icon is None else svg_from_icon(icon),
                 _hold_callback_freqs=(),
+                _prefetch=True,
                 disabled=disabled,
                 visible=visible,
             ),

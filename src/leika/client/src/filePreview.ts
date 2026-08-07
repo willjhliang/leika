@@ -121,16 +121,29 @@ export function previewKindFor(
   return "unsupported";
 }
 
-/** One file the server asked this client to look at. */
+/** A previewed file's bytes, once every part of the transfer has arrived. */
+export interface FileContents {
+  /** Object URL for the assembled blob. Revoked when the dialog closes. */
+  url: string;
+  blob: Blob;
+}
+
+/** One file the server asked this client to look at.
+ *
+ * Everything but the bytes is known from the transfer's first message, and
+ * that is deliberately enough to open the dialog with: the name, the viewer
+ * its type calls for, and so the frame's size are all settled while the file
+ * is still arriving. The dialog answers a click at the speed of the metadata,
+ * and only the contents wait on the transfer.
+ */
 export interface FilePreview {
   /** The transfer's uuid, which keys the dialog. */
   id: string;
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  /** Object URL for the assembled blob. Revoked when the dialog closes. */
-  url: string;
-  blob: Blob;
+  /** The file itself, or null while its parts are still arriving. */
+  contents: FileContents | null;
 }
 
 // The file currently being previewed, held outside React so that the message
@@ -149,15 +162,65 @@ function announce(): void {
 
 /** Show a file, closing whatever was being shown. */
 export function openFilePreview(preview: FilePreview): void {
-  if (current !== null) URL.revokeObjectURL(current.url);
+  if (current?.contents != null) URL.revokeObjectURL(current.contents.url);
   current = preview;
   announce();
+}
+
+/** Fill in the contents of the preview `id`, once they have all arrived.
+ *
+ * If that preview is no longer on screen -- the reader closed the dialog
+ * while the file was still in flight -- the contents are let go rather than
+ * shown: a dialog that was dismissed reappearing seconds later would be
+ * answering a question the reader has withdrawn.
+ *
+ * A dialog opened from warmed contents already has something on screen; the
+ * arrived transfer replaces it, since the press is always answered with what
+ * the file holds *now*. When nothing changed on disk, the replacement is the
+ * same text into the same rendered document, and nothing visibly moves.
+ */
+export function resolveFilePreview(id: string, contents: FileContents): void {
+  if (current === null || current.id !== id) {
+    URL.revokeObjectURL(contents.url);
+    return;
+  }
+  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
+  current = { ...current, contents };
+  announce();
+}
+
+/** Files that arrived ahead of their press, newest last.
+ *
+ * Held as blobs rather than object URLs so there is nothing here to revoke:
+ * a dialog that uses one is handed a URL of its own to own. Keyed by
+ * filename, which is what the press's transfer announces first. A handful is
+ * a session's worth of preview buttons; past that the oldest is dropped, and
+ * its press simply waits for its transfer like any unwarmed one.
+ */
+const WARMED_LIMIT = 8;
+const warmed = new Map<string, Blob>();
+
+/** Hold a file whose press has not come yet. */
+export function warmFilePreview(filename: string, blob: Blob): void {
+  warmed.delete(filename);
+  warmed.set(filename, blob);
+  if (warmed.size > WARMED_LIMIT) {
+    warmed.delete(warmed.keys().next().value!);
+  }
+}
+
+/** What warming has ready for `filename`: contents the dialog can own, or
+ * null and the dialog shows its spinner until the transfer lands. */
+export function warmedContents(filename: string): FileContents | null {
+  const blob = warmed.get(filename);
+  if (blob === undefined) return null;
+  return { blob, url: URL.createObjectURL(blob) };
 }
 
 /** Close a preview, if it is still the one on screen. */
 export function closeFilePreview(id: string): void {
   if (current === null || current.id !== id) return;
-  URL.revokeObjectURL(current.url);
+  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
   current = null;
   announce();
 }

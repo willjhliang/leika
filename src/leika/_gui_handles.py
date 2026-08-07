@@ -5,6 +5,7 @@ import base64
 import dataclasses
 import json
 import math
+import mimetypes
 import re
 import time
 import uuid
@@ -1269,9 +1270,65 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         super().__init__(_impl=_impl, _icon=_icon, _content=_content, _filename=_filename)
         self._max_bytes = _max_bytes
 
+    def _prepared(self, client: ClientHandle, filename: str, content: bytes | Path) -> bytes | Path:
+        """The contents as the browser should receive them.
+
+        A path-backed document knows where its relative images live. The
+        browser receives the document as an isolated blob, with no filesystem
+        base URL it could resolve them against -- but the images do not
+        belong *inside* the document either: inlined as base64 they multiply
+        the transfer, and nothing shows until the whole of it has arrived.
+        Each image is registered with the server instead and the document
+        keeps only its URL, so the text arrives on its own -- kilobytes,
+        shown at once -- and the browser fills the figures in as they load,
+        the way it loads any page. Bytes have no corresponding directory and
+        are left exactly as the caller supplied them.
+        """
+        if isinstance(content, Path) and Path(filename).suffix.lower() in (
+            ".md",
+            ".markdown",
+        ):
+            source = content.read_bytes().decode("utf-8", errors="replace")
+            return _link_markdown_assets(
+                source, content.parent, client._server.register_http_asset
+            ).encode("utf-8")
+        return content
+
     @override
     def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
+        content = self._prepared(client, filename, content)
         client.send_file_preview(filename, content, max_bytes=self._max_bytes)
+
+    def _warm(self, client: ClientHandle) -> None:
+        """Begin the press's transfer before the press (``GuiPreviewWarmMessage``).
+
+        Sent with disposition ``warm``, which the browser holds ready rather
+        than shows. Everything about it is advisory, so every reason not to
+        send is a quiet return: warming shows nobody anything, so there is
+        nobody to tell.
+
+        Only static contents warm. A callable is the caller's code, run --
+        with whatever cost or side effects the caller gave it -- on a *press*;
+        a button merely scrolling past is not that, so it is left alone.
+        """
+        content = self._content
+        if callable(content):
+            return
+        filename = self._filename
+        if filename is None:
+            filename = content.name if isinstance(content, Path) else None
+        if filename is None:
+            return
+        try:
+            prepared = self._prepared(client, filename, content)
+            size = len(prepared) if isinstance(prepared, bytes) else prepared.stat().st_size
+            if size > self._max_bytes:
+                return
+            client._send_file(filename, prepared, 1024 * 1024, "warm")
+        except OSError:
+            # An unreadable file warms nothing; the press, if it comes, will
+            # say so through the channels a press has.
+            return
 
 
 class GuiButtonGroupHandle(_GuiInputHandle[str], GuiButtonGroupProps):
@@ -1772,12 +1829,11 @@ def _get_data_url(url: str, image_root: Path | None) -> str:
     if image_root is None:
         image_root = Path(__file__).parent
     try:
-        import imageio.v3 as iio
-
-        image = iio.imread(image_root / url)
-        _, binary = encode_image_binary(image, "png")
-        url = base64.b64encode(binary).decode("utf-8")
-        return f"data:image/png;base64,{url}"
+        path = image_root / url
+        binary = path.read_bytes()
+        mime_type = mimetypes.guess_type(path.name, strict=False)[0] or "application/octet-stream"
+        encoded = base64.b64encode(binary).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
     except (IOError, FileNotFoundError):
         warnings.warn(
             f"Failed to read image {url}, with image_root set to {image_root}.",
@@ -1788,11 +1844,42 @@ def _get_data_url(url: str, image_root: Path | None) -> str:
 
 def _parse_markdown(markdown: str, image_root: Path | None) -> str:
     markdown = re.sub(
-        r"\!\[([^]]*)\]\(([^]]*)\)",
+        r"\!\[([^]]*)\]\(([^)\n]*)\)",
         lambda match: f"![{match.group(1)}]({_get_data_url(match.group(2), image_root)})",
         markdown,
     )
     return markdown
+
+
+def _link_markdown_assets(markdown: str, image_root: Path, register: Callable[[Path], str]) -> str:
+    """Point a document's relative images at server URLs of their own.
+
+    The counterpart of :func:`_parse_markdown` for when there is a server to
+    fetch from. Inlining images works anywhere but puts every byte of them in
+    front of the text, so nothing shows until all of it has arrived;
+    registering them (:meth:`Server.register_http_asset`) leaves the document
+    the size of its writing, and the browser fetches the images alongside it.
+
+    Web addresses and data URLs are already self-contained and pass through
+    untouched. An image that cannot be read keeps its original reference --
+    the document renders with the same broken figure it would show anywhere
+    else, rather than failing to show at all.
+    """
+
+    def linked(match: re.Match[str]) -> str:
+        url = match.group(2)
+        if url.startswith("http") or url.startswith("data:"):
+            return match.group(0)
+        try:
+            return f"![{match.group(1)}]({register(image_root / url)})"
+        except OSError:
+            warnings.warn(
+                f"Failed to read image {url}, relative to {image_root}.",
+                stacklevel=2,
+            )
+            return match.group(0)
+
+    return re.sub(r"\!\[([^]]*)\]\(([^)\n]*)\)", linked, markdown)
 
 
 class GuiProgressBarHandle(_GuiInputHandle[float], GuiProgressBarProps):

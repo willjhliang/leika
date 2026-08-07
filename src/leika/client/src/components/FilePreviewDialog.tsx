@@ -2,6 +2,7 @@ import { DownloadIcon, FileIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
   closeFilePreview,
@@ -9,6 +10,7 @@ import {
   formatBytes,
   isReadingKind,
   previewKindFor,
+  type FileContents,
   type FilePreview,
   type PreviewKind,
 } from "../filePreview";
@@ -16,7 +18,13 @@ import { HintTooltip } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaDialog } from "./MediaExpand";
 
-/** Read a textual blob without briefly rendering an empty document. */
+/** Read a textual blob without briefly rendering an empty document.
+ *
+ * The text lands as a transition: showing a document means parsing it, which
+ * for a long file is real work, and work a transition lets React do after the
+ * frame around the document has painted rather than before. The dialog is on
+ * screen at the click, and the document arrives in it.
+ */
 function useBlobText(blob: Blob, enabled: boolean): string | null {
   const [text, setText] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -24,7 +32,7 @@ function useBlobText(blob: Blob, enabled: boolean): string | null {
     let current = true;
     blob.text().then(
       (value) => {
-        if (current) setText(value);
+        if (current) React.startTransition(() => setText(value));
       },
       () => {
         if (current) setText("");
@@ -115,15 +123,29 @@ function ReadingColumn({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** What the frame holds while there is nothing to hold yet: the file still
+ * arriving, or a document still being read out of it. One mark for both, so
+ * the wait reads as one wait however it is being spent. */
+function PendingBody() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <Spinner className="text-muted-foreground size-6" />
+    </div>
+  );
+}
+
 /** Render content within the dialog's fixed preview frame. */
 function PreviewBody({
   kind,
   preview,
+  contents,
 }: {
   kind: PreviewKind;
   preview: FilePreview;
+  contents: FileContents;
 }) {
-  const { filename, mimeType, sizeBytes, url, blob } = preview;
+  const { filename, mimeType, sizeBytes } = preview;
+  const { url, blob } = contents;
   const isTextual = kind === "text" || kind === "prose" || kind === "markdown";
   const text = useBlobText(blob, isTextual);
 
@@ -166,9 +188,12 @@ function PreviewBody({
         </object>
       );
     case "markdown":
+      // The spinner from the transfer holds until the document is ready to
+      // land whole, in one paint.
+      if (text === null) return <PendingBody />;
       return (
         <ReadingColumn>
-          {text === null ? null : <MarkdownRenderer>{text}</MarkdownRenderer>}
+          <MarkdownRenderer>{text}</MarkdownRenderer>
         </ReadingColumn>
       );
     case "prose":
@@ -257,14 +282,27 @@ export function FilePreviewDialog({
       showTitle
       width="min(72rem, calc(100vw - 2rem))"
     >
-      <DownloadCorner filename={preview.filename} url={preview.url} />
+      {preview.contents !== null && (
+        <DownloadCorner
+          filename={preview.filename}
+          url={preview.contents.url}
+        />
+      )}
       <div
         className={cn(
           "overflow-auto",
           FRAME_HEIGHT[isReadingKind(kind) ? "reading" : "fitted"],
         )}
       >
-        <PreviewBody kind={kind} preview={preview} />
+        {preview.contents === null ? (
+          <PendingBody />
+        ) : (
+          <PreviewBody
+            kind={kind}
+            preview={preview}
+            contents={preview.contents}
+          />
+        )}
       </div>
     </MediaDialog>
   );

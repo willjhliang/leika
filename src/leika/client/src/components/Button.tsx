@@ -16,9 +16,28 @@ export default function ButtonComponent({
     color,
     _icon_html: iconHtml,
     _hold_callback_freqs: holdCallbackFreqs,
+    _prefetch: prefetch,
   },
 }: GuiButtonMessage) {
   const { messageSender } = React.useContext(GuiComponentContext)!;
+
+  // A button whose press shows a file asks for the file when it scrolls into
+  // view, so that the press finds it already in the browser
+  // (`GuiPreviewWarmMessage`; the server answers with a `warm` transfer that
+  // is held rather than shown). Asked once per time on screen: the observer
+  // disconnects after firing, and only a remount asks again.
+  useEffect(() => {
+    if (!prefetch) return;
+    const node = document.getElementById(uuid);
+    if (node === null) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      messageSender({ type: "GuiPreviewWarmMessage", uuid });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [prefetch, uuid, messageSender]);
   const holdIntervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
   const holdFrequencies = React.useMemo(
     () =>

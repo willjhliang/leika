@@ -156,13 +156,15 @@ purged when their entity is removed:
 EntityIdField: TypeAlias = Literal["uuid", "pane_id"]
 """Dataclass field carrying the entity ID."""
 
-FileDisposition: TypeAlias = Literal["save", "link", "preview"]
+FileDisposition: TypeAlias = Literal["save", "link", "preview", "warm"]
 """What the browser does with a file once every chunk of it has arrived.
 
 - ``save``: hand it straight to the browser's own download machinery.
 - ``link``: offer it in a notification, which can be right clicked to
   "Save as...".
-- ``preview``: show it in a dialog, in whatever viewer its type calls for."""
+- ``preview``: show it in a dialog, in whatever viewer its type calls for.
+- ``warm``: show nothing -- hold it, ready, for the ``preview`` a nearby
+  button's press is about to ask for."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -548,6 +550,10 @@ class GuiButtonProps(GuiBaseProps):
     """(Private) HTML string for the icon to be displayed on the button."""
     _hold_callback_freqs: Tuple[float, ...]
     """(Private) Tuple of frequencies (Hz) at which hold callbacks should be triggered."""
+    _prefetch: bool
+    """(Private) Whether the press's work can be begun before the press: a
+    button that shows a file asks for it when it scrolls into view
+    (``GuiPreviewWarmMessage``), so the press finds the file already here."""
 
 
 @dataclasses.dataclass
@@ -566,6 +572,18 @@ class GuiButtonHoldMessage(Message):
     uuid: str
     frequency: float
     """The frequency (Hz) at which this hold message was triggered."""
+
+
+@dataclasses.dataclass
+class GuiPreviewWarmMessage(Message):
+    """Message sent from client->server when a preview button scrolls into view.
+
+    Asks the server to begin the transfer the button's press would start, so
+    that by the time the press comes the file is already in the browser. The
+    server answers with an ordinary file transfer whose disposition is
+    ``warm``; a press may never come, and nothing is shown for one."""
+
+    uuid: str
 
 
 @dataclasses.dataclass

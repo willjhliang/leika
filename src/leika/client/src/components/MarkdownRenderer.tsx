@@ -1,40 +1,7 @@
 import React from "react";
 
-import {
-  createMarkdownRenderer,
-  DOCUMENT_ID_PREFIX,
-  type MarkdownComponents,
-} from "../markdown";
-
-// What a document looks like is shadcn/typeset's, whole: `src/typeset.css`
-// draws every element markdown makes -- the heading scale, the leading, the
-// space between blocks, the rules on a table, the underline on a link -- from
-// three values, and Leika sets none of them. There is nothing here that says
-// how a document looks, and nothing here should be.
-//
-// A component is worth writing only for what a tag *does*, or for structure a
-// stylesheet cannot add for itself. There are two.
-const components: MarkdownComponents = {
-  // A document can be opened on a file from anywhere, and a link in one is a
-  // link out of Leika. The referrer is the one thing following it should not
-  // carry with it.
-  a: (props) => <a rel="noreferrer" {...props} />,
-  // typeset holds a table's headings on one line, so a table with long ones
-  // is wider than the page whatever the page does, and the wrapper is what it
-  // ships to say where that width is allowed to go: the table scrolls inside
-  // its own box instead of the document scrolling sideways and taking every
-  // paragraph in it along. Markdown cannot tell us which tables are wide, so
-  // every one gets it -- the box is only a scroll when there is something to
-  // scroll. The wrapper owns the space above it, which is why the table
-  // itself no longer carries any.
-  table: (props) => (
-    <div className="typeset-scroll">
-      <table {...props} />
-    </div>
-  ),
-};
-
-const render = createMarkdownRenderer(components);
+import { DOCUMENT_ID_PREFIX } from "../markdown";
+import { renderMarkdown } from "./markdownDocument";
 
 /** The part of the document a `#fragment` names, as it was written.
  *
@@ -169,7 +136,7 @@ function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
  */
 export function MarkdownRenderer(props: { children?: string }) {
   const source = props.children ?? "";
-  const document = render(source);
+  const document = renderMarkdown(source);
   return (
     // One handler for the document rather than a component for its links: a
     // link into the same file is answered by where it lands, and where it

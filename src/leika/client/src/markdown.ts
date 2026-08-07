@@ -24,6 +24,7 @@
  *     than one tick later.
  */
 
+import type { Nodes, Root } from "hast";
 import type { ReactElement } from "react";
 import * as runtime from "react/jsx-runtime";
 import rehypeColorChips from "rehype-color-chips";
@@ -81,6 +82,79 @@ const schema = {
 };
 
 /**
+ * Length past which a `data:` URL is taken out of the source before parsing.
+ *
+ * An embedded image is megabytes of base64 sitting in the middle of a
+ * document, and the parser reads every byte of it as markdown: a file whose
+ * text parses in a quarter second takes several seconds once its images are
+ * inlined (`add_preview_button` inlines them on the way here, `image_root`
+ * before that). None of that reading can change anything -- base64 has no
+ * markup in it -- so each long URL is swapped for a short numbered stand-in
+ * (`data:,leika-embed-3`) on the way in and swapped back on the way out, and
+ * the parser only ever sees the document's actual writing.
+ *
+ * The swap is a pure inversion, not an image feature: it is undone wherever
+ * the stand-in comes to rest, so a long URL an author put in a code block
+ * comes back as the text it was, the same as one in an `src`. The threshold
+ * just keeps the machinery off the tiny URLs that cost nothing to parse.
+ */
+const EMBED_MIN_LENGTH = 1024;
+
+const EMBED_URL_PREFIX = "data:,leika-embed-";
+const EMBED_STAND_IN = new RegExp(`${EMBED_URL_PREFIX}(\\d+)`, "g");
+
+/** Swap every long `data:` URL for a numbered stand-in, keeping the originals.
+ *
+ * The character class is where a URL can end in any syntax that can hold one:
+ * whitespace, a markdown destination's `)`, an HTML attribute's quote, a tag's
+ * `>`, a code span's backtick. Everything between is carried whole, so the
+ * inverse is a straight substitution.
+ */
+function liftEmbeds(source: string): { lifted: string; embeds: string[] } {
+  const embeds: string[] = [];
+  const lifted = source.replace(
+    new RegExp(`data:[^\\s)"'\`<>]{${EMBED_MIN_LENGTH},}`, "g"),
+    (url) => {
+      embeds.push(url);
+      return `${EMBED_URL_PREFIX}${embeds.length - 1}`;
+    },
+  );
+  return { lifted, embeds };
+}
+
+/** Put the lifted URLs back, wherever their stand-ins ended up.
+ *
+ * Runs after sanitation, and safely so: a protocol is all sanitation reads of
+ * a URL, and a stand-in keeps the `data:` of what it stands for. An attribute
+ * that may not hold a `data:` URL is dropped with the stand-in still in it,
+ * and there is nothing left to restore.
+ */
+function rehypeRestoreEmbeds() {
+  return (tree: Root, file: { data: { embeds?: string[] } }) => {
+    const embeds = file.data.embeds ?? [];
+    if (embeds.length === 0) return;
+    const restore = (value: string): string =>
+      value.replace(EMBED_STAND_IN, (standIn, index) => {
+        return embeds[Number(index)] ?? standIn;
+      });
+    const visit = (node: Nodes): void => {
+      if (node.type === "text" && node.value.includes(EMBED_URL_PREFIX)) {
+        node.value = restore(node.value);
+      }
+      if (node.type === "element") {
+        for (const [name, value] of Object.entries(node.properties)) {
+          if (typeof value === "string" && value.includes(EMBED_URL_PREFIX)) {
+            node.properties[name] = restore(value);
+          }
+        }
+      }
+      if ("children" in node) node.children.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
+/**
  * Build a renderer that turns markdown into React elements.
  *
  * The pipeline is ordered by what each step is allowed to assume:
@@ -107,6 +181,7 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
     .use(rehypeRaw)
     .use(rehypeSlug)
     .use(rehypeSanitize, schema)
+    .use(rehypeRestoreEmbeds)
     .use(rehypeColorChips)
     .use(rehypeReact, {
       // React's own jsx-runtime types and the ones rehype-react asks for
@@ -119,6 +194,8 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
       components,
     } as RehypeReactOptions);
 
-  return (markdown: string): ReactElement =>
-    processor.processSync(markdown).result;
+  return (markdown: string): ReactElement => {
+    const { lifted, embeds } = liftEmbeds(markdown);
+    return processor.processSync({ value: lifted, data: { embeds } }).result;
+  };
 }

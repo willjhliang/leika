@@ -57,6 +57,34 @@ describe("what a document may contain", () => {
     );
   });
 
+  test("an image the server registered keeps its URL", () => {
+    // Path-backed previews arrive naming `/leika-assets/...` URLs rather
+    // than carrying image bytes; a relative URL passes sanitation the same
+    // way it does on GitHub.
+    expect(html("![plot](/leika-assets/abc123.png)")).toContain(
+      'src="/leika-assets/abc123.png"',
+    );
+  });
+
+  test("a large inlined image survives whole, and as its own", () => {
+    // Long data URLs are lifted out of the source before parsing and put
+    // back after -- an inlined image is megabytes the parser would otherwise
+    // read as markdown. The swap has to be invisible: each image keeps its
+    // own bytes, in markdown syntax and in inline HTML alike.
+    const first = `data:image/png;base64,${"A".repeat(2000)}`;
+    const second = `data:image/jpeg;base64,${"B".repeat(2000)}`;
+    const out = html(`![one](${first})\n\n<img alt="two" src="${second}">`);
+    expect(out).toContain(`src="${first}" alt="one"`);
+    expect(out).toContain(`alt="two" src="${second}"`);
+  });
+
+  test("a long data URL in a code block is text, and stays text", () => {
+    // The lift is an inversion, not an image feature: a URL that was written
+    // as writing comes back as the writing it was.
+    const url = `data:image/png;base64,${"C".repeat(2000)}`;
+    expect(html("```\n" + url + "\n```")).toContain(url);
+  });
+
   test("no document fails to render", () => {
     // CommonMark has no syntax errors: anything that is not markup is text.
     for (const source of ["", "<", "{", "```", "|a|\n|-", "<div", "*[x"]) {

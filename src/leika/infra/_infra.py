@@ -151,6 +151,47 @@ class WebsockClientConnection(WebsockMessageHandler):
         return self._state.message_buffer
 
 
+def _http_content_type(name: str) -> str:
+    """The Content-Type a file is served with, from its name.
+
+    Known types are answered from a table rather than from ``guess_type()``,
+    which can misname Javascript on some Windows machines. Some references:
+
+        https://bugs.python.org/issue43975
+        https://github.com/golang/go/issues/32350#issuecomment-525111557
+
+    We're assuming UTF-8 for text, which is mostly reasonable but might want
+    to be revisited.
+    """
+    mime_type = {
+        ".css": "text/css; charset=utf-8",
+        ".gif": "image/gif",
+        ".htm": "text/html; charset=utf-8",
+        ".html": "text/html; charset=utf-8",
+        ".jpg": "image/jpeg",
+        ".js": "application/javascript",
+        ".wasm": "application/wasm",
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".xml": "text/xml; charset=utf-8",
+    }.get(Path(name).suffix.lower(), None)
+    if mime_type is None:
+        mime_type = mimetypes.guess_type(name)[0]
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+    return mime_type
+
+
+_HTTP_ASSET_URL_PREFIX = "/leika-assets/"
+"""Where runtime-registered files are served, apart from the static tree."""
+
+_HTTP_ASSET_LIMIT = 1024
+"""How many registered assets are remembered. Registrations past this evict
+the oldest; a URL that has been evicted answers 404, the same as one that was
+never registered."""
+
+
 class WebsockServer(WebsockMessageHandler):
     """Websocket server abstraction. Communicates asynchronously with client
     applications.
@@ -199,6 +240,16 @@ class WebsockServer(WebsockMessageHandler):
 
         self._client_state_from_id: dict[int, _ClientHandleState] = {}
         self._server_thread: threading.Thread | None = None
+
+        # Files registered at runtime to be fetched over HTTP, named by their
+        # content's hash. See :meth:`register_http_asset`.
+        self._http_assets: dict[str, Path] = {}
+        # Digests already computed, so re-registering an unchanged file -- the
+        # normal case, every time a preview is reopened -- does not re-read
+        # megabytes just to rediscover its name. Keyed by path; an entry is
+        # trusted only while the file's (mtime_ns, size) still match.
+        self._http_asset_digests: dict[Path, tuple[tuple[int, int], str]] = {}
+        self._http_assets_lock = threading.Lock()
 
     def start(self) -> None:
         """Start the server."""
@@ -279,6 +330,55 @@ class WebsockServer(WebsockMessageHandler):
         client_state = self._client_state_from_id.get(client_id)
         if client_state is not None:
             client_state.message_buffer.flush()
+
+    def register_http_asset(self, path: Path) -> str:
+        """Serve one file over plain HTTP, and return the URL path it lives at.
+
+        This is for the big constituents of otherwise small payloads -- the
+        images a markdown preview refers to, say. Sent inline, they arrive as
+        base64 inside a message that nothing can show until all of it is
+        there; served here, the message stays small enough to arrive at once,
+        and the browser fetches the heavy parts in parallel, progressively,
+        the way it loads any page.
+
+        The URL is the content's hash, which is what makes it safe to cache
+        forever: a changed file registers as a different URL, so the browser
+        revisits nothing and refetches nothing across repeated previews. It
+        also names nothing -- neither the path on disk nor anything guessable
+        -- and only exact registered names are served, each behind the same
+        password gate as the rest of the server.
+
+        Hashing re-reads the file only when its ``(mtime_ns, size)`` have
+        changed since the last registration, so re-registering what a page
+        already shows -- the normal case, every time a preview is reopened --
+        costs a ``stat`` rather than the file. A rewrite that preserves both
+        timestamp and size would be served under its old name until either
+        moves, which nothing that writes files normally manages.
+
+        Raises ``OSError`` if the file cannot be read, which is also the
+        moment the caller still knows what the URL was standing in for.
+        """
+        stat = path.stat()
+        fingerprint = (stat.st_mtime_ns, stat.st_size)
+        with self._http_assets_lock:
+            remembered = self._http_asset_digests.get(path)
+        if remembered is not None and remembered[0] == fingerprint:
+            digest = remembered[1]
+        else:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        name = f"{digest}{path.suffix.lower()}"
+        with self._http_assets_lock:
+            # Re-registering refreshes the entry's place in eviction order:
+            # what a preview uses now is what should be evicted last.
+            self._http_assets.pop(name, None)
+            self._http_assets[name] = path
+            while len(self._http_assets) > _HTTP_ASSET_LIMIT:
+                del self._http_assets[next(iter(self._http_assets))]
+            self._http_asset_digests.pop(path, None)
+            self._http_asset_digests[path] = (fingerprint, digest)
+            while len(self._http_asset_digests) > _HTTP_ASSET_LIMIT:
+                del self._http_asset_digests[next(iter(self._http_asset_digests))]
+        return f"{_HTTP_ASSET_URL_PREFIX}{name}"
 
     def _background_worker(self, ready_sem: threading.Semaphore) -> None:
         import rich
@@ -461,6 +561,38 @@ class WebsockServer(WebsockMessageHandler):
             if request.headers.get("Upgrade") == "websocket":
                 return None
 
+            # Runtime-registered assets come before the static tree, and are
+            # served whether or not there is one. The lookup is an exact match
+            # against names this server handed out -- hex digests, nothing to
+            # decode and no path in them -- so there is no traversal to guard.
+            url_path = request.path.partition("?")[0]
+            if url_path.startswith(_HTTP_ASSET_URL_PREFIX):
+                with self._http_assets_lock:
+                    asset_path = self._http_assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
+                try:
+                    payload = asset_path.read_bytes() if asset_path is not None else None
+                except OSError:
+                    # Registered, but gone from disk since: the same 404 as
+                    # never registered, rather than a 500 out of read_bytes.
+                    payload = None
+                if payload is None:
+                    return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
+                return Response(
+                    http.HTTPStatus.OK,
+                    "OK",
+                    Headers(
+                        **{
+                            "Content-Type": _http_content_type(url_path),
+                            "Content-Length": str(len(payload)),
+                            # The name is the content's hash, so what this URL
+                            # answers can never change; the browser may keep it
+                            # for as long as it likes and never ask again.
+                            "Cache-Control": "private, max-age=31536000, immutable",
+                        }
+                    ),
+                    payload,
+                )
+
             # No files to serve: only the websocket (and the guard above)
             # live on this port.
             if http_server_root is None:
@@ -503,31 +635,7 @@ class WebsockServer(WebsockMessageHandler):
 
             use_gzip = "gzip" in request.headers.get("Accept-Encoding", "")
 
-            # First, try some known MIME types. Using guess_type() can cause
-            # problems for Javascript on some Windows machines.
-            #
-            # Some references:
-            #     https://bugs.python.org/issue43975
-            #     https://github.com/golang/go/issues/32350#issuecomment-525111557
-            #
-            # We're assuming UTF-8, this is mostly reasonable but might want to revisit.
-            mime_type = {
-                ".css": "text/css; charset=utf-8",
-                ".gif": "image/gif",
-                ".htm": "text/html; charset=utf-8",
-                ".html": "text/html; charset=utf-8",
-                ".jpg": "image/jpeg",
-                ".js": "application/javascript",
-                ".wasm": "application/wasm",
-                ".pdf": "application/pdf",
-                ".png": "image/png",
-                ".svg": "image/svg+xml",
-                ".xml": "text/xml; charset=utf-8",
-            }.get(Path(path).suffix.lower(), None)
-            if mime_type is None:
-                mime_type = mimetypes.guess_type(relpath)[0]
-            if mime_type is None:
-                mime_type = "application/octet-stream"
+            mime_type = _http_content_type(relpath)
 
             if source_path not in file_cache:
                 file_cache[source_path] = source_path.read_bytes()

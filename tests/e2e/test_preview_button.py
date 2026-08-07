@@ -62,6 +62,63 @@ def test_an_image_opens_in_the_dialog(
     assert page_errors == []
 
 
+def test_a_documents_images_are_fetched_beside_it(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    # A path-backed document's relative images are not carried inside the
+    # transfer: the server registers each one and the document arrives naming
+    # URLs, which the browser fetches like any page's images. The text shows
+    # without waiting for a byte of figure data.
+    docs = tmp_path / "docs"
+    (docs / "figures").mkdir(parents=True)
+    (docs / "figures" / "plot.png").write_bytes(_png(8, 6))
+    (docs / "notes.md").write_text("# Results\n\n![plot](figures/plot.png)\n")
+    leika_server.gui.add_preview_button("Show notes", docs / "notes.md")
+
+    _press(preview_page, "Show notes")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Results")
+    image = dialog.locator(".typeset img")
+    expect(image).to_be_visible()
+    # Decoded from the asset endpoint, not merely present as a tag.
+    expect(image).to_have_js_property("naturalWidth", 8)
+    src = image.get_attribute("src")
+    assert src is not None and src.startswith("/leika-assets/"), src
+    assert page_errors == []
+
+
+def test_a_preview_in_view_is_warmed_before_its_press(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    # A preview button on screen asks for its file before anyone presses it:
+    # the document and the images it names are all in the browser while the
+    # reader is still elsewhere, and nothing has opened to say so.
+    docs = tmp_path / "docs"
+    (docs / "figures").mkdir(parents=True)
+    (docs / "figures" / "plot.png").write_bytes(_png(8, 6))
+    (docs / "notes.md").write_text("# Warmed\n\n![plot](figures/plot.png)\n")
+    leika_server.gui.add_preview_button("Show warmed", docs / "notes.md")
+
+    # The image arrives in the browser's cache with no press anywhere.
+    preview_page.wait_for_function(
+        "() => performance.getEntriesByType('resource')"
+        ".some((entry) => entry.name.includes('/leika-assets/'))"
+    )
+    expect(_dialog(preview_page)).not_to_be_visible()
+
+    _press(preview_page, "Show warmed")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Warmed")
+    expect(dialog.locator(".typeset img")).to_have_js_property("naturalWidth", 8)
+    assert page_errors == []
+
+
 def test_text_is_shown_as_itself(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
