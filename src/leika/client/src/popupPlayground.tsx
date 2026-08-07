@@ -104,6 +104,10 @@ import {
 } from "./components/guiLabelStyles";
 import { MediaPreview } from "./components/MediaPreview";
 import { mediaPreviewWidth, useMediaSize } from "./components/mediaPreviewSize";
+import {
+  previewMediaClassName,
+  usePreviewFullscreen,
+} from "./components/previewFullscreen";
 import { POPOUT_WIDTH_CLASS } from "./ControlPanel/controlWidth";
 import type { FilePreview } from "./filePreview";
 import { usePrefersDarkMode } from "./hooks/useMediaQuery";
@@ -546,11 +550,16 @@ function CommandPaletteSpecimen() {
  *
  * Two shapes, because that is what the sizing is for. The portrait one is the
  * case a fixed frame got wrong -- it used to open in the document's width with
- * a column of empty dialog down either side of it. */
+ * a column of empty dialog down either side of it.
+ *
+ * They remember "fill the window" separately, which is worth trying here: it
+ * is the behaviour a single specimen could not show. */
 function MediaPreviewSpecimen({ shape }: { shape: typeof LANDSCAPE }) {
   const [open, setOpen] = React.useState(false);
   const url = sampleImageDataUrl(shape);
   const size = useMediaSize(url);
+  const key = `demo-pane-${shape.width}x${shape.height}`;
+  const [fullscreen] = usePreviewFullscreen(key);
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>
@@ -560,13 +569,10 @@ function MediaPreviewSpecimen({ shape }: { shape: typeof LANDSCAPE }) {
         open={open}
         onOpenChange={setOpen}
         title="Rendered frame"
+        rememberAs={key}
         width={mediaPreviewWidth(size)}
       >
-        <img
-          src={url}
-          alt=""
-          className="mx-auto block h-auto w-full rounded-lg"
-        />
+        <img src={url} alt="" className={previewMediaClassName(fullscreen)} />
       </MediaPreview>
     </>
   );

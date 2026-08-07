@@ -1,4 +1,4 @@
-import { Maximize2Icon } from "lucide-react";
+import { Maximize2Icon, MaximizeIcon, MinimizeIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,10 @@ import {
 import { cn } from "@/lib/utils";
 import { HintTooltip } from "./common";
 import { guiLabelClassName } from "./guiLabelStyles";
+import {
+  PREVIEW_FULLSCREEN_ATTR,
+  usePreviewFullscreen,
+} from "./previewFullscreen";
 
 /** The control that opens a media element's preview.
  *
@@ -84,6 +88,40 @@ export function MediaSurface({
   );
 }
 
+/** The corner control that gives a preview the whole window, and takes it
+ * back.
+ *
+ * Its own place in the row of corner chrome: after the download, before the
+ * close. Left to right that is what to do WITH the file, what to do with the
+ * popup, and how to leave -- and leaving stays where it has always been,
+ * under the pointer that reaches for the far corner without looking.
+ */
+function FullscreenCorner({
+  fullscreen,
+  onToggle,
+}: {
+  fullscreen: boolean;
+  onToggle: () => void;
+}) {
+  const label = fullscreen ? "Exit full window" : "Fill the window";
+  return (
+    <HintTooltip hint={label}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="absolute top-2 right-10"
+        onClick={onToggle}
+        aria-label={label}
+        aria-pressed={fullscreen}
+        data-leika-preview-fullscreen
+      >
+        {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+      </Button>
+    </HintTooltip>
+  );
+}
+
 /** A piece of media, shown at its own size.
  *
  * The one popup media opens in, whether it was expanded from a pane or sent
@@ -95,6 +133,12 @@ export function MediaSurface({
  *
  * So there is no frame here. The popup is the width its caller asks for --
  * `mediaPreviewWidth` in ./mediaPreviewSize -- and the media fills it.
+ *
+ * Unless it has been given the whole window, which is the one size a caller
+ * does not get a say in: full-window is the reader's answer to "this is too
+ * small", and a width computed from the media is exactly what they were
+ * disagreeing with. That answer outlives the popup it was given in -- see
+ * ./previewFullscreen -- and `rememberAs` is what it is kept against.
  *
  * `title` is drawn, always. It is the one line of chrome a preview has, and
  * what it says is which of the things on the page you are now looking at --
@@ -115,28 +159,65 @@ export function MediaPreview({
   open,
   onOpenChange,
   title,
+  rememberAs,
   width,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
+  /** Names what is being previewed, so that "fill the window" is remembered
+   * for this one and not for the next. A file's name, or the uuid of the pane
+   * whose media this is. */
+  rememberAs: string;
   /** CSS width for the dialog. Defaults to the stock 4xl content width. */
   width?: string;
   children: React.ReactNode;
 }) {
   const popupRef = React.useRef<HTMLDivElement | null>(null);
+  const [fullscreen, setFullscreen] = usePreviewFullscreen(rememberAs);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ref={popupRef}
         initialFocus={popupRef}
         finalFocus={false}
+        // A branch, not a pile of overrides. Both halves reach the element
+        // through `cn`, whose merge deletes the class it beats rather than
+        // trusting it to be printed later, so "max-h-none after max-h-[...]"
+        // would in fact have worked -- but a reader would have to know that to
+        // believe it, and the two boxes have almost nothing in common anyway.
         className={cn(
-          "max-h-[calc(100dvh-2rem)] overflow-auto",
-          width === undefined ? "sm:max-w-4xl" : "sm:max-w-none",
+          // Resizes land in one paint. The dialog carries `duration-100` for
+          // its opening keyframes, and `transition-property` is left at its
+          // default of `all` -- so every property this popup changes after it
+          // is on screen was being interpolated over 100ms, and half of them
+          // cannot be. Going full-window snapped its height (`auto` to a
+          // length interpolates to nothing) and its max-width, while the
+          // width and the centering translate slid: the box jumped to the top
+          // of the screen and then swung out from the left. A resize this
+          // partial reads worse than no motion, and it was doing it to the
+          // ordinary case too -- a preview grows when its picture finishes
+          // decoding and the measured width replaces the floor.
+          "transition-none",
+          fullscreen
+            ? // Everything the centered box does, undone. The margin, the
+              // rounding and the shadow are how a popup says it is sitting on
+              // top of a page; full-window there is no page left to sit on,
+              // so it stops saying it. The rows are named so that the body
+              // can fill what the title bar leaves: `auto` would size the
+              // body to the media and hand a portrait the height it asked
+              // for, which is the scrolling this mode exists to end.
+              "top-0 left-0 h-dvh max-w-none translate-x-0 translate-y-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-none shadow-none ring-0 sm:max-w-none"
+            : cn(
+                "max-h-[calc(100dvh-2rem)] overflow-auto",
+                width === undefined ? "sm:max-w-4xl" : "sm:max-w-none",
+              ),
         )}
-        style={width === undefined ? undefined : { width }}
+        // A width measured from the media is the wrong answer when the answer
+        // is "the window".
+        style={fullscreen || width === undefined ? undefined : { width }}
+        {...{ [PREVIEW_FULLSCREEN_ATTR]: fullscreen ? "true" : undefined }}
       >
         <DialogHeader>
           {/* Quiet, the way a GUI label is quiet, and for the same reason: it
@@ -148,7 +229,23 @@ export function MediaPreview({
             {title}
           </DialogTitle>
         </DialogHeader>
-        {children}
+        <FullscreenCorner
+          fullscreen={fullscreen}
+          onToggle={() => setFullscreen(!fullscreen)}
+        />
+        {/* The body is a box of its own only so that it has a height to give
+            away: full-window the media and the document frame inside it both
+            ask for all of it, and `h-full` needs something to be full of.
+            A plain block, deliberately -- as a grid it sized its one row to
+            the media's intrinsic height, and a percentage height against an
+            auto track resolves to nothing, so the media fell back to its own
+            size and ran off the bottom.
+            Windowed it carries nothing at all, so that it stays what it looks
+            like: a wrapper. Given `min-h-0` it let the popup's row shrink
+            under the document frame inside it, and the popup grew a scrollbar
+            of its own beside the frame's -- two nested scrollers, and a link
+            that focused anything scrolled whichever the browser picked. */}
+        <div className={cn(fullscreen && "h-full")}>{children}</div>
       </DialogContent>
     </Dialog>
   );

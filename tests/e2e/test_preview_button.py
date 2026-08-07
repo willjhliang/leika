@@ -351,23 +351,35 @@ def test_a_link_to_a_heading_scrolls_the_document_to_it(
     assert page_errors == []
 
 
-def _opened_size(page: Page, label: str) -> tuple[int, int]:
-    """The dialog's size once it has finished opening."""
-    _press(page, label)
-    dialog = _dialog(page)
-    expect(dialog).to_be_visible()
-    size = dialog.evaluate(
+def _settled_rect(dialog: Locator) -> dict[str, int]:
+    """Where the dialog is once it has stopped moving.
+
+    A dialog opens and resizes through animations, and a rect read while one
+    is still running is a frame of it rather than the answer.
+    """
+    return dialog.evaluate(
         """async (el) => {
           await Promise.all(
             el.getAnimations().map((animation) => animation.finished.catch(() => {}))
           );
           const box = el.getBoundingClientRect();
-          return [Math.round(box.width), Math.round(box.height)];
+          return {
+            x: Math.round(box.x), y: Math.round(box.y),
+            width: Math.round(box.width), height: Math.round(box.height),
+          };
         }"""
     )
+
+
+def _opened_size(page: Page, label: str) -> tuple[int, int]:
+    """The dialog's size once it has finished opening."""
+    _press(page, label)
+    dialog = _dialog(page)
+    expect(dialog).to_be_visible()
+    rect = _settled_rect(dialog)
     page.keyboard.press("Escape")
     expect(dialog).to_have_count(0)
-    return tuple(size)
+    return (rect["width"], rect["height"])
 
 
 def test_a_document_preview_opens_the_same_size_whatever_the_file_holds(
@@ -566,4 +578,84 @@ def test_an_oversize_file_says_so_instead_of_opening(
     toast = preview_page.locator('[data-slot="toast"]')
     expect(toast).to_contain_text("Too large to preview")
     expect(_dialog(preview_page)).to_have_count(0)
+    assert page_errors == []
+
+
+def test_a_preview_fills_the_window_and_stays_that_way(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """The full-window toggle, and the memory that outlives the preview.
+
+    Kept per preview rather than for all of them. Filling the window is a
+    decision about one thing being too small to read at the size it opens, and
+    the next file is a different thing: enlarging a picture must not enlarge
+    the document opened after it. Closing is not a retraction either -- the
+    same file, opened again, comes back the way it was left.
+    """
+    leika_server.gui.add_preview_button("Show tall", _png(200, 600), filename="tall.png")
+    leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
+
+    dialog = _dialog(preview_page)
+    viewport = preview_page.viewport_size
+    assert viewport is not None
+
+    _press(preview_page, "Show tall")
+    expect(dialog).to_be_visible()
+    windowed = _settled_rect(dialog)
+    assert windowed["width"] < viewport["width"]
+
+    # Order in the corner: download, full window, close. Left to right that is
+    # what to do with the file, what to do with the popup, and how to leave.
+    corners = dialog.evaluate(
+        """el => [...el.querySelectorAll('a, button')]
+             .map(node => ({
+                 label: node.getAttribute('aria-label') ?? node.textContent.trim(),
+                 right: node.getBoundingClientRect().right,
+             }))"""
+    )
+    by_label = {corner["label"]: corner["right"] for corner in corners}
+    download = next(right for label, right in by_label.items() if label.startswith("Download"))
+    assert download < by_label["Fill the window"] < by_label["Close"], by_label
+
+    preview_page.get_by_role("button", name="Fill the window").click()
+    expect(preview_page.get_by_role("button", name="Exit full window")).to_be_visible()
+    expect(dialog).to_have_attribute("data-preview-fullscreen", "true")
+    full = _settled_rect(dialog)
+    assert (full["x"], full["y"]) == (0, 0), full
+    assert full["width"] == viewport["width"], full
+    assert full["height"] == viewport["height"], full
+
+    # The whole picture is still on screen: the popup is the window's shape,
+    # the picture is not, so it is fitted rather than cropped or overflowed.
+    image = dialog.locator("img")
+    assert image.evaluate(
+        """el => {
+          const box = el.getBoundingClientRect();
+          return box.height <= window.innerHeight + 1 && box.width <= window.innerWidth + 1;
+        }"""
+    )
+
+    # Another file is untouched by it: this button was never pressed.
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show notes")
+    expect(dialog).to_be_visible()
+    expect(dialog).not_to_have_attribute("data-preview-fullscreen", "true")
+
+    # And the picture is still the way it was left, which is the memory half.
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show tall")
+    expect(dialog).to_have_attribute("data-preview-fullscreen", "true")
+
+    # Backing out of it is remembered just as well, and again only for this
+    # one: the document opened in between never changed either way.
+    preview_page.get_by_role("button", name="Exit full window").click()
+    expect(dialog).not_to_have_attribute("data-preview-fullscreen", "true")
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show tall")
+    expect(dialog).not_to_have_attribute("data-preview-fullscreen", "true")
+    reopened = _settled_rect(dialog)
+    assert reopened["width"] == windowed["width"], (reopened, windowed)
     assert page_errors == []

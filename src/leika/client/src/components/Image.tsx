@@ -4,6 +4,10 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { GuiImageMessage } from "../WebsocketMessages";
 import { MediaPreview, MediaSurface } from "./MediaPreview";
 import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
+import {
+  previewMediaClassName,
+  usePreviewFullscreen,
+} from "./previewFullscreen";
 import { guiLabelClassName } from "./guiLabelStyles";
 
 const ImageWithExpand = React.memo(function ImageWithExpand({
@@ -34,7 +38,7 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
   );
 });
 
-function ImageComponent({ props }: GuiImageMessage) {
+function ImageComponent({ uuid, props }: GuiImageMessage) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
   // Stable, so the memo above can actually skip re-renders of the inline copy.
@@ -42,6 +46,7 @@ function ImageComponent({ props }: GuiImageMessage) {
   // What the preview opens at. Measured off the URL rather than beside it, so
   // the size follows the picture wherever it is being shown from.
   const imageSize = useMediaSize(imageUrl);
+  const [fullscreen] = usePreviewFullscreen(uuid);
 
   useEffect(() => {
     const nextUrl = URL.createObjectURL(
@@ -64,12 +69,15 @@ function ImageComponent({ props }: GuiImageMessage) {
         open={opened}
         onOpenChange={setOpened}
         title={props.label ?? "Image"}
+        // The pane's own uuid: this image is what the answer belongs to, and
+        // its label is optional and need not be unique.
+        rememberAs={uuid}
         width={mediaPreviewWidth(imageSize)}
       >
         <img
           src={imageUrl}
           alt={props.label ?? ""}
-          className="mx-auto block h-auto w-full rounded-lg"
+          className={previewMediaClassName(fullscreen)}
         />
       </MediaPreview>
     </>

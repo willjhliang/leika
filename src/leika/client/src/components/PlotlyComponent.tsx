@@ -73,6 +73,7 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
 });
 
 export default function PlotlyComponent({
+  uuid,
   props: { _plotly_json_str: plotlyJsonString, aspect },
 }: GuiPlotlyMessage) {
   const [opened, setOpened] = React.useState(false);
@@ -88,7 +89,12 @@ export default function PlotlyComponent({
       {/* "Plot" for the same reason an unlabelled image says "Image": the
           protocol gives a plot no label to show, so the preview names its
           kind rather than going untitled. */}
-      <MediaPreview open={opened} onOpenChange={setOpened} title="Plot">
+      <MediaPreview
+        open={opened}
+        onOpenChange={setOpened}
+        title="Plot"
+        rememberAs={uuid}
+      >
         <PlotWithAspect jsonStr={plotlyJsonString} aspect={aspect} />
       </MediaPreview>
     </>

@@ -19,6 +19,10 @@ import { HintTooltip } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaPreview } from "./MediaPreview";
 import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
+import {
+  previewMediaClassName,
+  usePreviewFullscreen,
+} from "./previewFullscreen";
 
 /** Read a textual blob without briefly rendering an empty document.
  *
@@ -81,7 +85,7 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
       <Button
         variant="ghost"
         size="icon-sm"
-        className="absolute top-2 right-10"
+        className="absolute top-2 right-18"
         render={<a href={url} download={filename} />}
       >
         <DownloadIcon />
@@ -153,6 +157,7 @@ function PreviewBody({
   const { url, blob } = contents;
   const isTextual = kind === "text" || kind === "prose" || kind === "markdown";
   const text = useBlobText(blob, isTextual);
+  const [fullscreen] = usePreviewFullscreen(filename);
 
   switch (kind) {
     // The three that are shown at their own size. The popup has already been
@@ -164,14 +169,21 @@ function PreviewBody({
         <img
           src={url}
           alt={filename}
-          className="mx-auto block h-auto w-full rounded-lg"
+          className={previewMediaClassName(fullscreen)}
         />
       );
     case "video":
       return (
-        <video src={url} controls className="block h-auto w-full rounded-lg" />
+        <video
+          src={url}
+          controls
+          className={previewMediaClassName(fullscreen)}
+        />
       );
     case "audio":
+      // Not sized like the other two: a player is a bar, and stretching it
+      // down a full-window popup would only make a taller bar. It keeps the
+      // width and stays where a caption would be.
       return <audio src={url} controls className="block w-full" />;
     case "pdf":
       // Let browsers without a PDF viewer render the fallback children.
@@ -259,10 +271,15 @@ export function FilePreviewHost() {
  * screen is the whole of what a preview is for. The rest stops short of that,
  * because a PDF or a card is looked at rather than read down, and the extra
  * height would only be empty space around it.
+ *
+ * Full-window, neither guess applies and the frame simply takes the body it
+ * is given -- which is the popup less its title bar, measured rather than
+ * subtracted.
  */
 const FRAME_HEIGHT = {
   reading: "h-[calc(100dvh-6rem)]",
   fitted: "h-[70dvh]",
+  fullscreen: "h-full",
 } as const;
 
 /** How wide a document opens: as much of the window as it can have, short of
@@ -291,6 +308,9 @@ export function FilePreviewDialog({
   const imageSize = useMediaSize(
     kind === "image" ? (preview.contents?.url ?? null) : null,
   );
+  // Read rather than passed down: the popup owns the toggle, and the document
+  // frame is the one thing inside it that has to know.
+  const [fullscreen] = usePreviewFullscreen(preview.filename);
 
   const body =
     preview.contents === null ? (
@@ -306,6 +326,11 @@ export function FilePreviewDialog({
         if (!open) onClose();
       }}
       title={preview.filename}
+      // The file's name. A transfer's uuid is new on every press, and the
+      // button that sent it is not named on the wire -- but the name is what
+      // the transfer announces first, and it is already what a warmed
+      // preview is filed under.
+      rememberAs={preview.filename}
       width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
     >
       {preview.contents !== null && (
@@ -320,7 +345,13 @@ export function FilePreviewDialog({
         <div
           className={cn(
             "overflow-auto",
-            FRAME_HEIGHT[isReadingKind(kind) ? "reading" : "fitted"],
+            FRAME_HEIGHT[
+              fullscreen
+                ? "fullscreen"
+                : isReadingKind(kind)
+                  ? "reading"
+                  : "fitted"
+            ],
           )}
         >
           {body}
