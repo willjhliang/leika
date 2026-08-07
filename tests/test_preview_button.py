@@ -30,18 +30,45 @@ class _Client:
 
     def __init__(self, server: leika.Server | None = None) -> None:
         self._server = server
-        self.previewed: List[Tuple[str, Any, int]] = []
+        #: Every file sent to a dialog, in order: disposition, name, contents,
+        #: size limit, the component it came from and the stamp it went out
+        #: with. The last two are what let the dialog ask for it again.
+        self.shown: List[Tuple[str, str, Any, int, str | None, str | None]] = []
         self.downloaded: List[Tuple[str, Any]] = []
         self.warmed: List[Tuple[str, Any]] = []
 
-    def _send_file(self, filename: str, content: Any, chunk_size: int, disposition: str) -> None:
+    @property
+    def previewed(self) -> List[Tuple[str, Any, int]]:
+        """The files that opened a dialog."""
+        return [
+            (name, content, limit) for d, name, content, limit, _, _ in self.shown if d == "preview"
+        ]
+
+    @property
+    def reloaded(self) -> List[Tuple[str, Any, int]]:
+        """The files that landed in a dialog already open."""
+        return [
+            (name, content, limit) for d, name, content, limit, _, _ in self.shown if d == "reload"
+        ]
+
+    def _send_file(
+        self, filename: str, content: Any, chunk_size: int, disposition: str, **kwargs: Any
+    ) -> None:
         assert disposition == "warm"
         self.warmed.append((filename, content))
 
-    def send_file_preview(
-        self, filename: str, content: Any, chunk_size: int = 0, max_bytes: int = 0
+    def _send_preview(
+        self,
+        filename: str,
+        content: Any,
+        *,
+        chunk_size: int = 0,
+        max_bytes: int = 0,
+        disposition: str = "preview",
+        source_uuid: str | None = None,
+        source_version: str | None = None,
     ) -> None:
-        self.previewed.append((filename, content, max_bytes))
+        self.shown.append((disposition, filename, content, max_bytes, source_uuid, source_version))
 
     def send_file_download(self, filename: str, content: Any, **kwargs: Any) -> None:
         self.downloaded.append((filename, content))
@@ -143,6 +170,151 @@ def test_scrolling_into_view_warms_a_static_preview(server: leika.Server, tmp_pa
 
     assert client.warmed == [("notes.md", b"# hi\n")]
     assert client.previewed == []
+
+
+def _version(client: _Client) -> str | None:
+    """The stamp the last file went out under."""
+    return client.shown[-1][5]
+
+
+def _watch(handle: GuiPreviewButtonHandle, version: str | None) -> _Client:
+    client = _Client()
+    handle._watch(client, version)  # type: ignore[arg-type]
+    return client
+
+
+def test_a_press_says_which_button_its_file_came_out_of(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    # The transfer is the only thing the dialog is given, so what it needs to
+    # ask for the file again has to travel on it: which component to ask, and
+    # what it is already holding.
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document)
+
+    disposition, _, _, _, source_uuid, version = _press(handle).shown[0]
+    assert disposition == "preview"
+    assert source_uuid == handle._impl.uuid
+    assert version is not None
+
+
+def test_only_a_file_on_disk_is_stamped(server: leika.Server, tmp_path: Path) -> None:
+    # No stamp means no watching, and the two sources that cannot be watched
+    # say so this way: bytes handed over once are not a file and cannot change
+    # behind the reader, and what a function would return next time is not
+    # knowable without running it.
+    path = tmp_path / "notes.txt"
+    path.write_text("# hi\n")
+
+    assert _version(_press(server.gui.add_preview_button("A", b"x", filename="a.txt"))) is None
+    assert _version(_press(server.gui.add_preview_button("B", lambda _: path))) is None
+    assert _version(_press(server.gui.add_preview_button("C", path))) is not None
+
+
+def test_the_stamp_moves_when_the_file_does(server: leika.Server, tmp_path: Path) -> None:
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document)
+
+    first = _version(_press(handle))
+    document.write_text("# hi\n\nAnd more.\n")
+    assert _version(_press(handle)) != first
+
+
+def test_a_watch_sends_nothing_while_the_file_is_the_one_being_read(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    # The common case, and the one that has to cost nothing: a dialog left
+    # open on a file nobody is writing asks once a second and is told nothing
+    # each time.
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document)
+    version = _version(_press(handle))
+
+    assert _watch(handle, version).shown == []
+
+
+def test_a_watch_sends_the_file_again_once_it_has_changed(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document)
+    version = _version(_press(handle))
+
+    document.write_text("# hi\n\nRewritten.\n")
+    client = _watch(handle, version)
+
+    # Into the dialog that is open, rather than opening another. The file
+    # itself goes, as a path streamed a chunk at a time, exactly as the press
+    # would have sent it.
+    assert client.reloaded == [("notes.txt", document, leika._gui_handles.PREVIEW_MAX_BYTES)]
+    assert client.previewed == []
+    # Stamped with what it is now, so the next watch asks about the right one.
+    assert _version(client) not in (None, version)
+
+
+def test_a_watch_never_runs_a_callable(server: leika.Server, tmp_path: Path) -> None:
+    # The same rule warming follows, for the same reason: a function is the
+    # caller's code, with whatever cost and side effects they gave it, and
+    # leaving a dialog open is not a decision to run it once a second forever.
+    ran: List[Any] = []
+
+    def content(event: Any) -> bytes:
+        ran.append(event)
+        return b"# hi\n"
+
+    handle = server.gui.add_preview_button("Look", content, filename="notes.txt")
+    client = _watch(handle, None)
+
+    assert client.shown == [] and ran == []
+
+
+def test_a_watch_says_nothing_about_a_file_that_has_gone(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    # A file being rewritten in place is briefly not there. A preview that
+    # emptied itself for that moment and filled back in would be worse than
+    # one that waited for the next tick.
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document)
+    version = _version(_press(handle))
+
+    document.unlink()
+    assert _watch(handle, version).shown == []
+
+
+def test_a_watch_stops_at_the_size_limit_without_saying_so(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    # A press over the limit answers with a notification, because somebody
+    # asked. A watch asking every second must not raise one every second, so
+    # it simply stops sending.
+    document = tmp_path / "notes.txt"
+    document.write_text("# hi\n")
+    handle = server.gui.add_preview_button("Look", document, max_bytes=16)
+    version = _version(_press(handle))
+
+    document.write_text("# hi\n" + "x" * 64)
+    assert _watch(handle, version).shown == []
+
+
+def test_a_reload_press_asks_the_contents_afresh(server: leika.Server) -> None:
+    # Unlike a watch: pressing reload is asking what the file says now, and
+    # for contents that are computed the only way to answer is to compute
+    # them. It lands in the open dialog rather than opening a second one.
+    answers = iter([b"# first\n", b"# second\n"])
+
+    handle = server.gui.add_preview_button("Look", lambda _: next(answers), filename="notes.txt")
+    client = _Client()
+    handle._send(GuiEvent(client, 0, handle))  # type: ignore[arg-type]
+    handle._reload(GuiEvent(client, 0, handle))  # type: ignore[arg-type]
+
+    assert client.previewed == [("notes.txt", b"# first\n", leika._gui_handles.PREVIEW_MAX_BYTES)]
+    assert client.reloaded == [("notes.txt", b"# second\n", leika._gui_handles.PREVIEW_MAX_BYTES)]
 
 
 def test_a_callable_preview_never_runs_for_a_warm(server: leika.Server) -> None:

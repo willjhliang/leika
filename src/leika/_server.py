@@ -169,6 +169,27 @@ class ClientHandle:
                 that is what showing it means -- so an arbitrarily large file
                 would be an arbitrarily large tab. Defaults to 64 MiB.
         """
+        self._send_preview(filename, content, chunk_size=chunk_size, max_bytes=max_bytes)
+
+    def _send_preview(
+        self,
+        filename: str,
+        content: bytes | Path,
+        *,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int = PREVIEW_MAX_BYTES,
+        disposition: _messages.FileDisposition = "preview",
+        source_uuid: str | None = None,
+        source_version: str | None = None,
+    ) -> None:
+        """:meth:`send_file_preview`, plus what only a preview BUTTON knows.
+
+        A button's file can be asked for again -- reloaded by hand, or resent
+        when the file it was read from changes -- and the browser does the
+        asking, so it has to be told which component to ask and what it is
+        already holding. A script calling the public method has no component
+        behind it and passes neither.
+        """
         _validate_file_content(content)
         _validate_positive_integer(chunk_size, "chunk_size")
         _validate_nonnegative_integer(max_bytes, "max_bytes")
@@ -183,7 +204,14 @@ class ClientHandle:
                 f" {_format_bytes(max_bytes)} preview limit.",
             )
             return
-        self._send_file(filename, content, chunk_size, "preview")
+        self._send_file(
+            filename,
+            content,
+            chunk_size,
+            disposition,
+            source_uuid=source_uuid,
+            source_version=source_version,
+        )
 
     def _send_file(
         self,
@@ -191,6 +219,9 @@ class ClientHandle:
         content: bytes | Path,
         chunk_size: int,
         disposition: _messages.FileDisposition,
+        *,
+        source_uuid: str | None = None,
+        source_version: str | None = None,
     ) -> None:
         """One file onto the wire, whatever the client is to do with it."""
         _validate_positive_integer(chunk_size, "chunk_size")
@@ -209,6 +240,8 @@ class ClientHandle:
                     mime_type=mime_type,
                     part_count=-(-size_bytes // chunk_size),
                     size_bytes=size_bytes,
+                    source_uuid=source_uuid,
+                    source_version=source_version,
                 )
             )
             for i, part in enumerate(chunks):

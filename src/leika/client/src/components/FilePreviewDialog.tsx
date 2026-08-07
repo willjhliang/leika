@@ -1,9 +1,13 @@
-import { DownloadIcon, FileIcon } from "lucide-react";
+import { DownloadIcon, FileIcon, RefreshCwIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import {
+  GUI_MESSAGE_THROTTLE_MS,
+  useThrottledMessageSender,
+} from "../WebsocketUtils";
 import {
   closeFilePreview,
   filePreviewStore,
@@ -11,6 +15,7 @@ import {
   isMediaKind,
   isReadingKind,
   previewKindFor,
+  reloadIsOnItsWay,
   type FileContents,
   type FilePreview,
   type PreviewKind,
@@ -78,7 +83,13 @@ function UnsupportedPreview({
   );
 }
 
-/** Download action beside the dialog's close button. */
+/** Download action, in the row of corner chrome.
+ *
+ * The corner reads outward from the close: the two nearest it -- close, and
+ * the full-window toggle -- are about the POPUP, and the two beyond them are
+ * about the file. Each is one 2rem step further in than the last, so the
+ * close stays exactly where it is in every popup this app has.
+ */
 function DownloadCorner({ filename, url }: { filename: string; url: string }) {
   return (
     <HintTooltip hint="Download">
@@ -94,6 +105,49 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
     </HintTooltip>
   );
 }
+
+/** Ask the button that sent this file for it again.
+ *
+ * Outermost of the four. A preview follows its file on its own -- see
+ * {@link WATCH_INTERVAL_MS} -- so what this is for is the times watching
+ * cannot answer: contents that are computed rather than read off disk, where
+ * only running the caller's function again says what they are now, and which
+ * nothing but a press is allowed to do.
+ *
+ * It spins while the answer is on its way, because the usual answer looks
+ * like nothing happening: reload a file nobody has touched and the same
+ * bytes come back into the same document. Without the spin the button would
+ * read as broken exactly when it is working.
+ */
+function ReloadCorner({
+  reloading,
+  onReload,
+}: {
+  reloading: boolean;
+  onReload: () => void;
+}) {
+  return (
+    <HintTooltip hint="Reload">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="absolute top-2 right-26"
+        onClick={onReload}
+        aria-label="Reload"
+        data-leika-preview-reload
+      >
+        <RefreshCwIcon className={cn(reloading && "animate-spin")} />
+      </Button>
+    </HintTooltip>
+  );
+}
+
+/** How long a pressed reload spins before admitting nothing is coming.
+ *
+ * Long enough that a slow file still stops it by arriving, short enough that
+ * nobody is left watching it turn. */
+const RELOAD_GIVE_UP_MS = 10_000;
 
 /** The measure writing is read at here: short enough that the eye finds the
  * start of the next line, and the width `max-w-prose` is named for. */
@@ -240,13 +294,67 @@ function PreviewBody({
   }
 }
 
-/** Mount point for previews, one per app. */
+/** How often an open preview asks whether its file has moved on.
+ *
+ * A second is about as long as it is worth staring at a document that has
+ * been rewritten -- save in the editor, glance at the browser, and it is
+ * already the new one -- and it costs a `stat` and a message that carries a
+ * name and a timestamp. Only ever one preview is open, so this is the whole
+ * of the traffic, and none of it is bytes unless the file really changed.
+ *
+ * Asking is the browser's job rather than the server's on purpose: a tab that
+ * is closed, refreshed or crashed simply stops asking, where a watcher on the
+ * server would have to be told, and would keep a thread on a file nobody is
+ * looking at until it was.
+ */
+const WATCH_INTERVAL_MS = 1000;
+
+/** Mount point for previews, one per app.
+ *
+ * The half of a preview that talks to the server: the dialog below draws a
+ * file and says when the reader wants another look at it, and this is what
+ * turns that into messages. The playground renders the dialog with neither,
+ * and gets a preview that simply sits there, which is what a gallery wants.
+ */
 export function FilePreviewHost() {
   const preview = React.useSyncExternalStore(
     filePreviewStore.subscribe,
     filePreviewStore.snapshot,
     filePreviewStore.snapshot,
   );
+  const { send } = useThrottledMessageSender(GUI_MESSAGE_THROTTLE_MS);
+  const sourceUuid = preview?.sourceUuid ?? null;
+  const version = preview?.sourceVersion ?? null;
+
+  React.useEffect(() => {
+    // A source with no version is one that cannot be watched -- bytes, or a
+    // function whose answer only a press may ask for -- so there is nothing
+    // to ask about and the timer never starts.
+    if (sourceUuid === null || version === null) return;
+    const timer = window.setInterval(() => {
+      // A background tab is not being read. Its timers are throttled to
+      // roughly this interval anyway, and the file it wants is the one it
+      // has when the reader comes back, which the next tick will fetch.
+      if (document.hidden) return;
+      // The last answer is still arriving. Asking again would fetch the same
+      // file a second time, since the version it would be compared against is
+      // still the one this dialog is showing.
+      if (reloadIsOnItsWay(sourceUuid)) return;
+      send({ type: "GuiPreviewWatchMessage", uuid: sourceUuid, version });
+    }, WATCH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [sourceUuid, version, send]);
+
+  const reload = React.useCallback(() => {
+    if (sourceUuid === null) return;
+    // An event, not a state: two presses are two asks, and the second must
+    // not replace the first inside a throttle window and go unsent.
+    send(
+      { type: "GuiPreviewReloadMessage", uuid: sourceUuid },
+      { coalesce: false },
+    );
+  }, [sourceUuid, send]);
+
   if (preview === null) return null;
   return (
     <FilePreviewDialog
@@ -254,6 +362,7 @@ export function FilePreviewHost() {
       key={preview.id}
       preview={preview}
       onClose={() => closeFilePreview(preview.id)}
+      onReload={sourceUuid === null ? undefined : reload}
     />
   );
 }
@@ -297,9 +406,13 @@ const DOCUMENT_WIDTH = "min(72rem, calc(100vw - 2rem))";
 export function FilePreviewDialog({
   preview,
   onClose,
+  onReload,
 }: {
   preview: FilePreview;
   onClose: () => void;
+  /** Ask for the file again. Absent when there is nothing to ask -- a file a
+   * script sent names no component the browser could go back to. */
+  onReload?: () => void;
 }) {
   const kind = previewKindFor(preview.mimeType, preview.filename);
   const media = isMediaKind(kind);
@@ -311,6 +424,20 @@ export function FilePreviewDialog({
   // Read rather than passed down: the popup owns the toggle, and the document
   // frame is the one thing inside it that has to know.
   const [fullscreen] = usePreviewFullscreen(preview.filename);
+
+  // Which contents the reader asked to be rid of. The spin lasts until they
+  // are not what is on screen any more, so the answer itself stops it --
+  // whatever the answer took, and whether or not it differs.
+  const [asked, setAsked] = React.useState<FileContents | null>(null);
+  const reloading = asked !== null && asked === preview.contents;
+  React.useEffect(() => {
+    if (!reloading) return;
+    // Nothing came. A button removed from the panel while its preview was
+    // open answers nothing at all, and a spinner that never stops says the
+    // app is stuck when only this one ask is.
+    const timer = window.setTimeout(() => setAsked(null), RELOAD_GIVE_UP_MS);
+    return () => window.clearTimeout(timer);
+  }, [reloading]);
 
   const body =
     preview.contents === null ? (
@@ -333,6 +460,18 @@ export function FilePreviewDialog({
       rememberAs={preview.filename}
       width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
     >
+      {/* Both wait for the file. There is nothing to save before it lands,
+          and nothing to ask for again either -- the first copy is still on
+          its way. */}
+      {preview.contents !== null && onReload !== undefined && (
+        <ReloadCorner
+          reloading={reloading}
+          onReload={() => {
+            setAsked(preview.contents);
+            onReload();
+          }}
+        />
+      )}
       {preview.contents !== null && (
         <DownloadCorner
           filename={preview.filename}

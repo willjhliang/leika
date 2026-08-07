@@ -385,6 +385,12 @@ class GuiApi(GuiContainer):
             _messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm
         )
         self._websock_interface.register_handler(
+            _messages.GuiPreviewReloadMessage, self._handle_gui_preview_reload
+        )
+        self._websock_interface.register_handler(
+            _messages.GuiPreviewWatchMessage, self._handle_gui_preview_watch
+        )
+        self._websock_interface.register_handler(
             _messages.GuiFormSubmitMessage, self._handle_gui_form_submit
         )
         self._websock_interface.register_handler(
@@ -499,25 +505,75 @@ class GuiApi(GuiContainer):
                     cb, GuiEvent(client, client_id, handle)
                 ).add_done_callback(print_threadpool_errors)
 
+    def _preview_button_for(
+        self, uuid: str, client_id: ClientId
+    ) -> tuple[GuiPreviewButtonHandle, ClientHandle] | None:
+        """The button a preview message names, and the client that sent it.
+
+        None for every mismatch there is -- a stale uuid, a button that is not
+        a preview button, a client gone between queueing and dispatch -- so
+        that each of these messages can be a quiet return. All three are the
+        browser asking on its own account about a file it was already sent;
+        none of them is a press that a caller is waiting on, so there is
+        nobody an error would reach.
+        """
+        handle = self._gui_input_handle_from_uuid.get(uuid, None)
+        if handle is None or handle._impl.removed:
+            return None
+        if not isinstance(handle, GuiPreviewButtonHandle):
+            return None
+        client = self._resolve_client(client_id)
+        if client is None:
+            return None
+        return handle, client
+
     async def _handle_gui_preview_warm(
         self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
     ) -> None:
         """A preview button has scrolled into view; start its press's transfer.
 
-        Advisory, so every mismatch is a quiet return rather than an error: a
-        stale uuid, a button that is not a preview button, a client gone
-        between queueing and dispatch. The press, if one comes, is unaffected
-        either way -- it always sends fresh.
+        Advisory: the press, if one comes, is unaffected either way -- it
+        always sends fresh.
         """
-        handle = self._gui_input_handle_from_uuid.get(message.uuid, None)
-        if handle is None or handle._impl.removed:
+        found = self._preview_button_for(message.uuid, client_id)
+        if found is None:
             return
-        if not isinstance(handle, GuiPreviewButtonHandle):
-            return
-        client = self._resolve_client(client_id)
-        if client is None:
-            return
+        handle, client = found
         self._thread_executor.submit(handle._warm, client).add_done_callback(
+            print_threadpool_errors
+        )
+
+    async def _handle_gui_preview_reload(
+        self, client_id: ClientId, message: _messages.GuiPreviewReloadMessage
+    ) -> None:
+        """A reader has asked an open preview for the file again.
+
+        Off the thread pool like a press, and for the same reason: resolving
+        the contents may run the caller's function, or read a large file off
+        disk, and neither belongs on the event loop.
+        """
+        found = self._preview_button_for(message.uuid, client_id)
+        if found is None:
+            return
+        handle, client = found
+        self._thread_executor.submit(
+            handle._reload, GuiEvent(client, client_id, handle)
+        ).add_done_callback(print_threadpool_errors)
+
+    async def _handle_gui_preview_watch(
+        self, client_id: ClientId, message: _messages.GuiPreviewWatchMessage
+    ) -> None:
+        """An open preview is asking whether its file has moved on.
+
+        Arrives on a timer for as long as a dialog is open, so the work it
+        does when the answer is no has to be nothing much: one `stat`, off the
+        event loop, and a return.
+        """
+        found = self._preview_button_for(message.uuid, client_id)
+        if found is None:
+            return
+        handle, client = found
+        self._thread_executor.submit(handle._watch, client, message.version).add_done_callback(
             print_threadpool_errors
         )
 
@@ -1764,6 +1820,19 @@ class GuiApi(GuiContainer):
         else opens in a fixed frame, since a picture or a player is fitted into
         one rather than scrolled through. Either way the dialog is the same
         size whatever the file turns out to hold.
+
+        A markdown file with headings to list them is shown with its own
+        contents in the margin beside it, where the window is wide enough to
+        hold a column of them without narrowing the writing.
+
+        An open preview follows its file. Where `content` is a path, the
+        dialog checks about once a second whether what is on disk is still
+        what it is showing, and takes the new copy when it is not -- so a
+        document being rewritten, or a log being appended to, can be watched
+        from the browser without pressing anything. It keeps its place in the
+        document while it does. Contents given as bytes cannot change, and
+        contents given as a function are not run on a timer: for those, the
+        dialog's reload button asks, and a press is what runs your code.
 
         Args:
             text: Text on the button's face.

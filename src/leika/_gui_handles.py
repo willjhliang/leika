@@ -37,6 +37,7 @@ from ._messages import (
     ButtonColor,
     CommandProps,
     CommandUpdateMessage,
+    FileDisposition,
     GuiBaseProps,
     GuiButtonGroupProps,
     GuiButtonProps,
@@ -1294,10 +1295,108 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             ).encode("utf-8")
         return content
 
+    def _watched_path(self) -> Path | None:
+        """The file this button reads, if it reads one that could change.
+
+        Only the contents given as a path outright. A function's answer is
+        whatever running it returns, and running it is what a watch is trying
+        to avoid; bytes handed over once are not a file at all, and cannot
+        change behind the reader.
+        """
+        content = self._content
+        return content if isinstance(content, Path) else None
+
+    def _version(self) -> str | None:
+        """What the watched file is right now, as a stamp to compare against.
+
+        Modification time and size together: the pair a build, an editor's
+        save and an append all move, without reading a byte of the file to
+        find out. ``None`` for a source that cannot be watched, and for one
+        that has gone missing -- a preview of a file being rewritten in place
+        should not blink out and back, so nothing is said until there is a
+        file to say it about again.
+        """
+        path = self._watched_path()
+        if path is None:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    def _show(
+        self,
+        client: ClientHandle,
+        filename: str,
+        content: bytes | Path,
+        disposition: FileDisposition,
+    ) -> None:
+        """Send one file to one client's dialog, opening it or refilling it.
+
+        The version is read *before* the contents rather than after, so a file
+        written to while this is sending is left looking newer than what went
+        out, and the next watch sends it again. The other way round the two
+        would agree about a file the reader never got.
+        """
+        version = self._version()
+        content = self._prepared(client, filename, content)
+        client._send_preview(
+            filename,
+            content,
+            max_bytes=self._max_bytes,
+            disposition=disposition,
+            source_uuid=self._impl.uuid,
+            source_version=version,
+        )
+
     @override
     def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
-        content = self._prepared(client, filename, content)
-        client.send_file_preview(filename, content, max_bytes=self._max_bytes)
+        self._show(client, filename, content, "preview")
+
+    def _reload(self, event: GuiEvent[Any]) -> None:
+        """Send the file again, because the reader asked (``GuiPreviewReloadMessage``).
+
+        The press's own path: the contents are resolved exactly as a press
+        resolves them, function and all. Pressing reload is asking what the
+        file says now, and for contents that are computed, running the
+        computation is the only way to answer.
+
+        It lands in the dialog that is already open rather than opening one.
+        """
+        if event.client is None:
+            return
+        filename, content = self._resolve(event)
+        self._show(event.client, filename, content, "reload")
+
+    def _watch(self, client: ClientHandle, version: str | None) -> None:
+        """Send the file again if it is no longer what the reader is holding
+        (``GuiPreviewWatchMessage``).
+
+        Advisory like ``_warm``, and quiet like it: an unwatchable source, a
+        file that has not moved, one that has grown past the limit -- each is
+        a return, because there is nothing here a reader asked for and so
+        nobody to tell.
+        """
+        current = self._version()
+        if current is None or current == version:
+            return
+        path = self._watched_path()
+        assert path is not None  # A version means a watched file behind it.
+        filename = self._filename if self._filename is not None else path.name
+        try:
+            # Checked here as well as in the send, because the send says so
+            # in a notification: a file that has grown past the limit while
+            # being watched would raise one every tick, and the reader never
+            # asked this question in the first place. A press still answers
+            # it, once, in the words a press deserves.
+            if path.stat().st_size > self._max_bytes:
+                return
+            self._show(client, filename, path, "reload")
+        except OSError:
+            # Read out from under us between the stat and the send. The file
+            # is still moving; the next watch will find it.
+            return
 
     def _warm(self, client: ClientHandle) -> None:
         """Begin the press's transfer before the press (``GuiPreviewWarmMessage``).

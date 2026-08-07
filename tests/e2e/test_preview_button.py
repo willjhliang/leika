@@ -604,8 +604,9 @@ def test_a_preview_fills_the_window_and_stays_that_way(
     windowed = _settled_rect(dialog)
     assert windowed["width"] < viewport["width"]
 
-    # Order in the corner: download, full window, close. Left to right that is
-    # what to do with the file, what to do with the popup, and how to leave.
+    # Order in the corner: reload, download, full window, close. Left to right
+    # that is the two things to do with the file, then what to do with the
+    # popup, and how to leave.
     corners = dialog.evaluate(
         """el => [...el.querySelectorAll('a, button')]
              .map(node => ({
@@ -615,6 +616,7 @@ def test_a_preview_fills_the_window_and_stays_that_way(
     )
     by_label = {corner["label"]: corner["right"] for corner in corners}
     download = next(right for label, right in by_label.items() if label.startswith("Download"))
+    assert by_label["Reload"] < download, by_label
     assert download < by_label["Fill the window"] < by_label["Close"], by_label
 
     preview_page.get_by_role("button", name="Fill the window").click()
@@ -658,4 +660,97 @@ def test_a_preview_fills_the_window_and_stays_that_way(
     expect(dialog).not_to_have_attribute("data-preview-fullscreen", "true")
     reopened = _settled_rect(dialog)
     assert reopened["width"] == windowed["width"], (reopened, windowed)
+    assert page_errors == []
+
+
+def test_a_preview_takes_the_file_again_when_it_is_rewritten(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str], tmp_path: Path
+) -> None:
+    """A preview of a file follows that file, with nothing pressed.
+
+    What it is for: a document being written, or a log being appended to,
+    watched from the browser rather than reopened at every save.
+    """
+    document = tmp_path / "notes.md"
+    document.write_text("# Results\n\nStill running.\n")
+    leika_server.gui.add_preview_button("Show notes", document)
+
+    _press(preview_page, "Show notes")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Still running.")
+
+    document.write_text("# Results\n\nConverged at step 4000.\n")
+    expect(dialog).to_contain_text("Converged at step 4000.")
+    expect(dialog).not_to_contain_text("Still running.")
+
+    # Still the one dialog, opened once. A reload that reopened the preview
+    # would be a new transfer, and everything about the popup -- its place in
+    # the document, its full-window state -- would be reset with it.
+    expect(dialog).to_have_count(1)
+    assert page_errors == []
+
+
+def test_a_rewritten_document_keeps_the_readers_place(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str], tmp_path: Path
+) -> None:
+    # The file arriving again must not scroll a long document back to the top:
+    # what changed is usually the end of it, and the reader is somewhere in
+    # the middle.
+    document = tmp_path / "log.txt"
+    body = "\n".join(f"step {i:04d}  loss=0.5" for i in range(400))
+    document.write_text(body)
+    leika_server.gui.add_preview_button("Show log", document)
+
+    _press(preview_page, "Show log")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("step 0399")
+
+    frame = dialog.locator("div.overflow-auto").first
+    frame.evaluate("el => { el.scrollTop = 600; }")
+    document.write_text(body + "\nstep 0400  loss=0.4")
+
+    expect(dialog).to_contain_text("step 0400")
+    assert frame.evaluate("el => el.scrollTop") == 600
+    assert page_errors == []
+
+
+def test_reload_asks_the_button_for_the_file_again(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # Contents that are computed cannot be watched -- what the function would
+    # return next is only knowable by running it, and nothing but a press may
+    # do that. The corner button is that press.
+    presses = {"count": 0}
+
+    def content(_: leika.GuiEvent) -> bytes:
+        presses["count"] += 1
+        return f"# Reading {presses['count']}\n".encode()
+
+    leika_server.gui.add_preview_button("Show reading", content, filename="reading.md")
+
+    _press(preview_page, "Show reading")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Reading 1")
+
+    dialog.get_by_role("button", name="Reload").click()
+    expect(dialog).to_contain_text("Reading 2")
+    expect(dialog).to_have_count(1)
+    assert page_errors == []
+
+
+def test_a_file_a_script_sent_has_nothing_to_reload(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # `send_file_preview` comes from code, not from a component: there is no
+    # button in the panel to go back to, so the dialog does not offer to.
+    leika_server.gui.add_button("Send it").on_click(
+        lambda event: event.client.send_file_preview("sent.md", b"# Sent\n")
+    )
+
+    _press(preview_page, "Send it")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Sent")
+    expect(dialog.get_by_role("button", name="Reload")).to_have_count(0)
+    # The rest of the corner is unaffected: the file is still here to save.
+    expect(dialog.get_by_role("link", name="Download sent.md")).to_be_visible()
     assert page_errors == []

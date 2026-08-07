@@ -373,6 +373,11 @@ function previewOf(
     mimeType,
     sizeBytes: blob.size,
     contents: { blob, url: URL.createObjectURL(blob) },
+    // Named so the reload corner is drawn: in the app this is the button the
+    // file came out of. No version, which is what a source that cannot change
+    // looks like -- and the gallery has no server to watch one anyway.
+    sourceUuid: id,
+    sourceVersion: null,
   };
 }
 
@@ -601,6 +606,17 @@ function FilePreviewSpecimens() {
     </Button>
   );
 
+  // In the app a press asks the server for the file again and the answer
+  // arrives as new contents. Here it answers itself with the same bytes in a
+  // new wrapper, which is all the dialog watches for to stop its spinner --
+  // so the corner behaves, and there is a gallery of it to style against.
+  const reload = () =>
+    setPreview((current) =>
+      current === null || current.contents === null
+        ? current
+        : { ...current, contents: { ...current.contents } },
+    );
+
   return (
     <>
       <Specimen
@@ -615,6 +631,8 @@ function FilePreviewSpecimens() {
             mimeType: "image/png",
             sizeBytes: blob.size,
             contents: { blob, url: URL.createObjectURL(blob) },
+            sourceUuid: "png",
+            sourceVersion: null,
           };
         })}
       </Specimen>
@@ -670,6 +688,10 @@ function FilePreviewSpecimens() {
               mimeType: "application/octet-stream",
               sizeBytes: 1_482_391_552,
               contents: null,
+              // No corner chrome but the close while the file is still on its
+              // way: nothing to save, and nothing to ask for twice.
+              sourceUuid: "pending",
+              sourceVersion: null,
             })
           }
         >
@@ -677,7 +699,12 @@ function FilePreviewSpecimens() {
         </Button>
       </Specimen>
       {preview === null ? null : (
-        <FilePreviewDialog key={preview.id} preview={preview} onClose={close} />
+        <FilePreviewDialog
+          key={preview.id}
+          preview={preview}
+          onClose={close}
+          onReload={reload}
+        />
       )}
     </>
   );

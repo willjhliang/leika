@@ -7,7 +7,10 @@ import {
   isMediaKind,
   isReadingKind,
   openFilePreview,
+  noteReloadStarted,
   previewKindFor,
+  reloadFilePreview,
+  reloadIsOnItsWay,
   resolveFilePreview,
   warmedContents,
   warmFilePreview,
@@ -125,12 +128,14 @@ describe("formatBytes", () => {
 });
 
 describe("the preview store", () => {
-  const metadata = (id: string) => ({
+  const metadata = (id: string, sourceUuid: string | null = "button") => ({
     id,
     filename: "notes.md",
     mimeType: "text/markdown",
     sizeBytes: 4,
     contents: null,
+    sourceUuid,
+    sourceVersion: "1:4",
   });
   const contents = () => ({
     url: `blob:${crypto.randomUUID()}`,
@@ -193,6 +198,99 @@ describe("the preview store", () => {
 
   it("has nothing warmed for a file nobody warmed", () => {
     expect(warmedContents("never.md")).toBeNull();
+  });
+
+  it("swaps a fresher copy into the dialog without reopening it", () => {
+    // What a reload is for: same dialog, same id -- so the document is not
+    // remounted and the reader keeps their place -- with new bytes in it,
+    // and the version they were stamped with, which is what the next watch
+    // asks against.
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+
+    const second = contents();
+    reloadFilePreview("button", "notes.md", second, "2:9");
+    expect(revoke).toHaveBeenCalledWith(first.url);
+    expect(filePreviewStore.snapshot()).toMatchObject({
+      id: "a",
+      contents: second,
+      sourceVersion: "2:9",
+    });
+  });
+
+  it("knows a copy is on its way, until it lands", () => {
+    // What stops a preview asking again for a file it is already receiving.
+    // A watch is answered only when something changed, so an unanswered ask
+    // and an answer still arriving look identical from here; the transfer's
+    // first message is the difference, and it comes ahead of the bytes.
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    expect(reloadIsOnItsWay("button")).toBe(false);
+
+    noteReloadStarted("button");
+    expect(reloadIsOnItsWay("button")).toBe(true);
+    // Only for the source it was noted against.
+    expect(reloadIsOnItsWay("other-button")).toBe(false);
+
+    reloadFilePreview("button", "notes.md", contents(), "2:9");
+    expect(reloadIsOnItsWay("button")).toBe(false);
+  });
+
+  it("forgets a copy that never arrived when the reader moves on", () => {
+    // A transfer cut off mid-flight would otherwise leave its source marked
+    // as busy for the rest of the session, and that file would never be
+    // watched again.
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    noteReloadStarted("button");
+    closeFilePreview("a");
+    expect(reloadIsOnItsWay("button")).toBe(false);
+
+    openFilePreview(metadata("b"));
+    noteReloadStarted("button");
+    openFilePreview(metadata("c"));
+    expect(reloadIsOnItsWay("button")).toBe(false);
+  });
+
+  it("lets go of a reload for something else being read", () => {
+    // The reader closed this one and opened another while the bytes were in
+    // flight. Answering the question they withdrew would replace the file
+    // they are actually looking at.
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview({ ...metadata("a"), sourceUuid: "other-button" });
+    const showing = contents();
+    resolveFilePreview("a", showing);
+
+    const late = contents();
+    reloadFilePreview("button", "notes.md", late, "2:9");
+    expect(revoke).toHaveBeenCalledWith(late.url);
+    expect(filePreviewStore.snapshot()?.contents).toBe(showing);
+  });
+
+  it("lets go of a reload for a preview nobody is reading", () => {
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    const late = contents();
+    reloadFilePreview("button", "notes.md", late, "2:9");
+    expect(revoke).toHaveBeenCalledWith(late.url);
+    expect(filePreviewStore.snapshot()).toBeNull();
+  });
+
+  it("takes the name from the reload, which is the one that is current", () => {
+    // A button whose contents are computed can hand back a different name
+    // than it did last time; the title says what is on screen now.
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    resolveFilePreview("a", contents());
+    reloadFilePreview("button", "notes-v2.md", contents(), "2:9");
+    expect(filePreviewStore.snapshot()?.filename).toBe("notes-v2.md");
   });
 
   it("revokes what it was showing when a new file replaces it", () => {

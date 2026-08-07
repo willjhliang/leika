@@ -34,10 +34,12 @@ class _Client:
 
     ``_send_file`` is borrowed from the real class rather than stubbed: it is
     the thing under test, reached through whichever public method the test
-    called.
+    called. ``_send_preview`` comes with it, being the step between a preview
+    and that.
     """
 
     _send_file = ClientHandle._send_file
+    _send_preview = ClientHandle._send_preview
 
     def __init__(self) -> None:
         self._websock_connection = _RecordingConnection()

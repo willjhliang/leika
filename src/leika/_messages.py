@@ -156,7 +156,7 @@ purged when their entity is removed:
 EntityIdField: TypeAlias = Literal["uuid", "pane_id"]
 """Dataclass field carrying the entity ID."""
 
-FileDisposition: TypeAlias = Literal["save", "link", "preview", "warm"]
+FileDisposition: TypeAlias = Literal["save", "link", "preview", "warm", "reload"]
 """What the browser does with a file once every chunk of it has arrived.
 
 - ``save``: hand it straight to the browser's own download machinery.
@@ -164,7 +164,11 @@ FileDisposition: TypeAlias = Literal["save", "link", "preview", "warm"]
   "Save as...".
 - ``preview``: show it in a dialog, in whatever viewer its type calls for.
 - ``warm``: show nothing -- hold it, ready, for the ``preview`` a nearby
-  button's press is about to ask for."""
+  button's press is about to ask for.
+- ``reload``: the same file again, later. Swapped into the dialog already
+  showing it rather than opening one, so a preview left open follows the file
+  it came from; if that dialog has since been closed, the transfer is
+  dropped."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -584,6 +588,40 @@ class GuiPreviewWarmMessage(Message):
     ``warm``; a press may never come, and nothing is shown for one."""
 
     uuid: str
+
+
+@dataclasses.dataclass
+class GuiPreviewReloadMessage(Message):
+    """Message sent from client->server when a preview's reload is pressed.
+
+    A press, and treated as one: the file is resolved exactly the way the
+    button's own press resolves it -- running the caller's function, if the
+    contents are a function -- and sent back with disposition ``reload``. The
+    reader asked what the file says now, and only the source knows."""
+
+    uuid: str
+
+
+@dataclasses.dataclass
+class GuiPreviewWatchMessage(Message):
+    """Message sent from client->server while a preview is open, to ask
+    whether the file behind it has changed.
+
+    The open dialog's side of following a file: it says what it is holding and
+    the server answers only if the file on disk is no longer that. Nothing is
+    sent for a preview that is still current, so a preview nobody is editing
+    under costs one small message a second and no bytes.
+
+    Watching is not a press, so it never runs a caller's function: what a
+    function would return cannot be known without running it, and running one
+    on a timer -- with whatever cost or side effects it carries -- is not
+    something a reader leaving a dialog open has asked for. Only a file on
+    disk is watched."""
+
+    uuid: str
+    version: Optional[str]
+    """``source_version`` from the transfer the dialog is showing; the server
+    sends the file again when the source no longer matches it."""
 
 
 @dataclasses.dataclass
@@ -1072,6 +1110,16 @@ class FileTransferStartDownload(Message):
     mime_type: str
     part_count: int
     size_bytes: int
+    source_uuid: Optional[str]
+    """Component this file came out of, when one did: the preview button whose
+    press sent it. What lets the browser ask for the same file again --
+    ``GuiPreviewReloadMessage`` and ``GuiPreviewWatchMessage`` both name it.
+    A file sent by a script rather than by a press has no source to ask, and
+    the dialog offers no reload."""
+    source_version: Optional[str]
+    """What the source was when this went out, as an opaque stamp to compare
+    later; ``None`` when the source is not something that can change under the
+    reader (bytes in hand, or a function that has to be run to find out)."""
 
     @override
     def redundancy_key(self) -> str:

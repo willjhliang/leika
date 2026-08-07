@@ -3,8 +3,10 @@ import React, { useContext } from "react";
 import { applyGuiConfigUpdate } from "./ControlPanel/GuiState";
 import { toast } from "./components/ui/toast";
 import {
+  noteReloadStarted,
   openFilePreview,
   previewKindFor,
+  reloadFilePreview,
   resolveFilePreview,
   warmedContents,
   warmFilePreview,
@@ -239,7 +241,19 @@ function useFileDownloadHandler(): (
           mimeType: message.mime_type,
           sizeBytes: message.size_bytes,
           contents: warmedContents(message.filename),
+          // Kept so the open dialog can go back to the button for the file
+          // again: on a reader's press, and on its own while the file it was
+          // read from is still being written.
+          sourceUuid: message.source_uuid,
+          sourceVersion: message.source_version,
         });
+      } else if (
+        message.disposition === "reload" &&
+        message.source_uuid !== null
+      ) {
+        // Nothing is shown for this one; the note is so the dialog stops
+        // asking for what is already on its way.
+        noteReloadStarted(message.source_uuid);
       }
     } else {
       const state = downloadStatesRef.current[message.transfer_uuid];
@@ -293,6 +307,17 @@ function useFileDownloadHandler(): (
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      return;
+    }
+
+    if (disposition === "reload") {
+      // The same file again, for a dialog that is already showing it. Only a
+      // button's file can be reloaded, so a transfer arriving here without a
+      // source has nothing to be matched against and is let go.
+      const { source_uuid: sourceUuid, source_version: version } =
+        state.metadata;
+      if (sourceUuid === null) URL.revokeObjectURL(url);
+      else reloadFilePreview(sourceUuid, filename, { url, blob }, version);
       return;
     }
 

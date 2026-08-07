@@ -161,6 +161,14 @@ export interface FilePreview {
   sizeBytes: number;
   /** The file itself, or null while its parts are still arriving. */
   contents: FileContents | null;
+  /** The component this file came out of -- the preview button that was
+   * pressed -- or null for a file a script sent, which has nothing to ask
+   * again. What the reload and the watch are addressed to. */
+  sourceUuid: string | null;
+  /** What the source was when these contents were sent, as the server stamps
+   * it. Handed back with every watch, and null for a source that cannot
+   * change under the reader, which is the same as saying: do not watch. */
+  sourceVersion: string | null;
 }
 
 // The file currently being previewed, held outside React so that the message
@@ -180,6 +188,10 @@ function announce(): void {
 /** Show a file, closing whatever was being shown. */
 export function openFilePreview(preview: FilePreview): void {
   if (current?.contents != null) URL.revokeObjectURL(current.contents.url);
+  // Whatever was on its way was for what is being replaced, and a transfer
+  // that dies mid-flight is forgotten here rather than blocking that file's
+  // watch for the rest of the session.
+  arriving.clear();
   current = preview;
   announce();
 }
@@ -203,6 +215,57 @@ export function resolveFilePreview(id: string, contents: FileContents): void {
   }
   if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
   current = { ...current, contents };
+  announce();
+}
+
+// Sources whose next copy is on the wire. A watch is answered only when the
+// file has changed, so silence cannot be told apart from an answer that has
+// not finished arriving -- and a file being appended to while it is being
+// read is exactly the case where the ask comes round again before the last
+// one has landed. Without this, following a large file would pull it once per
+// tick instead of once per change.
+const arriving = new Set<string>();
+
+/** A reload for this source has started and not yet landed. */
+export function reloadIsOnItsWay(sourceUuid: string): boolean {
+  return arriving.has(sourceUuid);
+}
+
+/** Note a reload transfer's first message, which arrives ahead of its bytes. */
+export function noteReloadStarted(sourceUuid: string): void {
+  arriving.add(sourceUuid);
+}
+
+/** Put a fresher copy of the file into the preview already showing it.
+ *
+ * The other way contents arrive. `resolveFilePreview` fills in a dialog that
+ * was opened empty and is waiting for its file; this replaces the file in a
+ * dialog that has one -- because the reader pressed reload, or because the
+ * file on disk moved while they were reading it.
+ *
+ * Addressed to the source rather than to a transfer: the transfer is new
+ * every time, and what is being answered is "this button's file", which is
+ * what the open preview can be recognised by. A reload for anything else --
+ * the reader closed the dialog, or opened a different file, while the bytes
+ * were in flight -- is dropped, since a preview that was dismissed reappearing
+ * is worse than one that missed an edit.
+ *
+ * The dialog is not remounted: same `id`, so the document keeps the place the
+ * reader had scrolled to and only its contents change underneath.
+ */
+export function reloadFilePreview(
+  sourceUuid: string,
+  filename: string,
+  contents: FileContents,
+  version: string | null,
+): void {
+  arriving.delete(sourceUuid);
+  if (current === null || current.sourceUuid !== sourceUuid) {
+    URL.revokeObjectURL(contents.url);
+    return;
+  }
+  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
+  current = { ...current, filename, contents, sourceVersion: version };
   announce();
 }
 
@@ -237,6 +300,7 @@ export function warmedContents(filename: string): FileContents | null {
 /** Close a preview, if it is still the one on screen. */
 export function closeFilePreview(id: string): void {
   if (current === null || current.id !== id) return;
+  arriving.clear();
   if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
   current = null;
   announce();

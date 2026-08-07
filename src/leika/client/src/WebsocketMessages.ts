@@ -569,6 +569,40 @@ export interface GuiPreviewWarmMessage {
   type: "GuiPreviewWarmMessage";
   uuid: string;
 }
+/** Message sent from client->server when a preview's reload is pressed.
+ *
+ * A press, and treated as one: the file is resolved exactly the way the
+ * button's own press resolves it -- running the caller's function, if the
+ * contents are a function -- and sent back with disposition ``reload``. The
+ * reader asked what the file says now, and only the source knows.
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewReloadMessage {
+  type: "GuiPreviewReloadMessage";
+  uuid: string;
+}
+/** Message sent from client->server while a preview is open, to ask
+ * whether the file behind it has changed.
+ *
+ * The open dialog's side of following a file: it says what it is holding and
+ * the server answers only if the file on disk is no longer that. Nothing is
+ * sent for a preview that is still current, so a preview nobody is editing
+ * under costs one small message a second and no bytes.
+ *
+ * Watching is not a press, so it never runs a caller's function: what a
+ * function would return cannot be known without running it, and running one
+ * on a timer -- with whatever cost or side effects it carries -- is not
+ * something a reader leaving a dialog open has asked for. Only a file on
+ * disk is watched.
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewWatchMessage {
+  type: "GuiPreviewWatchMessage";
+  uuid: string;
+  version: string | null;
+}
 /** Sent client<->server when any property of a GUI component is changed.
  *
  * (automatically generated)
@@ -709,12 +743,14 @@ export interface FileTransferStartUpload {
  */
 export interface FileTransferStartDownload {
   type: "FileTransferStartDownload";
-  disposition: "save" | "link" | "preview" | "warm";
+  disposition: "save" | "link" | "preview" | "warm" | "reload";
   transfer_uuid: string;
   filename: string;
   mime_type: string;
   part_count: number;
   size_bytes: number;
+  source_uuid: string | null;
+  source_version: string | null;
 }
 /** Send a file for clients to download or upload files from client.
  *
@@ -903,6 +939,8 @@ export type Message =
   | GuiCloseModalMessage
   | GuiButtonHoldMessage
   | GuiPreviewWarmMessage
+  | GuiPreviewReloadMessage
+  | GuiPreviewWatchMessage
   | GuiUpdateMessage
   | ViewportImageMessage
   | ViewportMatplotlibMessage
