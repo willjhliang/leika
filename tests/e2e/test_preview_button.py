@@ -6,9 +6,10 @@ import base64
 import struct
 import zlib
 from pathlib import Path
+from typing import List
 
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 import leika
 
@@ -1150,4 +1151,60 @@ def test_a_long_filename_does_not_push_the_dialog_into_overflow(
     dialog = _dialog(preview_page)
     expect(dialog).to_contain_text(name)
     assert dialog.evaluate("(element) => element.scrollHeight - element.clientHeight") == 0
+    assert page_errors == []
+
+
+def test_a_document_does_not_reflow_as_its_figures_arrive(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    # A figure is fetched beside its document rather than carried inside it,
+    # which is what makes a preview open at the speed of the click. The cost
+    # was that the browser did not know how big one was until it landed, so it
+    # left no room and laid the document out again for every arrival -- under
+    # a reader who had been reading since the text appeared. The server
+    # measures what it serves and says so in the URL, so the boxes are the
+    # right shape from the first paint and the pictures drop into them.
+    tmp_path.joinpath("figure.png").write_bytes(_png(600, 400))
+    blocks = []
+    for index in range(5):
+        blocks.append(f"Paragraph {index} of the report.")
+        blocks.append(f"![Figure {index}](figure.png)")
+    document = tmp_path / "report.md"
+    document.write_text("# Report\n\n" + "\n\n".join(blocks) + "\n")
+
+    # Held, so that "before the figures arrive" is a state with a duration
+    # rather than a race against localhost.
+    held: List[Route] = []
+
+    def hold(route: Route) -> None:
+        # A plain `held.append` is a builtin, which Playwright cannot tag as
+        # a handler; a route left unhandled is a request left in flight.
+        held.append(route)
+
+    preview_page.route("**/leika-assets/**", hold)
+
+    leika_server.gui.add_preview_button("Show report", document)
+    _press(preview_page, "Show report")
+    frame = _dialog(preview_page).locator("div.overflow-auto").first
+    expect(_dialog(preview_page).locator("img")).to_have_count(5)
+
+    height = "(element) => element.scrollHeight"
+    reserved = frame.evaluate(height)
+    # Nothing has decoded, and the document is already its full height: the
+    # room is reserved from the markup, not discovered from the pictures.
+    assert preview_page.evaluate(
+        """() => [...document.querySelectorAll('[data-slot="dialog-content"] img')]
+             .every((image) => image.naturalWidth === 0)"""
+    ), "the figures were supposed to still be in flight"
+    assert reserved > 5 * 400, "no room was left for the figures"
+
+    for route in held:
+        route.continue_()
+    expect(_dialog(preview_page).locator("img").first).to_have_js_property("naturalWidth", 600)
+    preview_page.wait_for_timeout(200)
+
+    assert frame.evaluate(height) == reserved, "the document changed height when its figures landed"
     assert page_errors == []

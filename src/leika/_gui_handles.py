@@ -73,6 +73,7 @@ from ._messages import (
 from ._threadpool_exceptions import print_threadpool_errors
 from ._validation import validate_finite_number as _finite_number
 from .infra import ClientId
+from .infra._infra import HttpAsset
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -1291,7 +1292,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         ):
             source = content.read_bytes().decode("utf-8", errors="replace")
             return _link_markdown_assets(
-                source, content.parent, client._server.register_http_asset
+                source, content.parent, client._server._register_http_image
             ).encode("utf-8")
         return content
 
@@ -1950,7 +1951,9 @@ def _parse_markdown(markdown: str, image_root: Path | None) -> str:
     return markdown
 
 
-def _link_markdown_assets(markdown: str, image_root: Path, register: Callable[[Path], str]) -> str:
+def _link_markdown_assets(
+    markdown: str, image_root: Path, register: Callable[[Path], HttpAsset]
+) -> str:
     """Point a document's relative images at server URLs of their own.
 
     The counterpart of :func:`_parse_markdown` for when there is a server to
@@ -1959,24 +1962,45 @@ def _link_markdown_assets(markdown: str, image_root: Path, register: Callable[[P
     registering them (:meth:`Server.register_http_asset`) leaves the document
     the size of its writing, and the browser fetches the images alongside it.
 
+    Which leaves the browser not knowing how big a figure is until it
+    arrives, so a document full of them lays itself out again with every one
+    that lands -- under the reader, who started reading as soon as the text
+    did. A picture whose header declares a size carries it in its URL, as
+    ``?w=&h=``, and the renderer turns that back into the width and height
+    attributes that let the browser reserve the right box from the first
+    paint (`markdownDocument.tsx`). Serving ignores the query, so the two
+    URLs name the same file.
+
+    Through the URL because markdown has no syntax for a size and the
+    alternative -- writing the figure as an ``<img>`` -- would stop this being
+    markdown: a tag on a line of its own opens an HTML *block*, and everything
+    down to the next blank line stops being parsed. A caption under a figure
+    would have arrived as its own asterisks.
+
     Web addresses and data URLs are already self-contained and pass through
-    untouched. An image that cannot be read keeps its original reference --
-    the document renders with the same broken figure it would show anywhere
-    else, rather than failing to show at all.
+    untouched, as does a picture whose size cannot be read -- no query, and
+    the browser discovers the size as it did before. An image that cannot be
+    read at all keeps its original reference, so the document renders with the
+    same broken figure it would show anywhere else rather than failing to show
+    at all.
     """
 
     def linked(match: re.Match[str]) -> str:
-        url = match.group(2)
+        alt, url = match.group(1), match.group(2)
         if url.startswith("http") or url.startswith("data:"):
             return match.group(0)
         try:
-            return f"![{match.group(1)}]({register(image_root / url)})"
+            asset = register(image_root / url)
         except OSError:
             warnings.warn(
                 f"Failed to read image {url}, relative to {image_root}.",
                 stacklevel=2,
             )
             return match.group(0)
+        if asset.pixel_size is None:
+            return f"![{alt}]({asset.url})"
+        width, height = asset.pixel_size
+        return f"![{alt}]({asset.url}?w={width}&h={height})"
 
     return re.sub(r"\!\[([^]]*)\]\(([^)\n]*)\)", linked, markdown)
 

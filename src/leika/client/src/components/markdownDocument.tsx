@@ -22,12 +22,20 @@ import {
 // how a document looks, and nothing here should be.
 //
 // A component is worth writing only for what a tag *does*, or for structure a
-// stylesheet cannot add for itself. There are two.
+// stylesheet cannot add for itself. There are three.
 const components: MarkdownComponents = {
   // A document can be opened on a file from anywhere, and a link in one is a
   // link out of Leika. The referrer is the one thing following it should not
   // carry with it.
   a: (props) => <a rel="noreferrer" {...props} />,
+  // A figure served beside its document has no size until it has arrived, so
+  // the browser leaves it no room and lays the document out again when it
+  // lands -- under the reader, who has been reading since the text arrived.
+  // The server measures what it serves and says so in the URL; this is where
+  // that becomes the width and height the browser reserves from. See
+  // `_link_markdown_assets`, and `reservedSize` below for why it travels
+  // there rather than in the tag.
+  img: (props) => <img {...props} {...reservedSize(props.src)} />,
   // typeset holds a table's headings on one line, so a table with long ones
   // is wider than the page whatever the page does, and the wrapper is what it
   // ships to say where that width is allowed to go: the table scrolls inside
@@ -42,6 +50,28 @@ const components: MarkdownComponents = {
     </div>
   ),
 };
+
+/** The size the server measured for a picture it is serving, from its URL.
+ *
+ * `?w=&h=` rather than an `<img>` written into the document, because a tag on
+ * a line of its own opens an HTML block in markdown and everything down to
+ * the next blank line stops being parsed -- a caption under a figure would
+ * arrive as its own asterisks. A query is invisible to the parser and
+ * ignored by the server serving the file, so the document stays markdown and
+ * the URL stays one file.
+ *
+ * Nothing is asserted about pictures from anywhere else: a document may name
+ * any URL, and one that happens to carry these is a document saying what size
+ * its own figure is, which is all this ever claims to be.
+ */
+function reservedSize(src: string | undefined): {
+  width?: number;
+  height?: number;
+} {
+  const measured = /[?&]w=(\d+)&h=(\d+)/.exec(src ?? "");
+  if (measured === null) return {};
+  return { width: Number(measured[1]), height: Number(measured[2]) };
+}
 
 const render = createMarkdownRenderer(components);
 
@@ -84,6 +114,10 @@ export function renderMarkdown(source: string): RenderedDocument {
  * is fetched now is exactly what the open will show. The parse waits for an
  * idle moment because warming happens while the reader is doing something
  * else, and must not be felt.
+ *
+ * The URLs are matched with their `?w=&h=` if they carry one, because that is
+ * the address the document will ask for: fetching the bare path would warm a
+ * cache entry under a key no `<img>` on the page is going to use.
  */
 export function warmMarkdownDocument(source: string): void {
   const idle: (work: () => void) => void =
@@ -91,7 +125,9 @@ export function warmMarkdownDocument(source: string): void {
       ? requestIdleCallback
       : (work) => setTimeout(work, 100);
   idle(() => renderMarkdown(source));
-  for (const url of source.match(/\/leika-assets\/[\w.-]+/g) ?? []) {
+  for (const url of source.match(
+    /\/leika-assets\/[\w.-]+(?:\?w=\d+&h=\d+)?/g,
+  ) ?? []) {
     try {
       void fetch(url).catch(() => undefined);
     } catch {

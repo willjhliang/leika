@@ -15,7 +15,7 @@ import time
 from asyncio.events import AbstractEventLoop
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Callable, Generator, NewType, TypeVar
+from typing import Callable, Generator, NamedTuple, NewType, Optional, Tuple, TypeVar
 from urllib.parse import unquote as _url_unquote
 
 import msgspec.msgpack
@@ -31,6 +31,7 @@ from websockets.typing import Subprotocol
 
 from ._async_message_buffer import AsyncMessageBuffer
 from ._auth import HttpPasswordGuard
+from ._image_headers import image_pixel_size
 from ._messages import Message
 
 
@@ -192,6 +193,20 @@ the oldest; a URL that has been evicted answers 404, the same as one that was
 never registered."""
 
 
+class HttpAsset(NamedTuple):
+    """Where a registered file is served, and how big it is if it is a picture.
+
+    The size travels with the URL because both fall out of the same read: a
+    caller writing an ``<img>`` wants the address and the box to leave for it
+    at the same moment, and asking twice would mean reading the file twice.
+    """
+
+    url: str
+    """Root-relative URL path the file is served at."""
+    pixel_size: Optional[Tuple[int, int]]
+    """``(width, height)`` if the file's header declares one, else ``None``."""
+
+
 class WebsockServer(WebsockMessageHandler):
     """Websocket server abstraction. Communicates asynchronously with client
     applications.
@@ -244,11 +259,14 @@ class WebsockServer(WebsockMessageHandler):
         # Files registered at runtime to be fetched over HTTP, named by their
         # content's hash. See :meth:`register_http_asset`.
         self._http_assets: dict[str, Path] = {}
-        # Digests already computed, so re-registering an unchanged file -- the
-        # normal case, every time a preview is reopened -- does not re-read
-        # megabytes just to rediscover its name. Keyed by path; an entry is
-        # trusted only while the file's (mtime_ns, size) still match.
-        self._http_asset_digests: dict[Path, tuple[tuple[int, int], str]] = {}
+        # What registering an unchanged file already worked out -- its digest,
+        # and its shape if it is a picture -- so the normal case, every time a
+        # preview is reopened, does not re-read megabytes to rediscover either.
+        # Keyed by path; an entry is trusted only while the file's
+        # (mtime_ns, size) still match.
+        self._http_asset_records: dict[
+            Path, tuple[tuple[int, int], str, Optional[Tuple[int, int]]]
+        ] = {}
         self._http_assets_lock = threading.Lock()
 
     def start(self) -> None:
@@ -331,7 +349,7 @@ class WebsockServer(WebsockMessageHandler):
         if client_state is not None:
             client_state.message_buffer.flush()
 
-    def register_http_asset(self, path: Path) -> str:
+    def register_http_asset(self, path: Path) -> HttpAsset:
         """Serve one file over plain HTTP, and return the URL path it lives at.
 
         This is for the big constituents of otherwise small payloads -- the
@@ -355,17 +373,26 @@ class WebsockServer(WebsockMessageHandler):
         timestamp and size would be served under its old name until either
         moves, which nothing that writes files normally manages.
 
+        A picture's pixel size comes back with the URL, read out of the same
+        bytes the digest was taken from and remembered beside it. It is what
+        lets a document reserve the right room for a figure before the figure
+        arrives; ``None`` for anything whose header does not declare one.
+
         Raises ``OSError`` if the file cannot be read, which is also the
         moment the caller still knows what the URL was standing in for.
         """
         stat = path.stat()
         fingerprint = (stat.st_mtime_ns, stat.st_size)
         with self._http_assets_lock:
-            remembered = self._http_asset_digests.get(path)
+            remembered = self._http_asset_records.get(path)
         if remembered is not None and remembered[0] == fingerprint:
-            digest = remembered[1]
+            _, digest, pixel_size = remembered
         else:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            content = path.read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            # Read from the bytes already in hand for the hash, so knowing the
+            # shape of a picture costs nothing over not knowing it.
+            pixel_size = image_pixel_size(content)
         name = f"{digest}{path.suffix.lower()}"
         with self._http_assets_lock:
             # Re-registering refreshes the entry's place in eviction order:
@@ -374,11 +401,11 @@ class WebsockServer(WebsockMessageHandler):
             self._http_assets[name] = path
             while len(self._http_assets) > _HTTP_ASSET_LIMIT:
                 del self._http_assets[next(iter(self._http_assets))]
-            self._http_asset_digests.pop(path, None)
-            self._http_asset_digests[path] = (fingerprint, digest)
-            while len(self._http_asset_digests) > _HTTP_ASSET_LIMIT:
-                del self._http_asset_digests[next(iter(self._http_asset_digests))]
-        return f"{_HTTP_ASSET_URL_PREFIX}{name}"
+            self._http_asset_records.pop(path, None)
+            self._http_asset_records[path] = (fingerprint, digest, pixel_size)
+            while len(self._http_asset_records) > _HTTP_ASSET_LIMIT:
+                del self._http_asset_records[next(iter(self._http_asset_records))]
+        return HttpAsset(f"{_HTTP_ASSET_URL_PREFIX}{name}", pixel_size)
 
     def _background_worker(self, ready_sem: threading.Semaphore) -> None:
         import rich

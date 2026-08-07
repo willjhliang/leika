@@ -14,6 +14,7 @@ import re
 import urllib.request
 from pathlib import Path
 from typing import Any, List, Tuple
+from unittest import mock
 
 import pytest
 
@@ -104,6 +105,21 @@ def test_contents_can_be_bytes_a_path_or_a_function(server: leika.Server, tmp_pa
     assert _press(from_call).previewed[0][:2] == ("paper.pdf", path)
 
 
+def _one_pixel_png() -> bytes:
+    """A valid PNG, one pixel square, which its header declares."""
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+
+def _asset_url(document: bytes) -> str:
+    """The bare asset path a document's first figure points at."""
+    found = re.search(r"\(/leika-assets/[^?)]*", document.decode())
+    assert found is not None
+    return found.group(0)[1:]
+
+
 def test_a_path_backed_markdown_preview_links_relative_images(
     server: leika.Server, tmp_path: Path
 ) -> None:
@@ -114,9 +130,7 @@ def test_a_path_backed_markdown_preview_links_relative_images(
     # is that the path is resolved beside the markdown, registered with the
     # server, and the document sent on with the URL in its place -- the text
     # crosses the wire at its own size, and the browser fetches the images.
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    )
+    png = _one_pixel_png()
     figures.joinpath("plot.png").write_bytes(png)
     document = docs / "notes.md"
     document.write_text(
@@ -133,11 +147,18 @@ def test_a_path_backed_markdown_preview_links_relative_images(
     urls = re.findall(r"!\[[^]]*\]\(([^)]*)\)", content.decode())
     # The same file is the same content, so both references share one URL.
     assert len(urls) == 2 and urls[0] == urls[1]
-    assert urls[0].startswith("/leika-assets/") and urls[0].endswith(".png")
+    # The size the header declares rides along with the address -- the PNG
+    # above is one pixel square -- so the browser can leave the right room for
+    # the figure before it has arrived. Serving ignores the query, so this is
+    # still one file; the renderer turns it back into width and height.
+    assert urls[0] == f"{_asset_url(content)}?w=1&h=1"
+    assert _asset_url(content).startswith("/leika-assets/")
+    assert _asset_url(content).endswith(".png")
     assert b"figures/plot.png" not in content
     assert b"base64" not in content
 
-    # The URL the document now points at answers with the image itself.
+    # The URL the document now points at answers with the image itself, query
+    # and all -- the size is for the browser's layout, not for the lookup.
     with urllib.request.urlopen(f"http://127.0.0.1:{server.port}{urls[0]}") as response:
         assert response.read() == png
         assert response.headers["Content-Type"] == "image/png"
@@ -361,6 +382,34 @@ def test_an_unchanged_file_keeps_its_asset_url_and_a_changed_one_moves(
 
     asset.write_bytes(b"two, longer")
     assert server.register_http_asset(asset) != first
+
+
+def test_a_pictures_size_is_learned_without_reading_it_twice(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    # The size a document reserves room from comes out of the bytes the URL
+    # was already being hashed from, and is remembered beside the digest -- so
+    # knowing it costs nothing over not knowing it, and a reopened preview
+    # still costs a `stat` rather than the file. This is the whole reason it
+    # is read from the header here instead of by the browser over there.
+    asset = tmp_path / "plot.png"
+    asset.write_bytes(_one_pixel_png())
+
+    reads: List[Any] = []
+    original = Path.read_bytes
+
+    def counted(self: Path) -> bytes:
+        if self == asset:
+            reads.append(self)
+        return original(self)
+
+    with mock.patch.object(Path, "read_bytes", counted):
+        first = server._register_http_image(asset)
+        again = server._register_http_image(asset)
+
+    assert first.pixel_size == (1, 1)
+    assert again == first
+    assert len(reads) == 1, "the second registration re-read the file"
 
 
 def test_bytes_without_a_filename_are_rejected_at_creation(server: leika.Server) -> None:

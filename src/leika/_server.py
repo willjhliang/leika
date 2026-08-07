@@ -21,6 +21,7 @@ from ._share import CloudflaredTunnel, ShareTunnelError
 from ._threadpool_exceptions import print_threadpool_errors
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 from ._validation import validate_positive_integer as _validate_positive_integer
+from .infra._infra import HttpAsset
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
 
@@ -612,6 +613,16 @@ class Server:
 
         Returns:
             Root-relative URL path (``/leika-assets/<hash><suffix>``).
+        """
+        return self._websock_server.register_http_asset(path).url
+
+    def _register_http_image(self, path: Path) -> HttpAsset:
+        """:meth:`register_http_asset`, keeping the picture's size as well.
+
+        The size is what a document needs in order to leave the right room for
+        a figure before the figure has arrived, and it is read from the bytes
+        the URL was already being hashed from -- so it is the same
+        registration, told in full rather than told twice.
         """
         return self._websock_server.register_http_asset(path)
 
