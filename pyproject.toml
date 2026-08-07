@@ -113,6 +113,7 @@ exclude = [
   "src/leika/client/index.html",
   "src/leika/client/package.json",
   "src/leika/client/package-lock.json",
+  "src/leika/client/popup_test.html",
   "src/leika/client/tsconfig.json",
   "src/leika/client/vite-plugin-compress-html.mts",
   "src/leika/client/vite.config.mts",
