@@ -1,6 +1,7 @@
 import React from "react";
 import { Message } from "./WebsocketMessages";
-import { ViewerContext, ViewerContextContents } from "./ViewerContext";
+import { useViewer, ViewerContextContents } from "./ViewerContext";
+import { captureSendSession, SendSession } from "./connectionSender";
 
 export const GUI_MESSAGE_THROTTLE_MS = 50;
 
@@ -13,7 +14,7 @@ export const GUI_MESSAGE_THROTTLE_MS = 50;
  * throttle timer is also cleared on unmount so a teardown doesn't leave a
  * dangling closure pinning the viewer. */
 export function useThrottledMessageSender(throttleMilliseconds: number) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const sender = React.useMemo(
     () => makeThrottledMessageSender(viewer, throttleMilliseconds),
     [viewer, throttleMilliseconds],
@@ -67,18 +68,22 @@ export function makeThrottledMessageSender(
 ) {
   let readyToSend = true;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-  const pending = new Map<string, Message>();
+  const pending = new Map<string, { message: Message; session: SendSession }>();
   let eventCounter = 0;
 
   /** Send everything that waited out the window. Returns whether anything
    * went, which is what decides if a fresh window opens behind it. */
   function emitPending(): boolean {
-    const sendMessage = viewer.mutable.current.sendMessage;
     if (pending.size === 0) return false;
     const queued = [...pending.values()];
     pending.clear();
-    queued.forEach((message) => sendMessage(message));
-    return true;
+    let emitted = false;
+    for (const { message, session } of queued) {
+      if (!session.isCurrent()) continue;
+      session.sendMessage(message);
+      emitted = true;
+    }
+    return emitted;
   }
 
   function openWindow() {
@@ -91,9 +96,9 @@ export function makeThrottledMessageSender(
   }
 
   function send(message: Message, options?: { coalesce?: boolean }) {
-    const sendMessage = viewer.mutable.current.sendMessage;
+    const session = captureSendSession(viewer.mutable.current);
     if (readyToSend) {
-      sendMessage(message);
+      session.sendMessage(message);
       openWindow();
       return;
     }
@@ -101,7 +106,7 @@ export function makeThrottledMessageSender(
       options?.coalesce === false
         ? `${message.type}:${(eventCounter += 1)}`
         : coalescingKey(message);
-    pending.set(key, message);
+    pending.set(key, { message, session });
   }
 
   function cancel() {

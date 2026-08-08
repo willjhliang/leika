@@ -1,5 +1,5 @@
 // Structural coverage for pure layout transitions, self-targeting no-ops,
-// fixed area groups, and caller-clamped numeric operations.
+// fixed area groups, and validated numeric geometry.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -43,6 +43,7 @@ import {
   cascadeResize,
   resizeRegionColumns,
   setStackWeights,
+  restoreStackWeights,
 } from "./layoutOps";
 
 // ---------------------------------------------------------------------------
@@ -820,7 +821,7 @@ describe("tearOutPanel", () => {
     // Source group keeps the other two panels.
     expect(res.layout.groups["a"].panelIds).toEqual(["a:0", "a:2"]);
     // New floating group holds just the torn panel.
-    const newGroup = res.layout.groups[res.floatingGroupId];
+    const newGroup = res.layout.groups[res.floatingGroupId!];
     expect(newGroup.panelIds).toEqual(["a:1"]);
     expect(res.floatingGroupId).not.toBe("a");
     const win = res.layout.floating.find((w) => w.id === res.windowId)!;
@@ -841,10 +842,20 @@ describe("tearOutPanel", () => {
     expect(res.layout.groups["a"].activeId).toBe("a:0");
   });
 
-  it("unknown group falls back to floatGroup semantics", () => {
-    const layout = makeLayout({ floating: [{ id: "w1", stack: ["x"] }] });
-    const res = tearOutPanel(layout, "x", "x:0", 0, 0, 200);
-    expect(res.floatingGroupId).toBe("x");
+  it("rejects an unknown group without creating dangling references", () => {
+    const layout = makeLayout({ left: leaf("a") });
+    const res = tearOutPanel(layout, "missing", "a:0", 0, 0, 200);
+    expect(res.layout).toBe(layout);
+    expect(res.windowId).toBeNull();
+    expect(res.floatingGroupId).toBeNull();
+  });
+
+  it("rejects a panel that is not owned by the source group", () => {
+    const layout = makeLayout({ left: leaf("a") });
+    const res = tearOutPanel(layout, "a", "missing-panel", 0, 0, 200);
+    expect(res.layout).toBe(layout);
+    expect(res.windowId).toBeNull();
+    expect(res.floatingGroupId).toBeNull();
   });
 });
 
@@ -1024,8 +1035,8 @@ describe("BUG #1 (fixed): snapToWindowStack self-target no longer empties the wi
 // setStackWeights
 //
 // Merges groupId->weight entries into a floating window's stackWeights, keeping
-// any existing entries. Rejects non-finite / non-positive values. A missing
-// window is a no-op (returns the input reference).
+// existing live entries and pruning stale ones. Rejects non-finite /
+// non-positive values. A missing window is a no-op (returns the input reference).
 // ===========================================================================
 describe("setStackWeights", () => {
   it("merges groupId->weight into a window's stackWeights (creating the map)", () => {
@@ -1043,6 +1054,20 @@ describe("setStackWeights", () => {
     const win = out.floating.find((w) => w.id === "w1")!;
     // a and c untouched; b replaced.
     expect(win.stackWeights).toEqual({ a: 1, b: 5, c: 1 });
+  });
+
+  it("ignores incoming missing groups and prunes existing stale keys", () => {
+    const l = floatingLayout([
+      {
+        id: "w1",
+        stack: ["a", "b"],
+        stackWeights: { a: 2, stale: 9 },
+      },
+    ]);
+
+    const out = setStackWeights(l, "w1", { b: 3, missing: 4 });
+
+    expect(out.floating[0].stackWeights).toEqual({ a: 2, b: 3 });
   });
 
   it("rejects non-finite and non-positive weights (entry is not written)", () => {
@@ -1086,6 +1111,43 @@ describe("setStackWeights", () => {
     const before = structuredClone(l);
     setStackWeights(l, "w1", { a: 9 });
     expect(l).toEqual(before);
+  });
+});
+
+describe("restoreStackWeights", () => {
+  it("restores an absent map and auto-height to exact layout equality", () => {
+    const original = floatingLayout([{ id: "w1", stack: ["a", "b"] }]);
+    const resized = resizeWindowHeight(
+      setStackWeights(original, "w1", { a: 120, b: 80 }),
+      "w1",
+      240,
+    );
+
+    const restored = resizeWindowHeight(
+      restoreStackWeights(resized, "w1", ["a", "b"], undefined),
+      "w1",
+      undefined,
+    );
+
+    expect(restored).toEqual(original);
+    expect("stackWeights" in restored.floating[0]).toBe(false);
+  });
+
+  it("preserves added groups while never restoring or retaining removed groups", () => {
+    const restructured = floatingLayout([
+      {
+        id: "w1",
+        stack: ["a", "c"],
+        stackWeights: { a: 120, b: 80, c: 7 },
+      },
+    ]);
+
+    const restored = restoreStackWeights(restructured, "w1", ["a", "b"], {
+      a: 2,
+      b: 3,
+    });
+
+    expect(restored.floating[0].stackWeights).toEqual({ a: 2, c: 7 });
   });
 });
 
@@ -1333,20 +1395,62 @@ describe("resizeWindowHeight", () => {
     const out = resizeWindowHeight(layout, "w1", 333);
     expect(out.floating[0].height).toBe(333);
   });
+
+  it("restores auto-height by removing the explicit height field", () => {
+    const layout = makeLayout({
+      floating: [{ id: "w1", stack: ["a"], y: 10, height: 333 }],
+    });
+    const out = resizeWindowHeight(layout, "w1", undefined, 42);
+    expect("height" in out.floating[0]).toBe(false);
+    expect(out.floating[0].y).toBe(42);
+  });
+
+  it("is a no-op when auto-height and position are already restored", () => {
+    const layout = makeLayout({
+      floating: [{ id: "w1", stack: ["a"], y: 42 }],
+    });
+    delete layout.floating[0].height;
+    expect(resizeWindowHeight(layout, "w1", undefined, 42)).toBe(layout);
+  });
+
   it("returns input for unknown window", () => {
     const layout = makeLayout({ floating: [{ id: "w1", stack: ["a"] }] });
     expect(resizeWindowHeight(layout, "zzz", 100)).toBe(layout);
   });
 });
 
-// regression / NOTE: input validation gaps (still by contract; callers clamp).
-describe("NOTE: numeric ops do not validate their inputs", () => {
-  it("resizeWindow accepts a non-finite width verbatim", () => {
-    const l = emptyLayout();
-    l.groups = { a: group("a") };
-    l.floating = [{ id: "w1", x: 0, y: 0, width: 260, stack: ["a"] }];
-    const out = resizeWindow(l, "w1", Number.NaN);
-    expect(Number.isNaN(out.floating[0].width)).toBe(true); // no validation
+describe("numeric geometry validation", () => {
+  const layout = () => {
+    const value = emptyLayout();
+    value.groups = { a: group("a") };
+    value.floating = [
+      { id: "w1", x: 0, y: 0, width: 260, height: 200, stack: ["a"] },
+    ];
+    return value;
+  };
+
+  it("rejects non-finite window positions", () => {
+    const value = layout();
+    expect(moveWindow(value, "w1", Number.NaN, 1)).toBe(value);
+    expect(moveWindow(value, "w1", 1, Number.POSITIVE_INFINITY)).toBe(value);
+  });
+
+  it("rejects non-positive or non-finite widths and invalid left edges", () => {
+    const value = layout();
+    expect(resizeWindow(value, "w1", Number.NaN)).toBe(value);
+    expect(resizeWindow(value, "w1", 0)).toBe(value);
+    expect(resizeWindow(value, "w1", -1)).toBe(value);
+    expect(resizeWindow(value, "w1", 100, Number.NEGATIVE_INFINITY)).toBe(
+      value,
+    );
+  });
+
+  it("rejects non-positive or non-finite heights and invalid top edges", () => {
+    const value = layout();
+    expect(resizeWindowHeight(value, "w1", Number.NaN)).toBe(value);
+    expect(resizeWindowHeight(value, "w1", 0)).toBe(value);
+    expect(resizeWindowHeight(value, "w1", -1)).toBe(value);
+    expect(resizeWindowHeight(value, "w1", 100, Number.NaN)).toBe(value);
   });
 });
 

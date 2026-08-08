@@ -27,7 +27,7 @@ import {
   TabGroup,
   WindowId,
 } from "./types";
-import { freshId } from "./gestures";
+import { createDockIdAllocator, DockIdAllocator, freshDockId } from "./dockIds";
 
 // A typed recursive deep-clone, ~10x faster than structuredClone for the
 // layout's plain JSON-ish shape (objects/arrays/numbers/strings/booleans --
@@ -354,6 +354,25 @@ export function resizeRegionColumns(
   return widths;
 }
 
+/** Convert flex weights into their current per-cell pixel sizes. Collapsed
+ * cells occupy fixed chrome outside this budget, so they contribute neither
+ * weight nor pixels here. */
+export function weightedCellSizes(
+  weights: readonly number[],
+  collapsed: readonly boolean[],
+  containerPx: number,
+): number[] | null {
+  if (containerPx <= 0) return null;
+  const total = weights.reduce(
+    (sum, weight, index) => (collapsed[index] ? sum : sum + weight),
+    0,
+  );
+  const denominator = total || 1;
+  return weights.map((weight, index) =>
+    collapsed[index] ? 0 : (weight / denominator) * containerPx,
+  );
+}
+
 /** Pure cascading-divider resize, shared by docked column/row splits and
  * floating snap-stacks. Dragging the boundary between cell `dividerIndex` and
  * `dividerIndex+1` grows the drag-side cell and shrinks the other side IN ORDER
@@ -374,11 +393,8 @@ export function cascadeResize(opts: {
 }): number[] | null {
   const { weights, collapsed, containerPx, deltaPx, minCell, maxCell } = opts;
   const index = opts.dividerIndex;
-  if (containerPx <= 0) return null;
-  const total = weights.reduce((s, w, i) => (collapsed[i] ? s : s + w), 0) || 1;
-  const next = weights.map((w, i) =>
-    collapsed[i] ? 0 : (w / total) * containerPx,
-  );
+  const next = weightedCellSizes(weights, collapsed, containerPx);
+  if (next === null) return null;
   const growIdx = deltaPx > 0 ? index : index + 1;
   if (collapsed[growIdx]) return null;
   if (deltaPx > 0) {
@@ -475,9 +491,12 @@ function withoutAreaGroups(layout: DockLayout, groupIds: GroupId[]): GroupId[] {
 // Group + panel construction.
 // ---------------------------------------------------------------------------
 
-export function makeGroup(panelIds: PanelId[]): TabGroup {
+export function makeGroup(
+  panelIds: PanelId[],
+  allocateId: DockIdAllocator = freshDockId,
+): TabGroup {
   return {
-    id: freshId("group"),
+    id: allocateId("group"),
     panelIds: [...panelIds],
     activeId: panelIds[0],
   };
@@ -503,21 +522,28 @@ export function isGroupUnmergeable(
   return group.panelIds.some((p) => isPanelUnmergeable(panels, p));
 }
 
-function makeLeaf(groupId: GroupId, weight = 1): DockNode {
-  return { type: "leaf", id: freshId("node"), group: groupId, weight };
+function makeLeaf(
+  groupId: GroupId,
+  allocateId: DockIdAllocator,
+  weight = 1,
+): DockNode {
+  return { type: "leaf", id: allocateId("node"), group: groupId, weight };
 }
 
 /** Build a dock subtree from an ordered list of groups: a single leaf for one
  * group, or a vertical (column) split for several -- so a snapped floating
  * stack keeps its top-to-bottom arrangement when docked. */
-function buildColumnSubtree(groupIds: GroupId[]): DockNode {
-  if (groupIds.length === 1) return makeLeaf(groupIds[0]);
+function buildColumnSubtree(
+  groupIds: GroupId[],
+  allocateId: DockIdAllocator,
+): DockNode {
+  if (groupIds.length === 1) return makeLeaf(groupIds[0], allocateId);
   return {
     type: "split",
-    id: freshId("node"),
+    id: allocateId("node"),
     dir: "column",
     weight: 1,
-    children: groupIds.map((g) => makeLeaf(g)),
+    children: groupIds.map((g) => makeLeaf(g, allocateId)),
   };
 }
 
@@ -535,9 +561,10 @@ export function dockToEdge(
 ): DockLayout {
   groupIds = withoutAreaGroups(layout, groupIds);
   if (groupIds.length === 0) return layout;
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   groupIds.forEach((g) => detachInPlace(draft, g));
-  const subtree = buildColumnSubtree(groupIds);
+  const subtree = buildColumnSubtree(groupIds, allocateId);
   const existing = draft.docked[edge];
   if (existing === null) {
     draft.docked[edge] = subtree;
@@ -546,7 +573,7 @@ export function dockToEdge(
       edge === "left" ? [subtree, existing] : [existing, subtree];
     draft.docked[edge] = normalizeTree({
       type: "split",
-      id: freshId("node"),
+      id: allocateId("node"),
       dir: "row",
       weight: 1,
       children,
@@ -567,9 +594,10 @@ export function dockToRegionEdge(
 ): DockLayout {
   groupIds = withoutAreaGroups(layout, groupIds);
   if (groupIds.length === 0) return layout;
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   groupIds.forEach((g) => detachInPlace(draft, g));
-  const subtree = buildColumnSubtree(groupIds);
+  const subtree = buildColumnSubtree(groupIds, allocateId);
   const existing = draft.docked[edge];
   if (existing === null) {
     draft.docked[edge] = subtree;
@@ -591,7 +619,7 @@ export function dockToRegionEdge(
   const children = draggedFirst ? [subtreeW, existingW] : [existingW, subtreeW];
   draft.docked[edge] = normalizeTree({
     type: "split",
-    id: freshId("node"),
+    id: allocateId("node"),
     dir,
     weight: 1,
     children,
@@ -611,6 +639,7 @@ export function dropOnDockedLeaf(
 ): DockLayout {
   draggedGroupIds = withoutAreaGroups(layout, draggedGroupIds);
   if (draggedGroupIds.length === 0) return layout;
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   const tree = draft.docked[edge];
   if (tree === null) return layout;
@@ -632,7 +661,7 @@ export function dropOnDockedLeaf(
   if (liveTarget === null) return layout;
 
   const subtree: DockNode = {
-    ...buildColumnSubtree(draggedGroupIds),
+    ...buildColumnSubtree(draggedGroupIds, allocateId),
     weight: 1,
   };
   const keptTarget: DockNode = { ...liveTarget, weight: 1 };
@@ -641,7 +670,7 @@ export function dropOnDockedLeaf(
   const draggedFirst = region === "left" || region === "top";
   const split: DockNode = {
     type: "split",
-    id: freshId("node"),
+    id: allocateId("node"),
     dir,
     weight: liveTarget.weight,
     children: draggedFirst ? [subtree, keptTarget] : [keptTarget, subtree],
@@ -693,9 +722,36 @@ export function insertTabsInto(
   return draft;
 }
 
+function writeStackWeights(
+  layout: DockLayout,
+  windowIndex: number,
+  next: Record<GroupId, number> | undefined,
+): DockLayout {
+  const current = layout.floating[windowIndex].stackWeights;
+  if (current === undefined || next === undefined) {
+    if (current === next) return layout;
+  } else {
+    const currentKeys = Object.keys(current);
+    const nextKeys = Object.keys(next);
+    if (
+      currentKeys.length === nextKeys.length &&
+      nextKeys.every((groupId) => current[groupId] === next[groupId])
+    ) {
+      return layout;
+    }
+  }
+
+  const draft = clone(layout);
+  const draftWindow = draft.floating[windowIndex];
+  if (next === undefined) delete draftWindow.stackWeights;
+  else draftWindow.stackWeights = next;
+  return draft;
+}
+
 /** Merge per-group height weights into a floating window's stack (groupId ->
  * weight). Used by the draggable divider between stacked floating groups; only
- * meaningful for a fixed-height window. Rejects non-finite / non-positive. */
+ * meaningful for a fixed-height window. Rejects non-finite / non-positive
+ * values and drops keys for groups that no longer belong to the window. */
 export function setStackWeights(
   layout: DockLayout,
   windowId: WindowId,
@@ -704,38 +760,95 @@ export function setStackWeights(
   const windowIndex = layout.floating.findIndex((w) => w.id === windowId);
   if (windowIndex === -1) return layout;
   const win = layout.floating[windowIndex];
-  const current = win.stackWeights ?? {};
-  const updates = Object.entries(weights).filter(
-    ([groupId, weight]) =>
-      Number.isFinite(weight) && weight > 0 && current[groupId] !== weight,
-  );
-  if (updates.length === 0) return layout;
+  const liveGroupIds = new Set(win.stack);
+  const next: Record<GroupId, number> = {};
 
-  const draft = clone(layout);
-  const draftWindow = draft.floating[windowIndex];
-  const next = { ...(draftWindow.stackWeights ?? {}) };
-  for (const [groupId, weight] of updates) {
-    next[groupId] = weight;
+  for (const [groupId, weight] of Object.entries(win.stackWeights ?? {})) {
+    if (liveGroupIds.has(groupId)) next[groupId] = weight;
   }
-  draftWindow.stackWeights = next;
-  return draft;
+  for (const [groupId, weight] of Object.entries(weights)) {
+    if (liveGroupIds.has(groupId) && Number.isFinite(weight) && weight > 0) {
+      next[groupId] = weight;
+    }
+  }
+  return writeStackWeights(
+    layout,
+    windowIndex,
+    Object.keys(next).length === 0 ? undefined : next,
+  );
 }
 
-/** Set a floating window's explicit height (px). Switches it from auto-height
- * to fixed-height, with its contents scrolling. */
+/** Restore the stored weights captured at the start of a resize gesture.
+ * Only the captured groups are rolled back: weights for groups added during
+ * the gesture survive, while captured groups that have since left the window
+ * are never reinserted. An absent captured map is restored as absent. */
+export function restoreStackWeights(
+  layout: DockLayout,
+  windowId: WindowId,
+  capturedGroupIds: readonly GroupId[],
+  weights: Readonly<Record<GroupId, number>> | undefined,
+): DockLayout {
+  const windowIndex = layout.floating.findIndex((w) => w.id === windowId);
+  if (windowIndex === -1) return layout;
+  const win = layout.floating[windowIndex];
+  const liveGroupIds = new Set(win.stack);
+  const captured = new Set(capturedGroupIds);
+  const next: Record<GroupId, number> = {};
+
+  for (const [groupId, weight] of Object.entries(win.stackWeights ?? {})) {
+    if (liveGroupIds.has(groupId) && !captured.has(groupId)) {
+      next[groupId] = weight;
+    }
+  }
+  for (const groupId of capturedGroupIds) {
+    if (
+      liveGroupIds.has(groupId) &&
+      weights !== undefined &&
+      Object.prototype.hasOwnProperty.call(weights, groupId)
+    ) {
+      next[groupId] = weights[groupId];
+    }
+  }
+
+  return writeStackWeights(
+    layout,
+    windowIndex,
+    Object.keys(next).length === 0 ? undefined : next,
+  );
+}
+
+/** Set a floating window's explicit height (px), or clear it to restore
+ * auto-height. Fixed-height windows scroll their contents. */
 export function resizeWindowHeight(
   layout: DockLayout,
   windowId: WindowId,
-  height: number,
+  height: number | undefined,
   /** New top edge, for resizes that grab the TOP grips (the bottom edge stays
    * fixed by moving y as the height changes -- the vertical analog of
    * resizeWindow's `x`). */
   y?: number,
 ): DockLayout {
+  if (
+    (height !== undefined && (!Number.isFinite(height) || height <= 0)) ||
+    (y !== undefined && !Number.isFinite(y))
+  ) {
+    return layout;
+  }
+  const windowIndex = layout.floating.findIndex(
+    (window) => window.id === windowId,
+  );
+  if (windowIndex === -1) return layout;
+  const current = layout.floating[windowIndex];
+  const heightUnchanged =
+    height === undefined
+      ? !Object.prototype.hasOwnProperty.call(current, "height")
+      : current.height === height;
+  if (heightUnchanged && (y === undefined || current.y === y)) return layout;
+
   const draft = clone(layout);
-  const win = draft.floating.find((w) => w.id === windowId);
-  if (win === undefined) return layout;
-  win.height = height;
+  const win = draft.floating[windowIndex];
+  if (height === undefined) delete win.height;
+  else win.height = height;
   if (y !== undefined) win.y = y;
   return draft;
 }
@@ -779,10 +892,15 @@ export function ensureArea(layout: DockLayout, areaId: AreaId): DockLayout {
   if (existing !== undefined && layout.groups[existing.group] !== undefined) {
     return layout;
   }
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   // An empty group's activeId is meaningless (rendering guards on
   // panelIds.length); it becomes real when the first panel is added.
-  const group: TabGroup = { id: freshId("group"), panelIds: [], activeId: "" };
+  const group: TabGroup = {
+    id: allocateId("group"),
+    panelIds: [],
+    activeId: "",
+  };
   draft.groups[group.id] = group;
   draft.areas = {
     ...(draft.areas ?? {}),
@@ -826,10 +944,11 @@ export function addFloatingPanel(
   if (findPanelGroup(layout, panelId) !== null) {
     return { layout, windowId: null };
   }
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
-  const group = makeGroup([panelId]);
+  const group = makeGroup([panelId], allocateId);
   draft.groups[group.id] = group;
-  const win = makeFloatingWindow(x, y, width, [group.id], height);
+  const win = makeFloatingWindow(allocateId, x, y, width, [group.id], height);
   draft.floating.push(win);
   return { layout: draft, windowId: win.id };
 }
@@ -870,9 +989,15 @@ export function setAreaTabOrder(
   const group = layout.groups[area.group];
   if (group === undefined) return layout;
   const present = new Set(group.panelIds);
+  const seen = new Set<PanelId>();
+  const requested = order.filter((panelId) => {
+    if (!present.has(panelId) || seen.has(panelId)) return false;
+    seen.add(panelId);
+    return true;
+  });
   const next = [
-    ...order.filter((p) => present.has(p)),
-    ...group.panelIds.filter((p) => !order.includes(p)),
+    ...requested,
+    ...group.panelIds.filter((panelId) => !seen.has(panelId)),
   ];
   if (next.every((p, i) => p === group.panelIds[i])) return layout;
   const draft = clone(layout);
@@ -892,6 +1017,7 @@ function clampIndex(index: number | undefined, length: number): number {
 /** Build a FloatingWindow with a fresh id. Omitted height means the window
  * auto-sizes to content. */
 function makeFloatingWindow(
+  allocateId: DockIdAllocator,
   x: number,
   y: number,
   width: number,
@@ -900,7 +1026,7 @@ function makeFloatingWindow(
   stackWeights?: Record<GroupId, number>,
 ): FloatingWindow {
   return {
-    id: freshId("window"),
+    id: allocateId("window"),
     x,
     y,
     width,
@@ -926,10 +1052,12 @@ export function floatGroup(
    * window auto-sizes to content. */
   height?: number,
 ): { layout: DockLayout; windowId: WindowId | null } {
-  if (isAreaGroup(layout, groupId)) return { layout, windowId: null };
+  if (layout.groups[groupId] === undefined || isAreaGroup(layout, groupId))
+    return { layout, windowId: null };
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   detachInPlace(draft, groupId);
-  const win = makeFloatingWindow(x, y, width, [groupId], height);
+  const win = makeFloatingWindow(allocateId, x, y, width, [groupId], height);
   draft.floating.push(win);
   return { layout: draft, windowId: win.id };
 }
@@ -968,9 +1096,18 @@ export function floatColumn(
     stackWeights[l.group] = l.weight;
   });
 
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   stack.forEach((g) => detachInPlace(draft, g));
-  const win = makeFloatingWindow(x, y, width, stack, height, stackWeights);
+  const win = makeFloatingWindow(
+    allocateId,
+    x,
+    y,
+    width,
+    stack,
+    height,
+    stackWeights,
+  );
   draft.floating.push(win);
   return { layout: draft, windowId: win.id };
 }
@@ -986,22 +1123,30 @@ export function tearOutPanel(
   x: number,
   y: number,
   width: number,
-): { layout: DockLayout; windowId: WindowId; floatingGroupId: GroupId } {
+): {
+  layout: DockLayout;
+  windowId: WindowId | null;
+  floatingGroupId: GroupId | null;
+} {
   const group = layout.groups[groupId];
+  if (group === undefined || !group.panelIds.includes(panelId)) {
+    return { layout, windowId: null, floatingGroupId: null };
+  }
   // An area group is a fixed fixture: never float it as a whole, even when it
   // holds a single panel. Always split the torn panel into its OWN new group and
   // leave the area group in place (it may end up empty -- it persists as a drop
-  // affordance). A normal group with <=1 panel floats wholesale as before.
+  // affordance). A normal single-panel group floats wholesale as before.
   const area = isAreaGroup(layout, groupId);
-  if (group === undefined || (!area && group.panelIds.length <= 1)) {
+  if (!area && group.panelIds.length === 1) {
     const res = floatGroup(layout, groupId, x, y, width);
-    // Non-area by the check above, so floatGroup always created a window.
+    // The validated non-area group is guaranteed to produce a window.
     return {
       layout: res.layout,
-      windowId: res.windowId!,
-      floatingGroupId: groupId,
+      windowId: res.windowId,
+      floatingGroupId: res.windowId === null ? null : groupId,
     };
   }
+  const allocateId = createDockIdAllocator(layout);
   const draft = clone(layout);
   const src = draft.groups[groupId];
   src.panelIds = src.panelIds.filter((p) => p !== panelId);
@@ -1009,9 +1154,9 @@ export function tearOutPanel(
   // (stale) activeId -- rendering guards on panelIds.length, so it's harmless.
   if (src.panelIds.length > 0 && src.activeId === panelId)
     src.activeId = src.panelIds[0];
-  const newGroup = makeGroup([panelId]);
+  const newGroup = makeGroup([panelId], allocateId);
   draft.groups[newGroup.id] = newGroup;
-  const win = makeFloatingWindow(x, y, width, [newGroup.id]);
+  const win = makeFloatingWindow(allocateId, x, y, width, [newGroup.id]);
   draft.floating.push(win);
   return { layout: draft, windowId: win.id, floatingGroupId: newGroup.id };
 }
@@ -1023,11 +1168,17 @@ export function moveWindow(
   x: number,
   y: number,
 ): DockLayout {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return layout;
+  const windowIndex = layout.floating.findIndex(
+    (window) => window.id === windowId,
+  );
+  if (windowIndex === -1) return layout;
+  const current = layout.floating[windowIndex];
+  if (current.x === x && current.y === y) return layout;
+
   const draft = clone(layout);
-  const win = draft.floating.find((w) => w.id === windowId);
-  if (win === undefined) return layout;
-  win.x = x;
-  win.y = y;
+  draft.floating[windowIndex].x = x;
+  draft.floating[windowIndex].y = y;
   return draft;
 }
 
@@ -1039,11 +1190,25 @@ export function resizeWindow(
   width: number,
   x?: number,
 ): DockLayout {
+  if (
+    !Number.isFinite(width) ||
+    width <= 0 ||
+    (x !== undefined && !Number.isFinite(x))
+  ) {
+    return layout;
+  }
+  const windowIndex = layout.floating.findIndex(
+    (window) => window.id === windowId,
+  );
+  if (windowIndex === -1) return layout;
+  const current = layout.floating[windowIndex];
+  if (current.width === width && (x === undefined || current.x === x)) {
+    return layout;
+  }
+
   const draft = clone(layout);
-  const win = draft.floating.find((w) => w.id === windowId);
-  if (win === undefined) return layout;
-  win.width = width;
-  if (x !== undefined) win.x = x;
+  draft.floating[windowIndex].width = width;
+  if (x !== undefined) draft.floating[windowIndex].x = x;
   return draft;
 }
 

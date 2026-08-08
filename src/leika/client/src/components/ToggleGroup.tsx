@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiToggleGroupMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { GroupRun } from "./GroupRun";
@@ -36,7 +36,7 @@ export default function ToggleGroupComponent({
     _merge: merge,
   },
 }: GuiToggleGroupMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   return (
     <GuiInputRow
       {...{ uuid, hint, label, disabled }}

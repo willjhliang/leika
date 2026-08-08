@@ -3,6 +3,39 @@
 
 export { motionExceedsThreshold } from "../dragUtils";
 
+/** Coordinates every pointer gesture owned by one DockManager. Starting a new
+ * gesture cancels the previous one before taking ownership. The unregister
+ * callback is token-scoped, so a stale gesture ending late cannot clear a
+ * newer gesture. */
+export interface GestureCoordinator {
+  cancel(): void;
+  register(cleanup: () => void): () => void;
+}
+
+export function createGestureCoordinator(): GestureCoordinator {
+  let active: { cleanup: () => void } | null = null;
+
+  const cancel = () => {
+    const current = active;
+    if (current === null) return;
+    // Clear first: cleanup is allowed to synchronously start another gesture.
+    active = null;
+    current.cleanup();
+  };
+
+  return {
+    cancel,
+    register(cleanup) {
+      cancel();
+      const token = { cleanup };
+      active = token;
+      return () => {
+        if (active === token) active = null;
+      };
+    },
+  };
+}
+
 /** Bind a pointer gesture's move/end/cancel listeners on `window` and return a
  * detach function. Gestures capture the pointer on an element but listen on
  * `window` so the gesture survives the cursor leaving that element; this shares
@@ -53,23 +86,38 @@ export function bindPointerGesture(
  * restore function. Called synchronously inside pointerdown -- before the
  * browser's mousedown default can anchor a selection -- so dragging a tab,
  * grip, or divider across text content can't start highlighting it. */
-export function suppressTextSelection(): () => void {
-  const previous = document.body.style.userSelect;
-  document.body.style.userSelect = "none";
+function bodyStyleLease(
+  property: "userSelect" | "cursor",
+  value: string,
+): () => () => void {
+  let leases = 0;
+  let previous = "";
   return () => {
-    document.body.style.userSelect = previous;
+    if (leases === 0) previous = document.body.style[property];
+    leases += 1;
+    document.body.style[property] = value;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      leases -= 1;
+      if (leases === 0) document.body.style[property] = previous;
+    };
   };
+}
+
+const leaseTextSelectionSuppression = bodyStyleLease("userSelect", "none");
+const leaseGrabbingCursor = bodyStyleLease("cursor", "grabbing");
+
+export function suppressTextSelection(): () => void {
+  return leaseTextSelectionSuppression();
 }
 
 /** Show the "grabbing" cursor page-wide while a MOVE drag is in flight (the
  * handles show "grab" at rest; without this the cursor never closes). Returns
  * a restore function. Resize gestures keep their own ew/ns-resize cursors. */
 export function grabbingCursor(): () => void {
-  const prev = document.body.style.cursor;
-  document.body.style.cursor = "grabbing";
-  return () => {
-    document.body.style.cursor = prev;
-  };
+  return leaseGrabbingCursor();
 }
 
 /** Run a rAF-throttled drag gesture: capture the pointer on `grip`, record the
@@ -93,13 +141,20 @@ export function dragGesture(opts: {
   pointerId: number;
   update: (event: PointerEvent) => void;
   flush: () => void;
+  /** Manager-wide ownership. A new gesture cancels the current owner before
+   * this one captures the pointer or acquires global style leases. */
+  coordinator?: GestureCoordinator;
+  /** Runs after this gesture owns the coordinator. */
+  onStart?: () => void;
   onEnd?: (cancelled: boolean) => void;
 }): () => void {
-  const { grip, pointerId, update, flush, onEnd } = opts;
+  const { grip, pointerId, update, flush, coordinator, onStart, onEnd } = opts;
+  coordinator?.cancel();
   tryCapture(grip, pointerId);
   const restoreSelect = suppressTextSelection();
   let raf: number | null = null;
   let done = false;
+  let unregister = () => {};
   const frame = () => {
     raf = null;
     flush();
@@ -109,6 +164,8 @@ export function dragGesture(opts: {
     done = true;
     detach();
     if (raf !== null) cancelAnimationFrame(raf);
+    unregister();
+    tryRelease(grip, pointerId);
     restoreSelect();
     onEnd?.(cancelled);
   };
@@ -121,10 +178,11 @@ export function dragGesture(opts: {
       const pending = raf !== null;
       cancel(cancelled);
       if (pending && !cancelled) flush();
-      tryRelease(grip, pointerId);
     },
-    pointerId, // ignore other pointers so a second finger can't drive/end this.
+    pointerId, // ignore other pointers so a second finger cannot drive/end this.
   );
+  unregister = coordinator?.register(() => cancel(true)) ?? unregister;
+  onStart?.();
   return () => cancel(true);
 }
 
@@ -145,12 +203,4 @@ export function tryRelease(el: Element, pointerId: number): void {
   } catch {
     // Already released; ignore.
   }
-}
-
-// Monotonic id counter. Module-scoped so ids are unique across the whole client
-// session without needing Math.random()/Date.now().
-let idCounter = 0;
-export function freshId(prefix: string): string {
-  idCounter += 1;
-  return `${prefix}-${idCounter}`;
 }

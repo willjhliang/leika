@@ -343,7 +343,7 @@ function SplitDivider({
   onCancel: () => void;
 }) {
   const isRow = dir === "row";
-  const { setResizing } = useDock();
+  const { gestureCoordinator, setResizing } = useDock();
   // Cancel the in-flight gesture if the divider unmounts mid-drag (its split
   // can be restructured by another client), so the window listeners can't fire
   // after unmount and the shared `resizing` flag can't stick true.
@@ -361,8 +361,6 @@ function SplitDivider({
     // Suppress the column collapse/expand transition while dragging so the
     // resize tracks the cursor 1:1 (a column split would otherwise ease 200ms
     // behind every frame, which reads as a sluggish/broken resize).
-    setResizing(true);
-
     let latest = start;
     activeDrag.current = dragGesture({
       grip: event.currentTarget,
@@ -371,6 +369,8 @@ function SplitDivider({
         latest = isRow ? e.clientX : e.clientY;
       },
       flush: () => onResize(latest - start, containerPx),
+      coordinator: gestureCoordinator,
+      onStart: () => setResizing(true),
       onEnd: (cancelled) => {
         activeDrag.current = null;
         setResizing(false);

@@ -8,7 +8,7 @@ import { cn } from "../lib/utils";
 import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import { motionExceedsThreshold } from "../dragUtils";
 import { prefersReducedMotion } from "../utils/motion";
 import { useColorScheme } from "../hooks/useColorScheme";
@@ -21,6 +21,7 @@ import {
   dropViewportPane,
   sameViewportLayout,
 } from "./layoutModel";
+import { parsePlotlyFigure, parsePlotlyThemeTemplates } from "./plotlyPayload";
 import {
   GRID_EPSILON,
   DividerGeometry,
@@ -193,7 +194,7 @@ function paneTitle(pane: ViewportPane): string {
 /** Auto-filling split workspace for native image, matplotlib, Plotly, and
  * viser panes. */
 export function ViewportWorkspace() {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const layout = viewer.useViewport((state) => state.layout);
   const interactionEpoch = viewer.useViewport(
     (state) => state.interactionEpoch,
@@ -850,7 +851,7 @@ function ViewportPaneHost({
     paneId: string,
   ) => void;
 }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const pane = viewer.useViewport((state) => state.panes[paneId]);
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const [isHovered, setIsHovered] = React.useState(false);
@@ -1166,33 +1167,33 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
   // Plotly component (see components/PlotlyComponent.tsx).
   const plotRef = React.useRef<HTMLDivElement>(null);
 
-  const themeTemplates = React.useMemo(
-    () =>
-      pane.props._theme_templates === ""
-        ? null
-        : JSON.parse(pane.props._theme_templates),
+  const themeParseResult = React.useMemo(
+    () => parsePlotlyThemeTemplates(pane.props._theme_templates),
     [pane.props._theme_templates],
   );
+  const figureParseResult = React.useMemo(
+    () => parsePlotlyFigure(pane.props._plotly_json_str),
+    [pane.props._plotly_json_str],
+  );
 
-  // Parse JSON only when the figure changes; resizes reuse the parsed value.
-  const plotJson = React.useMemo(() => {
-    if (pane.props._plotly_json_str === "") return null;
-    const parsed = JSON.parse(pane.props._plotly_json_str);
-    // Keep zoom/selection state across figure updates, see
-    // https://plotly.com/javascript/uirevision/.
-    parsed.layout = { ...parsed.layout, uirevision: "true" };
-    return parsed;
-  }, [pane.props._plotly_json_str]);
+  const themeTemplates = themeParseResult.ok ? themeParseResult.value : null;
+  const plotJson = figureParseResult.ok ? figureParseResult.value : null;
+  const parseError = !figureParseResult.ok
+    ? figureParseResult.error
+    : !themeParseResult.ok
+      ? themeParseResult.error
+      : null;
 
   const layoutTemplate =
-    plotJson?.layout?.template ??
+    plotJson?.layout.template ??
     (themeTemplates === null
       ? undefined
       : (themeTemplates[colorScheme] ?? themeTemplates.light));
 
   const [plotlyMissing, setPlotlyMissing] = React.useState(false);
   React.useEffect(() => {
-    if (plotJson === null || width === 0 || height === 0) return;
+    if (parseError !== null || plotJson === null || width === 0 || height === 0)
+      return;
     // Plotly is loaded globally by a RunJavascriptMessage that the server
     // queues before any Plotly pane; a render that races it waits on the
     // ready promise. If it never arrives (blocked or failed eval), show a
@@ -1232,7 +1233,7 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
       cancelled = true;
       clearTimeout(fallback);
     };
-  }, [plotJson, layoutTemplate, width, height]);
+  }, [plotJson, parseError, layoutTemplate, width, height]);
 
   // Purge the Plotly instance on unmount so event listeners and (for gl
   // traces) WebGL contexts don't leak each time a pane is removed.
@@ -1246,6 +1247,8 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
     };
   }, []);
 
+  const plotlyMessage =
+    parseError ?? (plotlyMissing ? "Plotly failed to load." : null);
   return (
     <div
       ref={ref}
@@ -1257,7 +1260,7 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
       }}
     >
       <div ref={plotRef} />
-      {plotlyMissing ? (
+      {plotlyMessage === null ? null : (
         <div
           style={{
             position: "absolute",
@@ -1267,11 +1270,13 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
             justifyContent: "center",
             color: "var(--muted-foreground)",
             fontSize: "var(--text-sm)",
+            background: "var(--background)",
+            zIndex: 1,
           }}
         >
-          Plotly failed to load.
+          {plotlyMessage}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -1367,7 +1372,7 @@ function ViewportViserFrame({ src, title }: { src: string; title: string }) {
 }
 
 function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   // An app that named a fit meant it; one that did not leaves the choice to
   // whoever is looking at the image.
   const preferredFit = viewer.useSettings((state) => state.imageFit);

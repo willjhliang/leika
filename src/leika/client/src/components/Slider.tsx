@@ -3,7 +3,7 @@ import React from "react";
 import { Slider } from "@/components/ui/slider";
 import { SliderAnnotations } from "./SliderAnnotations";
 import { defaultMarks } from "./sliderValues";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { usePointerDrag } from "../hooks/usePointerDrag";
 import { GuiSliderMessage } from "../WebsocketMessages";
 import { NumericInput, GuiInputRow } from "./common";
@@ -23,7 +23,7 @@ export default function SliderComponent({
     _marks: marks,
   },
 }: GuiSliderMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const [dragging, startDrag] = usePointerDrag();
   const controlledValue = React.useMemo(() => [value], [value]);
   // The protocol allows an unlabelled row; a slider's Python API does not, so

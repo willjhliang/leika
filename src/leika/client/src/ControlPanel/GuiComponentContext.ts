@@ -13,10 +13,16 @@ interface GuiComponentContext {
   GuiContainer: React.FC<{ containerUuid: string; unwrapped?: boolean }>;
 }
 
-export const GuiComponentContext = React.createContext<GuiComponentContext>({
-  setValue: () => undefined,
-  messageSender: () => undefined,
-  GuiContainer: () => {
-    throw new Error("GuiComponentContext not initialized");
-  },
-});
+export const GuiComponentContext =
+  React.createContext<GuiComponentContext | null>(null);
+
+/** Read generated-GUI services, failing loudly when the provider is absent. */
+export function useGuiComponent(): GuiComponentContext {
+  const context = React.useContext(GuiComponentContext);
+  if (context === null) {
+    throw new Error(
+      "useGuiComponent must be used within GuiComponentContext.Provider",
+    );
+  }
+  return context;
+}

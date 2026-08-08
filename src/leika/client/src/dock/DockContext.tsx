@@ -4,6 +4,7 @@
 // split tree by hand.
 
 import React from "react";
+import type { GestureCoordinator } from "./gestures";
 import {
   AreaId,
   DockEdge,
@@ -87,8 +88,10 @@ export interface DockContextValue {
    * CSS transition is suppressed during a resize so panels track the cursor 1:1
    * instead of easing behind it. */
   resizing: boolean;
-  /** Set the `resizing` flag (called by SplitDivider on pointer down/up). */
+  /** Set the `resizing` flag (called by split/stack dividers). */
   setResizing: (value: boolean) => void;
+  /** Single active pointer gesture for this manager; component-internal. */
+  gestureCoordinator: GestureCoordinator;
   /** Group currently being dragged, or null. Used to dim its origin. */
   draggingGroupId: GroupId | null;
   /** Tab currently being reordered within its strip, or null. The frame lifts

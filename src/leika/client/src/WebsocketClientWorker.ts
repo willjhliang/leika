@@ -11,10 +11,7 @@ import { newPacingState, paceBatch } from "./pacing";
 import { shouldRetryWebsocket } from "./utils/shouldRetryWebsocket";
 import { LEIKA_PROTOCOL, LEIKA_VERSION } from "./VersionInfo";
 import { Message } from "./WebsocketMessages";
-
-// Initialize zstd decoder at module load.
-const zstdDecoder = new ZSTDDecoder();
-const zstdReady = zstdDecoder.init();
+import { FatalWorkerEvent, WorkerFailureController } from "./workerFailure";
 
 export type WsWorkerIncoming =
   | { type: "send"; message: Message }
@@ -30,7 +27,8 @@ export type WsWorkerOutgoing =
       closeReason: string;
     }
   | { type: "message_batch"; messages: Message[] }
-  | { type: "stats"; counters: ConnectionCounters };
+  | { type: "stats"; counters: ConnectionCounters }
+  | FatalWorkerEvent;
 
 type WorkerScope = {
   postMessage(data: WsWorkerOutgoing, transferable?: Transferable[]): void;
@@ -101,13 +99,6 @@ function decodeHybridMessage(
   let server: string | null = null;
   let ws: WebSocket | null = null;
 
-  const postOutgoing = (
-    data: WsWorkerOutgoing,
-    transferable?: Transferable[],
-  ) => {
-    workerScope.postMessage(data, transferable);
-  };
-
   // -- What the connection is doing ----------------------------------------
   //
   // Counted here rather than on the main thread because this is where the
@@ -123,6 +114,54 @@ function decodeHybridMessage(
   const counters = emptyCounters(performance.now());
   let connectionsOpened = 0;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
+  const cancelPendingOrderedSends = new Set<() => void>();
+
+  const surfaceWorkerError = (error: unknown) => {
+    const surfaced =
+      error instanceof Error ? error : new Error("Worker failure: " + error);
+    setTimeout(() => {
+      throw surfaced;
+    }, 0);
+  };
+
+  const failure = new WorkerFailureController(
+    () => {
+      server = null;
+      if (statsTimer !== null) clearInterval(statsTimer);
+      statsTimer = null;
+      for (const cancel of [...cancelPendingOrderedSends]) cancel();
+
+      const failedSocket = ws;
+      ws = null;
+      counters.connectedSinceMs = null;
+      failedSocket?.close();
+    },
+    (event) => workerScope.postMessage(event),
+    surfaceWorkerError,
+  );
+
+  const postOutgoing = (
+    data: WsWorkerOutgoing,
+    transferable?: Transferable[],
+  ): boolean =>
+    failure.post("Connection worker could not post a message", () =>
+      workerScope.postMessage(data, transferable),
+    );
+
+  // Decoder initialization is owned by this worker lifecycle. A rejected
+  // initialization must not linger as an unhandled promise while the socket
+  // continues to claim it is connected.
+  let zstdDecoder: ZSTDDecoder | null = null;
+  let zstdReady: Promise<void> | null = null;
+  try {
+    zstdDecoder = new ZSTDDecoder();
+    zstdReady = zstdDecoder.init();
+    void zstdReady.catch((error: unknown) => {
+      failure.fail("Connection worker could not initialize its decoder", error);
+    });
+  } catch (error) {
+    failure.fail("Connection worker could not initialize its decoder", error);
+  }
 
   const recordRoundTrip = (ms: number) => {
     counters.roundTripsMs.push(ms);
@@ -134,14 +173,19 @@ function decodeHybridMessage(
    * that is not open; those are counted too, since a page quietly dropping the
    * clicks it is given is exactly the kind of trouble this panel is for. */
   const sendToServer = (message: Message) => {
+    if (failure.hasFailed) return;
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       counters.droppedSends += 1;
       return;
     }
-    const encoded = msgpack.encode(message);
-    ws.send(encoded);
-    counters.bytesSent += encoded.byteLength;
-    counters.messagesSent += 1;
+    try {
+      const encoded = msgpack.encode(message);
+      ws.send(encoded);
+      counters.bytesSent += encoded.byteLength;
+      counters.messagesSent += 1;
+    } catch (error) {
+      failure.fail("Connection worker could not send a message", error);
+    }
   };
 
   /** Pull the answers to our own pings out of a batch, timing each one. They
@@ -159,20 +203,24 @@ function decodeHybridMessage(
   };
 
   const reportStats = () => {
+    if (failure.hasFailed) return;
     // Ping first: the reply lands between now and the next tick, so what is
     // posted here is the round trip the last tick asked for.
     if (ws?.readyState === WebSocket.OPEN) {
       sendToServer({ type: "ClientPingMessage", sent_ms: performance.now() });
     }
+    if (failure.hasFailed) return;
     counters.atMs = performance.now();
     postOutgoing({ type: "stats", counters });
   };
 
   const setWatching = (watching: boolean) => {
-    if (watching === (statsTimer !== null)) return;
+    if (failure.hasFailed || watching === (statsTimer !== null)) return;
     if (watching) {
       reportStats();
-      statsTimer = setInterval(reportStats, STATS_INTERVAL_MS);
+      if (!failure.hasFailed) {
+        statsTimer = setInterval(reportStats, STATS_INTERVAL_MS);
+      }
       return;
     }
     if (statsTimer !== null) clearInterval(statsTimer);
@@ -184,10 +232,18 @@ function decodeHybridMessage(
 
   const tryConnect = () => {
     const targetServer = server;
-    if (targetServer === null) return;
+    if (failure.hasFailed || targetServer === null) return;
     const previousSocket = ws;
     ws = null;
-    previousSocket?.close();
+    try {
+      previousSocket?.close();
+    } catch (error) {
+      failure.fail(
+        "Connection worker could not close its previous socket",
+        error,
+      );
+      return;
+    }
 
     // One subprotocol string carries the client identification, the version,
     // and the schema this bundle was built against. The server turns away
@@ -212,27 +268,32 @@ function decodeHybridMessage(
 
     // Timeout is necessary when we're connecting to an SSH/tunneled port.
     const retryTimeout = setTimeout(() => {
-      socket.close();
+      if (failure.hasFailed || ws !== socket) return;
+      try {
+        socket.close();
+      } catch (error) {
+        failure.fail(
+          "Connection worker could not close a timed-out socket",
+          error,
+        );
+      }
     }, 5000);
 
     socket.onopen = () => {
       clearTimeout(retryTimeout);
-      if (ws !== socket) return;
+      if (failure.hasFailed || ws !== socket) return;
 
       connectionsOpened += 1;
       counters.connectedSinceMs = performance.now();
       // Every connection after the first is one the page lost and got back.
       counters.reconnects = connectionsOpened - 1;
 
-      // Just indicate that we're connected.
-      postOutgoing({
-        type: "connected",
-      });
+      postOutgoing({ type: "connected" });
     };
 
     socket.onclose = (event) => {
       clearTimeout(retryTimeout);
-      if (ws !== socket) return;
+      if (failure.hasFailed || ws !== socket) return;
       ws = null;
       // Code 1002 is the server's protocol/version rejection.
       const versionMismatch = event.code === 1002;
@@ -241,7 +302,7 @@ function decodeHybridMessage(
 
       postOutgoing({
         type: "closed",
-        versionMismatch: versionMismatch,
+        versionMismatch,
         closeReason: event.reason || "Connection closed",
       });
 
@@ -256,25 +317,54 @@ function decodeHybridMessage(
     // State for tracking message timing.
     const pacing = newPacingState();
     socket.onmessage = async (event) => {
-      if (ws !== socket) return;
+      if (failure.hasFailed || ws !== socket) return;
+      if (!(event.data instanceof ArrayBuffer)) {
+        failure.fail("Connection worker received a non-binary message");
+        return;
+      }
+
       // Weighed here, before the buffer is handed to the main thread: posting
       // it transfers ownership away and leaves `byteLength` at zero.
-      counters.bytesReceived += (event.data as ArrayBuffer).byteLength;
+      const buffer = event.data;
+      counters.bytesReceived += buffer.byteLength;
       const dataPromise = (async () => {
-        // binaryType="arraybuffer" ensures event.data is an ArrayBuffer directly
-        // (skips the default Blob->ArrayBuffer async conversion).
-        const buffer = event.data as ArrayBuffer;
+        if (zstdReady === null || zstdDecoder === null) {
+          throw new Error("decoder is unavailable");
+        }
         await zstdReady;
         return decodeHybridMessage(buffer, zstdDecoder);
-      })();
+      })().then(
+        (data) => ({ ok: true as const, data }),
+        (error: unknown) => {
+          // Attach this rejection handler immediately. Otherwise a decode that
+          // fails while waiting for the ordering lock becomes an unhandled
+          // rejection until that wait completes.
+          failure.fail("Connection worker could not decode a message", error);
+          return { ok: false as const };
+        },
+      );
 
       // Preserve arrival order unless an earlier batch stalls for ten seconds.
       const jsReceivedMs = performance.now();
       let acquiredLock = false;
+      const releaseOrderLock = () => {
+        if (!acquiredLock) return;
+        acquiredLock = false;
+        try {
+          orderLock.release();
+        } catch (error) {
+          failure.fail(
+            "Connection worker could not release its ordering lock",
+            error,
+          );
+        }
+      };
+
       try {
         await orderLock.acquireAsync({ timeout: 10000 });
         acquiredLock = true;
       } catch {
+        if (failure.hasFailed) return;
         // Timed out waiting for the in-order slot. Proceed without the lock
         // (out of order) rather than calling release() on a lock we never
         // acquired -- that would release another waiter's hold and corrupt the
@@ -282,37 +372,24 @@ function decodeHybridMessage(
         counters.outOfOrderBatches += 1;
         console.warn("Order lock timed out; processing message out of order.");
       }
-      // Once the lock is acquired the release happens in `sendFn` (which may
-      // be deferred via setTimeout). If anything between here and scheduling
-      // `sendFn` throws -- e.g. decode fails -- we must still release, or the
-      // lock stays held and every subsequent message times out.
+
+      let releaseDeferred = false;
       try {
-        const data = await dataPromise;
-        if (ws !== socket) {
-          if (acquiredLock) orderLock.release();
-          return;
-        }
+        const decoded = await dataPromise;
+        if (!decoded.ok || failure.hasFailed || ws !== socket) return;
+        const data = decoded.data;
 
         counters.messagesReceived += data.messages.length;
         const messages = takePongs(data.messages, jsReceivedMs);
         // All typed array views point into the original WebSocket ArrayBuffer.
         // Transfer just that buffer instead of walking the entire message tree.
-        const sendFn = () => {
+        const sendBatch = () => {
           try {
-            if (ws === socket) {
+            if (!failure.hasFailed && ws === socket) {
               postOutgoing({ type: "message_batch", messages }, [data.buffer]);
             }
-          } catch (e) {
-            // `sendFn` can run later from setTimeout, outside the catch below.
-            // Log and still release the lock so one bad post cannot wedge all
-            // later message ordering.
-            console.error("Failed to post incoming message batch:", e);
           } finally {
-            // Only release if we actually acquired the lock above.
-            if (acquiredLock) {
-              orderLock.release();
-              acquiredLock = false;
-            }
+            releaseOrderLock();
           }
         };
 
@@ -322,19 +399,31 @@ function decodeHybridMessage(
           performance.now(),
           data.timestampSec * 1000,
         );
-        if (delayMs > 0) setTimeout(sendFn, delayMs);
-        else sendFn();
-      } catch (e) {
-        console.error("Failed to process incoming message:", e);
-        if (acquiredLock) {
-          orderLock.release();
-          acquiredLock = false;
+        if (delayMs > 0) {
+          const cancel = () => {
+            cancelPendingOrderedSends.delete(cancel);
+            clearTimeout(timer);
+            releaseOrderLock();
+          };
+          const timer = setTimeout(() => {
+            cancelPendingOrderedSends.delete(cancel);
+            sendBatch();
+          }, delayMs);
+          cancelPendingOrderedSends.add(cancel);
+          releaseDeferred = true;
+        } else {
+          sendBatch();
         }
+      } catch (error) {
+        failure.fail("Connection worker could not process a message", error);
+      } finally {
+        if (!releaseDeferred) releaseOrderLock();
       }
     };
   };
 
   workerScope.onmessage = (event) => {
+    if (failure.hasFailed) return;
     const data = event.data;
 
     if (data.type === "send") {

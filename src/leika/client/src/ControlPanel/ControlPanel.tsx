@@ -1,5 +1,5 @@
 import GeneratedGuiContainer from "./Generated";
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 
@@ -10,9 +10,7 @@ import BottomPanel from "./BottomPanel";
 import { SettingsButton } from "./SettingsPane";
 import { useControlsShown } from "./SettingsPanelController";
 import { useShowGenerated } from "./useShowGenerated";
-
-// Must match constant in Python.
-const ROOT_CONTAINER_ID = "root";
+import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 
 const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
 
@@ -33,7 +31,9 @@ export function ControlPanelContents() {
     <Collapsible open={hasGenerated && controlsShown}>
       <CollapsibleContent keepMounted>
         <div hidden={!controlsShown} data-leika-generated-gui>
-          <MemoizedGeneratedGuiContainer containerUuid={ROOT_CONTAINER_ID} />
+          <MemoizedGeneratedGuiContainer
+            containerUuid={ROOT_GUI_CONTAINER_ID}
+          />
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -79,7 +79,7 @@ export function PanelHeader({
    * button and cannot hold one. */
   badge?: React.ReactNode;
 }) {
-  const { useGui } = React.useContext(ViewerContext)!;
+  const { useGui } = useViewer();
   const label = useGui((state) => state.label);
 
   return (

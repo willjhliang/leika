@@ -238,7 +238,7 @@ export interface FloatingWindow {
    * used when the window has an explicit `height` so a draggable divider can
    * redistribute height between stacked groups. Missing/absent groups default to
    * weight 1 (equal). Keyed by group id (not index) so it survives stack
-   * insert/remove without re-alignment; stale keys are harmless. */
+   * insert/remove without re-alignment. Layout operations prune stale keys. */
   stackWeights?: Record<GroupId, number>;
 }
 

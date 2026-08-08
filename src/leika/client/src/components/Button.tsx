@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
@@ -19,7 +19,7 @@ export default function ButtonComponent({
     _prefetch: prefetch,
   },
 }: GuiButtonMessage) {
-  const { messageSender } = React.useContext(GuiComponentContext)!;
+  const { messageSender } = useGuiComponent();
 
   // A button whose press shows a file asks for the file when it scrolls into
   // view, so that the press finds it already in the browser

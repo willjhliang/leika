@@ -7,6 +7,7 @@ import {
   RegisterCommandMessage,
   ThemeConfigurationMessage,
 } from "../WebsocketMessages";
+import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 
 export interface GuiState {
   theme: ThemeConfigurationMessage;
@@ -80,7 +81,7 @@ const cleanGuiState: GuiState = {
   server: "",
   websocketState: "inactive",
   connectionError: null,
-  guiUuidSetFromContainerUuid: { root: {} },
+  guiUuidSetFromContainerUuid: { [ROOT_GUI_CONTAINER_ID]: {} },
   modals: [],
   guiOrderFromUuid: {},
   lastFormSubmit: null,

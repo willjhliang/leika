@@ -1,10 +1,8 @@
-import * as React from "react";
-
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import { shallowObjectKeysEqual } from "../utils/shallowObjectKeysEqual";
 
 export function useContainerIsEmpty(containerUuid: string): boolean {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const guiIdSet = viewer.useGui(
     (state) => state.guiUuidSetFromContainerUuid[containerUuid],
     shallowObjectKeysEqual,

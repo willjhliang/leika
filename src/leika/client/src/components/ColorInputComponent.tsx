@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { ColorRow } from "./ColorPicker";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiInputRow } from "./common";
 
 /** Swatch + popover color editor shared by the RGB and RGBA inputs. */
@@ -28,7 +28,7 @@ export function ColorInputComponent<V extends NonNullable<unknown>>({
   parse: (value: string) => V | null;
   equal: (a: V, b: V) => boolean;
 }) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const [localValue, setLocalValue] = React.useState(toString(value));
   // What the row was declared with. A ref rather than state: it is the one
   // thing here that must not follow the value, and nothing re-renders on it.

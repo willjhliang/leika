@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { Separator } from "@/components/ui/separator";
+import { sliderAnnotationLayoutKey } from "./sliderAnnotationLayout";
 import { markLabelMaxWidths } from "./sliderValues";
 
 export type SliderMark = { value: number; label?: string | null };
@@ -32,9 +33,7 @@ export function SliderAnnotations({
   // full content width even while the box is truncating it, so measuring does
   // not depend on the cap this then applies, and the two cannot chase each
   // other.
-  const layout = marks
-    .map((mark, index) => `${positions[index]}:${mark.label ?? ""}`)
-    .join("|");
+  const layout = sliderAnnotationLayoutKey(marks, positions);
   React.useLayoutEffect(() => {
     const track = trackRef.current;
     if (track === null) return;
@@ -62,8 +61,10 @@ export function SliderAnnotations({
     const observer = new ResizeObserver(measure);
     observer.observe(track);
     return () => observer.disconnect();
-    // `layout` stands in for the marks: a string, so a parent that rebuilds the
-    // array every render does not restart this every render.
+    // `layout` is the semantic dependency for both `marks` and `positions`: a
+    // parent may rebuild an equivalent marks array on every render, and that
+    // must not tear down and recreate the observer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
   return (

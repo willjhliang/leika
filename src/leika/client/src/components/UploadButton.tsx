@@ -1,9 +1,11 @@
-import React, { useContext } from "react";
+import React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ViewerContext, ViewerContextContents } from "../ViewerContext";
+import { useViewer, ViewerContextContents } from "../ViewerContext";
 import { GuiUploadButtonMessage } from "../WebsocketMessages";
+import { captureSendSession } from "../connectionSender";
+import { sendFileUpload } from "../fileUpload";
 import { randomUuid } from "../utils/randomUuid";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 
@@ -19,7 +21,7 @@ export default function UploadButtonComponent({
     text,
   },
 }: GuiUploadButtonMessage) {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
   const fileUploadRef = React.useRef<HTMLInputElement>(null);
   const { isUploading, progress, upload } = useFileUpload({
     viewer,
@@ -83,9 +85,7 @@ function useFileUpload({
     uploadState.uploadedBytes < uploadState.totalBytes;
 
   async function upload(file: File) {
-    const viewerMutable = viewer.mutable.current;
-    const chunkSize = 512 * 1024;
-    const numChunks = Math.ceil(file.size / chunkSize);
+    const sendSession = captureSendSession(viewer.mutable.current);
     const transferUuid = randomUuid();
 
     updateUploadState({
@@ -94,27 +94,7 @@ function useFileUpload({
       totalBytes: file.size,
       filename: file.name,
     });
-    viewerMutable.sendMessage({
-      type: "FileTransferStartUpload",
-      source_component_uuid: componentUuid,
-      transfer_uuid: transferUuid,
-      filename: file.name,
-      mime_type: file.type,
-      size_bytes: file.size,
-      part_count: numChunks,
-    });
-
-    for (let index = 0; index < numChunks; index++) {
-      const chunk = file.slice(index * chunkSize, (index + 1) * chunkSize);
-      const buffer = await chunk.arrayBuffer();
-      viewerMutable.sendMessage({
-        type: "FileTransferPart",
-        source_component_uuid: componentUuid,
-        transfer_uuid: transferUuid,
-        part_index: index,
-        content: new Uint8Array(buffer),
-      });
-    }
+    await sendFileUpload(file, componentUuid, transferUuid, sendSession);
   }
 
   return { isUploading, progress, upload };

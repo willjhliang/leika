@@ -8,13 +8,14 @@ import dataclasses
 import gzip
 import hashlib
 import http
+import inspect
 import logging
 import mimetypes
 import threading
 import time
-from asyncio.events import AbstractEventLoop
-from collections.abc import Coroutine
-from pathlib import Path
+from collections.abc import Awaitable, Coroutine, Iterable
+from concurrent.futures import Future
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Generator, NamedTuple, NewType, Optional, Tuple, TypeVar
 from urllib.parse import unquote as _url_unquote
 
@@ -29,6 +30,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.http11 import Request, Response
 from websockets.typing import Subprotocol
 
+from .._async_errors import print_async_exception
 from ._async_message_buffer import AsyncMessageBuffer
 from ._auth import HttpPasswordGuard
 from ._image_headers import image_pixel_size
@@ -45,16 +47,35 @@ class _WebsocketLogFilter(logging.Filter):
 _WEBSOCKET_LOGGER = logging.getLogger("leika.websockets")
 _WEBSOCKET_LOGGER.addFilter(_WebsocketLogFilter())
 
+_SERVER_STOP_TIMEOUT_SECONDS = 10.0
+
 
 @dataclasses.dataclass
 class _ClientHandleState:
     # Internal state for ClientConnection objects.
     message_buffer: AsyncMessageBuffer
-    event_loop: AbstractEventLoop
 
 
 ClientId = NewType("ClientId", int)
 TMessage = TypeVar("TMessage", bound=Message)
+
+
+async def _run_callback(callback: Callable[..., object], *args: object) -> None:
+    """Run one callback without letting its failure suppress later peers."""
+    try:
+        result = callback(*args)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as error:
+        # Cancellation is a BaseException and deliberately passes through: a
+        # peer close or server shutdown must still retire in-flight user code.
+        print_async_exception(error)
+
+
+async def _run_callbacks(callbacks: Iterable[Callable[..., object]], *args: object) -> None:
+    """Run a stable callback snapshot sequentially, isolating each failure."""
+    for callback in tuple(callbacks):
+        await _run_callback(callback, *args)
 
 
 class WebsockMessageHandler:
@@ -90,23 +111,15 @@ class WebsockMessageHandler:
             self._incoming_handlers[message_cls].remove(callback)  # type: ignore
 
     async def _handle_incoming_message(self, client_id: ClientId, message: Message) -> None:
-        """Handle incoming messages."""
-        if type(message) in self._incoming_handlers:
-            # Snapshot the list: a handler may unregister itself mid-dispatch
-            # (e.g. a request-response callback), which would otherwise skip
-            # the next handler in a live iteration.
-            for cb in list(self._incoming_handlers[type(message)]):
-                if asyncio.iscoroutinefunction(cb):
-                    await cb(client_id, message)
-                else:
-                    cb(client_id, message)
+        """Handle incoming messages in registration order."""
+        await _run_callbacks(self._incoming_handlers.get(type(message), ()), client_id, message)
 
     @abc.abstractmethod
     def get_message_buffer(self) -> AsyncMessageBuffer: ...
 
-    def queue_message(self, message: Message) -> None:
-        """Wrapped method for sending messages."""
-        self.get_message_buffer().push(message)
+    def queue_message(self, message: Message) -> bool:
+        """Queue a message and report whether the connection is still open."""
+        return self.get_message_buffer().push(message)
 
     @contextlib.contextmanager
     def atomic(self) -> Generator[None, None, None]:
@@ -152,6 +165,65 @@ class WebsockClientConnection(WebsockMessageHandler):
         return self._state.message_buffer
 
 
+def _static_relpath(request_target: str) -> str | None:
+    """Normalize one HTTP target, rejecting POSIX and Windows escapes."""
+    path = _url_unquote(request_target.partition("?")[0]).replace("\\", "/")
+    segments = [segment for segment in path.split("/") if segment and segment != "."]
+    if any(
+        segment == ".."
+        or ":" in segment
+        or any(ord(character) < 32 or ord(character) == 127 for character in segment)
+        for segment in segments
+    ):
+        return None
+
+    relpath = "/".join(segments) if segments else "index.html"
+    # On Windows, a drive-qualified right operand discards the configured
+    # static root. The colon check above also rejects NTFS alternate streams;
+    # keep the explicit drive guard so that invariant is visible and testable.
+    if PureWindowsPath(relpath).drive:
+        return None
+    return relpath
+
+
+def _quality(parameters: Iterable[str]) -> float:
+    """Parse an encoding quality, treating malformed q-values as refusal."""
+    for parameter in parameters:
+        name, separator, raw_value = parameter.partition("=")
+        if name.strip().lower() != "q":
+            continue
+        if not separator:
+            return 0.0
+        try:
+            quality = float(raw_value.strip())
+        except ValueError:
+            return 0.0
+        return quality if 0.0 <= quality <= 1.0 else 0.0
+    return 1.0
+
+
+def _accepts_gzip(header_values: Iterable[str]) -> bool:
+    """Whether Accept-Encoding permits gzip, including wildcard semantics."""
+    gzip_quality: float | None = None
+    wildcard_quality: float | None = None
+    for value in header_values:
+        for item in value.split(","):
+            coding, *parameters = item.split(";")
+            coding = coding.strip().lower()
+            if coding not in ("gzip", "*"):
+                continue
+            quality = _quality(parameters)
+            if coding == "gzip":
+                gzip_quality = max(gzip_quality or 0.0, quality)
+            else:
+                wildcard_quality = max(wildcard_quality or 0.0, quality)
+
+    # An explicit gzip entry overrides a wildcard, including gzip;q=0.
+    if gzip_quality is not None:
+        return gzip_quality > 0.0
+    return wildcard_quality is not None and wildcard_quality > 0.0
+
+
 def _http_content_type(name: str) -> str:
     """The Content-Type a file is served with, from its name.
 
@@ -191,6 +263,11 @@ _HTTP_ASSET_LIMIT = 1024
 """How many registered assets are remembered. Registrations past this evict
 the oldest; a URL that has been evicted answers 404, the same as one that was
 never registered."""
+
+_HTTP_ASSET_BACKING_LIMIT = 16
+"""Maximum equivalent source paths retained for one content-addressed URL.
+Recent alternatives preserve fallback without allowing duplicate temporary
+paths to create an unbounded request-time scan."""
 
 
 class HttpAsset(NamedTuple):
@@ -252,40 +329,51 @@ class WebsockServer(WebsockMessageHandler):
         self._background_event_loop: asyncio.AbstractEventLoop | None = None
 
         self._stop_event: asyncio.Event | None = None
+        self._stop_requested = threading.Event()
 
         self._client_state_from_id: dict[int, _ClientHandleState] = {}
         self._server_thread: threading.Thread | None = None
 
         # Files registered at runtime to be fetched over HTTP, named by their
-        # content's hash. See :meth:`register_http_asset`.
-        self._http_assets: dict[str, Path] = {}
-        # What registering an unchanged file already worked out -- its digest,
-        # and its shape if it is a picture -- so the normal case, every time a
-        # preview is reopened, does not re-read megabytes to rediscover either.
-        # Keyed by path; an entry is trusted only while the file's
-        # (mtime_ns, size) still match.
-        self._http_asset_records: dict[
-            Path, tuple[tuple[int, int], str, Optional[Tuple[int, int]]]
-        ] = {}
+        # content's hash. Keep the expected digest with the mutable source path
+        # so serving can enforce the content-addressed URL invariant.
+        self._http_assets: dict[str, tuple[tuple[Path, ...], str]] = {}
         self._http_assets_lock = threading.Lock()
 
     def start(self) -> None:
         """Start the server."""
 
-        # Start server thread.
-        self._start_error: Exception | None = None
-        ready_sem = threading.Semaphore(value=1)
-        ready_sem.acquire()
-        self._server_thread = threading.Thread(
-            target=lambda: self._background_worker(ready_sem),
-            daemon=True,
-        )
+        self._stop_requested.clear()
+
+        # A Future distinguishes failures before the socket is ready from
+        # failures after startup. The former belong to this synchronous API;
+        # the latter must still escape the worker thread instead of being
+        # silently converted into a second readiness signal.
+        startup: Future[None] = Future()
+
+        def run_worker() -> None:
+            try:
+                self._background_worker(startup)
+            except BaseException as error:
+                if not startup.done():
+                    startup.set_exception(error)
+                    return
+                raise
+
+        self._server_thread = threading.Thread(target=run_worker, daemon=True)
         self._server_thread.start()
 
-        # Wait for ready signal from the background thread.
-        ready_sem.acquire()
-        if self._start_error is not None:
-            raise self._start_error
+        # Wait for either a bound server or a reported startup failure.
+        try:
+            startup.result()
+        except BaseException:
+            # This can be either a worker failure or an interruption delivered
+            # to the caller while it waits. Signal a partially initialized
+            # worker in both cases, but never replace the original exception
+            # with an unbounded join.
+            self._signal_stop()
+            self._join_server_thread(raise_on_timeout=False)
+            raise
 
         # Exit the server thread when the main process exits. This would happen
         # automatically, but is nice to do explicitly to avoid some nanobind
@@ -295,41 +383,75 @@ class WebsockServer(WebsockMessageHandler):
         # Broadcast buffer should be populated by the background worker.
         assert isinstance(self._broadcast_buffer, AsyncMessageBuffer)
 
-    def stop(self) -> None:
-        """Stop the server."""
-        assert self._background_event_loop is not None
-        assert self._stop_event is not None
-        assert self._server_thread is not None
+    def _signal_stop(self) -> None:
+        """Request shutdown without waiting for the worker thread."""
+        self._stop_requested.set()
 
-        # Unregister the atexit handler to prevent double-stop.
-        atexit.unregister(self.stop)
+        event_loop = self._background_event_loop
+        stop_event = self._stop_event
+        if event_loop is not None and stop_event is not None:
+            try:
+                event_loop.call_soon_threadsafe(stop_event.set)
+            except RuntimeError:
+                # Event loop may already be closed during teardown.
+                pass
 
-        # Signal the background thread to stop.
-        try:
-            self._background_event_loop.call_soon_threadsafe(self._stop_event.set)
-        except RuntimeError:
-            # Event loop may already be closed during teardown.
-            pass
-
-        # Clean up the message buffers. This isn't really necessary, but helps
-        # avoid "task destroyed" errors.
-        self._broadcast_buffer.set_done()
+        # Clean up message buffers if startup reached far enough to create
+        # them. Besides waking producers, this avoids pending-task warnings.
+        broadcast_buffer = getattr(self, "_broadcast_buffer", None)
+        if isinstance(broadcast_buffer, AsyncMessageBuffer):
+            broadcast_buffer.set_done()
         for client in list(self._client_state_from_id.values()):
             client.message_buffer.set_done()
 
-        self._server_thread.join(timeout=10.0)
-        if self._server_thread.is_alive():
-            raise RuntimeError("Leika server thread did not stop within ten seconds.")
+    def _join_server_thread(self, *, raise_on_timeout: bool) -> bool:
+        """Join the worker when called off-thread; return whether it stopped."""
+        server_thread = self._server_thread
+        if server_thread is None or not server_thread.is_alive():
+            return True
+        if threading.current_thread() is server_thread:
+            return False
 
-    def on_client_connect(self, cb: Callable[[WebsockClientConnection], None | Coroutine]) -> None:
+        server_thread.join(timeout=_SERVER_STOP_TIMEOUT_SECONDS)
+        if not server_thread.is_alive():
+            return True
+
+        message = (
+            f"Leika server thread did not stop within {_SERVER_STOP_TIMEOUT_SECONDS:g} seconds."
+        )
+        if raise_on_timeout:
+            raise RuntimeError(message)
+        logging.getLogger(__name__).warning(message)
+        return False
+
+    def stop(self) -> None:
+        """Request shutdown and wait when called outside the server thread.
+
+        An async websocket callback runs on the server thread itself. In that
+        case this method only signals shutdown; joining there would deadlock
+        (and ``Thread.join()`` rejects a self-join). A later call from another
+        thread can safely perform the bounded join.
+        """
+        # Unregister the atexit handler to prevent double-stop. ``unregister``
+        # is deliberately idempotent, so partial startup and repeat calls are
+        # safe as well.
+        atexit.unregister(self.stop)
+        self._signal_stop()
+        self._join_server_thread(raise_on_timeout=True)
+
+    def on_client_connect(
+        self, cb: Callable[[WebsockClientConnection], None | Coroutine]
+    ) -> Callable[[WebsockClientConnection], None | Coroutine]:
         """Attach a callback to run for newly connected clients."""
         self._client_connect_cb.append(cb)
+        return cb
 
     def on_client_disconnect(
         self, cb: Callable[[WebsockClientConnection], None | Coroutine]
-    ) -> None:
+    ) -> Callable[[WebsockClientConnection], None | Coroutine]:
         """Attach a callback to run when clients disconnect."""
         self._client_disconnect_cb.append(cb)
+        return cb
 
     @override
     def get_message_buffer(self) -> AsyncMessageBuffer:
@@ -366,48 +488,47 @@ class WebsockServer(WebsockMessageHandler):
         -- and only exact registered names are served, each behind the same
         password gate as the rest of the server.
 
-        Hashing re-reads the file only when its ``(mtime_ns, size)`` have
-        changed since the last registration, so re-registering what a page
-        already shows -- the normal case, every time a preview is reopened --
-        costs a ``stat`` rather than the file. A rewrite that preserves both
-        timestamp and size would be served under its old name until either
-        moves, which nothing that writes files normally manages.
+        Registration hashes the bytes every time. File timestamps cannot prove
+        that content is unchanged on every filesystem, while the URL makes a
+        content-addressed promise. Serving independently verifies that current
+        bytes still match the digest, so a mutable source can never change the
+        response under an immutable URL.
 
         A picture's pixel size comes back with the URL, read out of the same
-        bytes the digest was taken from and remembered beside it. It is what
-        lets a document reserve the right room for a figure before the figure
-        arrives; ``None`` for anything whose header does not declare one.
+        bytes the digest was taken from. It lets a document reserve the right
+        room for a figure before the figure arrives; ``None`` for anything
+        whose header does not declare one.
 
         Raises ``OSError`` if the file cannot be read, which is also the
         moment the caller still knows what the URL was standing in for.
         """
-        stat = path.stat()
-        fingerprint = (stat.st_mtime_ns, stat.st_size)
-        with self._http_assets_lock:
-            remembered = self._http_asset_records.get(path)
-        if remembered is not None and remembered[0] == fingerprint:
-            _, digest, pixel_size = remembered
-        else:
-            content = path.read_bytes()
-            digest = hashlib.sha256(content).hexdigest()
-            # Read from the bytes already in hand for the hash, so knowing the
-            # shape of a picture costs nothing over not knowing it.
-            pixel_size = image_pixel_size(content)
+        # Resolve once: HTTP requests may be served after the process changes
+        # working directory, but a registered source must keep its identity.
+        path = path.resolve()
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        # Read from the bytes already in hand for the hash, so knowing the
+        # shape of a picture costs nothing over not knowing it.
+        pixel_size = image_pixel_size(content)
         name = f"{digest}{path.suffix.lower()}"
         with self._http_assets_lock:
-            # Re-registering refreshes the entry's place in eviction order:
-            # what a preview uses now is what should be evicted last.
-            self._http_assets.pop(name, None)
-            self._http_assets[name] = path
+            # Equal content has one URL even when it came from several paths.
+            # Retain every backing path so a later duplicate cannot shorten an
+            # earlier registration's lifetime merely by changing or vanishing.
+            previous = self._http_assets.pop(name, None)
+            paths = list(previous[0]) if previous is not None else []
+            with contextlib.suppress(ValueError):
+                paths.remove(path)
+            paths.append(path)
+            if len(paths) > _HTTP_ASSET_BACKING_LIMIT:
+                del paths[:-_HTTP_ASSET_BACKING_LIMIT]
+            # Re-registration also refreshes this content key's eviction order.
+            self._http_assets[name] = (tuple(paths), digest)
             while len(self._http_assets) > _HTTP_ASSET_LIMIT:
                 del self._http_assets[next(iter(self._http_assets))]
-            self._http_asset_records.pop(path, None)
-            self._http_asset_records[path] = (fingerprint, digest, pixel_size)
-            while len(self._http_asset_records) > _HTTP_ASSET_LIMIT:
-                del self._http_asset_records[next(iter(self._http_asset_records))]
         return HttpAsset(f"{_HTTP_ASSET_URL_PREFIX}{name}", pixel_size)
 
-    def _background_worker(self, ready_sem: threading.Semaphore) -> None:
+    def _background_worker(self, startup: Future[None]) -> None:
         import rich
 
         host = self._host
@@ -416,14 +537,38 @@ class WebsockServer(WebsockMessageHandler):
         http_server_root = self._http_server_root
         auth_guard = self._auth_guard
 
-        # Need to make a new event loop for notebook compatbility.
+        # Need to make a new event loop for notebook compatibility.
         event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-        self._stop_event = asyncio.Event()
-        self._background_event_loop = event_loop
-        self._broadcast_buffer = AsyncMessageBuffer(event_loop, persistent_messages=True)
 
-        count_lock = asyncio.Lock()
+        def close_event_loop() -> None:
+            """Cancel loop-owned work and close the loop on every exit path."""
+            try:
+                pending = asyncio.all_tasks(event_loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            finally:
+                try:
+                    event_loop.close()
+                finally:
+                    asyncio.set_event_loop(None)
+                    if self._background_event_loop is event_loop:
+                        self._background_event_loop = None
+                        self._stop_event = None
+
+        try:
+            asyncio.set_event_loop(event_loop)
+            self._stop_event = asyncio.Event()
+            self._background_event_loop = event_loop
+            self._broadcast_buffer = AsyncMessageBuffer(event_loop, persistent_messages=True)
+            if self._stop_requested.is_set():
+                self._stop_event.set()
+            count_lock = asyncio.Lock()
+        except BaseException:
+            close_event_loop()
+            raise
+
         connection_count = 0
         total_connections = 0
 
@@ -488,37 +633,32 @@ class WebsockServer(WebsockMessageHandler):
                 return  # Exit handler to prevent further processing.
 
             client_state = _ClientHandleState(
-                AsyncMessageBuffer(event_loop, persistent_messages=False),
-                event_loop,
+                AsyncMessageBuffer(event_loop, persistent_messages=False)
             )
             client_connection = WebsockClientConnection(client_id, client_state)
-            self._client_state_from_id[client_id] = client_state
+            stop_event = self._stop_event
+            assert stop_event is not None
 
-            def handle_incoming(message: Message) -> None:
-                event_loop.create_task(self._handle_incoming_message(client_id, message))
-                event_loop.create_task(
-                    client_connection._handle_incoming_message(client_id, message)
-                )
+            async def run_open_connection() -> None:
+                # New-connection callbacks and ordered message I/O share one
+                # owned task. A peer close can therefore cancel either phase.
+                await _run_callbacks(self._client_connect_cb, client_connection)
 
-            # New connection callbacks.
-            for cb in self._client_connect_cb:
-                if asyncio.iscoroutinefunction(cb):
-                    await cb(client_connection)
-                else:
-                    cb(client_connection)
+                if self._verbose:
+                    rich.print(
+                        f"[bold](leika)[/bold] Connection opened ({client_id},"
+                        f" {total_connections} total),"
+                        f" {len(self._broadcast_buffer.message_from_id)} persistent"
+                        " messages"
+                    )
 
-            if self._verbose:
-                rich.print(
-                    f"[bold](leika)[/bold] Connection opened ({client_id},"
-                    f" {total_connections} total),"
-                    f" {len(self._broadcast_buffer.message_from_id)} persistent"
-                    " messages"
-                )
+                async def handle_incoming(message: Message) -> None:
+                    # One connection is one ordered stream. Await dispatch so
+                    # later messages cannot overtake earlier async handlers.
+                    await self._handle_incoming_message(client_id, message)
+                    await client_connection._handle_incoming_message(client_id, message)
 
-            try:
-                # For each client: infinite loop over producers (which send messages)
-                # and consumers (which receive messages).
-                await asyncio.gather(
+                await _run_connection_tasks(
                     _message_producer(
                         connection,
                         client_state.message_buffer,
@@ -531,37 +671,37 @@ class WebsockServer(WebsockMessageHandler):
                     ),
                     _message_consumer(connection, handle_incoming, message_class),
                 )
+
+            try:
+                self._client_state_from_id[client_id] = client_state
+                # Transport closure is watched independently of callbacks and
+                # ordered dispatch. Server stop is an explicit sibling too, so
+                # shutdown never waits for an otherwise-live connection.
+                await _run_connection_tasks(
+                    run_open_connection(),
+                    connection.wait_closed(),
+                    stop_event.wait(),
+                )
             except (
                 websockets.exceptions.ConnectionClosedOK,
                 websockets.exceptions.ConnectionClosedError,
             ):
-                # Expected disconnects -- swallow. Any other exit (CancelledError
-                # on shutdown, an exception from a producer/consumer) still runs
-                # the teardown below via `finally`, so client state can't leak
-                # and disconnect callbacks always fire.
                 pass
             finally:
-                # We use a sentinel value to signal that the client producer thread
-                # should exit.
-                #
-                # This is partially cosmetic: it allows us to safely finish pending
-                # queue get() tasks, which suppresses a "Task was destroyed but it is
-                # pending" error.
                 client_state.message_buffer.set_done()
 
-                # Remove client state up front, before the disconnect callbacks:
-                # a callback that raises (or a CancelledError delivered at an
-                # `await` inside this finally) must not be able to skip it and
-                # leak the client. `pop(..., None)` keeps this idempotent.
+                # Remove transport state before user teardown. Even a callback
+                # that fails or waits forever cannot make this client look live.
                 self._client_state_from_id.pop(client_id, None)
                 total_connections -= 1
 
-                # Disconnection callbacks.
-                for cb in self._client_disconnect_cb:
-                    if asyncio.iscoroutinefunction(cb):
-                        await cb(client_connection)
-                    else:
-                        cb(client_connection)
+                # Let disconnect cleanup enter once, then cancel it if shutdown
+                # is already active or begins while user code is still waiting.
+                await _run_callbacks_until_stopped(
+                    self._client_disconnect_cb,
+                    client_connection,
+                    stop_event=stop_event,
+                )
                 if self._verbose:
                     rich.print(
                         f"[bold](leika)[/bold] Connection closed ({client_id},"
@@ -595,14 +735,23 @@ class WebsockServer(WebsockMessageHandler):
             url_path = request.path.partition("?")[0]
             if url_path.startswith(_HTTP_ASSET_URL_PREFIX):
                 with self._http_assets_lock:
-                    asset_path = self._http_assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
-                try:
-                    payload = asset_path.read_bytes() if asset_path is not None else None
-                except OSError:
-                    # Registered, but gone from disk since: the same 404 as
-                    # never registered, rather than a 500 out of read_bytes.
-                    payload = None
+                    asset = self._http_assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
+                payload: bytes | None = None
+                if asset is not None:
+                    paths, expected_digest = asset
+                    # Most recently registered first, falling back to any
+                    # equivalent source that still fulfills the immutable URL.
+                    for source in reversed(paths):
+                        try:
+                            candidate = source.read_bytes()
+                        except OSError:
+                            continue
+                        if hashlib.sha256(candidate).hexdigest() == expected_digest:
+                            payload = candidate
+                            break
                 if payload is None:
+                    # Every source is absent or changed. Never serve new bytes
+                    # under the old content-addressed URL.
                     return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
                 return Response(
                     http.HTTPStatus.OK,
@@ -625,33 +774,12 @@ class WebsockServer(WebsockMessageHandler):
             if http_server_root is None:
                 return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
 
-            # Strip out search params, get relative path. URL-decode so
-            # percent-encoded traversal sequences (e.g. ``%2e%2e/``)
-            # can't slip past the segment check below; normalize
-            # backslashes to forward slashes so a Windows-style path
-            # like ``foo\..\bar`` is also caught on Linux, where
-            # ``pathlib`` would otherwise treat the whole thing as a
-            # single literal filename.
-            path = request.path
-            path = path.partition("?")[0]
-            path = _url_unquote(path).replace("\\", "/")
-
-            # Reject path traversal by checking URL segments, not by
-            # comparing resolved paths. Under Bazel/uv runfile trees,
-            # http_server_root and the files inside it can pass through
-            # independent symlinks (e.g. uv hardlinks individual files
-            # from a shared cache), so Path.resolve() places a
-            # legitimate child outside the resolved root.
-            #
-            # Skipping the resolved-path check means we no longer
-            # validate that symlinks inside http_server_root stay
-            # within it. That is fine here: http_server_root is set
-            # by the application, not by user input, so the only
-            # attacker-controlled component is the URL path.
-            segments = [s for s in path.split("/") if s and s != "."]
-            if any(s == ".." for s in segments):
+            # Normalize and reject traversal before joining the configured
+            # root. This is lexical rather than resolve-based because runfile
+            # trees may legitimately expose children through independent links.
+            relpath = _static_relpath(request.path)
+            if relpath is None:
                 return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-            relpath = "/".join(segments) if segments else "index.html"
             assert http_server_root is not None
             source_path = http_server_root / relpath
             # ``is_file()`` (not ``exists()``) so a request resolving to a
@@ -660,7 +788,7 @@ class WebsockServer(WebsockMessageHandler):
             if not source_path.is_file():
                 return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
 
-            use_gzip = "gzip" in request.headers.get("Accept-Encoding", "")
+            use_gzip = _accepts_gzip(request.headers.get_all("Accept-Encoding"))
 
             mime_type = _http_content_type(relpath)
 
@@ -721,7 +849,6 @@ class WebsockServer(WebsockMessageHandler):
                 websockets.datastructures.Headers(**response_headers),
                 response_payload,
             )
-            # return (http.HTTPStatus.OK, response_headers, response_payload)
 
         async def start_server() -> None:
             port_attempt = port
@@ -737,11 +864,9 @@ class WebsockServer(WebsockMessageHandler):
                         max_size=50 * 1024 * 1024,
                         # Compression can be too slow for our use cases.
                         compression=None,
-                        process_request=(
-                            leika_http_server
-                            if http_server_root is not None or auth_guard is not None
-                            else None
-                        ),
+                        # The handler also serves runtime-registered assets;
+                        # keep it installed even without a static root or auth.
+                        process_request=leika_http_server,
                         # Accept connections with version-based protocol and extract version in handler.
                         subprotocols=None,
                         select_subprotocol=lambda _, subprotocols: next(
@@ -756,29 +881,31 @@ class WebsockServer(WebsockMessageHandler):
                         # one to build a URL.
                         sockets = serve_future.server.sockets
                         self._port = sockets[0].getsockname()[1] if sockets else port_attempt
-                        ready_sem.release()
+                        startup.set_result(None)
                         assert self._stop_event is not None
                         await self._stop_event.wait()
                         return
-                except OSError:  # Port not available.
+                except OSError:
+                    # Binding failures are retryable. Once readiness has been
+                    # reported, an OSError belongs to the running server and
+                    # must escape rather than masquerading as another collision.
+                    if startup.done():
+                        raise
                     port_attempt += 1
                     continue
-            # Every attempt failed: wake the waiting `start()` with the error
-            # rather than leaving it blocked on the semaphore forever.
-            self._start_error = RuntimeError(
-                f"Could not bind a port: tried {port} through {port_attempt - 1}."
+            # Every attempt failed: wake the waiting `start()` with the error.
+            startup.set_exception(
+                RuntimeError(f"Could not bind a port: tried {port} through {port_attempt - 1}.")
             )
-            ready_sem.release()
 
-        event_loop.run_until_complete(start_server())
-        rich.print("[bold](leika)[/bold] Server stopped")
-
-        pending = asyncio.all_tasks(event_loop)
-        for task in pending:
-            task.cancel()
-        if pending:
-            event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        event_loop.close()
+        try:
+            event_loop.run_until_complete(start_server())
+            rich.print("[bold](leika)[/bold] Server stopped")
+        finally:
+            # Own the loop for every exit path, including a bind/setup failure
+            # and an exception after readiness. No task or exception is left
+            # attached to a closed worker thread.
+            close_event_loop()
 
 
 # Pre-allocated padding bytes for 8-byte alignment.
@@ -798,6 +925,43 @@ def _append_aligned_buffers(
             current_offset += padding
         parts.append(buf)
         current_offset += buf.nbytes
+
+
+async def _run_connection_tasks(*awaitables: Awaitable[object]) -> None:
+    """Run a connection's tasks until one exits, then retire every sibling."""
+    tasks = tuple(asyncio.ensure_future(awaitable) for awaitable in awaitables)
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Inspect completed tasks in declaration order so simultaneous
+        # failures have deterministic reporting.
+        for task in tasks:
+            if task in done:
+                task.result()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _run_callbacks_until_stopped(
+    callbacks: Iterable[Callable[..., object]],
+    *args: object,
+    stop_event: asyncio.Event,
+) -> None:
+    """Own disconnect callbacks and cancel them when server shutdown begins."""
+    callback_task = asyncio.ensure_future(_run_callbacks(callbacks, *args))
+    try:
+        # Give synchronous cleanup and the active callback's pre-await prologue
+        # one turn even when shutdown was already requested. High-level client
+        # registries are cleared in that prologue before user code is entered.
+        await asyncio.sleep(0)
+        if callback_task.done():
+            callback_task.result()
+            return
+        await _run_connection_tasks(callback_task, stop_event.wait())
+    finally:
+        callback_task.cancel()
+        await asyncio.gather(callback_task, return_exceptions=True)
 
 
 async def _message_producer(
@@ -858,12 +1022,12 @@ async def _message_producer(
 
 async def _message_consumer(
     websocket: ServerConnection,
-    handle_message: Callable[[Message], None],
+    handle_message: Callable[[Message], Awaitable[None]],
     message_class: type[Message],
 ) -> None:
-    """Infinite loop waiting for and then handling incoming messages."""
+    """Receive and fully dispatch each incoming message in wire order."""
     while True:
         raw = await websocket.recv()
         assert isinstance(raw, bytes)
         message = message_class.deserialize(raw)
-        handle_message(message)
+        await handle_message(message)

@@ -4,7 +4,7 @@ import * as React from "react";
 import { commandPalette } from "../CommandPaletteController";
 import { ImageFit } from "../ClientSettings";
 import { LEIKA_VERSION } from "../VersionInfo";
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import { usePeekHold } from "../dock/DockContext";
 import { ColorRow } from "../components/ColorPicker";
 import {
@@ -72,7 +72,7 @@ function SettingsRow({
 /** The accent swatch, opening the same picker every other color in the app
  * uses, and the reset that puts the theme's own accent back. */
 function AccentColorRow() {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const accentColor = viewer.useSettings((state) => state.accentColor);
   const { setAccentColor } = viewer.settingsActions;
   return (
@@ -155,7 +155,7 @@ const COLOR_SCHEME_ITEMS: { value: ColorScheme; label: string }[] = [
 ];
 
 function ColorSchemeRow() {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const darkMode = viewer.useSettings((state) => state.darkMode);
   const { setDarkMode } = viewer.settingsActions;
 
@@ -186,7 +186,7 @@ const IMAGE_FIT_ITEMS = (Object.keys(IMAGE_FIT_LABELS) as ImageFit[]).map(
 );
 
 function ImageFitRow() {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const imageFit = viewer.useSettings((state) => state.imageFit);
   const { setImageFit } = viewer.settingsActions;
 
@@ -283,7 +283,7 @@ function AboutRow() {
  * and the panel underneath is left whole.
  */
 function SettingsRows() {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const { setShowPaneTitles } = viewer.settingsActions;
   // The palette renders nothing without commands, and closes itself when the
@@ -322,7 +322,7 @@ function SettingsRows() {
 }
 
 export function SettingsButton() {
-  const { useGui } = React.useContext(ViewerContext)!;
+  const { useGui } = useViewer();
   const connected = useGui((state) => state.websocketState === "connected");
   const opened = useSettingsPanelOpen();
 

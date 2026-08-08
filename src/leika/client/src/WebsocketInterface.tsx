@@ -1,14 +1,17 @@
-import React, { useContext } from "react";
+import React from "react";
 
 import { connectionStats } from "./ConnectionStatsController";
-import { ViewerContext, warnDisconnectedSend } from "./ViewerContext";
+import { useViewer, warnDisconnectedSend } from "./ViewerContext";
 import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
 import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
 import { syncSearchParamServer } from "./SearchParamsUtils";
+import { installConnectionBoundSender } from "./connectionSender";
+import { resetFilePreviewState } from "./filePreview";
+import { WorkerEventGate } from "./workerFailure";
 
 /** Live binary websocket producer with focus-aware reconnect behavior. */
 export function WebsocketMessageProducer() {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
   const server = viewer.useGui((state) => state.server);
 
   // An effect, not a render side effect: `replaceState` mutates shared
@@ -18,11 +21,30 @@ export function WebsocketMessageProducer() {
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);
     const worker = new WebsocketClientWorker();
+    const terminateWorker = () => {
+      try {
+        worker.terminate();
+      } catch (error) {
+        console.error("Could not terminate connection worker:", error);
+      }
+    };
     let active = true;
+    const workerEvents = new WorkerEventGate();
     let isConnected = false;
     let retryAllowed = true;
     let retryIntervalId: ReturnType<typeof setInterval> | null = null;
-    const postToWorker = (data: WsWorkerIncoming) => worker.postMessage(data);
+    const postToWorker = (data: WsWorkerIncoming) => {
+      if (!workerEvents.acceptsEvents) return;
+      try {
+        worker.postMessage(data);
+      } catch (error) {
+        failWorker(
+          error instanceof Error && error.message.length > 0
+            ? "Connection worker could not receive a command: " + error.message
+            : "Connection worker could not receive a command.",
+        );
+      }
+    };
 
     const updateRetryInterval = () => {
       const shouldRetry = retryAllowed && !isConnected && document.hasFocus();
@@ -43,6 +65,40 @@ export function WebsocketMessageProducer() {
       }
     };
 
+    const resetConnectionResources = () => {
+      viewer.mutable.current.downloads.reset();
+      resetFilePreviewState();
+      viewer.mutable.current.messageQueue.length = 0;
+    };
+
+    const markDisconnected = ({
+      retry,
+      error,
+    }: {
+      retry: boolean;
+      error: string | null;
+    }) => {
+      isConnected = false;
+      retryAllowed = retry;
+      viewer.guiActions.resetGui();
+      resetConnectionResources();
+      viewer.mutable.current.sendMessage = warnDisconnectedSend;
+      viewer.useGui.set({ connectionError: error });
+      updateRetryInterval();
+    };
+
+    const failWorker = (reason: string) => {
+      if (!active || !workerEvents.close()) return;
+      terminateWorker();
+      connectionStats.forget();
+      markDisconnected({
+        retry: false,
+        error: reason.endsWith(".")
+          ? reason + " Reload the page to reconnect."
+          : reason + ". Reload the page to reconnect.",
+      });
+    };
+
     // The worker measures only while something is watching, so it is told when
     // that changes -- and only then, since the counters it reports arrive
     // through this same store once a second.
@@ -58,8 +114,12 @@ export function WebsocketMessageProducer() {
     window.addEventListener("focus", updateRetryInterval);
     window.addEventListener("blur", updateRetryInterval);
     worker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
-      if (!active) return;
+      if (!active || !workerEvents.acceptsEvents) return;
       const data = event.data;
+      if (data.type === "fatal") {
+        failWorker(data.reason);
+        return;
+      }
       if (data.type === "stats") {
         connectionStats.record(data.counters);
         return;
@@ -69,31 +129,24 @@ export function WebsocketMessageProducer() {
         retryAllowed = true;
         viewer.guiActions.resetGui();
         viewer.viewportActions.resetPanes();
-        viewer.mutable.current.messageQueue.length = 0;
+        resetConnectionResources();
         viewer.useGui.set({
           websocketState: "connected",
           connectionError: null,
         });
         updateRetryInterval();
-        viewer.mutable.current.sendMessage = (message) =>
-          postToWorker({ type: "send", message });
+        installConnectionBoundSender(viewer.mutable.current, (message) =>
+          postToWorker({ type: "send", message }),
+        );
         return;
       }
       if (data.type === "closed") {
-        isConnected = false;
-        retryAllowed = !data.versionMismatch;
-        viewer.guiActions.resetGui();
-        // Anything still queued belongs to the dead connection.
-        viewer.mutable.current.messageQueue.length = 0;
-        viewer.mutable.current.sendMessage = warnDisconnectedSend;
-        if (data.versionMismatch) {
-          viewer.useGui.set({
-            connectionError: `Connection rejected: ${data.closeReason}`,
-          });
-        } else {
-          viewer.useGui.set({ connectionError: null });
-        }
-        updateRetryInterval();
+        markDisconnected({
+          retry: !data.versionMismatch,
+          error: data.versionMismatch
+            ? "Connection rejected: " + data.closeReason
+            : null,
+        });
         return;
       }
       // The worker's rate smoothing can deliver a batch after the close; a
@@ -103,23 +156,34 @@ export function WebsocketMessageProducer() {
         viewer.mutable.current.notifyMessageQueue();
       }
     };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      failWorker(
+        event.message.length > 0
+          ? "Connection worker failed: " + event.message
+          : "Connection worker failed.",
+      );
+    };
+    worker.onmessageerror = () => {
+      failWorker("Connection worker could not decode a message.");
+    };
 
     postToWorker({ type: "set_server", server });
     updateWatching();
     return () => {
       active = false;
+      workerEvents.close();
       worker.onmessage = null;
-      worker.terminate();
+      worker.onerror = null;
+      worker.onmessageerror = null;
+      terminateWorker();
       unsubscribeWatchers();
       // The counters belong to the worker that is about to be replaced, so
       // they say nothing about the connection that follows.
       connectionStats.forget();
       window.removeEventListener("focus", updateRetryInterval);
       window.removeEventListener("blur", updateRetryInterval);
-      if (retryIntervalId !== null) clearInterval(retryIntervalId);
-      viewer.mutable.current.messageQueue.length = 0;
-      viewer.mutable.current.sendMessage = warnDisconnectedSend;
-      viewer.useGui.set({ websocketState: "inactive" });
+      markDisconnected({ retry: false, error: null });
     };
   }, [server, viewer]);
 

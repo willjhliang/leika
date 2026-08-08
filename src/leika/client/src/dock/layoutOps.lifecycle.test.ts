@@ -138,7 +138,7 @@ describe("removePanel", () => {
     const torn = tearOutPanel(areaLayout(), "g-area", "tab2", 10, 10, 260);
     const out = removePanel(torn.layout, "tab2");
     expect(out.floating).toEqual([]);
-    expect(out.groups[torn.floatingGroupId]).toBeUndefined();
+    expect(out.groups[torn.floatingGroupId!]).toBeUndefined();
     expect(out.groups["g-area"].panelIds).toEqual(["tab1"]);
     expect(out.areas!["area-1"].group).toBe("g-area");
   });
@@ -196,6 +196,16 @@ describe("setAreaTabOrder", () => {
     const out = setAreaTabOrder(l, "area-1", ["t3", "t2", "t1"]);
     expect(out.groups[gid].panelIds).toEqual(["t3", "t1"]); // t2 stays floated
     expect(setAreaTabOrder(out, "area-1", ["t3", "t2", "t1"])).toBe(out); // idempotent
+  });
+
+  it("deduplicates requested tabs while preserving unmentioned tabs", () => {
+    let l: DockLayout = emptyLayout();
+    l = addPanelToArea(l, "area-1", "t1");
+    l = addPanelToArea(l, "area-1", "t2");
+    l = addPanelToArea(l, "area-1", "t3");
+    const out = setAreaTabOrder(l, "area-1", ["t2", "t2", "t1"]);
+    const gid = out.areas!["area-1"].group;
+    expect(out.groups[gid].panelIds).toEqual(["t2", "t1", "t3"]);
   });
 
   it("is a no-op for an unknown area", () => {

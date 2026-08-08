@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiFolderMessage } from "../WebsocketMessages";
 import { GuiSection } from "./GuiSection";
 import { useContainerIsEmpty } from "./useContainerIsEmpty";
@@ -9,7 +9,7 @@ export default function FolderComponent({
   uuid,
   props: { label, expand_by_default: expandByDefault },
 }: GuiFolderMessage) {
-  const guiContext = React.useContext(GuiComponentContext)!;
+  const guiContext = useGuiComponent();
   const isEmpty = useContainerIsEmpty(uuid);
 
   const contents = (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 
 import leika
 from leika import _messages
+from leika._server import ClientHandle
 from leika.infra import ClientId
 
 
@@ -18,6 +20,22 @@ def _wait_for(predicate, timeout: float = 2.0) -> None:
     while not predicate() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert predicate()
+
+
+def _client_connection_stub(
+    server: leika.Server,
+    client_id: ClientId,
+    queued: list[_messages.Message] | None = None,
+) -> SimpleNamespace:
+    """Minimal connection with the per-connection loop `ClientHandle` requires."""
+    queued = [] if queued is None else queued
+    message_buffer = SimpleNamespace(event_loop=server._event_loop)
+    return SimpleNamespace(
+        client_id=client_id,
+        register_handler=lambda *_: None,
+        queue_message=queued.append,
+        get_message_buffer=lambda: message_buffer,
+    )
 
 
 def test_controls_containers_and_callbacks(server: leika.Server) -> None:
@@ -51,6 +69,53 @@ def test_controls_containers_and_callbacks(server: leika.Server) -> None:
     second.remove()
     markdown.value = "## Updated"
     assert markdown.value == "## Updated"
+
+
+def test_implicit_order_is_shared_with_client_guis_but_isolated_between_servers(
+    server: leika.Server,
+) -> None:
+    queued: list[_messages.Message] = []
+    connection = _client_connection_stub(server, ClientId(7), queued)
+    client = ClientHandle(connection, server)  # type: ignore[arg-type]
+    other = leika.Server(host="127.0.0.1", port=0, verbose=False)
+    try:
+        first = server.gui.add_text("First", "")
+        client_first = client.gui.add_text("Client first", "")
+        second = server.gui.add_text("Second", "")
+        other_first = other.gui.add_text("Other first", "")
+        other_second = other.gui.add_text("Other second", "")
+
+        assert (first.order, client_first.order, second.order) == (1, 2, 3)
+        assert (other_first.order, other_second.order) == (1, 2)
+    finally:
+        other.stop()
+
+
+def test_client_local_gui_resolves_only_its_live_owner(server: leika.Server) -> None:
+    client_id = ClientId(7)
+
+    def connection() -> SimpleNamespace:
+        return _client_connection_stub(server, client_id)
+
+    original = ClientHandle(connection(), server)  # type: ignore[arg-type]
+    replacement = ClientHandle(connection(), server)  # type: ignore[arg-type]
+
+    with server._client_lock:
+        server._connected_clients[client_id] = original
+    assert original.gui._resolve_client(client_id) is original
+    assert original.gui._resolve_client(ClientId(8)) is None
+    assert server.gui._resolve_client(client_id) is original
+
+    # A stale queued handler on the previous connection must not resolve to
+    # either the dead object or a newer client that reused the same ID.
+    with server._client_lock:
+        server._connected_clients[client_id] = replacement
+    assert original.gui._resolve_client(client_id) is None
+    assert replacement.gui._resolve_client(client_id) is replacement
+
+    with server._client_lock:
+        server._connected_clients.pop(client_id)
+    assert replacement.gui._resolve_client(client_id) is None
 
 
 def test_a_multiline_text_input_is_the_height_it_asks_for(
@@ -155,6 +220,124 @@ def test_async_callbacks_are_scheduled_on_the_server_loop(server: leika.Server) 
 
     checkbox.value = False
     assert called.wait(2.0)
+
+
+def test_raising_async_update_callback_cannot_skip_sync_or_later_callbacks(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    checkbox = server.gui.add_checkbox("Shared", True)
+    queued: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", queued.append)
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+
+    @checkbox.on_update
+    async def fail(_: leika.GuiEvent[Any]) -> None:
+        raise RuntimeError("update callback failed")
+
+    continued: list[bool] = []
+
+    @checkbox.on_update
+    async def continue_dispatch(event: leika.GuiEvent[Any]) -> None:
+        continued.append(event.value)
+
+    client_id = ClientId(7)
+    asyncio.run(
+        server.gui._handle_gui_updates(
+            client_id,
+            _messages.GuiUpdateMessage(checkbox.id, {"value": False}),
+        )
+    )
+
+    assert continued == [False]
+    assert "RuntimeError: update callback failed" in capsys.readouterr().err
+    sync_messages = [
+        message for message in queued if isinstance(message, _messages.GuiUpdateMessage)
+    ]
+    assert len(sync_messages) == 1
+    assert sync_messages[0].updates == {"value": False}
+    assert sync_messages[0].excluded_self_client == client_id
+
+
+def test_raising_async_submit_callback_cannot_skip_close_or_later_callbacks(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    form = server.gui.add_form(label="Shared form")
+    queued: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", queued.append)
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+
+    @form.on_submit
+    async def fail(_: leika.GuiEvent[Any]) -> None:
+        raise RuntimeError("submit callback failed")
+
+    continued: list[bool] = []
+
+    @form.on_submit
+    async def continue_dispatch(_: leika.GuiEvent[Any]) -> None:
+        continued.append(True)
+
+    asyncio.run(
+        server.gui._handle_gui_form_submit(
+            ClientId(7),
+            _messages.GuiFormSubmitMessage(form.id),
+        )
+    )
+
+    assert continued == [True]
+    assert "RuntimeError: submit callback failed" in capsys.readouterr().err
+    close_messages = [
+        message for message in queued if isinstance(message, _messages.GuiFormSubmitMessage)
+    ]
+    assert len(close_messages) == 1
+    assert close_messages[0].uuid == form.id
+
+
+def test_raising_async_hold_and_command_callbacks_do_not_skip_peers(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    continued: list[str] = []
+
+    button = server.gui.add_button("Hold")
+
+    @button.on_hold(callback_hz=10.0)
+    async def fail_hold(_: leika.GuiEvent[Any]) -> None:
+        raise RuntimeError("hold callback failed")
+
+    @button.on_hold(callback_hz=10.0)
+    async def continue_hold(_: leika.GuiEvent[Any]) -> None:
+        continued.append("hold")
+
+    asyncio.run(
+        server.gui._handle_gui_button_hold(
+            ClientId(7), _messages.GuiButtonHoldMessage(button.id, 10.0)
+        )
+    )
+
+    command = server.gui.add_command("Run")
+
+    @command.on_trigger
+    async def fail_command(_: leika.CommandEvent) -> None:
+        raise RuntimeError("command callback failed")
+
+    @command.on_trigger
+    async def continue_command(_: leika.CommandEvent) -> None:
+        continued.append("command")
+
+    asyncio.run(
+        server.gui._handle_command_trigger(ClientId(7), _messages.CommandTriggerMessage(command.id))
+    )
+
+    assert continued == ["hold", "command"]
+    errors = capsys.readouterr().err
+    assert "RuntimeError: hold callback failed" in errors
+    assert "RuntimeError: command callback failed" in errors
 
 
 def test_handle_values_preserve_constructor_invariants(server: leika.Server) -> None:
@@ -503,8 +686,18 @@ def test_uploads_are_isolated_and_validated_per_client(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     upload = server.gui.add_upload_button("Upload")
-    sent: list[Any] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", sent.append)
+    broadcast: list[Any] = []
+    acknowledgements: dict[int, list[Any]] = {1: [], 2: []}
+    clients = {
+        client_id: SimpleNamespace(
+            _websock_connection=SimpleNamespace(
+                queue_message=acknowledgements[client_id].append,
+            )
+        )
+        for client_id in acknowledgements
+    }
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", broadcast.append)
+    monkeypatch.setattr(server.gui, "_resolve_client", clients.get)
 
     def start(client_id: int, *, transfer_uuid: str = "same", parts: int = 2) -> None:
         server.gui._handle_file_transfer_start(
@@ -544,10 +737,11 @@ def test_uploads_are_isolated_and_validated_per_client(
     )
     assert upload.value.content == b"cd"
     assert server.gui._current_file_upload_states == {}
-    assert (
-        len([message for message in sent if isinstance(message, _messages.FileTransferPartAck)])
-        == 4
-    )
+    assert not any(isinstance(message, _messages.FileTransferPartAck) for message in broadcast)
+    assert {client_id: len(messages) for client_id, messages in acknowledgements.items()} == {
+        1: 2,
+        2: 2,
+    }
 
     # Removing a button releases any incomplete transfer.
     start(1, transfer_uuid="pending", parts=1)
@@ -612,7 +806,8 @@ def test_upload_part_and_button_removal_are_serialized(
             ack_started.set()
             assert release_ack.wait(2.0)
 
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", queue_message)
+    client = SimpleNamespace(_websock_connection=SimpleNamespace(queue_message=queue_message))
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
     part_thread = threading.Thread(
         target=server.gui._handle_file_transfer_part,
         args=(ClientId(1), _messages.FileTransferPart(upload.id, "race", 0, b"a")),
@@ -683,8 +878,41 @@ def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) 
     assert shallow._impl.parent_container_id == outer.id
     assert sibling._impl.parent_container_id == outer.id
     assert root._impl.parent_container_id == "root"
-    # Nothing left behind for this thread once every block has unwound.
-    assert server.gui._container_stack_from_thread_id == {}
+    # Nothing left behind for this context once every block has unwound.
+    assert server.gui._container_stack.get() == ()
+
+
+def test_container_targets_are_isolated_between_async_tasks(server: leika.Server) -> None:
+    """Interleaved builders share an event-loop thread but not a container target."""
+
+    first = server.gui.add_folder("First")
+    second = server.gui.add_folder("Second")
+
+    async def build() -> tuple[leika.GuiCheckboxHandle, leika.GuiCheckboxHandle]:
+        first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
+
+        async def build_first() -> leika.GuiCheckboxHandle:
+            with first:
+                first_entered.set()
+                await second_entered.wait()
+                return server.gui.add_checkbox("First child", True)
+
+        async def build_second() -> leika.GuiCheckboxHandle:
+            await first_entered.wait()
+            with second:
+                second_entered.set()
+                # Give the first task a chance to add while this context is active.
+                await asyncio.sleep(0)
+                return server.gui.add_checkbox("Second child", True)
+
+        first_child, second_child = await asyncio.gather(build_first(), build_second())
+        return first_child, second_child
+
+    first_child, second_child = asyncio.run(build())
+    assert first_child._impl.parent_container_id == first.id
+    assert second_child._impl.parent_container_id == second.id
+    assert server.gui._container_stack.get() == ()
 
 
 def test_media_elements_are_created_from_their_content(
@@ -713,6 +941,65 @@ def test_media_elements_are_created_from_their_content(
     assert len(plotly_messages) == 1
     assert plotly_messages[0].props.aspect == 2.0
     assert plotly_messages[0].props._plotly_json_str.startswith("{")
+
+
+def test_plotly_bootstrap_is_owned_once_across_scopes_and_connections(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local, global, and pane APIs share one bootstrap per browser."""
+    plotly = pytest.importorskip("plotly.graph_objects")
+    bootstrap = "window.Plotly = {};"
+    load_count = 0
+
+    def load_plotly_js() -> str:
+        nonlocal load_count
+        load_count += 1
+        return bootstrap
+
+    monkeypatch.setattr("leika._server._load_plotly_js", load_plotly_js)
+
+    def connect(client_id: int) -> tuple[ClientHandle, list[_messages.Message]]:
+        queued: list[_messages.Message] = []
+        connection = _client_connection_stub(server, ClientId(client_id), queued)
+        client = ClientHandle(connection, server)  # type: ignore[arg-type]
+        with server._client_lock:
+            server._connected_clients[connection.client_id] = client
+        return client, queued
+
+    def bootstraps(messages: list[_messages.Message]) -> list[str]:
+        return [
+            message.source
+            for message in messages
+            if isinstance(message, _messages.RunJavascriptMessage)
+        ]
+
+    first, first_messages = connect(101)
+    _, second_messages = connect(102)
+
+    # A client-local figure initializes that client, not its peers.
+    first.gui.add_plotly(plotly.Figure())
+    assert bootstraps(first_messages) == [bootstrap]
+    assert bootstraps(second_messages) == []
+
+    # A later global figure fills only the missing recipient. A pane uses the
+    # same global scope and must not enqueue the runtime again.
+    server.gui.add_plotly(plotly.Figure())
+    server.panes.add_plotly(plotly.Figure(), pane_id="plotly-bootstrap-test")
+    assert bootstraps(first_messages) == [bootstrap]
+    assert bootstraps(second_messages) == [bootstrap]
+
+    # Once Plotly is globally required, each later connection is initialized
+    # before its local GUI can enqueue a figure.
+    late, late_messages = connect(103)
+    server._initialize_plotly_connection(late._websock_connection)
+    late.gui.add_plotly(plotly.Figure())
+    assert bootstraps(late_messages) == [bootstrap]
+
+    broadcast_messages = server._websock_server._broadcast_buffer.message_from_id.values()
+    assert not any(
+        isinstance(message, _messages.RunJavascriptMessage) for message in broadcast_messages
+    )
+    assert load_count == 1
 
 
 def test_toggle_initial_values_and_modes(server: leika.Server) -> None:

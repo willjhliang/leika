@@ -1,9 +1,9 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { GuiListMessage } from "../WebsocketMessages";
 import ListInputComponent from "./ListInput";
+import { renderWithGuiContext } from "./testGuiContext";
 
 function renderList({
   value = ["alpha", "beta"],
@@ -23,7 +23,7 @@ function renderList({
     container_uuid: "root",
     props: { order: 0, label, hint: null, visible: true, disabled, frozen },
   };
-  return renderToStaticMarkup(React.createElement(ListInputComponent, message));
+  return renderWithGuiContext(React.createElement(ListInputComponent, message));
 }
 
 /** The `disabled` attribute itself, not `data-disabled` and not the utility

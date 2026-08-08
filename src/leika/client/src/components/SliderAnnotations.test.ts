@@ -3,8 +3,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { SliderAnnotations } from "./SliderAnnotations";
+import { sliderAnnotationLayoutKey } from "./sliderAnnotationLayout";
 
 describe("SliderAnnotations", () => {
+  it("gives delimiter-containing and absent labels distinct layout keys", () => {
+    const one = sliderAnnotationLayoutKey([{ label: "x|100:y" }], [0]);
+    const two = sliderAnnotationLayoutKey(
+      [{ label: "x" }, { label: "y" }],
+      [0, 100],
+    );
+    const absent = sliderAnnotationLayoutKey([{}], [0]);
+    const empty = sliderAnnotationLayoutKey([{ label: "" }], [0]);
+
+    expect(one).not.toBe(two);
+    expect(absent).not.toBe(empty);
+  });
+
   it("clamps marks and aligns their content inside the track width", () => {
     const markup = renderToStaticMarkup(
       React.createElement(SliderAnnotations, {

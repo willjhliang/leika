@@ -2,28 +2,63 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import mimetypes
 import os
 import secrets
 import threading
 import time
 from collections.abc import Coroutine
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, ContextManager, Iterator, Tuple, TypeVar
 
 from . import _client_autobuild, _messages, infra
+from ._async_errors import await_async_errors, print_async_errors
 from ._gui_api import GuiApi
 from ._gui_handles import PREVIEW_MAX_BYTES, _make_uuid
 from ._notification_handle import NotificationHandle
 from ._panes import Panes
 from ._share import CloudflaredTunnel, ShareTunnelError
-from ._threadpool_exceptions import print_threadpool_errors
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 from ._validation import validate_positive_integer as _validate_positive_integer
 from .infra._infra import HttpAsset
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
+
+
+class _CallbackExecutor(ThreadPoolExecutor):
+    """Thread pool whose queued work can be cancelled on server shutdown.
+
+    Python cannot terminate a callback that is already running. Those
+    callbacks finish naturally; ``wait=False`` is essential because the
+    running callback may itself be the caller that stops the server.
+    """
+
+    def __init__(self, max_workers: int) -> None:
+        super().__init__(max_workers=max_workers)
+        self._pending_lock = threading.RLock()
+        self._pending_futures: set[Future[Any]] = set()
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        with self._pending_lock:
+            future = super().submit(fn, *args, **kwargs)
+            self._pending_futures.add(future)
+            future.add_done_callback(self._discard)
+            return future
+
+    def _discard(self, future: Future[Any]) -> None:
+        with self._pending_lock:
+            self._pending_futures.discard(future)
+
+    def shutdown_cancel_pending(self) -> None:
+        """Reject new work, cancel queued work, and let running work finish."""
+        with self._pending_lock:
+            for future in tuple(self._pending_futures):
+                future.cancel()
+            # ``cancel_futures=`` is unavailable on Python 3.8, so futures
+            # are tracked explicitly and the compatible API closes the pool.
+            super().shutdown(wait=False)
 
 
 def _format_bytes(count: int) -> str:
@@ -42,6 +77,25 @@ def _validate_file_content(content: object) -> None:
             "content must be bytes or a Path; a str is neither a file's contents"
             " (encode it) nor a path we would guess at (wrap it in Path)."
         )
+
+
+def _load_plotly_js() -> str:
+    """Read the browser runtime used by every Plotly surface on this server."""
+    try:
+        import plotly
+    except ImportError as error:
+        raise ImportError(
+            "You must have the `plotly` package installed to use Plotly elements."
+        ) from error
+
+    plotly_file = plotly.__file__
+    if plotly_file is None:
+        raise ImportError("Could not locate the installed `plotly` package.")
+    plotly_path = Path(plotly_file).parent / "package_data" / "plotly.min.js"
+    try:
+        return plotly_path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise ImportError(f"Could not find plotly.min.js at {plotly_path}.") from error
 
 
 def _read_in_chunks(
@@ -98,7 +152,9 @@ class ClientHandle:
 
         # Public attributes.
         self.gui: GuiApi = GuiApi(
-            self, thread_executor=server._thread_executor, event_loop=server._event_loop
+            self,
+            thread_executor=server._thread_executor,
+            event_loop=conn.get_message_buffer().event_loop,
         )
         """Handle for interacting with the GUI."""
         self.client_id: int = conn.client_id
@@ -195,24 +251,23 @@ class ClientHandle:
         _validate_positive_integer(chunk_size, "chunk_size")
         _validate_nonnegative_integer(max_bytes, "max_bytes")
         assert isinstance(content, (bytes, Path))
-        size_bytes = len(content) if isinstance(content, bytes) else content.stat().st_size
-        if size_bytes > max_bytes:
-            # Said rather than sent: the alternative is a tab that stops
-            # responding with nothing on screen to explain why.
-            self.add_notification(
-                "Too large to preview",
-                f"{filename} is {_format_bytes(size_bytes)}, over the"
-                f" {_format_bytes(max_bytes)} preview limit.",
-            )
-            return
-        self._send_file(
+        rejected_size = self._send_file(
             filename,
             content,
             chunk_size,
             disposition,
             source_uuid=source_uuid,
             source_version=source_version,
+            max_bytes=max_bytes,
         )
+        if rejected_size is not None:
+            # Said rather than sent: the alternative is a tab that stops
+            # responding with nothing on screen to explain why.
+            self.add_notification(
+                "Too large to preview",
+                f"{filename} is {_format_bytes(rejected_size)}, over the"
+                f" {_format_bytes(max_bytes)} preview limit.",
+            )
 
     def _send_file(
         self,
@@ -223,8 +278,9 @@ class ClientHandle:
         *,
         source_uuid: str | None = None,
         source_version: str | None = None,
-    ) -> None:
-        """One file onto the wire, whatever the client is to do with it."""
+        max_bytes: int | None = None,
+    ) -> int | None:
+        """Send one file, or return its opened size when it exceeds a limit."""
         _validate_positive_integer(chunk_size, "chunk_size")
 
         mime_type = mimetypes.guess_type(filename, strict=False)[0]
@@ -232,29 +288,57 @@ class ClientHandle:
             mime_type = "application/octet-stream"
 
         uuid = _make_uuid()
-        with _download_source(content, chunk_size) as (size_bytes, chunks):
-            self._websock_connection.queue_message(
-                _messages.FileTransferStartDownload(
-                    disposition=disposition,
-                    transfer_uuid=uuid,
-                    filename=filename,
-                    mime_type=mime_type,
-                    part_count=-(-size_bytes // chunk_size),
-                    size_bytes=size_bytes,
-                    source_uuid=source_uuid,
-                    source_version=source_version,
-                )
-            )
-            for i, part in enumerate(chunks):
-                self._websock_connection.queue_message(
-                    _messages.FileTransferPart(
-                        None,
+        started = False
+        expected_parts = 0
+        sent_parts = 0
+        try:
+            with _download_source(content, chunk_size) as (size_bytes, chunks):
+                if max_bytes is not None and size_bytes > max_bytes:
+                    return size_bytes
+                expected_parts = -(-size_bytes // chunk_size)
+                queued = self._websock_connection.queue_message(
+                    _messages.FileTransferStartDownload(
+                        disposition=disposition,
                         transfer_uuid=uuid,
-                        part_index=i,
-                        content=part,
+                        filename=filename,
+                        mime_type=mime_type,
+                        part_count=expected_parts,
+                        size_bytes=size_bytes,
+                        source_uuid=source_uuid,
+                        source_version=source_version,
                     )
                 )
-                self.flush()
+                if queued is False:
+                    return None
+                started = True
+                for i, part in enumerate(chunks):
+                    queued = self._websock_connection.queue_message(
+                        _messages.FileTransferPart(
+                            None,
+                            transfer_uuid=uuid,
+                            part_index=i,
+                            content=part,
+                        )
+                    )
+                    if queued is False:
+                        return None
+                    sent_parts = i + 1
+                    self.flush()
+        except Exception as error:
+            # Once a start is on the wire, every incomplete transfer needs a
+            # terminal message. Otherwise previews and their reload watches can
+            # wait forever while the connection itself remains healthy.
+            if started and sent_parts < expected_parts:
+                with contextlib.suppress(Exception):
+                    self._websock_connection.queue_message(
+                        _messages.FileTransferAbort(
+                            transfer_uuid=uuid,
+                            reason=str(error) or type(error).__name__,
+                        )
+                    )
+                    self.flush()
+            raise
+        return None
 
     def add_notification(
         self,
@@ -341,11 +425,20 @@ class Server:
         self.workspace_id = workspace_id
         self.verbose = verbose
         self._stopped = False
+        self._stop_lock = threading.Lock()
+        self._stop_finalizer: threading.Thread | None = None
+        self._executor_shutdown = False
         self._connected_clients: dict[int, ClientHandle] = {}
         self._client_lock = threading.RLock()
         self._client_connect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
         self._client_disconnect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
-        self._thread_executor = ThreadPoolExecutor(max_workers=32)
+        self._thread_executor = _CallbackExecutor(max_workers=32)
+        self._gui_order_counter = 0
+        self._gui_order_lock = threading.Lock()
+        self._plotly_js_lock = threading.Lock()
+        self._plotly_js_source: str | None = None
+        self._plotly_js_required_globally = False
+        self._plotly_js_sent_client_ids: set[infra.ClientId] = set()
 
         _client_autobuild.ensure_client_is_built()
         server = infra.WebsockServer(
@@ -365,12 +458,15 @@ class Server:
             with self._client_lock:
                 self._connected_clients[conn.client_id] = client
                 callbacks = tuple(self._client_connect_cb)
+            # The connection-local queue is registered before user callbacks,
+            # so their Plotly messages cannot overtake this bootstrap.
+            self._initialize_plotly_connection(conn)
             for callback in callbacks:
-                if asyncio.iscoroutinefunction(callback):
-                    await callback(client)
+                if inspect.iscoroutinefunction(callback):
+                    await await_async_errors(callback(client))
                 else:
                     self._thread_executor.submit(callback, client).add_done_callback(
-                        print_threadpool_errors
+                        print_async_errors
                     )
 
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
@@ -380,18 +476,19 @@ class Server:
             with self._client_lock:
                 client = self._connected_clients.pop(conn.client_id, None)
                 callbacks = tuple(self._client_disconnect_cb)
+            self._discard_plotly_connection(conn.client_id)
             if client is None:
                 return
-            client.gui._discard_file_uploads(client_id=conn.client_id)
+            client.gui._discard_client_work(conn.client_id)
             gui = getattr(self, "gui", None)
             if gui is not None:
-                gui._discard_file_uploads(client_id=conn.client_id)
+                gui._discard_client_work(conn.client_id)
             for callback in callbacks:
-                if asyncio.iscoroutinefunction(callback):
-                    await callback(client)
+                if inspect.iscoroutinefunction(callback):
+                    await await_async_errors(callback(client))
                 else:
                     self._thread_executor.submit(callback, client).add_done_callback(
-                        print_threadpool_errors
+                        print_async_errors
                     )
 
         server.start()
@@ -430,6 +527,52 @@ class Server:
     def url(self) -> str:
         display_host = "localhost" if self.host in ("0.0.0.0", "::") else self.host
         return f"http://{display_host}:{self.port}"
+
+    def _next_gui_order(self) -> float:
+        """Allocate one deterministic implicit order across this server's GUIs."""
+        with self._gui_order_lock:
+            self._gui_order_counter += 1
+            return self._gui_order_counter
+
+    def _queue_plotly_js_locked(self, connection: infra.WebsockClientConnection) -> None:
+        """Queue the cached runtime once for one browser connection. Lock held."""
+        client_id = connection.client_id
+        if client_id in self._plotly_js_sent_client_ids:
+            return
+        source = self._plotly_js_source
+        assert source is not None
+        if connection.queue_message(_messages.RunJavascriptMessage(source=source)) is False:
+            return
+        self._plotly_js_sent_client_ids.add(client_id)
+
+    def _ensure_plotly_js_sent(self, connection: infra.WebsockClientConnection | None) -> None:
+        """Initialize one client, or every current and future client, once."""
+        with self._plotly_js_lock:
+            if self._plotly_js_source is None:
+                self._plotly_js_source = _load_plotly_js()
+
+            if connection is not None:
+                self._queue_plotly_js_locked(connection)
+                return
+
+            self._plotly_js_required_globally = True
+            with self._client_lock:
+                connections = tuple(
+                    client._websock_connection for client in self._connected_clients.values()
+                )
+            for client_connection in connections:
+                self._queue_plotly_js_locked(client_connection)
+
+    def _initialize_plotly_connection(self, connection: infra.WebsockClientConnection) -> None:
+        """Apply a prior global Plotly requirement to a new connection."""
+        with self._plotly_js_lock:
+            if self._plotly_js_required_globally:
+                self._queue_plotly_js_locked(connection)
+
+    def _discard_plotly_connection(self, client_id: infra.ClientId) -> None:
+        """Forget per-connection delivery state when a browser disconnects."""
+        with self._plotly_js_lock:
+            self._plotly_js_sent_client_ids.discard(client_id)
 
     def _handle_client_ping(
         self, client_id: infra.ClientId, message: _messages.ClientPingMessage
@@ -520,16 +663,55 @@ class Server:
                 message = buffer.message_from_id.pop(msg_id)
                 buffer.id_from_redundancy_key.pop(message.redundancy_key(), None)
 
+    def _shutdown_callback_executor(self) -> None:
+        """Cancel queued callbacks once, after websocket teardown is done."""
+        with self._stop_lock:
+            if self._executor_shutdown:
+                return
+            self._executor_shutdown = True
+        self._thread_executor.shutdown_cancel_pending()
+
+    def _finish_stop(self) -> None:
+        """Join the websocket worker, then retire its callback executor."""
+        try:
+            self._websock_server.stop()
+        finally:
+            self._shutdown_callback_executor()
+
     def stop(self) -> None:
-        """Stop the Leika server and callback executor."""
-        if self._stopped:
+        """Stop the Leika server and cancel callbacks that have not started.
+
+        Callbacks already running are allowed to finish: Python threads cannot
+        be terminated safely. When this is called from an async websocket
+        callback, a short-lived finalizer performs the join after that callback
+        returns, avoiding a server-thread self-join. Repeat calls remain safe
+        and may complete the same bounded shutdown from another thread.
+        """
+        with self._stop_lock:
+            first_request = not self._stopped
+            self._stopped = True
+            tunnel = self._share_tunnel if first_request else None
+            if first_request:
+                self._share_tunnel = None
+                self.share_url = None
+
+        if tunnel is not None:
+            tunnel.close()
+
+        server_thread = self._websock_server._server_thread
+        if threading.current_thread() is server_thread:
+            self._websock_server.stop()
+            with self._stop_lock:
+                if self._stop_finalizer is None:
+                    self._stop_finalizer = threading.Thread(
+                        target=self._finish_stop,
+                        name="leika-stop-finalizer",
+                        daemon=True,
+                    )
+                    self._stop_finalizer.start()
             return
-        self._stopped = True
-        if self._share_tunnel is not None:
-            self._share_tunnel.close()
-            self.share_url = None
-        self._websock_server.stop()
-        self._thread_executor.shutdown(wait=False)
+
+        self._finish_stop()
 
     def on_client_connect(
         self, cb: Callable[[ClientHandle], NoneOrCoroutine]
@@ -555,11 +737,11 @@ class Server:
         # This makes sure that the the callback is applied to any clients that
         # connect between the two lines.
         for client in clients:
-            if asyncio.iscoroutinefunction(cb):
+            if inspect.iscoroutinefunction(cb):
                 future = asyncio.run_coroutine_threadsafe(cb(client), self._event_loop)
-                future.add_done_callback(print_threadpool_errors)
+                future.add_done_callback(print_async_errors)
             else:
-                self._thread_executor.submit(cb, client).add_done_callback(print_threadpool_errors)
+                self._thread_executor.submit(cb, client).add_done_callback(print_async_errors)
 
         return cb  # type: ignore
 

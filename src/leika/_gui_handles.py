@@ -11,7 +11,7 @@ import time
 import uuid
 import warnings
 from collections.abc import Coroutine, Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -30,6 +30,7 @@ import numpy as np
 from typing_extensions import Protocol, Self, override
 
 from ._assignable_props_api import AssignablePropsBase
+from ._async_errors import print_async_errors
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import encode_image_binary
@@ -70,7 +71,6 @@ from ._messages import (
     GuiVector3Props,
     RemoveCommandMessage,
 )
-from ._threadpool_exceptions import print_threadpool_errors
 from ._validation import validate_finite_number as _finite_number
 from .infra import ClientId
 from .infra._infra import HttpAsset
@@ -142,10 +142,10 @@ def _schedule_coroutine(
     except RuntimeError:
         running_loop = None
     if running_loop is event_loop:
-        event_loop.create_task(coroutine)
+        event_loop.create_task(coroutine).add_done_callback(print_async_errors)
     else:
         future = asyncio.run_coroutine_threadsafe(coroutine, event_loop)
-        future.add_done_callback(print_threadpool_errors)
+        future.add_done_callback(print_async_errors)
 
 
 class GuiContainerProtocol(Protocol):
@@ -347,6 +347,8 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
             gui_api._gui_input_handle_from_uuid.pop(self._impl.uuid)
         if isinstance(self, GuiUploadButtonHandle):
             gui_api._discard_file_uploads(source_component_uuid=self._impl.uuid)
+        if isinstance(self, GuiPreviewButtonHandle):
+            gui_api._discard_preview_work(source_component_uuid=self._impl.uuid)
 
 
 class _GuiInputHandle(
@@ -1420,11 +1422,17 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         if filename is None:
             return
         try:
+            version = self._version()
             prepared = self._prepared(client, filename, content)
-            size = len(prepared) if isinstance(prepared, bytes) else prepared.stat().st_size
-            if size > self._max_bytes:
-                return
-            client._send_file(filename, prepared, 1024 * 1024, "warm")
+            client._send_file(
+                filename,
+                prepared,
+                1024 * 1024,
+                "warm",
+                source_uuid=self._impl.uuid,
+                source_version=version,
+                max_bytes=self._max_bytes,
+            )
         except OSError:
             # An unreadable file warms nothing; the press, if it comes, will
             # say so through the channels a press has.
@@ -1791,10 +1799,7 @@ class GuiFormHandle(GuiFolderHandle):
         # the buttons along again.
         actions = getattr(self, "actions", None)
         if actions is not None:
-            # Runtime import to break the circular edge with `_gui_api`.
-            from ._gui_api import _apply_default_order
-
-            actions.order = _apply_default_order(None)
+            actions.order = self._impl.gui_api._apply_default_order(None)
 
     def on_submit(
         self,
@@ -1915,6 +1920,33 @@ class GuiModalHandle(GuiContainer):
         self.close()
 
 
+class _UnsafeMarkdownAssetPath(ValueError):
+    """A markdown image reference that leaves its declared asset root."""
+
+
+def _resolve_markdown_asset_path(image_root: Path, url: str) -> Path:
+    """Resolve one local markdown image without allowing cross-root paths."""
+    posix_path = PurePosixPath(url)
+    windows_path = PureWindowsPath(url)
+    if (
+        posix_path.is_absolute()
+        or windows_path.drive
+        or windows_path.root
+        or ".." in posix_path.parts
+        or ".." in windows_path.parts
+        or any(":" in part for part in windows_path.parts)
+    ):
+        raise _UnsafeMarkdownAssetPath(url)
+
+    root = image_root.resolve()
+    path = (root / Path(*posix_path.parts)).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise _UnsafeMarkdownAssetPath(url) from error
+    return path
+
+
 def _get_data_url(url: str, image_root: Path | None) -> str:
     if not url.startswith("http") and not image_root:
         warnings.warn(
@@ -1929,12 +1961,19 @@ def _get_data_url(url: str, image_root: Path | None) -> str:
     if image_root is None:
         image_root = Path(__file__).parent
     try:
-        path = image_root / url
+        path = _resolve_markdown_asset_path(image_root, url)
+    except _UnsafeMarkdownAssetPath:
+        warnings.warn(
+            f"Refused image {url}, which is outside image_root {image_root}.",
+            stacklevel=2,
+        )
+        return url
+    try:
         binary = path.read_bytes()
         mime_type = mimetypes.guess_type(path.name, strict=False)[0] or "application/octet-stream"
         encoded = base64.b64encode(binary).decode("ascii")
         return f"data:{mime_type};base64,{encoded}"
-    except (IOError, FileNotFoundError):
+    except OSError:
         warnings.warn(
             f"Failed to read image {url}, with image_root set to {image_root}.",
             stacklevel=2,
@@ -1990,7 +2029,15 @@ def _link_markdown_assets(
         if url.startswith("http") or url.startswith("data:"):
             return match.group(0)
         try:
-            asset = register(image_root / url)
+            source = _resolve_markdown_asset_path(image_root, url)
+        except _UnsafeMarkdownAssetPath:
+            warnings.warn(
+                f"Refused image {url}, which is outside image_root {image_root}.",
+                stacklevel=2,
+            )
+            return match.group(0)
+        try:
+            asset = register(source)
         except OSError:
             warnings.warn(
                 f"Failed to read image {url}, relative to {image_root}.",

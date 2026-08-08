@@ -61,7 +61,7 @@ export function createStore<T extends object>(initialState: T): Store<T> {
       initialized: false,
     });
 
-    return useSyncExternalStore(subscribe, () => {
+    const getSnapshot = () => {
       if (!selector) return state as T | U;
       const next = selector(state);
       if (
@@ -75,7 +75,8 @@ export function createStore<T extends object>(initialState: T): Store<T> {
       cache.current.value = next;
       cache.current.initialized = true;
       return next;
-    });
+    };
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   }
 
   useStore.get = get;
@@ -230,7 +231,15 @@ export function createKeyedStore<V>(
       value: V | undefined | U;
       version: number;
       key: string;
-    }>({ value: undefined, version: -1, key: "" });
+      selector: ((val: V | undefined) => U) | undefined;
+      equalityFn: ((a: U, b: U) => boolean) | undefined;
+    }>({
+      value: undefined,
+      version: -1,
+      key: "",
+      selector: undefined,
+      equalityFn: undefined,
+    });
 
     // New subscribe identity when key changes, so useSyncExternalStore
     // re-subscribes to the correct key.
@@ -239,28 +248,44 @@ export function createKeyedStore<V>(
       [key],
     );
 
-    const value = useSyncExternalStore(subscribe, () => {
-      const ver = getVersion(key);
-      // If key or version changed, recompute.
-      if (cache.current.key !== key || cache.current.version !== ver) {
+    const getSnapshot = () => {
+      const version = getVersion(key);
+      const selectionChanged =
+        cache.current.selector !== selector ||
+        cache.current.equalityFn !== equalityFn;
+      // The selected value can change even while the key and its data do not:
+      // selectors may close over props that changed on a parent render.
+      if (
+        cache.current.key !== key ||
+        cache.current.version !== version ||
+        selectionChanged
+      ) {
         const raw = map.get(key);
         const next = selector ? selector(raw) : raw;
-        if (cache.current.key === key && cache.current.version !== ver) {
-          // Same key, new version -- check equality.
+        if (cache.current.key === key && cache.current.version >= 0) {
           if (
             equalityFn
               ? equalityFn(cache.current.value as U, next as U)
               : Object.is(cache.current.value, next)
           ) {
-            cache.current.version = ver;
+            cache.current.version = version;
+            cache.current.selector = selector;
+            cache.current.equalityFn = equalityFn;
             return cache.current.value as V | undefined | U;
           }
         }
-        cache.current = { value: next, version: ver, key };
+        cache.current = {
+          value: next,
+          version,
+          key,
+          selector,
+          equalityFn,
+        };
         return next;
       }
       return cache.current.value as V | undefined | U;
-    });
+    };
+    const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
     return value;
   }

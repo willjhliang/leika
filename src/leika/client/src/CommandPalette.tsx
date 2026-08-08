@@ -11,18 +11,22 @@ import {
 import Fuse, { FuseResult, IFuseOptions } from "fuse.js";
 import React, {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { ViewerContext } from "./ViewerContext";
+import { useViewer } from "./ViewerContext";
 import {
   commandPalette,
   useCommandPaletteOpen,
 } from "./CommandPaletteController";
 import { RegisterCommandMessage } from "./WebsocketMessages";
+import {
+  commandPaletteHotkeys,
+  hotkeyMatches,
+  HotkeyBinding,
+} from "./commandHotkeys";
 import { KeyModifier } from "./dragUtils";
 import { isFormElement } from "./utils/isFormElement";
 import { isMac } from "./utils/platform";
@@ -135,7 +139,7 @@ function useFuseFilter() {
 }
 
 export function CommandPalette() {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
   const commands = viewer.useGui((state) => state.commands);
   const viewerMutable = viewer.mutable.current;
   const opened = useCommandPaletteOpen();
@@ -204,11 +208,11 @@ export function CommandPalette() {
           command.props.modifier,
         ).map((key) => [key, trigger] as [string, typeof trigger]);
       });
-    return [
-      ["mod+k", openPalette],
-      ["mod+shift+p", openPalette],
-      ...commandHotkeys,
-    ] as [string, () => void][];
+    return commandPaletteHotkeys(
+      Object.keys(commands).length > 0,
+      openPalette,
+      commandHotkeys,
+    );
   }, [commands, handleTrigger]);
   useHotkeys(hotkeyItems);
 
@@ -287,26 +291,13 @@ export function CommandPalette() {
   );
 }
 
-function hotkeyMatches(event: KeyboardEvent, definition: string): boolean {
-  const parts = definition.toLowerCase().split("+");
-  const key = parts.at(-1);
-  const mod = parts.includes("mod");
-  return (
-    event.key.toLowerCase() === key &&
-    (mod
-      ? event.ctrlKey || event.metaKey
-      : event.ctrlKey === parts.includes("ctrl")) &&
-    (mod || event.metaKey === parts.includes("meta")) &&
-    event.shiftKey === parts.includes("shift") &&
-    event.altKey === parts.includes("alt")
-  );
-}
-
 /** Bind window-level hotkeys, ignoring keystrokes typed into form fields. */
-function useHotkeys(hotkeys: readonly [string, () => void][]) {
+function useHotkeys(hotkeys: readonly HotkeyBinding[]) {
   const handlers = useRef(hotkeys);
   handlers.current = hotkeys;
+  const enabled = hotkeys.length > 0;
   useEffect(() => {
+    if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (isFormElement(event.target)) return;
       const match = handlers.current.find(([definition]) =>
@@ -318,5 +309,5 @@ function useHotkeys(hotkeys: readonly [string, () => void][]) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [enabled]);
 }

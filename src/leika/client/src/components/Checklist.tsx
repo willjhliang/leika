@@ -3,7 +3,7 @@ import * as React from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiChecklistMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
@@ -72,7 +72,7 @@ export default function ChecklistComponent({
   value,
   props: { label, hint, disabled, frozen },
 }: GuiChecklistMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const commit = (next: Item[]) => setValue(uuid, next);
 
   /** Rewrite one item, leaving the rest of the list exactly as it is. */

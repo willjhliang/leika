@@ -3,13 +3,16 @@ import React from "react";
 import { useClientSettings } from "./ClientSettings";
 import { UseGui } from "./ControlPanel/GuiState";
 import { Message } from "./WebsocketMessages";
+import type { MessageSender } from "./connectionSender";
+import type { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { useViewportState } from "./viewport/ViewportState";
 
 /** Mutable transport state for the live websocket producer. */
 export type ViewerMutable = {
-  sendMessage: (message: Message) => void;
+  sendMessage: MessageSender;
   messageQueue: Message[];
   notifyMessageQueue: () => void;
+  downloads: FileDownloadAssembler;
 };
 
 export function warnDisconnectedSend(message: Message): void {
@@ -31,3 +34,12 @@ export type ViewerContextContents = {
 export const ViewerContext = React.createContext<ViewerContextContents | null>(
   null,
 );
+
+/** Read the current viewer, failing at the component boundary if it is absent. */
+export function useViewer(): ViewerContextContents {
+  const viewer = React.useContext(ViewerContext);
+  if (viewer === null) {
+    throw new Error("useViewer must be used within ViewerContext.Provider");
+  }
+  return viewer;
+}

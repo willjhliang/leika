@@ -1,4 +1,9 @@
-import { DownloadIcon, FileIcon, RefreshCwIcon } from "lucide-react";
+import {
+  DownloadIcon,
+  FileIcon,
+  RefreshCwIcon,
+  TableOfContentsIcon,
+} from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -15,15 +20,19 @@ import {
   isMediaKind,
   isReadingKind,
   previewKindFor,
+  previewMemoryKey,
   reloadIsOnItsWay,
   type FileContents,
   type FilePreview,
   type PreviewKind,
 } from "../filePreview";
+import { contentsOf } from "../markdown";
 import { HintTooltip } from "./common";
+import { renderMarkdown } from "./markdownDocument";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaPreview } from "./MediaPreview";
 import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
+import { usePreviewContents } from "./previewContents";
 import {
   previewMediaClassName,
   usePreviewFullscreen,
@@ -36,10 +45,10 @@ import {
  * frame around the document has painted rather than before. The dialog is on
  * screen at the click, and the document arrives in it.
  */
-function useBlobText(blob: Blob, enabled: boolean): string | null {
+function useBlobText(blob: Blob | null, enabled: boolean): string | null {
   const [text, setText] = React.useState<string | null>(null);
   React.useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || blob === null) return;
     let current = true;
     blob.text().then(
       (value) => {
@@ -126,6 +135,21 @@ function ReloadCorner({
   reloading: boolean;
   onReload: () => void;
 }) {
+  // Whether the icon is mid-turn, which is not the same as whether the file
+  // is still coming. A local file is usually back before the icon is a
+  // quarter of the way round, and a rotation dropped there is a twitch
+  // rather than a turn -- it reads as the button flinching, which is the
+  // opposite of what the spin is for. So an answer does not stop the icon
+  // where it happens to be; the turn under way finishes, and the icon comes
+  // to rest at the top where it started.
+  //
+  // Where that moment is, the icon is asked rather than timed:
+  // `animationiteration` is the animation itself reporting that it has come
+  // back round, so nothing here has to know how long a turn takes or when
+  // one began. A press landing during a turn only means the next boundary
+  // finds the answer still out, and the icon keeps going from where it is.
+  const [turning, setTurning] = React.useState(false);
+
   return (
     <HintTooltip hint="Reload">
       <Button
@@ -133,11 +157,59 @@ function ReloadCorner({
         variant="ghost"
         size="icon-sm"
         className="absolute top-2 right-26"
-        onClick={onReload}
+        onClick={() => {
+          setTurning(true);
+          onReload();
+        }}
         aria-label="Reload"
         data-leika-preview-reload
       >
-        <RefreshCwIcon className={cn(reloading && "animate-spin")} />
+        <RefreshCwIcon
+          className={cn(turning && "animate-spin")}
+          onAnimationIteration={() => {
+            if (!reloading) setTurning(false);
+          }}
+        />
+      </Button>
+    </HintTooltip>
+  );
+}
+
+/** Stand the document's contents up beside it, or take them back down.
+ *
+ * The outermost of the row, and the odd one out in it: the other four are
+ * about the popup or about the file, and this is about the reading. Its place
+ * is the far end for the plain reason that it is the only one not every
+ * preview has -- a picture has no contents, and neither has a document with
+ * too few headings to make a list of -- so putting it anywhere else would
+ * shift the download and the reload from file to file.
+ *
+ * Pressed rather than named: the icon is the same either way, and what says
+ * whether the list is up is `aria-pressed` and the list itself. A toggle
+ * whose glyph changes is a button that looks like a different button
+ * depending on the state of the thing it toggles.
+ */
+function ContentsCorner({
+  shown,
+  onToggle,
+}: {
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  const label = shown ? "Hide contents" : "Show contents";
+  return (
+    <HintTooltip hint={label}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="absolute top-2 right-34"
+        onClick={onToggle}
+        aria-label={label}
+        aria-pressed={shown}
+        data-leika-preview-contents
+      >
+        <TableOfContentsIcon />
       </Button>
     </HintTooltip>
   );
@@ -202,16 +274,22 @@ function PreviewBody({
   kind,
   preview,
   contents,
+  text,
+  showContents,
 }: {
   kind: PreviewKind;
   preview: FilePreview;
   contents: FileContents;
+  /** The file as writing, or null while it is still being read out of the
+   * blob. Read by the dialog rather than here, because whether to offer the
+   * contents toggle is a question about the document that has to be answered
+   * outside the frame the document is drawn in. */
+  text: string | null;
+  showContents: boolean;
 }) {
   const { filename, mimeType, sizeBytes } = preview;
-  const { url, blob } = contents;
-  const isTextual = kind === "text" || kind === "prose" || kind === "markdown";
-  const text = useBlobText(blob, isTextual);
-  const [fullscreen] = usePreviewFullscreen(filename);
+  const { url } = contents;
+  const [fullscreen] = usePreviewFullscreen(previewMemoryKey(preview));
 
   switch (kind) {
     // The three that are shown at their own size. The popup has already been
@@ -260,10 +338,10 @@ function PreviewBody({
       if (text === null) return <PendingBody />;
       return (
         <ReadingColumn>
-          {/* The one surface with margins to put a contents list in: the
+          {/* The one surface with room to stand a contents list in: the
               writing keeps to its measure, and what is left over on either
               side is room a preview has and a panel row does not. */}
-          <MarkdownRenderer contents>{text}</MarkdownRenderer>
+          <MarkdownRenderer contents={showContents}>{text}</MarkdownRenderer>
         </ReadingColumn>
       );
     case "prose":
@@ -420,6 +498,7 @@ export function FilePreviewDialog({
   onReload?: () => void;
 }) {
   const kind = previewKindFor(preview.mimeType, preview.filename);
+  const memoryKey = previewMemoryKey(preview);
   const media = isMediaKind(kind);
   // Only a picture says how big it is. Audio has no size at all, and a
   // video's is not worth a second decode to learn, so both open at the floor.
@@ -428,7 +507,28 @@ export function FilePreviewDialog({
   );
   // Read rather than passed down: the popup owns the toggle, and the document
   // frame is the one thing inside it that has to know.
-  const [fullscreen] = usePreviewFullscreen(preview.filename);
+  const [fullscreen] = usePreviewFullscreen(memoryKey);
+
+  // The file as writing, read here rather than in the body below it: what the
+  // corner offers depends on what the document turns out to hold, and the
+  // corner is outside the frame the document is drawn in.
+  const textual = kind === "text" || kind === "prose" || kind === "markdown";
+  const text = useBlobText(preview.contents?.blob ?? null, textual);
+  // Whether there is a list to stand up at all, which is what decides the
+  // toggle exists. This is the same cached parse the document is drawn from
+  // -- see `renderMarkdown` -- so asking costs nothing over showing it.
+  const listed = React.useMemo(
+    () =>
+      kind === "markdown" && text !== null
+        ? contentsOf(renderMarkdown(text).headings)
+        : [],
+    [kind, text],
+  );
+  const [contentsWanted, setContentsWanted] = usePreviewContents(memoryKey);
+  // A file remembered with its list up, reopened after an edit that took the
+  // headings out, is a file with nothing to stand up. The memory is left
+  // alone: the headings may well come back, and so should the list.
+  const showContents = contentsWanted && listed.length > 0;
 
   // Which contents the reader asked to be rid of. The spin lasts until they
   // are not what is on screen any more, so the answer itself stops it --
@@ -448,7 +548,13 @@ export function FilePreviewDialog({
     preview.contents === null ? (
       <PendingBody />
     ) : (
-      <PreviewBody kind={kind} preview={preview} contents={preview.contents} />
+      <PreviewBody
+        kind={kind}
+        preview={preview}
+        contents={preview.contents}
+        text={text}
+        showContents={showContents}
+      />
     );
 
   const reading = isReadingKind(kind);
@@ -460,11 +566,9 @@ export function FilePreviewDialog({
         if (!open) onClose();
       }}
       title={preview.filename}
-      // The file's name. A transfer's uuid is new on every press, and the
-      // button that sent it is not named on the wire -- but the name is what
-      // the transfer announces first, and it is already what a warmed
-      // preview is filed under.
-      rememberAs={preview.filename}
+      // Source identity keeps same-named buttons independent; one-off files
+      // without a source fall back to their announced filename.
+      rememberAs={memoryKey}
       width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
       height={reading ? READING_HEIGHT : undefined}
     >
@@ -478,6 +582,12 @@ export function FilePreviewDialog({
             setAsked(preview.contents);
             onReload();
           }}
+        />
+      )}
+      {listed.length > 0 && (
+        <ContentsCorner
+          shown={showContents}
+          onToggle={() => setContentsWanted(!showContents)}
         />
       )}
       {preview.contents !== null && (

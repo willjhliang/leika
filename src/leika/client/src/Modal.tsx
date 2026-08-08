@@ -1,4 +1,4 @@
-import { ViewerContext } from "./ViewerContext";
+import { useViewer } from "./ViewerContext";
 import { GuiModalMessage } from "./WebsocketMessages";
 import GeneratedGuiContainer from "./ControlPanel/Generated";
 import {
@@ -7,11 +7,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./components/ui/dialog";
-import { useContext } from "react";
 import { shallowArrayEqual } from "./utils/shallowArrayEqual";
 
 export function LeikaModal() {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
 
   const modalList = viewer.useGui((state) => state.modals, shallowArrayEqual);
   const modals = modalList.map((conf, index) => {
@@ -28,7 +27,7 @@ function GeneratedModal({
   conf: GuiModalMessage;
   index: number;
 }) {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
   return (
     <Dialog
       open

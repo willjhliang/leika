@@ -10,7 +10,7 @@
 // The one chrome not drawn here is the phone's bottom sheet (ControlPanel).
 
 import React from "react";
-import { ViewerContext, ViewerContextContents } from "../ViewerContext";
+import { useViewer, ViewerContextContents } from "../ViewerContext";
 import { DockMetricsContext, useDock } from "../dock/DockContext";
 import { DockManager } from "../dock/DockManager";
 import * as ops from "../dock/layoutOps";
@@ -63,7 +63,7 @@ export function ControlPanelDockSurface({
   controlLayout: ThemeConfigurationMessage["control_layout"];
   onDockStateChange?: (state: ControlDockState) => void;
 }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
 
   // GUI tab groups rendered inside the dock surface register here (via
   // GuiDockContext); the registry hook owns the lifetime of their tabs' panel
@@ -236,7 +236,7 @@ function useGuiTabPanelRegistry(
         return next;
       });
     },
-    [viewer],
+    [applyRef, viewer],
   );
   const registerTabGroup = React.useCallback(
     (uuid: string) => {
@@ -358,8 +358,7 @@ function ControlPanelDockSync({
       }
       return next;
     });
-    // defaultRect and dock.api are stable; the placement follows the theme.
-  }, [controlLayout]);
+  }, [controlLayout, defaultRect, dock.api]);
 
   // Keep the dock group aligned with the generated controls' visibility.
   const bodyVisible = useControlsShown();

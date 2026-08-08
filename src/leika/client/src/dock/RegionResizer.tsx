@@ -2,6 +2,7 @@
 
 import React from "react";
 import { dragGesture } from "./gestures";
+import { useDock } from "./DockContext";
 import { DockEdge } from "./types";
 
 export function RegionResizer({
@@ -15,6 +16,7 @@ export function RegionResizer({
   makeOnResize: () => (px: number) => void;
   getStart: () => number;
 }) {
+  const { gestureCoordinator } = useDock();
   // Cancel the in-flight gesture if the resizer unmounts mid-drag (e.g. the
   // region empties), so its window listeners can't fire after unmount.
   const activeDrag = React.useRef<(() => void) | null>(null);
@@ -35,6 +37,7 @@ export function RegionResizer({
         pending = edge === "left" ? startWidth + delta : startWidth - delta;
       },
       flush: () => onResize(pending),
+      coordinator: gestureCoordinator,
       onEnd: (cancelled) => {
         activeDrag.current = null;
         // Cancel (Escape): resolve back to the drag-start width; the snapshot

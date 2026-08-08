@@ -171,6 +171,24 @@ export interface FilePreview {
   sourceVersion: string | null;
 }
 
+export interface FilePreviewReload {
+  sourceUuid: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  contents: FileContents;
+  sourceVersion: string | null;
+}
+
+/** A stable key for display state remembered across preview mounts. */
+export function previewMemoryKey(
+  preview: Pick<FilePreview, "sourceUuid" | "filename">,
+): string {
+  return preview.sourceUuid === null
+    ? "file-name:" + preview.filename
+    : "file-source:" + preview.sourceUuid;
+}
+
 // The file currently being previewed, held outside React so that the message
 // handler -- which is not a component and must not re-render one to do its
 // job -- can open a dialog the same way it raises a toast.
@@ -236,6 +254,28 @@ export function noteReloadStarted(sourceUuid: string): void {
   arriving.add(sourceUuid);
 }
 
+/** Unwind preview state owned by a transfer that cannot finish.
+ *
+ * A failed reload leaves the existing contents in place and merely allows the
+ * watcher to ask again. A failed initial preview closes only an empty dialog;
+ * warmed contents remain useful even if their fresh replacement was corrupt.
+ */
+export function abortFilePreviewTransfer(
+  transferUuid: string,
+  sourceUuid: string | null,
+): void {
+  if (sourceUuid !== null) arriving.delete(sourceUuid);
+  if (
+    current === null ||
+    current.id !== transferUuid ||
+    current.contents !== null
+  ) {
+    return;
+  }
+  current = null;
+  announce();
+}
+
 /** Put a fresher copy of the file into the preview already showing it.
  *
  * The other way contents arrive. `resolveFilePreview` fills in a dialog that
@@ -253,48 +293,87 @@ export function noteReloadStarted(sourceUuid: string): void {
  * The dialog is not remounted: same `id`, so the document keeps the place the
  * reader had scrolled to and only its contents change underneath.
  */
-export function reloadFilePreview(
-  sourceUuid: string,
-  filename: string,
-  contents: FileContents,
-  version: string | null,
-): void {
+export function reloadFilePreview({
+  sourceUuid,
+  filename,
+  mimeType,
+  sizeBytes,
+  contents,
+  sourceVersion,
+}: FilePreviewReload): void {
   arriving.delete(sourceUuid);
   if (current === null || current.sourceUuid !== sourceUuid) {
     URL.revokeObjectURL(contents.url);
     return;
   }
   if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
-  current = { ...current, filename, contents, sourceVersion: version };
+  current = {
+    ...current,
+    filename,
+    mimeType,
+    sizeBytes,
+    contents,
+    sourceVersion,
+  };
   announce();
 }
 
 /** Files that arrived ahead of their press, newest last.
  *
  * Held as blobs rather than object URLs so there is nothing here to revoke:
- * a dialog that uses one is handed a URL of its own to own. Keyed by
- * filename, which is what the press's transfer announces first. A handful is
- * a session's worth of preview buttons; past that the oldest is dropped, and
- * its press simply waits for its transfer like any unwarmed one.
+ * a dialog that uses one is handed a URL of its own to own. Source identity
+ * and version keep same-named or newly changed files from borrowing stale
+ * bytes. A handful is a session's worth of preview buttons; past that the
+ * oldest is dropped, and its press waits for its own transfer.
  */
 const WARMED_LIMIT = 8;
-const warmed = new Map<string, Blob>();
+type WarmedFile = {
+  filename: string;
+  version: string | null;
+  blob: Blob;
+};
+const warmed = new Map<string, WarmedFile>();
 
 /** Hold a file whose press has not come yet. */
-export function warmFilePreview(filename: string, blob: Blob): void {
-  warmed.delete(filename);
-  warmed.set(filename, blob);
+export function warmFilePreview(
+  sourceUuid: string,
+  filename: string,
+  version: string | null,
+  blob: Blob,
+): void {
+  warmed.delete(sourceUuid);
+  warmed.set(sourceUuid, { filename, version, blob });
   if (warmed.size > WARMED_LIMIT) {
     warmed.delete(warmed.keys().next().value!);
   }
 }
 
-/** What warming has ready for `filename`: contents the dialog can own, or
- * null and the dialog shows its spinner until the transfer lands. */
-export function warmedContents(filename: string): FileContents | null {
-  const blob = warmed.get(filename);
-  if (blob === undefined) return null;
-  return { blob, url: URL.createObjectURL(blob) };
+/** Return only the exact source revision the upcoming press announced. */
+export function warmedContents(
+  sourceUuid: string | null,
+  filename: string,
+  version: string | null,
+): FileContents | null {
+  if (sourceUuid === null) return null;
+  const entry = warmed.get(sourceUuid);
+  if (
+    entry === undefined ||
+    entry.filename !== filename ||
+    entry.version !== version
+  ) {
+    return null;
+  }
+  return { blob: entry.blob, url: URL.createObjectURL(entry.blob) };
+}
+
+/** Clear every resource owned by the current server connection. */
+export function resetFilePreviewState(): void {
+  arriving.clear();
+  warmed.clear();
+  if (current === null) return;
+  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
+  current = null;
+  announce();
 }
 
 /** Close a preview, if it is still the one on screen. */

@@ -14,12 +14,14 @@ import {
 import { useGuiState } from "./ControlPanel/GuiState";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
+import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { LeikaModal } from "./Modal";
 import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
 import {
   ViewerContext,
   ViewerContextContents,
   ViewerMutable,
+  useViewer,
   warnDisconnectedSend,
 } from "./ViewerContext";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
@@ -42,6 +44,7 @@ export function Root() {
     sendMessage: warnDisconnectedSend,
     messageQueue: [],
     notifyMessageQueue: () => undefined,
+    downloads: new FileDownloadAssembler(),
   });
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();
@@ -72,7 +75,7 @@ export function Root() {
 }
 
 function ViewerContents({ children }: { children: React.ReactNode }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const configuredDarkMode = viewer.useGui((state) => state.theme.dark_mode);
   const prefersDarkMode = usePrefersDarkMode();
   const chosenDarkMode = viewer.useSettings((state) => state.darkMode);

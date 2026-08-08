@@ -1,9 +1,9 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { GuiTextMessage } from "../WebsocketMessages";
 import TextInputComponent from "./TextInput";
+import { renderWithGuiContext } from "./testGuiContext";
 
 function renderText({
   value = "note",
@@ -42,7 +42,7 @@ function renderText({
       _source: source ?? value,
     },
   };
-  return renderToStaticMarkup(React.createElement(TextInputComponent, message));
+  return renderWithGuiContext(React.createElement(TextInputComponent, message));
 }
 
 describe("TextInputComponent", () => {

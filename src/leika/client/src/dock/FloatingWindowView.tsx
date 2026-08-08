@@ -10,7 +10,10 @@ import { Separator } from "../components/ui/separator";
 import { PeekHold, PeekHoldContext, useDock } from "./DockContext";
 import { dragGesture } from "./gestures";
 import { prefersReducedMotion } from "../utils/motion";
-import { cascadeResize } from "./layoutOps";
+import {
+  createFloatingStackResizeSession,
+  floatingStackCellBudget,
+} from "./floatingStackResize";
 import { TabGroupFrame } from "./TabGroupFrame";
 import {
   AUTO_HEIGHT_BOUNDARY_PAD_PX,
@@ -101,6 +104,7 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   onResize,
   onResizeHeight,
   onSetStackWeights,
+  onRestoreStackWeights,
   onFront,
 }: {
   win: FloatingWindow;
@@ -118,11 +122,21 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
    * All handlers are windowId-first and STABLE, so this component can be
    * memoized (a re-render of the manager with an unchanged window skips it). */
   onResize: (windowId: string, width: number, x?: number) => void;
-  onResizeHeight: (windowId: string, height: number, y?: number) => void;
+  onResizeHeight: (
+    windowId: string,
+    height: number | undefined,
+    y?: number,
+  ) => void;
   /** Merge per-group stack height weights (groupId -> weight). */
   onSetStackWeights: (
     windowId: string,
     weights: Record<GroupId, number>,
+  ) => void;
+  /** Restore only the stack groups captured at resize start. */
+  onRestoreStackWeights: (
+    windowId: string,
+    groupIds: readonly GroupId[],
+    weights: Readonly<Record<GroupId, number>> | undefined,
   ) => void;
   onFront: (windowId: string) => void;
 }) {
@@ -375,6 +389,7 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           pendingX = side === "left" ? startRight - pending : undefined;
         },
         flush: () => onResize(win.id, pending, pendingX),
+        coordinator: dock.gestureCoordinator,
         onEnd: (cancelled) => {
           activeGrip.current = null;
           // Cancel (Escape) reverts the per-frame resizes to the start size.
@@ -436,6 +451,8 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       if (activeGrip.current !== null) return;
       event.stopPropagation();
       const startY = event.clientY;
+      const startExplicitHeight = win.height;
+      const startWindowY = win.y;
       const { startHeight, heightFrom, yFor } = vResizeStart(vside);
 
       let pending = startHeight;
@@ -446,9 +463,18 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           pending = heightFrom(e.clientY - startY);
         },
         flush: () => onResizeHeight(win.id, pending, yFor(pending)),
+        coordinator: dock.gestureCoordinator,
         onEnd: (cancelled) => {
           activeGrip.current = null;
-          if (cancelled) onResizeHeight(win.id, startHeight, yFor(startHeight));
+          if (cancelled) {
+            // Restore persisted state, not the rendered measurement used for
+            // drag math: an auto-height window must remain auto-height.
+            onResizeHeight(
+              win.id,
+              startExplicitHeight,
+              vside === "top" ? startWindowY : undefined,
+            );
+          }
         },
       });
     };
@@ -465,6 +491,8 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       const startY = event.clientY;
       const startWidth = win.width;
       const startRight = win.x + win.width;
+      const startExplicitHeight = win.height;
+      const startWindowY = win.y;
       const { startHeight, heightFrom, yFor } = vResizeStart(vside);
       const maxW = maxResizeWidth();
 
@@ -485,15 +513,16 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           onResize(win.id, pendingW, pendingX);
           onResizeHeight(win.id, pendingH, yFor(pendingH));
         },
+        coordinator: dock.gestureCoordinator,
         onEnd: (cancelled) => {
           activeGrip.current = null;
           if (cancelled) {
-            onResize(
+            onResize(win.id, startWidth, side === "left" ? win.x : undefined);
+            onResizeHeight(
               win.id,
-              startWidth,
-              side === "left" ? startRight - startWidth : undefined,
+              startExplicitHeight,
+              vside === "top" ? startWindowY : undefined,
             );
-            onResizeHeight(win.id, startHeight, yFor(startHeight));
           }
         },
       });
@@ -658,22 +687,28 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
                   {index > 0 && (
                     // Draggable: redistribute height between the stacked groups
                     // (same cascade as docked column splits). On an auto-height
-                    // window the first drag pins the current height so there is a
-                    // total to divide.
+                    // window the first effective resize pins the current height.
                     <FloatingStackDivider
                       stackRef={stackRef}
                       dividerIndex={index - 1}
                       stack={win.stack}
+                      stackWeights={win.stackWeights}
                       groups={dock.groups}
                       weightOf={(g) => win.stackWeights?.[g] ?? 1}
                       onSetWeights={(weights) =>
                         onSetStackWeights(win.id, weights)
+                      }
+                      onRestoreWeights={(groupIds, weights) =>
+                        onRestoreStackWeights(win.id, groupIds, weights)
                       }
                       isFixed={fixedHeight}
                       pinHeight={() => {
                         const p = paperRef.current;
                         if (p) onResizeHeight(win.id, p.offsetHeight);
                       }}
+                      restoreAutoHeight={() =>
+                        onResizeHeight(win.id, undefined)
+                      }
                     />
                   )}
                   {fixedHeight ? (
@@ -702,31 +737,41 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   );
 });
 
-/** Draggable divider between two groups in a fixed-height floating snap-stack.
+/** Draggable divider between two groups in a floating snap-stack. An
+ * auto-height stack is pinned only after its first effective resize.
  * Redistributes height between the stacked groups using the same cascade as
  * docked column splits, writing per-group weights (by id). */
 function FloatingStackDivider({
   stackRef,
   dividerIndex,
   stack,
+  stackWeights,
   groups,
   weightOf,
   onSetWeights,
+  onRestoreWeights,
   isFixed,
   pinHeight,
+  restoreAutoHeight,
 }: {
   stackRef: React.RefObject<HTMLDivElement | null>;
   dividerIndex: number;
   stack: GroupId[];
+  stackWeights: Readonly<Record<GroupId, number>> | undefined;
   groups: Record<GroupId, TabGroup>;
   weightOf: (g: GroupId) => number;
   onSetWeights: (weights: Record<GroupId, number>) => void;
+  onRestoreWeights: (
+    groupIds: readonly GroupId[],
+    weights: Readonly<Record<GroupId, number>> | undefined,
+  ) => void;
   /** Whether the window already has a fixed height (so weights apply directly).
-   * If false, the first drag pins the current rendered height. */
+   * If false, the first effective resize pins the current rendered height. */
   isFixed: boolean;
   pinHeight: () => void;
+  restoreAutoHeight: () => void;
 }) {
-  const { setResizing } = useDock();
+  const { gestureCoordinator, setResizing } = useDock();
   // Cancel the in-flight gesture if the divider unmounts mid-drag (the stack
   // can be restructured by another client), so the window listeners can't fire
   // after unmount and the shared `resizing` flag can't stick true.
@@ -739,18 +784,51 @@ function FloatingStackDivider({
     const container = stackRef.current;
     if (container === null) return;
     const containerPx = container.getBoundingClientRect().height;
-    // Auto-height window: pin the current height so there's a total to divide
-    // (re-renders to fixed-height with weighted cells). Capturing happens after,
-    // on the persistent grip element.
-    if (!isFixed) pinHeight();
-    setResizing(true);
+    const collapsed = stack.map(
+      (groupId) => groups[groupId]?.collapsed === true,
+    );
+    const groupElements = new Map<GroupId, HTMLElement>();
+    const stackIds = new Set(stack);
+    container
+      .querySelectorAll<HTMLElement>("[data-dock-group]")
+      .forEach((element) => {
+        const groupId = element.dataset.dockGroup;
+        if (groupId !== undefined && stackIds.has(groupId)) {
+          groupElements.set(groupId, element);
+        }
+      });
+    const dividerHeights = Array.from(container.children)
+      .filter((element) => element.hasAttribute("data-floating-divider"))
+      .map((element) => element.getBoundingClientRect().height);
+    const collapsedCellHeights = stack.flatMap((groupId, index) =>
+      collapsed[index]
+        ? [groupElements.get(groupId)?.getBoundingClientRect().height ?? 0]
+        : [],
+    );
+    const cellBudget = floatingStackCellBudget(
+      containerPx,
+      dividerHeights,
+      collapsedCellHeights,
+    );
+    const resizeSession = createFloatingStackResizeSession({
+      stack,
+      // An auto-height stack has no weights on screen yet. Preserve its actual
+      // rendered proportions when the first effective drag pins the height.
+      weights: stack.map((groupId, index) =>
+        !isFixed && !collapsed[index]
+          ? (groupElements.get(groupId)?.getBoundingClientRect().height ??
+            weightOf(groupId))
+          : weightOf(groupId),
+      ),
+      stackWeights,
+      collapsed,
+      containerPx: cellBudget,
+      dividerIndex,
+      minCell: MIN_STACK_CELL_PX,
+      fixedHeight: isFixed,
+    });
     const start = event.clientY;
     let latest = start;
-    // Drag-start weights so a cancel (Escape) can put them back.
-    const startWeights: Record<string, number> = {};
-    stack.forEach((g) => {
-      startWeights[g] = weightOf(g);
-    });
     activeDrag.current = dragGesture({
       grip: event.currentTarget,
       pointerId: event.pointerId,
@@ -758,27 +836,20 @@ function FloatingStackDivider({
         latest = e.clientY;
       },
       flush: () => {
-        const collapsed = stack.map((g) => groups[g]?.collapsed === true);
-        const next = cascadeResize({
-          weights: stack.map((g) => weightOf(g)),
-          collapsed,
-          containerPx,
-          dividerIndex,
-          deltaPx: latest - start,
-          minCell: MIN_STACK_CELL_PX,
-          maxCell: Infinity,
-        });
-        if (next === null) return;
-        const wmap: Record<string, number> = {};
-        stack.forEach((g, i) => {
-          if (!collapsed[i]) wmap[g] = next[i];
-        });
-        onSetWeights(wmap);
+        const update = resizeSession.applyDelta(latest - start);
+        if (update === null) return;
+        if (update.pinAutoHeight) pinHeight();
+        onSetWeights(update.weights);
       },
+      coordinator: gestureCoordinator,
+      onStart: () => setResizing(true),
       onEnd: (cancelled) => {
         activeDrag.current = null;
         setResizing(false);
-        if (cancelled) onSetWeights(startWeights);
+        if (!cancelled) return;
+        const rollback = resizeSession.rollback();
+        onRestoreWeights(rollback.groupIds, rollback.stackWeights);
+        if (rollback.restoreAutoHeight) restoreAutoHeight();
       },
     });
   };

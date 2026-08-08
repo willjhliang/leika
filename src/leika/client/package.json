@@ -38,7 +38,7 @@
     "preview": "vite preview",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint src/",
+    "lint": "eslint src/ vite-plugin-compress-html.mts vite.config.mts vitest.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiToggleMessage } from "../WebsocketMessages";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 import { TOGGLE_CLASSES } from "./toggleStyles";
@@ -13,7 +13,7 @@ export default function ToggleComponent({
   value,
   props: { hint, label, text, disabled, color, _icon_html: iconHtml },
 }: GuiToggleMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const toggle = (
     <Toggle
       id={uuid}

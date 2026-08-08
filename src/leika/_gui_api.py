@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import builtins
+import contextvars
 import dataclasses
+import inspect
 import threading
 import time
 import warnings
 from asyncio import AbstractEventLoop
+from collections import deque
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -30,6 +32,11 @@ from typing_extensions import (
 )
 
 from . import _messages
+from ._async_errors import (
+    await_async_errors,
+    print_async_errors,
+    print_async_exception,
+)
 from ._gui_handles import (
     PREVIEW_MAX_BYTES,
     CommandEvent,
@@ -78,6 +85,7 @@ from ._gui_handles import (
     _GuiInputHandle,
     _make_uuid,
     _plotly_json_with_config,
+    _schedule_coroutine,
     _string_options,
     install_container_add_methods,
     not_container_scoped,
@@ -87,7 +95,6 @@ from ._icons_enum import IconName
 from ._image_encoding import encode_image_binary
 from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import NotificationHandle, _NotificationHandleState
-from ._threadpool_exceptions import print_threadpool_errors
 from ._validation import (
     validate_finite_number as _validate_number,
 )
@@ -109,6 +116,28 @@ IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 T = TypeVar("T")
+
+_PreviewWorkKind = Literal["warm", "preview", "reload", "watch"]
+
+
+@dataclasses.dataclass(frozen=True)
+class _PreviewWorkItem:
+    """One preview operation, already scoped to its originating browser."""
+
+    kind: _PreviewWorkKind
+    client_id: ClientId
+    client: ClientHandle
+    handle: GuiPreviewButtonHandle
+    run: Callable[[], None]
+
+
+@dataclasses.dataclass
+class _PreviewWorkState:
+    """FIFO owned by one ``(client_id, source_uuid)`` pair."""
+
+    pending: deque[_PreviewWorkItem] = dataclasses.field(default_factory=deque)
+    active_kind: _PreviewWorkKind | None = None
+    worker: Future[Any] | None = None
 
 
 def _compute_step(x: float | None) -> float:  # type: ignore
@@ -297,23 +326,6 @@ class _RootGuiContainer:
     _children: dict[str, SupportsRemoveProtocol]
 
 
-_global_order_counter = 0
-
-
-def _apply_default_order(order: float | None) -> float:
-    """Apply default ordering logic for GUI elements.
-
-    If `order` is set to a float, this function is a no-op and returns it back.
-    Otherwise, we increment and return the value of a global counter.
-    """
-    if order is not None:
-        return order
-
-    global _global_order_counter
-    _global_order_counter += 1
-    return _global_order_counter
-
-
 class _FileUploadState(TypedDict):
     client_id: ClientId
     source_component_uuid: str
@@ -330,17 +342,12 @@ class GuiApi(GuiContainer):
     Used by both our global server object, for sharing the same GUI elements
     with all clients, and by individual client handles."""
 
-    _container_stack_from_thread_id: dict[int, list[str]]
-    """Containers each thread is currently inside, innermost last; new GUI
-    elements go into the innermost one. A stack rather than a single ID so that
-    nested ``with`` blocks -- including a container entered twice -- unwind to
-    exactly where they started.
+    _container_stack: contextvars.ContextVar[tuple[str, ...]]
+    """Containers the current execution context is inside, innermost last.
 
-    Keyed by thread so concurrent builders do not see each other's target, and
-    per-instance (NOT a shared class attribute) so a thread inside a ``with
-    some_gui.add_folder()`` block cannot leak that target into a *different*
-    GuiApi instance (e.g. server.gui vs a client.gui) and raise KeyError on the
-    foreign uuid."""
+    ``ContextVar`` isolates both worker threads and interleaved asyncio tasks.
+    Its immutable tuple keeps copied task contexts isolated.
+    """
 
     def __init__(
         self,
@@ -352,9 +359,16 @@ class GuiApi(GuiContainer):
 
         self._owner = owner
         """Entity that owns this API."""
-        self._container_stack_from_thread_id = {}
+        self._container_stack = contextvars.ContextVar(
+            f"leika_gui_container_stack_{id(self)}",
+            default=(),
+        )
         self._thread_executor = thread_executor
         self._event_loop = event_loop
+        server = owner if isinstance(owner, Server) else owner._server
+        self._server = server
+        self._plotly_connection = None if isinstance(owner, Server) else owner._websock_connection
+        self._next_order = server._next_gui_order
 
         self._websock_interface = (
             owner._websock_server if isinstance(owner, Server) else owner._websock_connection
@@ -369,11 +383,8 @@ class GuiApi(GuiContainer):
         self._command_handle_from_uuid: dict[str, CommandHandle] = {}
         self._current_file_upload_states: dict[tuple[ClientId, str], _FileUploadState] = {}
         self._file_upload_lock = threading.RLock()
-
-        # Set to True when plotly.min.js has been sent to client. The lock
-        # keeps concurrent first adds from queueing the ~3MB payload twice.
-        self._setup_plotly_js: bool = False
-        self._setup_plotly_js_lock = threading.Lock()
+        self._preview_work_from_key: dict[tuple[ClientId, str], _PreviewWorkState] = {}
+        self._preview_work_lock = threading.RLock()
 
         self._websock_interface.register_handler(
             _messages.GuiUpdateMessage, self._handle_gui_updates
@@ -415,6 +426,10 @@ class GuiApi(GuiContainer):
     def _child_container_id(self) -> str:
         return "root"
 
+    def _apply_default_order(self, order: float | None) -> float:
+        """Return an explicit order, or the next order owned by this server."""
+        return self._next_order() if order is None else order
+
     def _resolve_client(self, client_id: ClientId) -> ClientHandle | None:
         """Resolve the ClientHandle for a given client_id. Returns None when
         the client has disconnected between queuing and dispatch -- callers
@@ -422,10 +437,15 @@ class GuiApi(GuiContainer):
         # Runtime import to break the circular edge with `_server`.
         from ._server import ClientHandle, Server
 
-        if isinstance(self._owner, ClientHandle):
-            return self._owner
-        if isinstance(self._owner, Server):
-            return self._owner._connected_clients.get(client_id, None)
+        with self._server._client_lock:
+            connected = self._server._connected_clients.get(client_id)
+            if isinstance(self._owner, ClientHandle):
+                # A client-local GUI must only accept messages from the exact
+                # live connection that owns it. The object can outlive its
+                # websocket long enough for an already-queued handler to run.
+                return self._owner if connected is self._owner else None
+            if isinstance(self._owner, Server):
+                return connected
         assert_never(self._owner)
 
     async def _handle_gui_updates(
@@ -464,16 +484,27 @@ class GuiApi(GuiContainer):
         client = self._resolve_client(client_id)
         if client is None:
             return
-        for cb in tuple(handle_state.update_cb):
-            if asyncio.iscoroutinefunction(cb):
-                await cb(GuiEvent(client, client_id, handle))
-            else:
-                self._thread_executor.submit(
-                    cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_threadpool_errors)
 
+        # Synchronize the validated value before entering user code: a raising
+        # async callback must not leave the other clients with stale state.
         if handle_state.sync_cb is not None:
             handle_state.sync_cb(client_id, updates_cast)
+
+        event = GuiEvent(client, client_id, handle)
+        if isinstance(handle, GuiPreviewButtonHandle):
+            self._queue_preview_work(
+                "preview",
+                client_id,
+                client,
+                handle,
+                lambda: handle._send(event),
+            )
+
+        for cb in tuple(handle_state.update_cb):
+            if inspect.iscoroutinefunction(cb):
+                await await_async_errors(cb(event))
+            else:
+                self._thread_executor.submit(cb, event).add_done_callback(print_async_errors)
 
     async def _handle_gui_button_hold(
         self, client_id: ClientId, message: _messages.GuiButtonHoldMessage
@@ -498,12 +529,12 @@ class GuiApi(GuiContainer):
 
         # Call all callbacks for this frequency.
         for cb in tuple(callbacks):
-            if asyncio.iscoroutinefunction(cb):
-                await cb(GuiEvent(client, client_id, handle))
+            if inspect.iscoroutinefunction(cb):
+                await await_async_errors(cb(GuiEvent(client, client_id, handle)))
             else:
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_threadpool_errors)
+                ).add_done_callback(print_async_errors)
 
     def _preview_button_for(
         self, uuid: str, client_id: ClientId
@@ -527,6 +558,120 @@ class GuiApi(GuiContainer):
             return None
         return handle, client
 
+    def _queue_preview_work(
+        self,
+        kind: _PreviewWorkKind,
+        client_id: ClientId,
+        client: ClientHandle,
+        handle: GuiPreviewButtonHandle,
+        run: Callable[[], None],
+    ) -> None:
+        """Run preview work in arrival order for one browser and source.
+
+        File resolution and transfer happen in the callback pool, but a shared
+        pool alone does not preserve submission order. A slow warm or reload
+        could otherwise finish after a newer press and replace the browser's
+        newer contents. One worker drains one FIFO per ``(client, source)``.
+
+        Warm and watch requests are advisory. At most one is useful while no
+        user-requested work is pending; a press or explicit reload supersedes
+        any advisory item that has not started. Presses and reloads are never
+        coalesced, so two reload clicks still resolve the source twice.
+        """
+        item = _PreviewWorkItem(kind, client_id, client, handle, run)
+        key = (client_id, handle._impl.uuid)
+
+        with self._preview_work_lock:
+            state = self._preview_work_from_key.get(key)
+            if state is None:
+                state = _PreviewWorkState()
+                self._preview_work_from_key[key] = state
+
+            has_work = state.active_kind is not None or bool(state.pending)
+            if kind in ("warm", "watch") and has_work:
+                return
+
+            if kind in ("preview", "reload"):
+                state.pending = deque(
+                    queued for queued in state.pending if queued.kind not in ("warm", "watch")
+                )
+            state.pending.append(item)
+
+            if state.worker is not None:
+                return
+            try:
+                state.worker = self._thread_executor.submit(
+                    self._run_preview_work,
+                    key,
+                    state,
+                )
+            except BaseException:
+                self._preview_work_from_key.pop(key, None)
+                raise
+            state.worker.add_done_callback(print_async_errors)
+
+    def _run_preview_work(
+        self,
+        key: tuple[ClientId, str],
+        state: _PreviewWorkState,
+    ) -> None:
+        """Drain one preview FIFO. Called by exactly one pool worker."""
+        while True:
+            with self._preview_work_lock:
+                if self._preview_work_from_key.get(key) is not state:
+                    return
+                if not state.pending:
+                    self._preview_work_from_key.pop(key, None)
+                    return
+                item = state.pending.popleft()
+                state.active_kind = item.kind
+
+            try:
+                # A queued item can become stale while an earlier file is being
+                # read. Revalidate both halves of its identity immediately
+                # before entering user code or touching the connection buffer.
+                if (
+                    not item.handle._impl.removed
+                    and self._resolve_client(item.client_id) is item.client
+                ):
+                    item.run()
+            except BaseException as error:
+                # Each operation used to own an executor future, where one
+                # failure was reported without preventing later submissions.
+                # Preserve that isolation inside the serialized worker.
+                print_async_exception(error)
+            finally:
+                with self._preview_work_lock:
+                    if self._preview_work_from_key.get(key) is state:
+                        state.active_kind = None
+
+    def _discard_preview_work(
+        self,
+        *,
+        client_id: ClientId | None = None,
+        source_component_uuid: str | None = None,
+    ) -> None:
+        """Drop queued preview work for a disconnected client or removed source."""
+        workers: list[Future[Any]] = []
+        with self._preview_work_lock:
+            stale = [
+                key
+                for key in self._preview_work_from_key
+                if (client_id is None or key[0] == client_id)
+                and (source_component_uuid is None or key[1] == source_component_uuid)
+            ]
+            for key in stale:
+                state = self._preview_work_from_key.pop(key)
+                state.pending.clear()
+                if state.worker is not None:
+                    workers.append(state.worker)
+
+        # A worker that has not started can be removed from the executor too.
+        # Running Python code cannot be terminated safely; after it returns,
+        # the missing state above makes it stop before the next queued item.
+        for worker in workers:
+            worker.cancel()
+
     async def _handle_gui_preview_warm(
         self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
     ) -> None:
@@ -539,8 +684,12 @@ class GuiApi(GuiContainer):
         if found is None:
             return
         handle, client = found
-        self._thread_executor.submit(handle._warm, client).add_done_callback(
-            print_threadpool_errors
+        self._queue_preview_work(
+            "warm",
+            client_id,
+            client,
+            handle,
+            lambda: handle._warm(client),
         )
 
     async def _handle_gui_preview_reload(
@@ -556,9 +705,14 @@ class GuiApi(GuiContainer):
         if found is None:
             return
         handle, client = found
-        self._thread_executor.submit(
-            handle._reload, GuiEvent(client, client_id, handle)
-        ).add_done_callback(print_threadpool_errors)
+        event = GuiEvent(client, client_id, handle)
+        self._queue_preview_work(
+            "reload",
+            client_id,
+            client,
+            handle,
+            lambda: handle._reload(event),
+        )
 
     async def _handle_gui_preview_watch(
         self, client_id: ClientId, message: _messages.GuiPreviewWatchMessage
@@ -573,8 +727,13 @@ class GuiApi(GuiContainer):
         if found is None:
             return
         handle, client = found
-        self._thread_executor.submit(handle._watch, client, message.version).add_done_callback(
-            print_threadpool_errors
+        version = message.version
+        self._queue_preview_work(
+            "watch",
+            client_id,
+            client,
+            handle,
+            lambda: handle._watch(client, version),
         )
 
     async def _handle_gui_form_submit(
@@ -595,16 +754,27 @@ class GuiApi(GuiContainer):
         if client is None:
             return
 
+        # Broadcast before entering user code so every client closes the form
+        # even if an async submit callback raises.
+        self._websock_interface.queue_message(_messages.GuiFormSubmitMessage(uuid=message.uuid))
+
         for cb in tuple(handle._submit_cb):
-            if asyncio.iscoroutinefunction(cb):
-                await cb(GuiEvent(client, client_id, handle))
+            if inspect.iscoroutinefunction(cb):
+                await await_async_errors(cb(GuiEvent(client, client_id, handle)))
             else:
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_threadpool_errors)
+                ).add_done_callback(print_async_errors)
 
-        # Broadcast so the clients showing this form close it.
-        self._websock_interface.queue_message(_messages.GuiFormSubmitMessage(uuid=message.uuid))
+    def _queue_upload_ack(
+        self,
+        client_id: ClientId,
+        message: FileTransferPartAck,
+    ) -> None:
+        """Acknowledge an upload only to the browser that is sending it."""
+        client = self._resolve_client(client_id)
+        if client is not None:
+            client._websock_connection.queue_message(message)
 
     def _handle_file_transfer_start(
         self, client_id: ClientId, message: _messages.FileTransferStartUpload
@@ -638,13 +808,14 @@ class GuiApi(GuiContainer):
 
             # Empty uploads have no part message to drive completion.
             if message.part_count == 0:
-                self._websock_interface.queue_message(
+                self._queue_upload_ack(
+                    client_id,
                     FileTransferPartAck(
                         source_component_uuid=message.source_component_uuid,
                         transfer_uuid=message.transfer_uuid,
                         transferred_bytes=0,
                         total_bytes=0,
-                    )
+                    ),
                 )
                 completion = self._complete_file_upload_locked(key)
 
@@ -696,12 +867,15 @@ class GuiApi(GuiContainer):
         if client is None:
             return
         for cb in callbacks:
-            if asyncio.iscoroutinefunction(cb):
-                self._event_loop.create_task(cb(GuiEvent(client, client_id, handle)))
+            if inspect.iscoroutinefunction(cb):
+                _schedule_coroutine(
+                    self._event_loop,
+                    cb(GuiEvent(client, client_id, handle)),
+                )
             else:
                 self._thread_executor.submit(
                     cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_threadpool_errors)
+                ).add_done_callback(print_async_errors)
 
     def _handle_file_transfer_part(
         self, client_id: ClientId, message: _messages.FileTransferPart
@@ -730,13 +904,14 @@ class GuiApi(GuiContainer):
             state["parts"][message.part_index] = message.content
             state["transferred_bytes"] = transferred_bytes
             total_bytes = state["total_bytes"]
-            self._websock_interface.queue_message(
+            self._queue_upload_ack(
+                client_id,
                 FileTransferPartAck(
                     source_component_uuid=state["source_component_uuid"],
                     transfer_uuid=message.transfer_uuid,
                     transferred_bytes=transferred_bytes,
                     total_bytes=total_bytes,
-                )
+                ),
             )
 
             if len(state["parts"]) < state["part_count"]:
@@ -769,6 +944,11 @@ class GuiApi(GuiContainer):
             for key in stale:
                 self._current_file_upload_states.pop(key, None)
 
+    def _discard_client_work(self, client_id: ClientId) -> None:
+        """Discard connection-owned work that must not outlive its browser."""
+        self._discard_file_uploads(client_id=client_id)
+        self._discard_preview_work(client_id=client_id)
+
     async def _handle_command_trigger(
         self, client_id: ClientId, message: _messages.CommandTriggerMessage
     ) -> None:
@@ -785,12 +965,12 @@ class GuiApi(GuiContainer):
             return
 
         for cb in tuple(handle_state.trigger_cb):
-            if asyncio.iscoroutinefunction(cb):
-                await cb(CommandEvent(client, client_id, handle))
+            if inspect.iscoroutinefunction(cb):
+                await await_async_errors(cb(CommandEvent(client, client_id, handle)))
             else:
                 self._thread_executor.submit(
                     cb, CommandEvent(client, client_id, handle)
-                ).add_done_callback(print_threadpool_errors)
+                ).add_done_callback(print_async_errors)
 
     async def _handle_gui_close_modal(
         self, client_id: ClientId, message: _messages.GuiCloseModalMessage
@@ -812,26 +992,20 @@ class GuiApi(GuiContainer):
         handle.close()
 
     def _get_container_uuid(self) -> str:
-        """Container that new GUI elements on this thread belong to."""
-        stack = self._container_stack_from_thread_id.get(threading.get_ident())
+        """Container that new GUI elements in this execution context belong to."""
+        stack = self._container_stack.get()
         return stack[-1] if stack else "root"
 
     def _push_container_uuid(self, container_uuid: str) -> None:
-        """Direct new GUI elements on this thread into ``container_uuid``."""
-        self._container_stack_from_thread_id.setdefault(threading.get_ident(), []).append(
-            container_uuid
-        )
+        """Direct new GUI elements in this context into ``container_uuid``."""
+        self._container_stack.set((*self._container_stack.get(), container_uuid))
 
     def _pop_container_uuid(self) -> None:
-        """Undo the matching :meth:`_push_container_uuid`.
-
-        The thread's entry is dropped once it is empty, so a pool thread that
-        finishes a build leaves nothing behind."""
-        thread_id = threading.get_ident()
-        stack = self._container_stack_from_thread_id[thread_id]
-        stack.pop()
+        """Undo the matching :meth:`_push_container_uuid`."""
+        stack = self._container_stack.get()
         if not stack:
-            del self._container_stack_from_thread_id[thread_id]
+            raise RuntimeError("GUI container stack is empty.")
+        self._container_stack.set(stack[:-1])
 
     def reset(self) -> None:
         """Reset the GUI."""
@@ -1024,7 +1198,7 @@ class GuiApi(GuiContainer):
         if callback is not None:
             # The shorthand callback takes no arguments; adapt it to the
             # event-taking signature that on_trigger expects.
-            if asyncio.iscoroutinefunction(callback):
+            if inspect.iscoroutinefunction(callback):
 
                 async def trigger_async(_: CommandEvent) -> None:
                     await callback()
@@ -1061,7 +1235,7 @@ class GuiApi(GuiContainer):
             A handle that can be used as a context to populate the folder.
         """
         folder_container_id = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         props = _messages.GuiFolderProps(
             order=order,
             label=label,
@@ -1191,7 +1365,7 @@ class GuiApi(GuiContainer):
                 break
 
         form_container_id = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         props = _messages.GuiFormProps(
             order=order,
             label=label,
@@ -1234,7 +1408,7 @@ class GuiApi(GuiContainer):
             A handle that can be used as a context to populate the modal.
         """
         modal_container_id = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         self._websock_interface.queue_message(
             _messages.GuiModalMessage(
                 order=order,
@@ -1263,7 +1437,7 @@ class GuiApi(GuiContainer):
             A handle that can be used as a context to populate the tab group.
         """
         tab_group_id = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
 
         message = _messages.GuiTabGroupMessage(
             uuid=tab_group_id,
@@ -1306,7 +1480,7 @@ class GuiApi(GuiContainer):
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiHtmlProps(
-                order=_apply_default_order(order),
+                order=self._apply_default_order(order),
                 content=content,
                 visible=visible,
             ),
@@ -1343,7 +1517,7 @@ class GuiApi(GuiContainer):
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiDividerProps(
-                order=_apply_default_order(order),
+                order=self._apply_default_order(order),
                 visible=visible,
             ),
         )
@@ -1397,7 +1571,7 @@ class GuiApi(GuiContainer):
                 _data=data,
                 label=label,
                 _format=resolved_format,
-                order=_apply_default_order(order),
+                order=self._apply_default_order(order),
                 visible=visible,
             ),
         )
@@ -1417,33 +1591,8 @@ class GuiApi(GuiContainer):
         )
 
     def _ensure_plotly_js_sent(self) -> None:
-        """Send plotly.min.js to clients, once. Plotly figures cannot be
-        rendered client-side until this arrives."""
-        with self._setup_plotly_js_lock:
-            if self._setup_plotly_js:
-                return
-
-            # Check if plotly is installed.
-            try:
-                import plotly
-            except ImportError:
-                raise ImportError(
-                    "You must have the `plotly` package installed to use the Plotly GUI element."
-                )
-
-            # Check that plotly.min.js exists.
-            plotly_file = plotly.__file__
-            if plotly_file is None:
-                raise ImportError("Could not locate the installed `plotly` package.")
-            plotly_path = Path(plotly_file).parent / "package_data" / "plotly.min.js"
-            assert plotly_path.exists(), f"Could not find plotly.min.js at {plotly_path}."
-
-            # Send it over!
-            plotly_js = plotly_path.read_text(encoding="utf-8")
-            self._websock_interface.queue_message(_messages.RunJavascriptMessage(source=plotly_js))
-
-            # Update the flag so we don't send it again.
-            self._setup_plotly_js = True
+        """Ensure every recipient of this API can render Plotly figures."""
+        self._server._ensure_plotly_js_sent(self._plotly_connection)
 
     def add_plotly(
         self,
@@ -1482,7 +1631,7 @@ class GuiApi(GuiContainer):
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiPlotlyProps(
-                order=_apply_default_order(order),
+                order=self._apply_default_order(order),
                 _plotly_json_str=_plotly_json_with_config(figure, config),
                 aspect=aspect,
                 visible=visible,
@@ -1622,7 +1771,7 @@ class GuiApi(GuiContainer):
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         props = _messages.GuiButtonProps(
             order=order,
             label=label,
@@ -1681,7 +1830,7 @@ class GuiApi(GuiContainer):
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiUploadButtonHandle(
             self._create_gui_input(
                 value=UploadedFile("", b""),
@@ -1759,7 +1908,7 @@ class GuiApi(GuiContainer):
         _validate_file_content(content, filename, "add_download_button()")
 
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         props = _messages.GuiButtonProps(
             order=order,
             label=label,
@@ -1868,7 +2017,7 @@ class GuiApi(GuiContainer):
         _validate_nonnegative_integer(max_bytes, "max_bytes")
 
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         message = _messages.GuiButtonMessage(
             value=False,
             uuid=uuid,
@@ -1894,7 +2043,6 @@ class GuiApi(GuiContainer):
             _filename=filename,
             _max_bytes=max_bytes,
         )
-        handle._impl.update_cb.append(handle._send)
         return handle
 
     def _add_button_group(
@@ -1913,7 +2061,7 @@ class GuiApi(GuiContainer):
         options = _string_options(options, "add_button()")
         value = options[0]
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiButtonGroupHandle(
             self._create_gui_input(
                 value,
@@ -2049,7 +2197,7 @@ class GuiApi(GuiContainer):
                     f" got {initial_value!r}."
                 )
             uuid = _make_uuid()
-            order = _apply_default_order(order)
+            order = self._apply_default_order(order)
             return GuiToggleHandle(
                 self._create_gui_input(
                     initial_value is True,
@@ -2087,7 +2235,7 @@ class GuiApi(GuiContainer):
         required = (not multiple) if required is None else required
         value = _initial_toggles(options, initial_value, multiple=multiple, required=required)
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiToggleGroupHandle(
             self._create_gui_input(
                 value,
@@ -2138,7 +2286,7 @@ class GuiApi(GuiContainer):
         if not isinstance(value, bool):
             raise ValueError(f"initial_value must be a bool, not {type(value).__name__}.")
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiCheckboxHandle(
             self._create_gui_input(
                 value,
@@ -2224,7 +2372,7 @@ class GuiApi(GuiContainer):
                     f"rows= is a height in lines and must be a positive integer; got {rows!r}."
                 )
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         handle = GuiTextHandle(
             self._create_gui_input(
                 value,
@@ -2301,7 +2449,7 @@ class GuiApi(GuiContainer):
                     f" strings; got {entry!r}. Pass str(...) for anything else."
                 )
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiListHandle(
             self._create_gui_input(
                 entries,
@@ -2378,7 +2526,7 @@ class GuiApi(GuiContainer):
         """
         items = _checklist_items(initial_value)
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiChecklistHandle(
             self._create_gui_input(
                 items,
@@ -2463,7 +2611,7 @@ class GuiApi(GuiContainer):
         assert step is not None  # Narrowing for the type checker.
 
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiNumberHandle(
             self._create_gui_input(
                 value,
@@ -2529,7 +2677,7 @@ class GuiApi(GuiContainer):
         if max is not None and any(component > hi for component, hi in zip(value, max)):
             raise ValueError("initial_value has a component above max.")
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
 
         step = _infer_vector_step(value, min, max, step)
 
@@ -2597,7 +2745,7 @@ class GuiApi(GuiContainer):
         if max is not None and any(component > hi for component, hi in zip(value, max)):
             raise ValueError("initial_value has a component above max.")
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
 
         step = _infer_vector_step(value, min, max, step)
 
@@ -2696,7 +2844,7 @@ class GuiApi(GuiContainer):
                 f"Dropdown initial_value {value!r} is not one of the options {options_tuple!r}."
             )
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiDropdownHandle(
             self._create_gui_input(
                 value,
@@ -2746,7 +2894,7 @@ class GuiApi(GuiContainer):
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiProgressBarProps(
-                order=_apply_default_order(order),
+                order=self._apply_default_order(order),
                 animated=animated,
                 visible=visible,
             ),
@@ -2817,7 +2965,7 @@ class GuiApi(GuiContainer):
             value = float(value)  # type: ignore
 
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiSliderHandle(
             self._create_gui_input(
                 value,
@@ -2917,7 +3065,7 @@ class GuiApi(GuiContainer):
             initial_value = tuple(float(x) for x in initial_value)  # type: ignore
 
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiMultiSliderHandle(
             self._create_gui_input(
                 value=initial_value,
@@ -2973,7 +3121,7 @@ class GuiApi(GuiContainer):
 
         value = cast("tuple[int, int, int]", _colors_to_int_tuple(initial_value, 3))
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiRgbHandle(
             self._create_gui_input(
                 value,
@@ -3020,7 +3168,7 @@ class GuiApi(GuiContainer):
         """
         value = cast("tuple[int, int, int, int]", _colors_to_int_tuple(initial_value, 4))
         uuid = _make_uuid()
-        order = _apply_default_order(order)
+        order = self._apply_default_order(order)
         return GuiRgbaHandle(
             self._create_gui_input(
                 value,

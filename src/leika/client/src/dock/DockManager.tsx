@@ -13,6 +13,7 @@
 import { Card } from "../components/ui/card";
 import React from "react";
 import { createDragController } from "./dragController";
+import { createGestureCoordinator } from "./gestures";
 import {
   DockContext,
   DockContextValue,
@@ -107,16 +108,17 @@ export function DockManager({
   // window's position, and an anchor/pull write mid-drag would detach the
   // window from the cursor (the drop commits the final position anyway).
   const draggingWindowIdRef = React.useRef<WindowId | null>(null);
-  // Cleanup for an in-flight gesture, run if the manager unmounts mid-drag.
-  const activeCleanup = React.useRef<(() => void) | null>(null);
+  // One active pointer gesture per manager. The tokenized coordinator covers
+  // drag presses, moves, split/region dividers, and floating-window resizes.
+  const [gestureCoordinator] = React.useState(createGestureCoordinator);
   // Pending tab-reorder "settle" timer, so it can be cancelled on unmount.
   const settleTimer = React.useRef<number | undefined>(undefined);
   React.useEffect(
     () => () => {
-      activeCleanup.current?.();
+      gestureCoordinator.cancel();
       if (settleTimer.current !== undefined) clearTimeout(settleTimer.current);
     },
-    [],
+    [gestureCoordinator],
   );
 
   // ONE region plan per edge per layout, shared by every consumer below:
@@ -269,7 +271,7 @@ export function DockManager({
         layoutRef,
         reservedWidthRef,
         draggingWindowIdRef,
-        activeCleanup,
+        gestureCoordinator,
         settleTimer,
         panelsRef,
         applyOp,
@@ -278,7 +280,7 @@ export function DockManager({
         setDraggingGroupId,
         setDraggingTabId,
       }),
-    [applyOp, restoreLayout, showHint],
+    [applyOp, gestureCoordinator, restoreLayout, showHint],
   );
 
   const activateTab = React.useCallback(
@@ -304,6 +306,7 @@ export function DockManager({
       areas: layout.areas ?? {},
       resizing,
       setResizing,
+      gestureCoordinator,
       ...gestures,
       activateTab,
       toggleCollapsed,
@@ -315,6 +318,7 @@ export function DockManager({
       api,
       layout,
       resizing,
+      gestureCoordinator,
       gestures,
       activateTab,
       toggleCollapsed,
@@ -346,13 +350,24 @@ export function DockManager({
     [applyOp],
   );
   const onWindowResizeHeight = React.useCallback(
-    (windowId: WindowId, height: number, y?: number) =>
+    (windowId: WindowId, height: number | undefined, y?: number) =>
       applyOp(ops.resizeWindowHeight(layoutRef.current, windowId, height, y)),
     [applyOp],
   );
   const onWindowSetStackWeights = React.useCallback(
     (windowId: WindowId, weights: Record<GroupId, number>) =>
       applyOp(ops.setStackWeights(layoutRef.current, windowId, weights)),
+    [applyOp],
+  );
+  const onWindowRestoreStackWeights = React.useCallback(
+    (
+      windowId: WindowId,
+      groupIds: readonly GroupId[],
+      weights: Readonly<Record<GroupId, number>> | undefined,
+    ) =>
+      applyOp(
+        ops.restoreStackWeights(layoutRef.current, windowId, groupIds, weights),
+      ),
     [applyOp],
   );
   const onWindowFront = React.useCallback(
@@ -514,6 +529,7 @@ export function DockManager({
                 onResize={onWindowResize}
                 onResizeHeight={onWindowResizeHeight}
                 onSetStackWeights={onWindowSetStackWeights}
+                onRestoreStackWeights={onWindowRestoreStackWeights}
                 onFront={onWindowFront}
               />
             ))}

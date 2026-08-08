@@ -187,6 +187,9 @@ function useCurrentSection(
     if (frame === null) return;
 
     let pending = 0;
+    // The entry the list was last moved for. Kept so that it is only moved
+    // when the answer changes -- see {@link keepInView}.
+    let moved: string | null = null;
     const measure = () => {
       pending = 0;
       const box = frame.getBoundingClientRect();
@@ -224,7 +227,10 @@ function useCurrentSection(
         reached = topmostOnScreen;
       }
       setCurrent(reached);
-      keepInView(nav, reached);
+      if (reached !== moved) {
+        moved = reached;
+        keepInView(nav, reached);
+      }
     };
     const schedule = () => {
       if (pending === 0) pending = requestAnimationFrame(measure);
@@ -255,6 +261,14 @@ function useCurrentSection(
  * `scrollIntoView`, which scrolls every scrollable ancestor it needs to --
  * including the frame holding the document, which would mean the contents
  * list scrolling the thing that is scrolling it.
+ *
+ * Called when the mark MOVES, and not otherwise, which is what makes the two
+ * scrolls independent. A reader who scrolls the list to look further down the
+ * file has left the marked entry off the top of it, so every measurement
+ * after that -- and one is taken on every frame the document scrolls in --
+ * found the entry out of view and hauled the list back to it. Reading on by a
+ * line snapped the list shut. Only a new section is a reason to move it, and
+ * a new section is a reason: the mark is no use where it cannot be seen.
  */
 function keepInView(nav: HTMLElement, fragment: string | null): void {
   if (fragment === null) return;
@@ -266,21 +280,23 @@ function keepInView(nav: HTMLElement, fragment: string | null): void {
   else if (box.bottom > list.bottom) nav.scrollTop += box.bottom - list.bottom;
 }
 
-/** The document's headings, in the margin to the right of it.
+/** The document's headings, in a column to the right of it.
  *
- * A column of its own rather than something floating in the margin, and an
- * empty mirror of it on the left rather than nothing: a table takes the whole
- * width it is given, so a list overlapping the margin would be a list
- * overlapping the table, and a document laid out with a gutter on one side
- * only would have its writing sitting off-centre in the popup. With both, the
- * column of writing is in the same place whether or not there is a contents
- * list beside it, and only the widest blocks give up any room.
+ * A column of its own rather than something floating in the margin: a table
+ * takes the whole width it is given, so a list hanging over the margin would
+ * be a list hanging over the table. The document and the list are then
+ * centred in the frame together, so standing the list up moves the writing
+ * left by half of what the list takes -- the reader is looking at a document
+ * with a list beside it, and that pair is what the popup is showing.
  *
  * It stays put while the document moves under it, which is the whole use of
  * it -- a contents list you have to scroll back up to is the one at the top of
- * the file. The height it may take is the window's less the popup's chrome,
- * because what it sticks to is the frame the document scrolls in, and that is
- * as tall as the window lets it be.
+ * the file. Its own scroll is its own: `overscroll-contain` keeps the end of
+ * a long list from being passed outwards to the document behind it, and the
+ * mark only pulls the list about when the mark itself moves; see
+ * {@link keepInView}. The height it may take is the window's less the popup's
+ * chrome, because what it sticks to is the frame the document scrolls in, and
+ * that is as tall as the window lets it be.
  *
  * It carries no heading of its own. A column of the file's own words beside
  * the file: nothing about that needs announcing, and "Contents" over it would
@@ -297,20 +313,18 @@ function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
       aria-label="Contents"
       // Hidden until the width is there: `hidden` is the answer for every
       // surface, and the container query is what takes it back for the ones
-      // wide enough. The 67rem is arithmetic, not taste -- two 10rem columns
-      // and their 3rem gaps come out of it, and what is left has to still be
-      // the 65 characters the writing is set to. A contents list bought by
-      // narrowing the document would be a bad trade, and measured before this
-      // was tuned it was exactly that: the paragraphs came out 34px short.
+      // wide enough. The 67rem is arithmetic, not taste -- the 10rem column
+      // and its gap come out of it, and what is left has to still be the 65
+      // characters the writing is set to. A contents list bought by narrowing
+      // the document would be a bad trade, and measured before this was tuned
+      // it was exactly that: the paragraphs came out 34px short.
       //
-      // The gap has been widened twice, and each time the column paid for it
-      // rather than the writing. There is not much left to pay with: a
-      // document popup is at most 72rem, which leaves 1104px inside its
-      // padding, and this layout now asks for 1058 of them. A platform whose
-      // scrollbars take up room rather than floating over the page spends
-      // another 15, so anything much wider than this would mean no contents
-      // list at all on Windows.
-      className="sticky top-0 hidden max-h-[calc(100dvh-6rem)] self-start overflow-y-auto pt-1 no-scrollbar @min-[67rem]/document:col-start-3 @min-[67rem]/document:row-start-1 @min-[67rem]/document:block"
+      // Room to spare now, where there used not to be: this layout asked for
+      // both margins while only one of them held anything, and giving up the
+      // empty one gave back 13rem. What the threshold buys at this width is a
+      // reader who widens a narrow window and sees the list appear rather
+      // than the writing shrink.
+      className="sticky top-0 hidden max-h-[calc(100dvh-6rem)] self-start overflow-y-auto overscroll-contain pt-1 no-scrollbar @min-[67rem]/document:col-start-2 @min-[67rem]/document:row-start-1 @min-[67rem]/document:block"
       data-leika-document-contents
     >
       {/* Set at label size -- `text-sm`, which this app draws at 13px -- and
@@ -380,12 +394,13 @@ function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
  * Leika's, and is how wide the blocks are allowed to run, which is the one
  * question typeset leaves to the surface asking it.
  *
- * `contents` asks for the document's headings beside it, which is a thing to
- * ask for only where there is margin to put them in: a preview dialog has
- * one, a panel row is the width of a panel. Whether the margin is wide enough
- * on the day is settled in CSS -- see {@link DocumentContents} -- so this is a
- * request rather than an instruction, and a document with too few headings to
- * make a list of ignores it either way.
+ * `contents` stands the document's headings up beside it, which is a thing
+ * to ask for only where there is room for them: a preview dialog has room, a
+ * panel row is the width of a panel. It is the reader's answer, kept per file
+ * -- see ./previewContents -- and it is still only a request: whether the
+ * room is there on the day is settled in CSS (see {@link DocumentContents}),
+ * and a document with too few headings to make a list of has nothing to stand
+ * up either way.
  */
 export function MarkdownRenderer(props: {
   children?: string;
@@ -407,43 +422,62 @@ export function MarkdownRenderer(props: {
   // link into the same file is answered by where it lands, and where it lands
   // is only knowable from here. A contents entry is such a link, so it sits
   // inside the same handler and needs nothing of its own.
-  if (listed.length === 0) {
-    return (
-      <div
-        className="typeset reading-measure"
-        onClick={followLinkWithinDocument}
-      >
-        {element}
-      </div>
-    );
-  }
+  //
+  // One structure whether or not the list is up, and not because it reads
+  // better: the reader can put the list up and take it back down while they
+  // are half way through a file. Two branches would be two trees, and React
+  // would unmount the document to swap between them -- losing the reader
+  // their place, and the browser every figure it had already fetched. Here
+  // only the wrappers change class and the nav comes and goes; the document
+  // is the same elements in the same place, and since the measure is the same
+  // either way it does not even re-wrap.
+  const showing = listed.length > 0;
   return (
     <div className="@container/document" onClick={followLinkWithinDocument}>
-      {/* The contents are placed in the third column rather than written
+      {/* The contents are placed in the second column rather than written
           there: first in the document, so that reaching them does not mean
           reading past the file to get to them, and last on the screen, where
-          they were asked for. The first column is the empty mirror that keeps
-          the writing centred; see {@link DocumentContents}. */}
-      {/* The middle column is the width of the document, not the width of
+          they were asked for.
+
+          The document's column is the width of the document, not the width of
           what is left over: `fit-content` sizes it to the widest block in the
           file -- the measure for writing, more for a table that needs it --
-          and the three columns are then centred in the frame together. So the
-          contents hang a fixed 1.5rem off the document's edge and stay there,
-          where a `1fr` middle column pinned them to the frame's edge instead
-          and let the gap grow with the window: going full-window walked them
-          another hundred pixels away from the thing they are a list of.
+          and the two columns are then centred in the frame together. So the
+          contents hang a fixed distance off the document's edge and stay
+          there, in a window or filling the screen, where a `1fr` column
+          pinned them to the frame's edge instead and let the gap grow with
+          the window: going full-window walked them another hundred pixels
+          away from the thing they are a list of.
+
+          That distance is the one the popup already uses. A block that takes
+          the full width -- a wide table -- stops 1.5rem short of the popup's
+          edge, being the dialog's padding and the reading column's together,
+          and this is the same 1.5rem: the list is inset from the writing by
+          what the writing is inset from the frame, so there is one gutter
+          width on the surface rather than a second one invented for it.
 
           The floor is the measure, so a file of short lines still sets its
           blocks to the column every other file uses rather than shrinking to
           its own longest line. The cap is the space available, so a table
           wider than the frame scrolls inside its own box, as it does
           everywhere else, instead of widening the popup. */}
-      <div className="grid grid-cols-1 @min-[67rem]/document:grid-cols-[10rem_fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-12">
-        <DocumentContents headings={listed} />
-        {/* Both placed by hand, and both told which row: auto-placement
-            fills forwards only, so a document asking for the column to the
-            left of the contents would be put on the row below them. */}
-        <div className="typeset reading-measure @min-[67rem]/document:col-start-2 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]">
+      <div
+        className={cn(
+          showing &&
+            "grid @min-[67rem]/document:grid-cols-[fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-6",
+        )}
+      >
+        {showing ? <DocumentContents headings={listed} /> : null}
+        {/* Both placed by hand, and both told which row: auto-placement fills
+            forwards only, so a document asking for the column to the left of
+            the contents would be put on the row below them. */}
+        <div
+          className={cn(
+            "typeset reading-measure",
+            showing &&
+              "@min-[67rem]/document:col-start-1 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]",
+          )}
+        >
           {element}
         </div>
       </div>

@@ -9,17 +9,23 @@ file too large to hold in a tab.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import inspect
 import re
+import threading
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List, Tuple
 from unittest import mock
 
 import pytest
 
 import leika
+from leika import _messages
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
+from leika.infra import ClientId
 
 
 class _Client:
@@ -36,7 +42,7 @@ class _Client:
         #: with. The last two are what let the dialog ask for it again.
         self.shown: List[Tuple[str, str, Any, int, str | None, str | None]] = []
         self.downloaded: List[Tuple[str, Any]] = []
-        self.warmed: List[Tuple[str, Any]] = []
+        self.warmed: List[Tuple[str, Any, str | None, str | None]] = []
 
     @property
     def previewed(self) -> List[Tuple[str, Any, int]]:
@@ -54,9 +60,21 @@ class _Client:
 
     def _send_file(
         self, filename: str, content: Any, chunk_size: int, disposition: str, **kwargs: Any
-    ) -> None:
+    ) -> int | None:
         assert disposition == "warm"
-        self.warmed.append((filename, content))
+        size = len(content) if isinstance(content, bytes) else content.stat().st_size
+        max_bytes = kwargs.get("max_bytes")
+        if max_bytes is not None and size > max_bytes:
+            return size
+        self.warmed.append(
+            (
+                filename,
+                content,
+                kwargs.get("source_uuid"),
+                kwargs.get("source_version"),
+            )
+        )
+        return None
 
     def _send_preview(
         self,
@@ -189,7 +207,10 @@ def test_scrolling_into_view_warms_a_static_preview(server: leika.Server, tmp_pa
     client = _Client(server)
     handle._warm(client)  # type: ignore[arg-type]
 
-    assert client.warmed == [("notes.md", b"# hi\n")]
+    assert len(client.warmed) == 1
+    filename, content, source_uuid, version = client.warmed[0]
+    assert (filename, content, source_uuid) == ("notes.md", b"# hi\n", handle._impl.uuid)
+    assert version is not None
     assert client.previewed == []
 
 
@@ -371,9 +392,8 @@ def test_a_warm_that_cannot_deliver_stays_silent(server: leika.Server, tmp_path:
 def test_an_unchanged_file_keeps_its_asset_url_and_a_changed_one_moves(
     server: leika.Server, tmp_path: Path
 ) -> None:
-    # The URL is the content's hash: re-registering an unchanged file answers
-    # from the digest cache with the same URL (this is what lets the browser
-    # cache forever), and an edit -- new mtime, new size -- is a new URL.
+    # The URL is the content's hash: unchanged bytes produce the same URL,
+    # while changed bytes produce a new one regardless of filesystem metadata.
     asset = tmp_path / "plot.png"
     asset.write_bytes(b"one")
 
@@ -384,14 +404,11 @@ def test_an_unchanged_file_keeps_its_asset_url_and_a_changed_one_moves(
     assert server.register_http_asset(asset) != first
 
 
-def test_a_pictures_size_is_learned_without_reading_it_twice(
+def test_a_pictures_size_is_learned_from_the_bytes_used_for_its_digest(
     server: leika.Server, tmp_path: Path
 ) -> None:
-    # The size a document reserves room from comes out of the bytes the URL
-    # was already being hashed from, and is remembered beside the digest -- so
-    # knowing it costs nothing over not knowing it, and a reopened preview
-    # still costs a `stat` rather than the file. This is the whole reason it
-    # is read from the header here instead of by the browser over there.
+    # Each registration reads once to uphold the content-addressed URL. The
+    # picture size comes from those bytes rather than causing another read.
     asset = tmp_path / "plot.png"
     asset.write_bytes(_one_pixel_png())
 
@@ -409,7 +426,7 @@ def test_a_pictures_size_is_learned_without_reading_it_twice(
 
     assert first.pixel_size == (1, 1)
     assert again == first
-    assert len(reads) == 1, "the second registration re-read the file"
+    assert len(reads) == 2, "pixel-size detection performed an extra file read"
 
 
 def test_bytes_without_a_filename_are_rejected_at_creation(server: leika.Server) -> None:
@@ -431,3 +448,209 @@ def test_the_error_names_the_method_that_was_called(server: leika.Server) -> Non
 def test_a_str_is_refused_at_creation(server: leika.Server) -> None:
     with pytest.raises(TypeError, match="bytes, a Path"):
         server.gui.add_preview_button("Look", "notes.md")  # type: ignore[arg-type]
+
+
+def test_preview_work_for_one_client_and_source_is_fifo(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow old operation cannot land after a newer user request."""
+    handle = server.gui.add_preview_button("Look", b"x", filename="x.txt")
+    client = _Client(server)
+    client_id = ClientId(17)
+    monkeypatch.setattr(
+        server.gui,
+        "_resolve_client",
+        lambda requested: client if requested == client_id else None,
+    )
+    warm_started = threading.Event()
+    release_warm = threading.Event()
+    second_reload_finished = threading.Event()
+    events: list[str] = []
+    reload_count = 0
+
+    def warm(requesting_client: Any) -> None:
+        assert requesting_client is client
+        events.append("warm:start")
+        warm_started.set()
+        if not release_warm.wait(5.0):
+            raise AssertionError("test did not release the warm operation")
+        events.append("warm:end")
+
+    def preview(event: GuiEvent[Any]) -> None:
+        assert event.client is client
+        events.append("preview")
+
+    def reload(event: GuiEvent[Any]) -> None:
+        nonlocal reload_count
+        assert event.client is client
+        reload_count += 1
+        events.append(f"reload:{reload_count}")
+        if reload_count == 2:
+            second_reload_finished.set()
+
+    def watch(requesting_client: Any, version: str | None) -> None:
+        events.append("watch")
+
+    monkeypatch.setattr(handle, "_warm", warm)
+    monkeypatch.setattr(handle, "_send", preview)
+    monkeypatch.setattr(handle, "_reload", reload)
+    monkeypatch.setattr(handle, "_watch", watch)
+
+    try:
+        asyncio.run(
+            server.gui._handle_gui_preview_warm(
+                client_id, _messages.GuiPreviewWarmMessage(handle.id)
+            )
+        )
+        assert warm_started.wait(2.0)
+        asyncio.run(
+            server.gui._handle_gui_updates(
+                client_id,
+                _messages.GuiUpdateMessage(handle.id, {"value": True}),
+            )
+        )
+        for _ in range(2):
+            asyncio.run(
+                server.gui._handle_gui_preview_reload(
+                    client_id, _messages.GuiPreviewReloadMessage(handle.id)
+                )
+            )
+        asyncio.run(
+            server.gui._handle_gui_preview_watch(
+                client_id,
+                _messages.GuiPreviewWatchMessage(handle.id, "old-version"),
+            )
+        )
+    finally:
+        release_warm.set()
+
+    assert second_reload_finished.wait(2.0)
+    assert events == ["warm:start", "warm:end", "preview", "reload:1", "reload:2"]
+
+
+def test_preview_work_is_independent_across_clients_and_sources(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One blocked FIFO does not hold an unrelated browser or source."""
+    first = server.gui.add_preview_button("First", b"1", filename="1.txt")
+    second = server.gui.add_preview_button("Second", b"2", filename="2.txt")
+    first_client = _Client(server)
+    second_client = _Client(server)
+    first_client_id = ClientId(21)
+    second_client_id = ClientId(22)
+    clients = {
+        first_client_id: first_client,
+        second_client_id: second_client,
+    }
+    monkeypatch.setattr(server.gui, "_resolve_client", clients.get)
+
+    warm_started = threading.Event()
+    release_warm = threading.Event()
+    other_client_finished = threading.Event()
+    other_source_finished = threading.Event()
+
+    def blocked_warm(client: Any) -> None:
+        warm_started.set()
+        if not release_warm.wait(5.0):
+            raise AssertionError("test did not release the warm operation")
+
+    def first_reload(event: GuiEvent[Any]) -> None:
+        if event.client is second_client:
+            other_client_finished.set()
+
+    def second_reload(event: GuiEvent[Any]) -> None:
+        if event.client is first_client:
+            other_source_finished.set()
+
+    monkeypatch.setattr(first, "_warm", blocked_warm)
+    monkeypatch.setattr(first, "_reload", first_reload)
+    monkeypatch.setattr(second, "_reload", second_reload)
+
+    try:
+        asyncio.run(
+            server.gui._handle_gui_preview_warm(
+                first_client_id, _messages.GuiPreviewWarmMessage(first.id)
+            )
+        )
+        assert warm_started.wait(2.0)
+        asyncio.run(
+            server.gui._handle_gui_preview_reload(
+                second_client_id, _messages.GuiPreviewReloadMessage(first.id)
+            )
+        )
+        asyncio.run(
+            server.gui._handle_gui_preview_reload(
+                first_client_id, _messages.GuiPreviewReloadMessage(second.id)
+            )
+        )
+        assert other_client_finished.wait(2.0)
+        assert other_source_finished.wait(2.0)
+    finally:
+        release_warm.set()
+
+
+def test_disconnecting_drops_queued_preview_work(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handle = server.gui.add_preview_button("Look", b"x", filename="x.txt")
+    client = _Client(server)
+    client_id = ClientId(29)
+    monkeypatch.setattr(
+        server.gui,
+        "_resolve_client",
+        lambda requested: client if requested == client_id else None,
+    )
+    client.gui = SimpleNamespace(_discard_client_work=lambda _: None)
+    with server._client_lock:
+        server._connected_clients[client_id] = client  # type: ignore[assignment]
+
+    warm_started = threading.Event()
+    release_warm = threading.Event()
+    events: list[str] = []
+    worker = None
+
+    def warm(requesting_client: Any) -> None:
+        events.append("warm:start")
+        warm_started.set()
+        if not release_warm.wait(5.0):
+            raise AssertionError("test did not release the warm operation")
+        events.append("warm:end")
+
+    monkeypatch.setattr(handle, "_warm", warm)
+    monkeypatch.setattr(handle, "_send", lambda event: events.append("preview"))
+    monkeypatch.setattr(handle, "_reload", lambda event: events.append("reload"))
+
+    try:
+        asyncio.run(
+            server.gui._handle_gui_preview_warm(
+                client_id, _messages.GuiPreviewWarmMessage(handle.id)
+            )
+        )
+        assert warm_started.wait(2.0)
+        asyncio.run(
+            server.gui._handle_gui_updates(
+                client_id,
+                _messages.GuiUpdateMessage(handle.id, {"value": True}),
+            )
+        )
+        for _ in range(2):
+            asyncio.run(
+                server.gui._handle_gui_preview_reload(
+                    client_id, _messages.GuiPreviewReloadMessage(handle.id)
+                )
+            )
+
+        with server.gui._preview_work_lock:
+            state = server.gui._preview_work_from_key[(client_id, handle.id)]
+            worker = state.worker
+        disconnect = server._websock_server._client_disconnect_cb[-1]
+        assert inspect.iscoroutinefunction(disconnect)
+        asyncio.run(disconnect(SimpleNamespace(client_id=client_id)))
+        with server.gui._preview_work_lock:
+            assert (client_id, handle.id) not in server.gui._preview_work_from_key
+    finally:
+        release_warm.set()
+
+    assert worker is not None
+    worker.result(timeout=2.0)
+    assert events == ["warm:start", "warm:end"]

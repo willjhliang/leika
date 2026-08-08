@@ -10,8 +10,8 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
-import { ViewerContext } from "../ViewerContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
+import { useViewer } from "../ViewerContext";
 import { GuiFormMessage } from "../WebsocketMessages";
 import { useContainerIsEmpty } from "./useContainerIsEmpty";
 import { GuiInputRow } from "./common";
@@ -37,7 +37,7 @@ export default function FormComponent(message: GuiFormMessage) {
  * it is the same kind of thing -- a small square that acts on the control
  * beside it rather than a row of its own. */
 function MiniForm({ uuid }: GuiFormMessage) {
-  const guiContext = React.useContext(GuiComponentContext)!;
+  const guiContext = useGuiComponent();
   return (
     <form
       className="flex min-w-0 items-center gap-1"
@@ -82,8 +82,8 @@ function MiniForm({ uuid }: GuiFormMessage) {
  * the parts live in the popout, where they are plainly a thing apart from the
  * controls behind them and a submit is plainly the way out. */
 function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
-  const viewer = React.useContext(ViewerContext)!;
-  const guiContext = React.useContext(GuiComponentContext)!;
+  const viewer = useViewer();
+  const guiContext = useGuiComponent();
   const [open, setOpen] = React.useState(false);
   // Submitting is the way out, and the server says when that happened -- so
   // the popout closes on the press of its own submit, on Enter, and on a

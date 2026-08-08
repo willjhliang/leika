@@ -4,7 +4,7 @@ import { ErrorBoundary } from "react-error-boundary";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiTextMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -38,7 +38,7 @@ export default function TextInputComponent({
     _source,
   },
 }: GuiTextMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
 
   if (!editable) {
     // A document is blocks -- headings, lists, code -- and takes as many lines

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiVector2Message } from "../WebsocketMessages";
 import { VectorInput, GuiInputRow } from "./common";
 
@@ -8,7 +8,7 @@ export default function Vector2Component({
   value,
   props: { hint, label, disabled, min, max, step, precision },
 }: GuiVector2Message) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       <VectorInput

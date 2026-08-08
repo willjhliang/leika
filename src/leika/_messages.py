@@ -1141,6 +1141,18 @@ class FileTransferPart(Message):
 
 
 @dataclasses.dataclass
+class FileTransferAbort(Message):
+    """Tell a client that a started download cannot finish."""
+
+    transfer_uuid: str
+    reason: str
+
+    @override
+    def redundancy_key(self) -> str:
+        return type(self).__name__ + "-" + self.transfer_uuid
+
+
+@dataclasses.dataclass
 class FileTransferPartAck(Message):
     """Send a file for clients to download or upload files from client."""
 

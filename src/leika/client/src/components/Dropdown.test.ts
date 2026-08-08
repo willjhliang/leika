@@ -1,9 +1,9 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { GuiDropdownMessage } from "../WebsocketMessages";
 import DropdownComponent from "./Dropdown";
+import { renderWithGuiContext } from "./testGuiContext";
 
 function renderDropdown(disabled = false, searchable = false): string {
   const message: GuiDropdownMessage = {
@@ -21,7 +21,7 @@ function renderDropdown(disabled = false, searchable = false): string {
       searchable,
     },
   };
-  return renderToStaticMarkup(React.createElement(DropdownComponent, message));
+  return renderWithGuiContext(React.createElement(DropdownComponent, message));
 }
 
 describe("DropdownComponent", () => {

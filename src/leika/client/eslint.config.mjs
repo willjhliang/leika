@@ -32,6 +32,7 @@ export default defineConfig(
       "react/prop-types": ["error", { skipUndeclared: true }],
       "react-refresh/only-export-components": "error",
       "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "error",
     },
   },
   {
@@ -45,5 +46,18 @@ export default defineConfig(
       "src/components/ui/toggle.tsx",
     ],
     rules: { "react-refresh/only-export-components": "off" },
+  },
+  {
+    files: [
+      "vite-plugin-compress-html.mts",
+      "vite.config.mts",
+      "vitest.config.ts",
+    ],
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: { ...globals.node, ...globals.es2021 },
+    },
   },
 );

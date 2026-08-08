@@ -15,6 +15,7 @@ import {
   rgbToHsv,
   type HsvColor,
   type RgbTuple,
+  type RgbaTuple,
 } from "./colorUtils";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -178,8 +179,11 @@ function ColorPicker({
   className?: string;
   onValueChange: (value: string) => void;
 }) {
-  const rgba = parseToRgba(value) ?? [0, 0, 0, 255];
-  const rgb = rgba.slice(0, 3) as RgbTuple;
+  const rgba = React.useMemo<RgbaTuple>(
+    () => parseToRgba(value) ?? [0, 0, 0, 255],
+    [value],
+  );
+  const rgb = React.useMemo(() => rgba.slice(0, 3) as RgbTuple, [rgba]);
   const alpha = (rgba[3] / 255) * 100;
   const [draftHsv, setDraftHsv] = React.useState<HsvColor>(() => rgbToHsv(rgb));
   // Where the hue and saturation controls sit cannot be recovered from the

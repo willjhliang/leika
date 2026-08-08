@@ -15,6 +15,7 @@ import { flushSync } from "react-dom";
 
 import {
   bindPointerGesture,
+  type GestureCoordinator,
   grabbingCursor,
   motionExceedsThreshold,
   suppressTextSelection,
@@ -72,8 +73,8 @@ export type DragControllerDeps = {
   reservedWidthRef: React.RefObject<{ left: number; right: number }>;
   /** The window being dragged, for the container observer to leave alone. */
   draggingWindowIdRef: React.RefObject<WindowId | null>;
-  /** Cleanup for an in-flight gesture, run if the manager unmounts mid-drag. */
-  activeCleanup: React.RefObject<(() => void) | null>;
+  /** Enforces one active pointer gesture across this DockManager. */
+  gestureCoordinator: GestureCoordinator;
   /** Pending tab-reorder "settle" timer, cancellable on unmount. */
   settleTimer: React.RefObject<number | undefined>;
   panelsRef: React.RefObject<PanelRegistry>;
@@ -158,7 +159,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
     layoutRef,
     reservedWidthRef,
     draggingWindowIdRef,
-    activeCleanup,
+    gestureCoordinator,
     settleTimer,
     panelsRef,
     applyOp,
@@ -390,12 +391,12 @@ export function createDragController(deps: DragControllerDeps): DragController {
     grabY: number,
     /** Pre-drag layout for drags that COMMIT an op up front (float a group/
      * column, tear out a tab): a cancel (Escape) restores it, so the panel
-     * docks back where it came from instead of stranding as a floater.
-     * Deliberately a whole-layout snapshot, not an inverse op: cancelling
-     * also discards any external layout changes that landed mid-drag, which
-     * is acceptable for a sub-second gesture and far simpler than rebasing. */
+     * docks back where it came from instead of stranding as a floater. The
+     * snapshot is restored only while the post-commit layout is still current;
+     * a concurrent layout commit makes the snapshot stale. */
     restoreOnCancel?: DockLayout,
   ) => {
+    gestureCoordinator.cancel();
     const container = containerRef.current;
     const el0 = container?.querySelector<HTMLElement>(
       `[data-floating-window="${windowId}"]`,
@@ -408,6 +409,11 @@ export function createDragController(deps: DragControllerDeps): DragController {
     const restoreCursor = grabbingCursor();
     let crect = container.getBoundingClientRect();
     let targets = collectTargets(windowId);
+    // Every committed layout is a new immutable object, so this reference is a
+    // transaction token for the up-front float/tear commit. Keep it separate
+    // from targetsLayout: target collection may legitimately rebase during the
+    // drag, but a whole-layout rollback must never overwrite that newer state.
+    const rollbackToken = layoutRef.current;
     // The layout the targets were collected against. A mid-drag layout change
     // (e.g. a server update adding/removing panels) invalidates the cached
     // rects AND may recreate the dragged window's DOM node; both are
@@ -488,17 +494,22 @@ export function createDragController(deps: DragControllerDeps): DragController {
       }
     };
 
+    let unregister = () => {};
+    let ended = false;
     const detach = bindPointerGesture(
       (e) => {
+        if (ended) return;
         latest = e;
         if (raf === null) raf = requestAnimationFrame(apply);
       },
       (_endEvent, cancelled) => {
+        if (ended) return;
+        ended = true;
         // A cancelled pointer (Escape, browser-stolen touch) ABORTS: no dock,
         // no move -- clearing the transform snaps the window back to where the
         // drag started. Only a real pointerup commits.
         detach();
-        activeCleanup.current = null;
+        unregister();
         if (raf !== null) {
           cancelAnimationFrame(raf);
           if (!cancelled) apply();
@@ -515,9 +526,15 @@ export function createDragController(deps: DragControllerDeps): DragController {
         resetLeafPreview();
         if (cancelled) {
           // A deferred-float drag already committed its float op; put the
-          // pre-drag layout back so Escape really means "never mind" --
-          // including region widths, which the snapshot carries.
-          if (restoreOnCancel !== undefined) restoreLayout(restoreOnCancel);
+          // pre-drag layout back only if nothing else committed meanwhile.
+          // Restoring a whole snapshot after a lifecycle/server update would
+          // resurrect removed panels or discard newly added ones.
+          if (
+            restoreOnCancel !== undefined &&
+            layoutRef.current === rollbackToken
+          ) {
+            restoreLayout(restoreOnCancel);
+          }
           return;
         }
 
@@ -614,14 +631,28 @@ export function createDragController(deps: DragControllerDeps): DragController {
     // Suppress text selection anywhere while dragging over content.
     const restoreSelect = suppressTextSelection();
     tryCapture(el, pointerId);
-    activeCleanup.current = () => {
+    unregister = gestureCoordinator.register(() => {
+      if (ended) return;
+      ended = true;
       detach();
+      if (raf !== null) cancelAnimationFrame(raf);
+      tryRelease(el, pointerId);
+      el.style.transform = "";
+      el.style.willChange = "";
       el.style.opacity = "";
       restoreSelect();
       restoreCursor();
+      showHint(null);
+      setDraggingGroupId(null);
       draggingWindowIdRef.current = null;
-      if (raf !== null) cancelAnimationFrame(raf);
-    };
+      resetLeafPreview();
+      if (
+        restoreOnCancel !== undefined &&
+        layoutRef.current === rollbackToken
+      ) {
+        restoreLayout(restoreOnCancel);
+      }
+    });
   };
 
   /** Run a drag whose gesture COMMITS layout ops up front (float a group or
@@ -670,6 +701,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
     // so without this DOM-containment check a click inside an open modal
     // would arm a drag / click-toggle on the handle underneath.
     if (!event.currentTarget.contains(event.target as Node)) return;
+    gestureCoordinator.cancel();
     // Finalize any pending tab-reorder settle so its delayed setDraggingTabId
     // doesn't fire in the middle of this new gesture (which would un-mark a tab
     // mid-drag and let FLIP fight the manager's imperative transform).
@@ -685,21 +717,26 @@ export function createDragController(deps: DragControllerDeps): DragController {
     const startX = event.clientX;
     const startY = event.clientY;
     let triggered = false;
+    let unregister = () => {};
+    let ended = false;
     const detach = bindPointerGesture(
       (e) => {
-        if (triggered) return;
+        if (ended || triggered) return;
         if (!motionExceedsThreshold([startX, startY], [e.clientX, e.clientY]))
           return;
         triggered = true;
+        ended = true;
         detach();
-        activeCleanup.current = null;
+        unregister();
         // The drag handler re-suppresses for its own (longer) lifetime.
         restoreSelect();
         onDrag(e);
       },
       (_e, cancelled) => {
+        if (ended) return;
+        ended = true;
         detach();
-        activeCleanup.current = null;
+        unregister();
         restoreSelect();
         // Only a real release is a click -- a CANCELLED pointer (touch grabbed
         // by the browser for scrolling, palm rejection, etc.) must not activate.
@@ -708,10 +745,12 @@ export function createDragController(deps: DragControllerDeps): DragController {
       // Ignore other pointers so a second finger can't trigger/cancel this press.
       event.pointerId,
     );
-    activeCleanup.current = () => {
+    unregister = gestureCoordinator.register(() => {
+      if (ended) return;
+      ended = true;
       detach();
       restoreSelect();
-    };
+    });
   };
 
   const floatRectFor = (selector: string) => {
@@ -1066,22 +1105,27 @@ export function createDragController(deps: DragControllerDeps): DragController {
     // the grabbing cursor.
     let restoreSelect: (() => void) | null = null;
     let restoreCursor: (() => void) | null = null;
-    const teardown = () => {
+    let unregister = () => {};
+    let ended = false;
+    const teardown = (): boolean => {
+      if (ended) return false;
+      ended = true;
       detach?.();
       detach = null;
       if (raf !== null) cancelAnimationFrame(raf);
       raf = null;
-      activeCleanup.current = null;
+      unregister();
       restoreSelect?.();
       restoreSelect = null;
       restoreCursor?.();
       restoreCursor = null;
       showHint(null);
+      return true;
     };
     // Used when the gesture is abandoned without committing (tear-out, unmount):
     // snap the dragged tab back and clear drag state immediately.
     const cleanup = () => {
-      teardown();
+      if (!teardown()) return;
       const tabEl = draggedTabEl();
       if (tabEl !== null) {
         tabEl.style.transition = "";
@@ -1092,7 +1136,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
     // Pointer-up while reordering: commit the reorder to the line's index, then
     // glide the dragged tab from the cursor into its new slot.
     const commitReorder = () => {
-      teardown();
+      if (!teardown()) return;
       if (!reordering) return;
       if (lastInsert === null) {
         setDraggingTabId(null);
@@ -1142,6 +1186,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
           src.y,
           src.width,
         );
+        if (res.windowId === null || res.floatingGroupId === null) return null;
         flushSync(() => applyOp(res.layout));
 
         // Anchor the new window so the cursor lands on its tab strip. Unlike
@@ -1246,11 +1291,13 @@ export function createDragController(deps: DragControllerDeps): DragController {
         }
         // Keep selection suppressed through the reorder phase (armPress's
         // suppression ends when it hands off to this drag handler).
+        gestureCoordinator.cancel();
         restoreSelect = suppressTextSelection();
         restoreCursor = grabbingCursor();
         latest = e0;
         detach = bindPointerGesture(
           (e) => {
+            if (ended) return;
             latest = e;
             if (raf === null) raf = requestAnimationFrame(apply);
           },
@@ -1260,7 +1307,7 @@ export function createDragController(deps: DragControllerDeps): DragController {
           (_endEvent, cancelled) => (cancelled ? cleanup() : commitReorder()),
           e0.pointerId, // ignore other fingers during the reorder/tear.
         );
-        activeCleanup.current = cleanup;
+        unregister = gestureCoordinator.register(cleanup);
         raf = requestAnimationFrame(apply);
       },
       opts?.onClick ??

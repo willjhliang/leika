@@ -1,9 +1,9 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import ButtonGroupComponent from "./ButtonGroup";
+import { renderWithGuiContext } from "./testGuiContext";
 
 type Color = "inverse" | "default";
 
@@ -29,7 +29,7 @@ function renderButtonGroup(
       _merge: merge,
     },
   };
-  return renderToStaticMarkup(
+  return renderWithGuiContext(
     React.createElement(ButtonGroupComponent, message),
   );
 }

@@ -1,8 +1,9 @@
-import React, { useContext } from "react";
+import React from "react";
 
 import { applyGuiConfigUpdate } from "./ControlPanel/GuiState";
 import { toast } from "./components/ui/toast";
 import {
+  abortFilePreviewTransfer,
   noteReloadStarted,
   openFilePreview,
   previewKindFor,
@@ -12,6 +13,7 @@ import {
   warmFilePreview,
 } from "./filePreview";
 import { warmMarkdownDocument } from "./components/markdownDocument";
+import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import {
   dismissNotification,
   fileDownloadToastOptions,
@@ -20,8 +22,10 @@ import {
 } from "./notifications";
 import { notePlotlyMaybeLoaded } from "./plotlyReady";
 import { makeMessageQueueScheduler } from "./messageQueueScheduler";
-import { ViewerContext } from "./ViewerContext";
+import { dispatchMessageBatch, type GuiUpdate } from "./messageBatch";
+import { useViewer } from "./ViewerContext";
 import {
+  FileTransferAbort,
   FileTransferPart,
   FileTransferStartDownload,
   GuiComponentMessage,
@@ -29,14 +33,11 @@ import {
   isGuiComponentMessage,
 } from "./WebsocketMessages";
 
-type GuiUpdate = {
-  uuid: string;
-  updates: Record<string, unknown>;
-};
-
 function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
-  const viewer = useContext(ViewerContext)!;
-  const fileDownloadHandler = useFileDownloadHandler();
+  const viewer = useViewer();
+  const fileDownloadHandler = useFileDownloadHandler(
+    viewer.mutable.current.downloads,
+  );
 
   return (message) => {
     if (isGuiComponentMessage(message)) {
@@ -113,6 +114,7 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
         return;
       case "FileTransferStartDownload":
       case "FileTransferPart":
+      case "FileTransferAbort":
         fileDownloadHandler(message);
         return;
       case "FileTransferPartAck":
@@ -133,7 +135,7 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
 
 /** Process queued websocket batches before paint. */
 export function MessageHandler() {
-  const viewer = useContext(ViewerContext)!;
+  const viewer = useViewer();
   const handleMessage = useMessageHandler();
 
   React.useEffect(() => {
@@ -141,21 +143,7 @@ export function MessageHandler() {
       const queue = viewer.mutable.current.messageQueue;
       if (queue.length === 0) return;
       const batch = queue.splice(0, queue.length);
-      const guiUpdates = new Map<string, Record<string, unknown>>();
-
-      for (const message of batch) {
-        // Updates are deferred to the end of the batch while removes apply
-        // immediately, so an update whose component was removed later in the
-        // same batch is legitimate leftover, not an error.
-        if (message.type === "GuiRemoveMessage")
-          guiUpdates.delete(message.uuid);
-        const result = handleMessage(message);
-        if (result === undefined) continue;
-        guiUpdates.set(result.uuid, {
-          ...(guiUpdates.get(result.uuid) ?? {}),
-          ...result.updates,
-        });
-      }
+      const guiUpdates = dispatchMessageBatch(batch, handleMessage);
 
       if (guiUpdates.size === 0) return;
       const configUpdates: Record<string, GuiComponentMessage | undefined> = {};
@@ -208,42 +196,42 @@ export function MessageHandler() {
   return null;
 }
 
-function useFileDownloadHandler(): (
-  message: FileTransferStartDownload | FileTransferPart,
+function useFileDownloadHandler(
+  downloads: FileDownloadAssembler,
+): (
+  message: FileTransferStartDownload | FileTransferPart | FileTransferAbort,
 ) => void {
-  const downloadStatesRef = React.useRef<
-    Record<
-      string,
-      {
-        metadata: FileTransferStartDownload;
-        parts: FileTransferPart[];
-        bytesDownloaded: number;
-      }
-    >
-  >({});
-
   return (message) => {
+    const result = downloads.accept(message);
+    if (result.status === "rejected") {
+      console.error(result.reason);
+      if (result.metadata !== null) {
+        abortFilePreviewTransfer(
+          result.metadata.transfer_uuid,
+          result.metadata.disposition === "reload"
+            ? result.metadata.source_uuid
+            : null,
+        );
+      }
+      return;
+    }
+
     if (message.type === "FileTransferStartDownload") {
-      downloadStatesRef.current[message.transfer_uuid] = {
-        metadata: message,
-        parts: [],
-        bytesDownloaded: 0,
-      };
       if (message.disposition === "preview") {
         // The dialog opens on the first message rather than the last: its
         // name, viewer and size are all here, so the click is answered now
         // and only the contents wait on the rest of the transfer -- or not
-        // even that, when a warm transfer already brought them: the document
-        // shows at once, and the arriving copy replaces it on landing.
+        // even that, when a warm transfer already brought them.
         openFilePreview({
           id: message.transfer_uuid,
           filename: message.filename,
           mimeType: message.mime_type,
           sizeBytes: message.size_bytes,
-          contents: warmedContents(message.filename),
-          // Kept so the open dialog can go back to the button for the file
-          // again: on a reader's press, and on its own while the file it was
-          // read from is still being written.
+          contents: warmedContents(
+            message.source_uuid,
+            message.filename,
+            message.source_version,
+          ),
           sourceUuid: message.source_uuid,
           sourceVersion: message.source_version,
         });
@@ -251,56 +239,40 @@ function useFileDownloadHandler(): (
         message.disposition === "reload" &&
         message.source_uuid !== null
       ) {
-        // Nothing is shown for this one; the note is so the dialog stops
-        // asking for what is already on its way.
         noteReloadStarted(message.source_uuid);
       }
-    } else {
-      const state = downloadStatesRef.current[message.transfer_uuid];
-      if (state === undefined) {
-        console.error(
-          "Received FileTransferPart for unknown transfer",
-          message.transfer_uuid,
-        );
-        return;
-      }
-      if (message.part_index !== state.parts.length) {
-        console.error("A file download message was received out of order!");
-      }
-      state.parts.push(message);
-      state.bytesDownloaded += message.content.length;
     }
 
-    const state = downloadStatesRef.current[message.transfer_uuid];
-    if (state.bytesDownloaded < state.metadata.size_bytes) return;
+    if (result.status !== "complete") return;
 
-    // Every chunk has arrived: assemble the blob.
-    const blob = new Blob(
-      state.parts
-        .sort((left, right) => left.part_index - right.part_index)
-        .map((part) => part.content),
-      { type: state.metadata.mime_type },
-    );
+    const { metadata, parts } = result;
+    const blob = new Blob(parts, { type: metadata.mime_type });
     const url = URL.createObjectURL(blob);
-    const { filename, disposition } = state.metadata;
-    delete downloadStatesRef.current[message.transfer_uuid];
+    const { filename, disposition, transfer_uuid: transferUuid } = metadata;
 
     if (disposition === "warm") {
       // Arrived ahead of its press, so nothing is shown: the file is held
       // for the preview that a press would open, and a markdown document is
-      // readied the rest of the way -- parsed into the render cache, its
-      // images fetched into the browser's -- while the reader is elsewhere.
+      // readied the rest of the way while the reader is elsewhere.
       URL.revokeObjectURL(url);
-      warmFilePreview(filename, blob);
-      if (previewKindFor(state.metadata.mime_type, filename) === "markdown") {
+      if (metadata.source_uuid !== null) {
+        warmFilePreview(
+          metadata.source_uuid,
+          filename,
+          metadata.source_version,
+          blob,
+        );
+      }
+      if (
+        metadata.source_uuid !== null &&
+        previewKindFor(metadata.mime_type, filename) === "markdown"
+      ) {
         void blob.text().then(warmMarkdownDocument, () => undefined);
       }
       return;
     }
 
     if (disposition === "save") {
-      // Hand the blob straight to the browser, which owns the download UI from
-      // here (its own progress/downloads list).
       const link = document.createElement("a");
       link.href = url;
       link.download = filename;
@@ -311,30 +283,32 @@ function useFileDownloadHandler(): (
     }
 
     if (disposition === "reload") {
-      // The same file again, for a dialog that is already showing it. Only a
-      // button's file can be reloaded, so a transfer arriving here without a
-      // source has nothing to be matched against and is let go.
-      const { source_uuid: sourceUuid, source_version: version } =
-        state.metadata;
+      const { source_uuid: sourceUuid, source_version: version } = metadata;
       if (sourceUuid === null) URL.revokeObjectURL(url);
-      else reloadFilePreview(sourceUuid, filename, { url, blob }, version);
+      else
+        reloadFilePreview({
+          sourceUuid,
+          filename,
+          mimeType: metadata.mime_type,
+          sizeBytes: metadata.size_bytes,
+          contents: { url, blob },
+          sourceVersion: version,
+        });
       return;
     }
 
     if (disposition === "preview") {
-      // The dialog owns the URL from here: every viewer in it reads from the
-      // URL, so it is revoked when the dialog closes rather than now -- or
-      // right away, if the dialog was closed while the file was in flight.
-      resolveFilePreview(message.transfer_uuid, { url, blob });
+      // The dialog owns the URL until it closes. If it closed while bytes
+      // were in flight, resolveFilePreview releases the late URL instead.
+      resolveFilePreview(transferUuid, { url, blob });
       return;
     }
 
-    // Otherwise offer the file as a link, which the user can also right click
-    // to "Save as...". The object URL has to outlive this call, so it is
-    // revoked only once the toast is gone.
+    // Otherwise offer the file as a link. Its object URL lives exactly as
+    // long as the toast that exposes it.
     const options = fileDownloadToastOptions(filename, url);
     toast.add({
-      id: message.transfer_uuid,
+      id: transferUuid,
       title: options.title,
       description: (
         <a

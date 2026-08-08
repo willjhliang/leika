@@ -3,7 +3,7 @@ import React from "react";
 import { Slider } from "@/components/ui/slider";
 import { SliderAnnotations } from "./SliderAnnotations";
 import { defaultMarks, snapMultiSliderValue } from "./sliderValues";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { usePointerDrag } from "../hooks/usePointerDrag";
 import { GuiMultiSliderMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
@@ -24,7 +24,7 @@ export default function MultiSliderComponent({
     min_range: minRange,
   },
 }: GuiMultiSliderMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const [dragging, startDrag] = usePointerDrag();
   const controlledValue = React.useMemo(() => [...value], [value]);
   const endpointValues = React.useRef({ first: value[0], last: value.at(-1) });

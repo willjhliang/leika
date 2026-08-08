@@ -1,77 +1,30 @@
 // Which previews fill the window, and the styling that follows from it.
 //
-// Per preview, not per session. Full-window is a decision about one thing
-// being too small to read at the size it opens -- a dense figure, a document
-// with a wide table in it -- and the next file is a different thing. So the
-// flag is keyed by whatever is being previewed, and pressing the toggle on
-// one says nothing about any other.
-//
-// Held outside React because it outlives every component that reads it: the
-// preview it belongs to is unmounted the moment it closes, which is exactly
-// when the answer has to survive.
-//
-// A set of the keys that open full-window rather than a map to booleans, so
-// what is remembered is only what somebody asked for. Going back to windowed
-// forgets the key instead of writing `false` against it, and a session that
-// opens a thousand files carries nothing for the ones it never enlarged.
-//
-// Not written to storage. This is a way of looking at something, not a
-// preference somebody set: every preference that outlives the tab is one a
-// viewer can find and change in the settings popout. Reloading starts small.
+// One of the flags a preview remembers about how it is being looked at; see
+// ./previewFlags for what that means and why it is kept where it is. Filling
+// the window is the reader's answer to "this is too small", and the next
+// file is not that file, so the answer is kept against this one alone.
 
-import * as React from "react";
+import { previewFlag, usePreviewFlag } from "./previewFlags";
 
 /** Marks the popup as full-window, for anything reading the page from the
  * outside -- a test, mostly. Nothing styles off it: see
  * {@link previewMediaClassName} for why. */
 export const PREVIEW_FULLSCREEN_ATTR = "data-preview-fullscreen";
 
-const fullscreenKeys = new Set<string>();
-const listeners = new Set<() => void>();
+const fullscreen = previewFlag();
 
-/** The `useSyncExternalStore` half, held apart from the hook so that the flag
- * can be read without a component to read it from. */
-export const previewFullscreenStore = {
-  subscribe(listener: () => void): () => void {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  },
-  snapshot(key: string): boolean {
-    return fullscreenKeys.has(key);
-  },
-};
+export const previewFullscreenStore = fullscreen.store;
 
 export function setPreviewFullscreen(key: string, next: boolean): void {
-  // Previews mount and unmount constantly, and each one asks. Only a real
-  // change is worth waking every reader for.
-  if (next === fullscreenKeys.has(key)) return;
-  if (next) fullscreenKeys.add(key);
-  else fullscreenKeys.delete(key);
-  for (const listener of listeners) listener();
+  fullscreen.set(key, next);
 }
 
-/** Whether THIS preview opens full-window, and the way to say otherwise.
- *
- * `key` names what is being previewed, and is what the answer is remembered
- * against: a file's name, or the uuid of the pane whose media this is. Two
- * previews sharing a key share the answer, which is the right reading of a
- * name -- the same file shown from two buttons is the same file.
- */
+/** Whether THIS preview opens full-window, and the way to say otherwise. */
 export function usePreviewFullscreen(
   key: string,
 ): [boolean, (next: boolean) => void] {
-  const value = React.useSyncExternalStore(
-    previewFullscreenStore.subscribe,
-    () => previewFullscreenStore.snapshot(key),
-    () => previewFullscreenStore.snapshot(key),
-  );
-  const set = React.useCallback(
-    (next: boolean) => setPreviewFullscreen(key, next),
-    [key],
-  );
-  return [value, set];
+  return usePreviewFlag(fullscreen, key);
 }
 
 /** What a picture or a video wears inside a preview.

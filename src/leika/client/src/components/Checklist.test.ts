@@ -1,9 +1,9 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { GuiChecklistMessage } from "../WebsocketMessages";
 import ChecklistComponent from "./Checklist";
+import { renderWithGuiContext } from "./testGuiContext";
 
 function renderChecklist({
   value = [
@@ -26,7 +26,7 @@ function renderChecklist({
     container_uuid: "root",
     props: { order: 0, label, hint: null, visible: true, disabled, frozen },
   };
-  return renderToStaticMarkup(React.createElement(ChecklistComponent, message));
+  return renderWithGuiContext(React.createElement(ChecklistComponent, message));
 }
 
 /** The `disabled` attribute itself, not `data-disabled` and not the utility

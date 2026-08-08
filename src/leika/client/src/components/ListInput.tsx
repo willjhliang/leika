@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiListMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
@@ -20,7 +20,7 @@ export default function ListInputComponent({
   value,
   props: { label, hint, disabled, frozen },
 }: GuiListMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const commit = (next: string[]) => setValue(uuid, next);
 
   const stack = (

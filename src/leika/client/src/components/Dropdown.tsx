@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiDropdownMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 
@@ -135,7 +135,7 @@ export default function DropdownComponent({
   value,
   props: { hint, label, disabled, options, searchable },
 }: GuiDropdownMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const shared = {
     uuid,
     value,

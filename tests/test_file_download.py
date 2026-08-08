@@ -11,6 +11,7 @@ recording stand-in rather than standing up a websocket and a GUI api.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Tuple
 
@@ -25,8 +26,16 @@ class _RecordingConnection:
     def __init__(self) -> None:
         self.messages: List[Any] = []
 
-    def queue_message(self, message: Any) -> None:
+    def queue_message(self, message: Any) -> bool:
         self.messages.append(message)
+        return True
+
+
+class _CloseAfterStartConnection(_RecordingConnection):
+    def queue_message(self, message: Any) -> bool:
+        if self.messages:
+            return False
+        return super().queue_message(message)
 
 
 class _Client:
@@ -109,6 +118,20 @@ def test_start_precedes_every_part() -> None:
     assert len(messages) == 1 + len(_parts(messages))
 
 
+def test_transfer_stops_when_connection_closes_after_start() -> None:
+    client = _Client()
+    client._websock_connection = _CloseAfterStartConnection()
+
+    ClientHandle.send_file_download(client, "data.bin", b"0123456789", chunk_size=2)  # type: ignore[arg-type]
+
+    assert len(client._websock_connection.messages) == 1
+    assert isinstance(
+        client._websock_connection.messages[0],
+        _messages.FileTransferStartDownload,
+    )
+    assert client.flushes == 0
+
+
 def test_empty_file_sends_no_parts() -> None:
     messages = _send("empty.txt", b"")
     assert _start(messages).size_bytes == 0
@@ -127,6 +150,36 @@ def test_a_path_is_read_from_disk_and_chunked_like_bytes(tmp_path: Path) -> None
     assert start.size_bytes == len(content)
     assert start.part_count == len(parts)
     assert b"".join(part.content for part in parts) == content
+
+
+def test_an_interrupted_send_emits_a_terminal_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = OSError("source shrank")
+
+    @contextmanager
+    def interrupted_source(content: bytes | Path, chunk_size: int):
+        del content, chunk_size
+
+        def chunks():
+            yield b"first"
+            raise failure
+
+        yield 10, chunks()
+
+    monkeypatch.setattr("leika._server._download_source", interrupted_source)
+    client = _Client()
+    with pytest.raises(OSError, match="source shrank") as captured:
+        client._send_file("data.bin", b"ignored", 5, "preview")
+
+    assert captured.value is failure
+    start = _start(client._websock_connection.messages)
+    assert isinstance(client._websock_connection.messages[1], _messages.FileTransferPart)
+    abort = client._websock_connection.messages[-1]
+    assert isinstance(abort, _messages.FileTransferAbort)
+    assert abort.transfer_uuid == start.transfer_uuid
+    assert abort.reason == "source shrank"
+    assert client.flushes == 2
 
 
 def test_an_empty_path_sends_no_parts(tmp_path: Path) -> None:
@@ -214,9 +267,9 @@ def test_a_file_over_the_preview_limit_is_described_rather_than_sent() -> None:
     assert "2.0 KiB" in body and "1.0 KiB" in body
 
 
-def test_a_path_is_measured_before_it_is_read(tmp_path: Path) -> None:
-    # The limit is checked against the file on disk, so an oversize file is
-    # never opened, let alone streamed.
+def test_a_path_is_measured_from_the_open_descriptor(tmp_path: Path) -> None:
+    # The limit is settled on the same descriptor the transfer would read, so
+    # a path replacement cannot race a preliminary stat check.
     path = tmp_path / "capture.bin"
     path.write_bytes(b"x" * 2048)
     client = _Client()
@@ -224,6 +277,24 @@ def test_a_path_is_measured_before_it_is_read(tmp_path: Path) -> None:
 
     assert client._websock_connection.messages == []
     assert client.notifications[0][0] == "Too large to preview"
+
+
+def test_a_preview_limit_uses_the_source_opened_for_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @contextmanager
+    def replaced_source(content: bytes | Path, chunk_size: int):
+        del content, chunk_size
+        yield 2048, iter([b"x" * 2048])
+
+    monkeypatch.setattr("leika._server._download_source", replaced_source)
+    client = _Client()
+    ClientHandle.send_file_preview(client, "capture.bin", b"small", max_bytes=1024)  # type: ignore[arg-type]
+
+    assert client._websock_connection.messages == []
+    assert client.notifications == [
+        ("Too large to preview", "capture.bin is 2.0 KiB, over the 1.0 KiB preview limit.")
+    ]
 
 
 def test_a_file_at_the_limit_is_sent() -> None:

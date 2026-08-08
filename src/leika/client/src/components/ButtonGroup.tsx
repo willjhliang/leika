@@ -6,7 +6,7 @@ import {
   ButtonGroupSeparator,
 } from "@/components/ui/button-group";
 import { cn } from "@/lib/utils";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { GroupRun } from "./GroupRun";
@@ -33,7 +33,7 @@ export default function ButtonGroupComponent({
   uuid,
   props: { hint, label, disabled, options, color, _merge: merge },
 }: GuiButtonGroupMessage) {
-  const { setValue } = React.useContext(GuiComponentContext)!;
+  const { setValue } = useGuiComponent();
   const runs = runsOf(options, merge);
   return (
     <GuiInputRow

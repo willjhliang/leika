@@ -120,6 +120,13 @@ What the gate guarantees, none of it depending on the code being secret:
 
 What the gate cannot promise:
 
+- **A Leika server is trusted application code, not untrusted content.** The
+  protocol can ask the client to run JavaScript and render HTML supplied by
+  the server. This is intentional -- it is how Python-side extensions can
+  load browser renderers and provide rich controls -- but it gives the server
+  the same authority as the page itself. Only open servers whose operator and
+  Python program you trust; a password controls who may reach a server, not
+  what an authenticated server may do in the browser.
 - **Cloudflare sees the traffic.** TLS terminates at their edge and is
   re-established into the tunnel, so the dashboard's bytes exist in
   Cloudflare's memory in the clear -- true of any proxied tunnel service.

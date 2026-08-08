@@ -89,7 +89,7 @@ describe("(a) tearOutPanel on a single-panel area group", () => {
     expect(out.layout.groups[AREA_GID].panelIds).toEqual([]);
 
     // The torn panel lives in a NEW floating group, in a new floating window.
-    const floated = out.layout.groups[out.floatingGroupId];
+    const floated = out.layout.groups[out.floatingGroupId!];
     expect(floated.panelIds).toEqual(["layers"]);
     const win = out.layout.floating.find((w) => w.id === out.windowId)!;
     expect(win.stack).toEqual([out.floatingGroupId]);
@@ -118,7 +118,7 @@ describe("(b) tearOutPanel from a multi-panel area keeps activeId valid", () => 
     expect(area.panelIds).toContain(area.activeId);
 
     // Torn panel floated on its own.
-    expect(out.layout.groups[out.floatingGroupId].panelIds).toEqual(["props"]);
+    expect(out.layout.groups[out.floatingGroupId!].panelIds).toEqual(["props"]);
   });
 
   it("tearing a NON-active middle panel preserves the existing activeId", () => {

@@ -763,6 +763,15 @@ export interface FileTransferPart {
   part_index: number;
   content: Uint8Array<ArrayBuffer>;
 }
+/** Tell a client that a started download cannot finish.
+ *
+ * (automatically generated)
+ */
+export interface FileTransferAbort {
+  type: "FileTransferAbort";
+  transfer_uuid: string;
+  reason: string;
+}
 /** Send a file for clients to download or upload files from client.
  *
  * (automatically generated)
@@ -954,6 +963,7 @@ export type Message =
   | FileTransferStartUpload
   | FileTransferStartDownload
   | FileTransferPart
+  | FileTransferAbort
   | FileTransferPartAck
   | ClientPingMessage
   | ServerPongMessage

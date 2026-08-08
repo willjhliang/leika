@@ -5,7 +5,7 @@ import {
   useConnectionReading,
 } from "../ConnectionStatsController";
 import { LEIKA_PROTOCOL } from "../VersionInfo";
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import { usePeekHold } from "../dock/DockContext";
 import {
   QUALITY_LABELS,
@@ -78,7 +78,7 @@ function StatRow({
  * nothing but an echo, so a reading that looks bad is bad from where the
  * reader is sitting, which is the only place it matters. */
 function ConnectionRows() {
-  const { useGui } = React.useContext(ViewerContext)!;
+  const { useGui } = useViewer();
   const server = useGui((state) => state.server);
   const connectionError = useGui((state) => state.connectionError);
   const websocketState = useGui((state) => state.websocketState);
@@ -185,7 +185,7 @@ function ConnectionRows() {
  * `watch` is what tells the worker to start, and dropping it is what stops it.
  */
 export function ConnectionBadge() {
-  const { useGui } = React.useContext(ViewerContext)!;
+  const { useGui } = useViewer();
   const websocketState = useGui((state) => state.websocketState);
   const { status, text } = CONNECTION_STATUS[websocketState];
   const [open, setOpen] = React.useState(false);

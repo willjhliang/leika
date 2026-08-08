@@ -166,8 +166,9 @@ const initialLayout: DockLayout = {
 // reconciles docked region widths exactly like a real gesture (top-level
 // column weights are rewritten to pixel widths; new columns get the default).
 // Injected layouts should reference the registered panel ids above and use a
-// distinctive prefix (tests use "t-") for node/group/window ids so they never
-// collide with freshId-generated ones. Test-only globals stay confined to
+// distinctive prefix (tests use "t-") for readable node/group/window ids.
+// Runtime ids are UUID-backed and checked against every injected layout id.
+// Test-only globals stay confined to
 // this playground; the library itself exposes nothing on window.
 function LayoutInjector() {
   const { api } = useDock();

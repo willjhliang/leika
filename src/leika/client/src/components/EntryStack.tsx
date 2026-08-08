@@ -104,13 +104,15 @@ function useEntryIds(count: number) {
       (_, place) => ids.current[place] ?? minted.current++,
     );
   }
+  const follow = React.useCallback((move: (ids: number[]) => number[]) => {
+    ids.current = move(ids.current);
+  }, []);
+  const mint = React.useCallback(() => minted.current++, []);
   return {
     ids: ids.current,
     /** Do to the ids what is about to be done to the entries. */
-    follow: (move: (ids: number[]) => number[]) => {
-      ids.current = move(ids.current);
-    },
-    mint: () => minted.current++,
+    follow,
+    mint,
   };
 }
 
@@ -146,10 +148,13 @@ export function EntryStack<T>({
 }) {
   const { ids, follow, mint } = useEntryIds(items.length);
   /** Reorder, remove, add: the entries and their ids, always together. */
-  const reorder = (from: number, to: number) => {
-    follow((order) => moved(order, from, to));
-    commit(moved(items, from, to));
-  };
+  const reorder = React.useCallback(
+    (from: number, to: number) => {
+      follow((order) => moved(order, from, to));
+      commit(moved(items, from, to));
+    },
+    [commit, follow, items],
+  );
   const discard = (place: number) => {
     follow((order) => order.filter((_, other) => other !== place));
     commit(items.filter((_, other) => other !== place));
@@ -169,42 +174,54 @@ export function EntryStack<T>({
     travel: Animation;
   } | null>(null);
 
-  const rows = () => [...(rowsRef.current?.children ?? [])] as HTMLElement[];
+  const rows = React.useCallback(
+    () => [...(rowsRef.current?.children ?? [])] as HTMLElement[],
+    [],
+  );
 
   /** Hand the keyboard to the grip of the row an entry has moved into (rows
    * are keyed by place, so a reorder rewrites their contents rather than
    * moving them). `ringed` decides, through `:focus-visible`, whether the row
    * keeps its controls out: the keys hand the grip on ringed because they will
    * go on working it; a drag hands it on bare because the pointer is done. */
-  const followEntry = (place: number, ringed: boolean) => {
-    const row = rows()[place];
-    row?.querySelector<HTMLElement>("[data-leika-list-grip]")?.focus({
-      focusVisible: ringed,
-    });
-  };
+  const followEntry = React.useCallback(
+    (place: number, ringed: boolean) => {
+      const row = rows()[place];
+      row?.querySelector<HTMLElement>("[data-leika-list-grip]")?.focus({
+        focusVisible: ringed,
+      });
+    },
+    [rows],
+  );
 
   /** Slide a row in from where its contents were drawn a moment ago -- the
    * move itself is already done. */
-  const slideIn = (place: number, from: number) =>
-    from === 0 || prefersReducedMotion()
-      ? undefined
-      : rows()[place]?.animate(
-          [{ transform: `translateY(${from}px)` }, { transform: "none" }],
-          { duration: SLIDE_MS, easing: "ease" },
-        );
+  const slideIn = React.useCallback(
+    (place: number, from: number) =>
+      from === 0 || prefersReducedMotion()
+        ? undefined
+        : rows()[place]?.animate(
+            [{ transform: `translateY(${from}px)` }, { transform: "none" }],
+            { duration: SLIDE_MS, easing: "ease" },
+          ),
+    [rows],
+  );
 
   /** Send an entry to the row it now lives in: the keyboard follows it there,
    * and the row stays aloft until it arrives -- otherwise it would finish its
    * travel under the entries it is still crossing, wearing their lines. */
-  const land = (place: number, from: number, ringed: boolean) => {
-    followEntry(place, ringed);
-    const travel = slideIn(place, from);
-    if (travel === undefined) return;
-    setFlying({ place, travel });
-    const landed = () =>
-      setFlying((current) => (current?.travel === travel ? null : current));
-    travel.finished.then(landed, landed);
-  };
+  const land = React.useCallback(
+    (place: number, from: number, ringed: boolean) => {
+      followEntry(place, ringed);
+      const travel = slideIn(place, from);
+      if (travel === undefined) return;
+      setFlying({ place, travel });
+      const landed = () =>
+        setFlying((current) => (current?.travel === travel ? null : current));
+      travel.finished.then(landed, landed);
+    },
+    [followEntry, slideIn],
+  );
 
   /** Take hold of an entry. The list is not touched until the drop. */
   const takeHold = (
@@ -276,7 +293,7 @@ export function EntryStack<T>({
       window.removeEventListener("pointerup", drop);
       window.removeEventListener("pointercancel", abandon);
     };
-  }, [drag, items]);
+  }, [drag, items, land, reorder]);
 
   const carry = drag === null ? null : carriedTo(drag, items.length);
 

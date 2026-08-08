@@ -1,4 +1,4 @@
-import { ViewerContext } from "../ViewerContext";
+import { useViewer } from "../ViewerContext";
 import {
   GUI_MESSAGE_THROTTLE_MS,
   useThrottledMessageSender,
@@ -39,7 +39,7 @@ export default function GeneratedGuiContainer({
 }: {
   containerUuid: string;
 }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const updateGuiProps = viewer.guiActions.updateGuiProps;
   const messageSender = useThrottledMessageSender(GUI_MESSAGE_THROTTLE_MS).send;
 
@@ -72,7 +72,7 @@ function GuiContainer({
   /** If true, render children directly into the nearest GUI stack. */
   unwrapped?: boolean;
 }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const guiIdSet = viewer.useGui(
     (state) => state.guiUuidSetFromContainerUuid[containerUuid] ?? {},
     shallowObjectKeysEqual,
@@ -96,7 +96,7 @@ function GuiContainer({
 
 /** A single generated GUI element. */
 function GeneratedInput(props: { guiUuid: string }) {
-  const viewer = React.useContext(ViewerContext)!;
+  const viewer = useViewer();
   const conf = viewer.useGuiConfig(props.guiUuid);
   if (conf === undefined) {
     console.error("Tried to render non-existent component", props.guiUuid);

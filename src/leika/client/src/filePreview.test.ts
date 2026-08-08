@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  abortFilePreviewTransfer,
   closeFilePreview,
   filePreviewStore,
   formatBytes,
@@ -9,8 +10,10 @@ import {
   openFilePreview,
   noteReloadStarted,
   previewKindFor,
+  previewMemoryKey,
   reloadFilePreview,
   reloadIsOnItsWay,
+  resetFilePreviewState,
   resolveFilePreview,
   warmedContents,
   warmFilePreview,
@@ -141,11 +144,64 @@ describe("the preview store", () => {
     url: `blob:${crypto.randomUUID()}`,
     blob: new Blob(["# hi"]),
   });
+  const reload = (
+    nextContents: ReturnType<typeof contents>,
+    overrides: Partial<Parameters<typeof reloadFilePreview>[0]> = {},
+  ) =>
+    reloadFilePreview({
+      sourceUuid: "button",
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      sizeBytes: nextContents.blob.size,
+      contents: nextContents,
+      sourceVersion: "2:9",
+      ...overrides,
+    });
 
   afterEach(() => {
-    const open = filePreviewStore.snapshot();
-    if (open !== null) closeFilePreview(open.id);
+    resetFilePreviewState();
     vi.restoreAllMocks();
+  });
+
+  it("keys remembered display state by source identity", () => {
+    expect(previewMemoryKey(metadata("a", "first-button"))).toBe(
+      "file-source:first-button",
+    );
+    expect(previewMemoryKey(metadata("b", "second-button"))).toBe(
+      "file-source:second-button",
+    );
+    expect(previewMemoryKey(metadata("c", null))).toBe("file-name:notes.md");
+  });
+
+  it("clears previews, reload markers, and warmed files on disconnect", () => {
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    const arrived = contents();
+    openFilePreview({ ...metadata("a"), contents: arrived });
+    noteReloadStarted("button");
+    warmFilePreview("button", "warm.md", "1", new Blob(["ready"]));
+
+    resetFilePreviewState();
+
+    expect(filePreviewStore.snapshot()).toBeNull();
+    expect(reloadIsOnItsWay("button")).toBe(false);
+    expect(warmedContents("button", "warm.md", "1")).toBeNull();
+    expect(revoke).toHaveBeenCalledWith(arrived.url);
+  });
+
+  it("unwinds failed preview and reload transfers without losing good contents", () => {
+    openFilePreview(metadata("initial"));
+    abortFilePreviewTransfer("initial", null);
+    expect(filePreviewStore.snapshot()).toBeNull();
+
+    openFilePreview(metadata("loaded"));
+    const arrived = contents();
+    resolveFilePreview("loaded", arrived);
+    noteReloadStarted("button");
+    abortFilePreviewTransfer("reload-transfer", "button");
+    expect(filePreviewStore.snapshot()?.contents).toBe(arrived);
+    expect(reloadIsOnItsWay("button")).toBe(false);
   });
 
   it("opens on metadata alone, and fills in the contents when they arrive", () => {
@@ -182,9 +238,9 @@ describe("the preview store", () => {
     const revoke = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
-    warmFilePreview("notes.md", new Blob(["# early"]));
+    warmFilePreview("button", "notes.md", "1:4", new Blob(["# early"]));
 
-    const early = warmedContents("notes.md");
+    const early = warmedContents("button", "notes.md", "1:4");
     expect(early).not.toBeNull();
     openFilePreview({ ...metadata("a"), contents: early });
 
@@ -193,14 +249,25 @@ describe("the preview store", () => {
     expect(revoke).toHaveBeenCalledWith(early!.url);
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
     // The warmed blob itself is still held for the next press.
-    expect(warmedContents("notes.md")).not.toBeNull();
+    expect(warmedContents("button", "notes.md", "1:4")).not.toBeNull();
   });
 
   it("has nothing warmed for a file nobody warmed", () => {
-    expect(warmedContents("never.md")).toBeNull();
+    expect(warmedContents("never", "never.md", "1")).toBeNull();
+    expect(warmedContents(null, "never.md", "1")).toBeNull();
   });
 
-  it("swaps a fresher copy into the dialog without reopening it", () => {
+  it("never shares warmed bytes across sources or revisions", () => {
+    warmFilePreview("first", "notes.md", "1", new Blob(["first"]));
+    warmFilePreview("second", "notes.md", "1", new Blob(["second"]));
+
+    expect(warmedContents("first", "notes.md", "1")?.blob.size).toBe(5);
+    expect(warmedContents("second", "notes.md", "1")?.blob.size).toBe(6);
+    expect(warmedContents("first", "notes.md", "2")).toBeNull();
+    expect(warmedContents("first", "renamed.md", "1")).toBeNull();
+  });
+
+  it("swaps a fresher copy and its metadata without reopening", () => {
     // What a reload is for: same dialog, same id -- so the document is not
     // remounted and the reader keeps their place -- with new bytes in it,
     // and the version they were stamped with, which is what the next watch
@@ -213,10 +280,17 @@ describe("the preview store", () => {
     resolveFilePreview("a", first);
 
     const second = contents();
-    reloadFilePreview("button", "notes.md", second, "2:9");
+    reload(second, {
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 2048,
+    });
     expect(revoke).toHaveBeenCalledWith(first.url);
     expect(filePreviewStore.snapshot()).toMatchObject({
       id: "a",
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 2048,
       contents: second,
       sourceVersion: "2:9",
     });
@@ -236,7 +310,7 @@ describe("the preview store", () => {
     // Only for the source it was noted against.
     expect(reloadIsOnItsWay("other-button")).toBe(false);
 
-    reloadFilePreview("button", "notes.md", contents(), "2:9");
+    reload(contents());
     expect(reloadIsOnItsWay("button")).toBe(false);
   });
 
@@ -268,7 +342,7 @@ describe("the preview store", () => {
     resolveFilePreview("a", showing);
 
     const late = contents();
-    reloadFilePreview("button", "notes.md", late, "2:9");
+    reload(late);
     expect(revoke).toHaveBeenCalledWith(late.url);
     expect(filePreviewStore.snapshot()?.contents).toBe(showing);
   });
@@ -278,7 +352,7 @@ describe("the preview store", () => {
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
     const late = contents();
-    reloadFilePreview("button", "notes.md", late, "2:9");
+    reload(late);
     expect(revoke).toHaveBeenCalledWith(late.url);
     expect(filePreviewStore.snapshot()).toBeNull();
   });
@@ -289,7 +363,7 @@ describe("the preview store", () => {
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     openFilePreview(metadata("a"));
     resolveFilePreview("a", contents());
-    reloadFilePreview("button", "notes-v2.md", contents(), "2:9");
+    reload(contents(), { filename: "notes-v2.md" });
     expect(filePreviewStore.snapshot()?.filename).toBe("notes-v2.md");
   });
 

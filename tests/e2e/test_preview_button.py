@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import re
 import struct
+import time
 import zlib
 from pathlib import Path
 from typing import List
@@ -739,6 +741,42 @@ def test_reload_asks_the_button_for_the_file_again(
     assert page_errors == []
 
 
+#: How long one turn of the reload icon takes -- Tailwind's `animate-spin`,
+#: which is what the icon is spun with. Named here only so the floor below
+#: reads as the period it is, and not as a number somebody picked.
+_SPIN_PERIOD_S = 1.0
+
+
+def test_a_pressed_reload_finishes_the_turn_it_started(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The spin says the press was heard, and a press is nearly always heard
+    # faster than the eye reads a spin: the file is local, so the answer is
+    # back within a frame or two and the icon would stop a few degrees from
+    # where it began. That is a twitch, and a twitch reads as the button
+    # failing rather than as the file arriving. The turn under way finishes
+    # first, however early the answer lands.
+    leika_server.gui.add_preview_button(
+        "Show reading", lambda _: b"# Reading\n", filename="reading.md"
+    )
+
+    _press(preview_page, "Show reading")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Reading")
+
+    icon = dialog.locator("[data-leika-preview-reload] svg")
+    spinning = re.compile(r"\banimate-spin\b")
+    started = time.monotonic()
+    dialog.get_by_role("button", name="Reload").click()
+    expect(icon).to_have_class(spinning)
+
+    # Waits out the spin rather than timing it: what is asserted is the floor
+    # a whole turn puts under it, which a slow machine can only raise.
+    expect(icon).not_to_have_class(spinning)
+    assert time.monotonic() - started >= _SPIN_PERIOD_S * 0.9
+    assert page_errors == []
+
+
 def test_a_file_a_script_sent_has_nothing_to_reload(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -782,6 +820,17 @@ def _contents(page: Page) -> Locator:
     return _dialog(page).locator("[data-leika-document-contents]")
 
 
+def _show_contents(page: Page) -> Locator:
+    """Stand the contents list up, and hand back the list.
+
+    Down by default: a document opens to be read from where it starts, and a
+    column of links is what a reader asks for once they want to move around
+    inside the file rather than read down it.
+    """
+    _dialog(page).get_by_role("button", name="Show contents").click()
+    return _contents(page)
+
+
 def _settle(page: Page) -> None:
     """Wait out the dialog's opening before measuring anything in it.
 
@@ -798,6 +847,21 @@ def _settle(page: Page) -> None:
           );
         }"""
     )
+
+
+def _group_gaps(page: Page) -> tuple[float, float]:
+    """How much room there is either side of the writing AND its list."""
+    _settle(page)
+    gaps = _dialog(page).evaluate(
+        """(el) => {
+          const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
+          const text = el.querySelector('.typeset > p').getBoundingClientRect();
+          const list = el.querySelector('[data-leika-document-contents]')
+                         .getBoundingClientRect();
+          return [text.left - frame.left, frame.right - list.right];
+        }"""
+    )
+    return (gaps[0], gaps[1])
 
 
 def _writing_gaps(page: Page) -> tuple[float, float]:
@@ -821,7 +885,9 @@ def test_a_document_lists_its_own_contents_beside_it(
     leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
     _press(preview_page, "Show notes")
-    contents = _contents(preview_page)
+    # Nothing in the margin until the corner button is pressed.
+    expect(_contents(preview_page)).to_have_count(0)
+    contents = _show_contents(preview_page)
     expect(contents).to_be_visible()
 
     # Three levels down from the shallowest heading, and no further: a list of
@@ -865,34 +931,29 @@ def test_a_document_lists_its_own_contents_beside_it(
     assert page_errors == []
 
 
-def test_the_contents_column_does_not_move_the_writing(
+def test_the_writing_and_its_contents_are_centred_together(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # What the empty mirrored column on the far side is for. The writing is
-    # centred in the frame because of the measure it is set to, and a contents
-    # list appearing beside it must not shove it off centre -- a reader who
-    # widens the window would watch the column they are reading slide left.
+    # What is being read decides what is centred. With the list down that is
+    # the writing, and it sits in the middle of the frame; with the list up it
+    # is the pair of them, so the writing steps left by half of what the list
+    # takes rather than staying put with the list hung off the edge.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
-    leika_server.gui.add_preview_button("Show listed", CONTENTS_DOCUMENT, filename="listed.md")
-    leika_server.gui.add_preview_button(
-        "Show unlisted", CONTENTS_DOCUMENT.replace(b"#", b""), filename="unlisted.md"
-    )
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
-    _press(preview_page, "Show listed")
-    expect(_contents(preview_page)).to_be_visible()
+    _press(preview_page, "Show notes")
+    expect(_dialog(preview_page)).to_contain_text("Training report")
     left, right = _writing_gaps(preview_page)
     assert abs(left - right) < 2.0, (left, right)
-    preview_page.keyboard.press("Escape")
-    expect(_dialog(preview_page)).to_have_count(0)
 
-    # The same document with its headings taken away: no list, and the writing
-    # in the same place it was.
-    _press(preview_page, "Show unlisted")
-    expect(_dialog(preview_page)).to_be_visible()
-    expect(_contents(preview_page)).to_have_count(0)
-    bare_left, bare_right = _writing_gaps(preview_page)
-    assert abs(bare_left - bare_right) < 2.0, (bare_left, bare_right)
-    assert abs(bare_left - left) < 2.0, (bare_left, left)
+    expect(_show_contents(preview_page)).to_be_visible()
+    outer_left, outer_right = _group_gaps(preview_page)
+    assert abs(outer_left - outer_right) < 2.0, (outer_left, outer_right)
+
+    # And the writing really did move over: the list is not hanging in a
+    # margin that was already empty.
+    shifted, _ = _writing_gaps(preview_page)
+    assert shifted < left - 50.0, (shifted, left)
     assert page_errors == []
 
 
@@ -906,9 +967,13 @@ def test_a_narrow_preview_keeps_its_width_for_the_document(
 
     _press(preview_page, "Show notes")
     expect(_dialog(preview_page)).to_contain_text("Training report")
-    expect(_contents(preview_page)).to_be_hidden()
+    # Asked for and still not given: the button is offered on the strength of
+    # the file's headings, and the room is a separate question that CSS
+    # answers.
+    expect(_show_contents(preview_page)).to_be_hidden()
 
-    # Widen the window and it appears, without the preview being reopened.
+    # Widen the window and it appears, without the preview being reopened or
+    # asked again.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
     expect(_contents(preview_page)).to_be_visible()
     assert page_errors == []
@@ -942,7 +1007,7 @@ def test_the_contents_marks_the_section_being_read(
     leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
     _press(preview_page, "Show notes")
-    expect(_contents(preview_page)).to_be_visible()
+    expect(_show_contents(preview_page)).to_be_visible()
     _settle(preview_page)
     frame = _dialog(preview_page).locator("div.overflow-auto").first
 
@@ -1009,7 +1074,7 @@ def test_a_section_the_scroll_cannot_reach_is_still_marked(
     leika_server.gui.add_preview_button("Show notes", document, filename="notes.md")
 
     _press(preview_page, "Show notes")
-    expect(_contents(preview_page)).to_be_visible()
+    expect(_show_contents(preview_page)).to_be_visible()
     _settle(preview_page)
     frame = _dialog(preview_page).locator("div.overflow-auto").first
     frame.evaluate("el => { el.scrollTop = el.scrollHeight; }")
@@ -1048,7 +1113,7 @@ def test_a_document_that_fits_marks_its_first_section(
     )
 
     _press(preview_page, "Show notes")
-    expect(_contents(preview_page)).to_be_visible()
+    expect(_show_contents(preview_page)).to_be_visible()
     _settle(preview_page)
     preview_page.wait_for_timeout(300)
     assert _marked(preview_page) == ["Report"]
@@ -1083,7 +1148,7 @@ def test_the_contents_hang_off_the_document_not_the_window(
     leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
     _press(preview_page, "Show notes")
-    expect(_contents(preview_page)).to_be_visible()
+    expect(_show_contents(preview_page)).to_be_visible()
     windowed = _contents_offset(preview_page)
 
     preview_page.get_by_role("button", name="Fill the window").click()
@@ -1093,6 +1158,162 @@ def test_the_contents_hang_off_the_document_not_the_window(
     assert abs(full["fromDocument"] - windowed["fromDocument"]) < 1.0, (windowed, full)
     # And it really is a wider window: the frame's own edge moved well away.
     assert full["fromFrame"] - windowed["fromFrame"] > 50.0, (windowed, full)
+    assert page_errors == []
+
+
+def test_the_contents_stand_a_gutter_off_the_writing(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The space between the writing and its list is the space the popup
+    # already uses: a block that takes the full width -- a table -- stops that
+    # same distance short of the popup's edge, being the dialog's padding and
+    # the reading column's together. One gutter width on the surface, rather
+    # than a second one invented for the list.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    # Wide enough that it really does take the full width: a table narrower
+    # than the measure is centred in the column and insets itself.
+    row = "| " + " | ".join(f"a column heading {index}" for index in range(8)) + " |\n"
+    table = row + "|" + "---|" * 8 + "\n" + row * 3
+    leika_server.gui.add_preview_button(
+        "Show notes", CONTENTS_DOCUMENT + f"\n{table}\n".encode(), filename="notes.md"
+    )
+
+    _press(preview_page, "Show notes")
+    expect(_show_contents(preview_page)).to_be_visible()
+    _settle(preview_page)
+    measured = _dialog(preview_page).evaluate(
+        """el => {
+             const popup = el.getBoundingClientRect();
+             const doc = el.querySelector('.typeset').getBoundingClientRect();
+             const table = el.querySelector('.typeset-scroll').getBoundingClientRect();
+             const list = el.querySelector('[data-leika-document-contents]')
+                            .getBoundingClientRect();
+             return {gap: list.left - doc.right, inset: table.left - popup.left};
+           }"""
+    )
+    assert measured["inset"] > 0, measured
+    assert abs(measured["gap"] - measured["inset"]) < 1.0, measured
+    assert page_errors == []
+
+
+def test_the_contents_toggle_is_remembered_for_that_file(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The same memory full-window has, kept the same way and for the same
+    # reason: whether a file is long enough to want a list beside it is a fact
+    # about that file, and the next one is a different file. So the answer
+    # follows the document rather than the session, and closing the preview is
+    # not a retraction of it.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+    leika_server.gui.add_preview_button("Show other", CONTENTS_DOCUMENT, filename="other.md")
+    dialog = _dialog(preview_page)
+
+    _press(preview_page, "Show notes")
+    expect(dialog.get_by_role("button", name="Show contents")).to_have_attribute(
+        "aria-pressed", "false"
+    )
+    expect(_show_contents(preview_page)).to_be_visible()
+    expect(dialog.get_by_role("button", name="Hide contents")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show notes")
+    expect(_contents(preview_page)).to_be_visible()
+
+    # Another file is untouched by it: this document was never asked.
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show other")
+    expect(dialog).to_contain_text("Training report")
+    expect(_contents(preview_page)).to_have_count(0)
+
+    # And taking it back down is remembered just as well.
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show notes")
+    dialog.get_by_role("button", name="Hide contents").click()
+    expect(_contents(preview_page)).to_have_count(0)
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Show notes")
+    expect(dialog).to_contain_text("Training report")
+    expect(_contents(preview_page)).to_have_count(0)
+    assert page_errors == []
+
+
+def test_a_document_with_no_headings_is_not_offered_a_contents_list(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # The button says there is something to stand up. A file with nothing to
+    # list would answer a press with no visible change at all, which is worse
+    # than not offering.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button(
+        "Show flat", CONTENTS_DOCUMENT.replace(b"#", b""), filename="flat.md"
+    )
+    leika_server.gui.add_preview_button("Show shot", _png(200, 120), filename="shot.png")
+
+    _press(preview_page, "Show flat")
+    expect(_dialog(preview_page)).to_contain_text("Training report")
+    expect(_dialog(preview_page).get_by_role("button", name="Show contents")).to_have_count(0)
+
+    # Nor is anything that is not a document. There is no writing to list.
+    preview_page.keyboard.press("Escape")
+    expect(_dialog(preview_page)).to_have_count(0)
+    _press(preview_page, "Show shot")
+    expect(_dialog(preview_page).locator("img")).to_be_visible()
+    expect(_dialog(preview_page).get_by_role("button", name="Show contents")).to_have_count(0)
+    assert page_errors == []
+
+
+def _sectioned_document() -> bytes:
+    """A file with more sections than a contents list can show at once."""
+    sections = "".join(f"## Section {index}\n\nOne line about it.\n\n" for index in range(40))
+    return f"# Report\n\n{_FILLER}{sections}".encode()
+
+
+def test_the_contents_stay_where_the_reader_left_them(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    # Two scrolls, and each is its own. A list longer than the window has a
+    # scroll of the reader's, and it was being taken back off them: the marked
+    # entry was pulled into view on every frame the document scrolled in, so
+    # looking ahead in the list and then reading on by a line snapped the list
+    # shut. It follows the MARK now, and the mark had not moved.
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", _sectioned_document(), filename="notes.md")
+
+    _press(preview_page, "Show notes")
+    contents = _show_contents(preview_page)
+    expect(contents).to_be_visible()
+    _settle(preview_page)
+    frame = _dialog(preview_page).locator("div.overflow-auto").first
+
+    # The reader looks ahead down the list, while the document stays put.
+    contents.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    parked = contents.evaluate("el => el.scrollTop")
+    assert parked > 0, "the list should be long enough to scroll"
+
+    # Then reads on a little, without leaving the section they are in.
+    frame.evaluate("el => { el.scrollTop += 40; }")
+    preview_page.wait_for_timeout(300)
+    assert contents.evaluate("el => el.scrollTop") == parked
+    assert _marked(preview_page) == ["Report"]
+
+    # It does still come back when the mark moves, which is what moving it is
+    # for: an entry nobody can see marks nothing.
+    frame.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    preview_page.wait_for_timeout(300)
+    assert contents.evaluate(
+        """el => {
+             const list = el.getBoundingClientRect();
+             const entry = el.querySelector('a[aria-current]').getBoundingClientRect();
+             return entry.top >= list.top - 1 && entry.bottom <= list.bottom + 1;
+           }"""
+    ), _marked(preview_page)
     assert page_errors == []
 
 

@@ -32,8 +32,8 @@ class AsyncMessageBuffer:
     done: bool = False
     atomic_counter: int = 0
 
-    def push(self, message: Message) -> None:
-        """Push a new message to our buffer, and remove old redundant ones."""
+    def push(self, message: Message) -> bool:
+        """Push a message, returning whether its connection is still open."""
 
         assert isinstance(message, Message)
 
@@ -52,6 +52,8 @@ class AsyncMessageBuffer:
             purge_entity_id = getattr(message, message.entity_id_field)
 
         with self.buffer_lock:
+            if self.done:
+                return False
             # On Remove, drop pending Updates for the same entity so a
             # removed entity leaves no residue in the buffer. (Create+Remove
             # coalesce via the redundancy key below; Updates use a separate
@@ -77,10 +79,11 @@ class AsyncMessageBuffer:
 
             # If an existing message with the same key already exists in our buffer, we
             # don't need the old one anymore. :-)
-            if redundancy_key is not None and redundancy_key in self.id_from_redundancy_key:
-                old_message_id = self.id_from_redundancy_key.pop(redundancy_key)
-                self.message_from_id.pop(old_message_id)
-            self.id_from_redundancy_key[redundancy_key] = new_message_id
+            if redundancy_key is not None:
+                if redundancy_key in self.id_from_redundancy_key:
+                    old_message_id = self.id_from_redundancy_key.pop(redundancy_key)
+                    self.message_from_id.pop(old_message_id)
+                self.id_from_redundancy_key[redundancy_key] = new_message_id
 
             # Pulse message event to notify consumers that a new message is
             # available.
@@ -97,6 +100,7 @@ class AsyncMessageBuffer:
                 # If we're in an atomic block, this will happen when
                 # atomic_end() is called.
                 self.event_loop.call_soon_threadsafe(self.message_event.set)
+            return True
 
     def atomic_start(self) -> None:
         """Start an atomic block. No new messages/windows should be sent."""
@@ -120,7 +124,11 @@ class AsyncMessageBuffer:
 
     def set_done(self) -> None:
         """Set the done flag. Kills the generator."""
-        self.done = True
+        with self.buffer_lock:
+            self.done = True
+            if not self.persistent_messages:
+                self.message_from_id.clear()
+                self.id_from_redundancy_key.clear()
 
         try:
             # Pulse message event to make sure we aren't waiting for a new message.

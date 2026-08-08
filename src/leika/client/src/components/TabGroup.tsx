@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiDockContext } from "../ControlPanel/GuiDockContext";
 import { GuiTabGroupMessage } from "../WebsocketMessages";
 import { IconHtml } from "./common";
@@ -60,6 +60,9 @@ function DraggableTabGroup({
     dock.api.apply((layout) =>
       layoutOps.setAreaTabOrder(layout, areaId, tabContainerIds),
     );
+    // `orderKey` is the semantic dependency for `tabContainerIds`: label/icon
+    // updates rebuild the tab array but do not require re-placing its panels.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, orderKey, areaId, dock.api]);
 
   return <DockArea areaId={areaId} minHeight="2.4em" inheritContentPadding />;
@@ -67,7 +70,7 @@ function DraggableTabGroup({
 
 /** Tabs that stay where they are, drawn here rather than by a dock. */
 function FixedTabGroup({ props: { _tabs: tabs } }: GuiTabGroupMessage) {
-  const { GuiContainer } = React.useContext(GuiComponentContext)!;
+  const { GuiContainer } = useGuiComponent();
   // Derived rather than corrected in an effect: when the server drops the
   // selected tab, the first tab takes over on the same render.
   const [selected, setSelected] = React.useState<string | null>(null);

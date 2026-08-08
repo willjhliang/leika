@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Message } from "./WebsocketMessages";
 import { ViewerContextContents } from "./ViewerContext";
 import { makeThrottledMessageSender } from "./WebsocketUtils";
+import { installConnectionBoundSender } from "./connectionSender";
 
 const WINDOW_MS = 50;
 
@@ -17,7 +18,7 @@ function makeSender() {
       },
     },
   } as unknown as ViewerContextContents;
-  return { sent, ...makeThrottledMessageSender(viewer, WINDOW_MS) };
+  return { sent, viewer, ...makeThrottledMessageSender(viewer, WINDOW_MS) };
 }
 
 const value = (uuid: string, text: string) =>
@@ -129,5 +130,26 @@ describe("makeThrottledMessageSender", () => {
     expect(sent).toEqual([value("a", "one")]);
     send(value("a", "three"));
     expect(sent).toHaveLength(2);
+  });
+
+  it("does not move a deferred message onto a replacement connection", () => {
+    const { viewer, send } = makeSender();
+    const firstConnection: Message[] = [];
+    const replacementConnection: Message[] = [];
+    installConnectionBoundSender(viewer.mutable.current, (message) =>
+      firstConnection.push(message),
+    );
+
+    send(value("a", "one"));
+    send(value("a", "two"));
+    installConnectionBoundSender(viewer.mutable.current, (message) =>
+      replacementConnection.push(message),
+    );
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    expect(firstConnection).toEqual([value("a", "one")]);
+    expect(replacementConnection).toEqual([]);
+    send(value("a", "three"));
+    expect(replacementConnection).toEqual([value("a", "three")]);
   });
 });
