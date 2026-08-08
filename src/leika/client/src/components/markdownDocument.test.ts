@@ -38,10 +38,10 @@ test("a served figure reserves the size the server measured", () => {
   expect(drawn).toContain('alt="Plot"');
 });
 
-test("figures defer offscreen loading and decode asynchronously", () => {
+test("figures defer offscreen loading and request atomic presentation", () => {
   const drawn = html("![Plot](/leika-assets/abc.png?w=640&h=360)");
   expect(drawn).toContain('loading="lazy"');
-  expect(drawn).toContain('decoding="async"');
+  expect(drawn).toContain('decoding="sync"');
   // Scheduling hints must not trade away the stable geometry that prevents
   // images arriving under the reader from moving the document.
   expect(drawn).toContain('width="640"');
@@ -55,7 +55,7 @@ test("a figure with no measurement is left as it was", () => {
   expect(drawn).not.toContain("width=");
   expect(drawn).not.toContain("height=");
   expect(drawn).not.toContain('loading="lazy"');
-  expect(drawn).not.toContain('decoding="async"');
+  expect(drawn).not.toContain("decoding=");
 });
 
 test("external declared geometry keeps its eager loading behavior", () => {
@@ -63,7 +63,7 @@ test("external declared geometry keeps its eager loading behavior", () => {
   expect(drawn).toContain('width="640"');
   expect(drawn).toContain('height="360"');
   expect(drawn).not.toContain('loading="lazy"');
-  expect(drawn).not.toContain('decoding="async"');
+  expect(drawn).not.toContain("decoding=");
 });
 
 test("a caption under a figure is still markdown", () => {

@@ -38,10 +38,11 @@ const components: MarkdownComponents = {
   // Warming still fetches every immutable image URL ahead of a press, but
   // fetching bytes and decoding them are separate browser costs. Ask the
   // browser to leave a measured offscreen image encoded until it approaches
-  // the viewport, and never make its decode block the document's paint. Only a
-  // Leika asset is already warm, and only a measured one has a box to hold its
-  // place; every external or unmeasured image keeps its prior eager behavior.
-  // Neither hint changes a served image's box or styling.
+  // the viewport. Ask for atomic presentation once it does: an asynchronous
+  // decode can expose a transient empty image frame while scrolling on some
+  // compositors. Only a Leika asset is already warm, and only a measured one
+  // has a box to hold its place; every external or unmeasured image keeps its
+  // prior eager behavior. Neither hint changes a served image's box or styling.
   img: (props) => {
     const size = reservedSize(props.src);
     const canDefer =
@@ -49,7 +50,7 @@ const components: MarkdownComponents = {
     return !canDefer ? (
       <img {...props} {...size} />
     ) : (
-      <img {...props} {...size} loading="lazy" decoding="async" />
+      <img {...props} {...size} loading="lazy" decoding="sync" />
     );
   },
   // typeset holds a table's headings on one line, so a table with long ones
