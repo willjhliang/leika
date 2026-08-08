@@ -180,6 +180,11 @@ export interface FilePreviewReload {
   sourceVersion: string | null;
 }
 
+/** A preview whose transfer has finished and whose URL has one owner. */
+type CompleteFilePreview = Omit<FilePreview, "contents"> & {
+  contents: FileContents;
+};
+
 /** A stable key for display state remembered across preview mounts. */
 export function previewMemoryKey(
   preview: Pick<FilePreview, "sourceUuid" | "filename">,
@@ -199,18 +204,82 @@ export function previewMemoryKey(
 let current: FilePreview | null = null;
 const listeners = new Set<() => void>();
 
+/** The revision the watcher should compare against.
+ *
+ * Usually this is the revision on screen. While a reader is scrolling, a
+ * freshly arrived reload is held for the first quiet frame rather than
+ * replacing a long document underneath the compositor. The watcher must
+ * still move on immediately: asking again with the displayed revision would
+ * download the same new file once per tick until scrolling stopped.
+ */
+type FilePreviewWatchTarget = Pick<FilePreview, "sourceUuid" | "sourceVersion">;
+let watchTarget: FilePreviewWatchTarget | null = null;
+
+/** A completed replacement waiting for the reader to stop scrolling. */
+let deferredReplacement: CompleteFilePreview | null = null;
+
+/** A scroll burst is idle once no event has arrived for this long. */
+const SCROLL_IDLE_MS = 120;
+let scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let scrollingPreviewId: string | null = null;
+
 function announce(): void {
   for (const listener of listeners) listener();
+}
+
+function setWatchTarget(
+  sourceUuid: string | null,
+  sourceVersion: string | null,
+): void {
+  if (
+    watchTarget?.sourceUuid === sourceUuid &&
+    watchTarget.sourceVersion === sourceVersion
+  ) {
+    return;
+  }
+  watchTarget = { sourceUuid, sourceVersion };
+}
+
+function cancelScrollIdleTimer(): void {
+  if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
+  scrollIdleTimer = null;
+  scrollingPreviewId = null;
+}
+
+function revokeDeferredReplacement(): void {
+  if (deferredReplacement !== null) {
+    URL.revokeObjectURL(deferredReplacement.contents.url);
+    deferredReplacement = null;
+  }
+}
+
+function discardDeferredReplacement(): void {
+  cancelScrollIdleTimer();
+  revokeDeferredReplacement();
+}
+
+function applyReplacement(replacement: CompleteFilePreview): void {
+  if (current === null || current.id !== replacement.id) {
+    URL.revokeObjectURL(replacement.contents.url);
+    return;
+  }
+  if (current.contents !== null) {
+    URL.revokeObjectURL(current.contents.url);
+  }
+  current = replacement;
+  announce();
 }
 
 /** Show a file, closing whatever was being shown. */
 export function openFilePreview(preview: FilePreview): void {
   if (current?.contents != null) URL.revokeObjectURL(current.contents.url);
+  discardDeferredReplacement();
   // Whatever was on its way was for what is being replaced, and a transfer
   // that dies mid-flight is forgotten here rather than blocking that file's
   // watch for the rest of the session.
   arriving.clear();
   current = preview;
+  setWatchTarget(preview.sourceUuid, preview.sourceVersion);
   announce();
 }
 
@@ -221,19 +290,25 @@ export function openFilePreview(preview: FilePreview): void {
  * shown: a dialog that was dismissed reappearing seconds later would be
  * answering a question the reader has withdrawn.
  *
- * A dialog opened from warmed contents already has something on screen; the
+ * A dialog opened from warmed contents already has something on screen. The
  * arrived transfer replaces it, since the press is always answered with what
- * the file holds *now*. When nothing changed on disk, the replacement is the
- * same text into the same rendered document, and nothing visibly moves.
+ * the file holds *now*, but waits for an active scroll burst to end before it
+ * reparses a long document underneath the reader.
  */
 export function resolveFilePreview(id: string, contents: FileContents): void {
   if (current === null || current.id !== id) {
     URL.revokeObjectURL(contents.url);
     return;
   }
-  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
-  current = { ...current, contents };
-  announce();
+  const next: CompleteFilePreview = { ...current, contents };
+  if (current.contents !== null && scrollingPreviewId === id) {
+    revokeDeferredReplacement();
+    deferredReplacement = next;
+    return;
+  }
+
+  revokeDeferredReplacement();
+  applyReplacement(next);
 }
 
 // Sources whose next copy is on the wire. A watch is answered only when the
@@ -273,6 +348,7 @@ export function abortFilePreviewTransfer(
     return;
   }
   current = null;
+  watchTarget = null;
   announce();
 }
 
@@ -306,8 +382,7 @@ export function reloadFilePreview({
     URL.revokeObjectURL(contents.url);
     return;
   }
-  if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
-  current = {
+  const next: CompleteFilePreview = {
     ...current,
     filename,
     mimeType,
@@ -315,7 +390,41 @@ export function reloadFilePreview({
     contents,
     sourceVersion,
   };
-  announce();
+  setWatchTarget(sourceUuid, sourceVersion);
+
+  if (scrollingPreviewId === current.id) {
+    // Only the newest completed copy matters. Keeping the displayed URL alive
+    // until the swap also leaves the download control and embedded viewers
+    // valid throughout the short hold.
+    revokeDeferredReplacement();
+    deferredReplacement = next;
+    // The visible snapshot is unchanged, but the watch snapshot moved on.
+    announce();
+    return;
+  }
+
+  revokeDeferredReplacement();
+  applyReplacement(next);
+}
+
+/** Keep a completed reload off screen until this scroll burst is idle.
+ *
+ * Called by the document's actual scroll frame. It changes no fetch or watch
+ * timing, and does nothing unless a reload happens to land during the burst.
+ */
+export function noteFilePreviewScroll(id: string): void {
+  if (current === null || current.id !== id) return;
+  if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
+  scrollingPreviewId = id;
+  scrollIdleTimer = setTimeout(() => {
+    scrollIdleTimer = null;
+    if (scrollingPreviewId !== id) return;
+    scrollingPreviewId = null;
+
+    const next = deferredReplacement;
+    deferredReplacement = null;
+    if (next !== null) applyReplacement(next);
+  }, SCROLL_IDLE_MS);
 }
 
 /** Files that arrived ahead of their press, newest last.
@@ -370,6 +479,8 @@ export function warmedContents(
 export function resetFilePreviewState(): void {
   arriving.clear();
   warmed.clear();
+  discardDeferredReplacement();
+  watchTarget = null;
   if (current === null) return;
   if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
   current = null;
@@ -380,6 +491,8 @@ export function resetFilePreviewState(): void {
 export function closeFilePreview(id: string): void {
   if (current === null || current.id !== id) return;
   arriving.clear();
+  discardDeferredReplacement();
+  watchTarget = null;
   if (current.contents !== null) URL.revokeObjectURL(current.contents.url);
   current = null;
   announce();
@@ -395,6 +508,14 @@ export const filePreviewStore = {
   },
   snapshot(): FilePreview | null {
     return current;
+  },
+};
+
+/** The latest source revision, including a reload held off screen. */
+export const filePreviewWatchStore = {
+  subscribe: filePreviewStore.subscribe,
+  snapshot(): FilePreviewWatchTarget | null {
+    return watchTarget;
   },
 };
 

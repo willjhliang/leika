@@ -38,12 +38,32 @@ test("a served figure reserves the size the server measured", () => {
   expect(drawn).toContain('alt="Plot"');
 });
 
+test("figures defer offscreen loading and decode asynchronously", () => {
+  const drawn = html("![Plot](/leika-assets/abc.png?w=640&h=360)");
+  expect(drawn).toContain('loading="lazy"');
+  expect(drawn).toContain('decoding="async"');
+  // Scheduling hints must not trade away the stable geometry that prevents
+  // images arriving under the reader from moving the document.
+  expect(drawn).toContain('width="640"');
+  expect(drawn).toContain('height="360"');
+});
+
 test("a figure with no measurement is left as it was", () => {
   // An image from anywhere else, or one whose header declared no size: the
   // browser discovers it on arrival, which is what it always did.
   const drawn = html("![Plot](https://example.com/plot.png)");
   expect(drawn).not.toContain("width=");
   expect(drawn).not.toContain("height=");
+  expect(drawn).not.toContain('loading="lazy"');
+  expect(drawn).not.toContain('decoding="async"');
+});
+
+test("external declared geometry keeps its eager loading behavior", () => {
+  const drawn = html("![Plot](https://example.com/plot.png?w=640&h=360)");
+  expect(drawn).toContain('width="640"');
+  expect(drawn).toContain('height="360"');
+  expect(drawn).not.toContain('loading="lazy"');
+  expect(drawn).not.toContain('decoding="async"');
 });
 
 test("a caption under a figure is still markdown", () => {

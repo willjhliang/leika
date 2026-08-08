@@ -4,9 +4,11 @@ import {
   abortFilePreviewTransfer,
   closeFilePreview,
   filePreviewStore,
+  filePreviewWatchStore,
   formatBytes,
   isMediaKind,
   isReadingKind,
+  noteFilePreviewScroll,
   openFilePreview,
   noteReloadStarted,
   previewKindFor,
@@ -160,6 +162,7 @@ describe("the preview store", () => {
 
   afterEach(() => {
     resetFilePreviewState();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -252,6 +255,32 @@ describe("the preview store", () => {
     expect(warmedContents("button", "notes.md", "1:4")).not.toBeNull();
   });
 
+  it("keeps warmed contents stable until an active scroll burst ends", () => {
+    vi.useFakeTimers();
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    const early = contents();
+    openFilePreview({ ...metadata("a"), contents: early });
+    noteFilePreviewScroll("a");
+
+    const fresh = contents();
+    resolveFilePreview("a", fresh);
+    expect(filePreviewStore.snapshot()?.contents).toBe(early);
+    expect(revoke).not.toHaveBeenCalledWith(early.url);
+
+    // A later scroll event owns a fresh idle deadline; the original timer
+    // cannot swap the document while the gesture is still producing frames.
+    vi.advanceTimersByTime(100);
+    noteFilePreviewScroll("a");
+    vi.advanceTimersByTime(119);
+    expect(filePreviewStore.snapshot()?.contents).toBe(early);
+
+    vi.advanceTimersByTime(1);
+    expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
+    expect(revoke).toHaveBeenCalledWith(early.url);
+  });
+
   it("has nothing warmed for a file nobody warmed", () => {
     expect(warmedContents("never", "never.md", "1")).toBeNull();
     expect(warmedContents(null, "never.md", "1")).toBeNull();
@@ -294,6 +323,81 @@ describe("the preview store", () => {
       contents: second,
       sourceVersion: "2:9",
     });
+  });
+
+  it("holds a completed reload until scrolling is idle", () => {
+    vi.useFakeTimers();
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+
+    noteFilePreviewScroll("a");
+    const second = contents();
+    reload(second, { sourceVersion: "2:9" });
+
+    // The document and its URL stay untouched during the gesture. The watch
+    // revision still advances, so a long scroll never downloads this same
+    // completed version once per polling tick.
+    expect(filePreviewStore.snapshot()?.contents).toBe(first);
+    expect(filePreviewWatchStore.snapshot()).toEqual({
+      sourceUuid: "button",
+      sourceVersion: "2:9",
+    });
+    expect(revoke).not.toHaveBeenCalledWith(first.url);
+
+    vi.runAllTimers();
+    expect(filePreviewStore.snapshot()?.contents).toBe(second);
+    expect(revoke).toHaveBeenCalledWith(first.url);
+  });
+
+  it("keeps only the newest reload completed during one scroll burst", () => {
+    vi.useFakeTimers();
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+    noteFilePreviewScroll("a");
+
+    const second = contents();
+    const third = contents();
+    reload(second, { sourceVersion: "2" });
+    reload(third, { sourceVersion: "3" });
+
+    expect(revoke).toHaveBeenCalledWith(second.url);
+    expect(filePreviewStore.snapshot()?.contents).toBe(first);
+    expect(filePreviewWatchStore.snapshot()?.sourceVersion).toBe("3");
+
+    vi.runAllTimers();
+    expect(filePreviewStore.snapshot()?.contents).toBe(third);
+    expect(revoke).toHaveBeenCalledWith(first.url);
+  });
+
+  it("discards a held reload when its preview closes", () => {
+    vi.useFakeTimers();
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+    noteFilePreviewScroll("a");
+
+    const second = contents();
+    reload(second, { sourceVersion: "2" });
+    closeFilePreview("a");
+
+    expect(revoke).toHaveBeenCalledWith(first.url);
+    expect(revoke).toHaveBeenCalledWith(second.url);
+    expect(filePreviewStore.snapshot()).toBeNull();
+    expect(filePreviewWatchStore.snapshot()).toBeNull();
+
+    vi.runAllTimers();
+    expect(filePreviewStore.snapshot()).toBeNull();
   });
 
   it("knows a copy is on its way, until it lands", () => {

@@ -35,7 +35,23 @@ const components: MarkdownComponents = {
   // that becomes the width and height the browser reserves from. See
   // `_link_markdown_assets`, and `reservedSize` below for why it travels
   // there rather than in the tag.
-  img: (props) => <img {...props} {...reservedSize(props.src)} />,
+  // Warming still fetches every immutable image URL ahead of a press, but
+  // fetching bytes and decoding them are separate browser costs. Ask the
+  // browser to leave a measured offscreen image encoded until it approaches
+  // the viewport, and never make its decode block the document's paint. Only a
+  // Leika asset is already warm, and only a measured one has a box to hold its
+  // place; every external or unmeasured image keeps its prior eager behavior.
+  // Neither hint changes a served image's box or styling.
+  img: (props) => {
+    const size = reservedSize(props.src);
+    const canDefer =
+      props.src?.startsWith("/leika-assets/") && size.width !== undefined;
+    return !canDefer ? (
+      <img {...props} {...size} />
+    ) : (
+      <img {...props} {...size} loading="lazy" decoding="async" />
+    );
+  },
   // typeset holds a table's headings on one line, so a table with long ones
   // is wider than the page whatever the page does, and the wrapper is what it
   // ships to say where that width is allowed to go: the table scrolls inside

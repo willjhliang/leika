@@ -16,9 +16,11 @@ import {
 import {
   closeFilePreview,
   filePreviewStore,
+  filePreviewWatchStore,
   formatBytes,
   isMediaKind,
   isReadingKind,
+  noteFilePreviewScroll,
   previewKindFor,
   previewMemoryKey,
   reloadIsOnItsWay,
@@ -403,9 +405,14 @@ export function FilePreviewHost() {
     filePreviewStore.snapshot,
     filePreviewStore.snapshot,
   );
+  const watchTarget = React.useSyncExternalStore(
+    filePreviewWatchStore.subscribe,
+    filePreviewWatchStore.snapshot,
+    filePreviewWatchStore.snapshot,
+  );
   const { send } = useThrottledMessageSender(GUI_MESSAGE_THROTTLE_MS);
-  const sourceUuid = preview?.sourceUuid ?? null;
-  const version = preview?.sourceVersion ?? null;
+  const sourceUuid = watchTarget?.sourceUuid ?? null;
+  const version = watchTarget?.sourceVersion ?? null;
 
   React.useEffect(() => {
     // A source with no version is one that cannot be watched -- bytes, or a
@@ -419,7 +426,7 @@ export function FilePreviewHost() {
       if (document.hidden) return;
       // The last answer is still arriving. Asking again would fetch the same
       // file a second time, since the version it would be compared against is
-      // still the one this dialog is showing.
+      // not advanced until that transfer has completed.
       if (reloadIsOnItsWay(sourceUuid)) return;
       send({ type: "GuiPreviewWatchMessage", uuid: sourceUuid, version });
     }, WATCH_INTERVAL_MS);
@@ -600,6 +607,7 @@ export function FilePreviewDialog({
         body
       ) : (
         <div
+          onScroll={() => noteFilePreviewScroll(preview.id)}
           className={cn(
             // `min-h-0` is what lets the frame be shorter than the document
             // in it, so the scroll happens here. `overscroll-contain` keeps

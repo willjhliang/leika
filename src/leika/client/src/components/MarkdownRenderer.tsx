@@ -7,6 +7,11 @@ import {
   type DocumentHeading,
 } from "../markdown";
 import { renderMarkdown } from "./markdownDocument";
+import {
+  sectionAtScroll,
+  type MeasuredSection,
+  type SectionLayout,
+} from "./markdownSectionLayout";
 
 /** The part of the document a `#fragment` names, as it was written.
  *
@@ -145,15 +150,34 @@ function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
   carryTo(frame, target);
 }
 
-/** How far below the top of the frame a heading still counts as reached.
- *
- * A heading is the section you are in from the moment it reaches the top of
- * what you can see. The slack is there because the two ways of arriving at
- * one land it in slightly different places: a carried link stops it flush
- * against the top edge, and the jump a reader who asked for less motion gets
- * leaves the `scroll-margin` typeset gives it. Both have to read as arrived.
- */
-const SECTION_LINE_PX = 24;
+/** Measure headings once, after layout changes, in document coordinates. */
+function measureSectionLayout(
+  frame: HTMLElement,
+  headings: DocumentHeading[],
+): SectionLayout {
+  const box = frame.getBoundingClientRect();
+  const scrollTop = frame.scrollTop;
+  const sections: MeasuredSection[] = [];
+  let ordered = true;
+  let previousTop = -Infinity;
+  for (const heading of headings) {
+    const id = CSS.escape(DOCUMENT_ID_PREFIX + heading.fragment);
+    const element = frame.querySelector(`#${id}`);
+    if (!(element instanceof HTMLElement)) continue;
+    const top = element.getBoundingClientRect().top - box.top + scrollTop;
+    ordered &&= top >= previousTop;
+    previousTop = top;
+    sections.push({ fragment: heading.fragment, top });
+  }
+  return {
+    first: headings[0]?.fragment ?? null,
+    sections,
+    ordered,
+    viewportHeight: box.height,
+    clientHeight: frame.clientHeight,
+    scrollHeight: frame.scrollHeight,
+  };
+}
 
 /** Which of `headings` the reader is currently in front of.
  *
@@ -187,45 +211,18 @@ function useCurrentSection(
     if (frame === null) return;
 
     let pending = 0;
+    let layout = measureSectionLayout(frame, headings);
+    let layoutChanged = false;
     // The entry the list was last moved for. Kept so that it is only moved
     // when the answer changes -- see {@link keepInView}.
     let moved: string | null = null;
-    const measure = () => {
+    const select = () => {
       pending = 0;
-      const box = frame.getBoundingClientRect();
-      const line = box.top + SECTION_LINE_PX;
-      // The scroll has run out with more document below. A frame the document
-      // fits inside is not that, however much its numbers look like it: there
-      // the reader is at the top and has been all along.
-      const atEnd =
-        frame.scrollHeight > frame.clientHeight &&
-        frame.scrollTop + frame.clientHeight >= frame.scrollHeight - 1;
-
-      // Before any of them has been reached, the reader is at the top of the
-      // document, which is the first section by every reckoning but the
-      // literal one.
-      let reached = headings[0]?.fragment ?? null;
-      let reachedTop = -Infinity;
-      let topmostOnScreen: string | null = null;
-      for (const heading of headings) {
-        const id = CSS.escape(DOCUMENT_ID_PREFIX + heading.fragment);
-        const element = frame.querySelector(`#${id}`);
-        if (!(element instanceof HTMLElement)) continue;
-        const top = element.getBoundingClientRect().top;
-        if (top <= line) {
-          reached = heading.fragment;
-          reachedTop = top;
-        } else if (topmostOnScreen === null && top < box.bottom) {
-          topmostOnScreen = heading.fragment;
-        }
+      if (layoutChanged) {
+        layout = measureSectionLayout(frame, headings);
+        layoutChanged = false;
       }
-      // Only when the answer would otherwise be a section that is no longer
-      // on the screen. A heading sitting just above the line at the bottom of
-      // the scroll is still the one at the top of the view, and keeps the
-      // mark it earned the ordinary way.
-      if (atEnd && topmostOnScreen !== null && reachedTop < box.top) {
-        reached = topmostOnScreen;
-      }
+      const reached = sectionAtScroll(layout, frame.scrollTop);
       setCurrent(reached);
       if (reached !== moved) {
         moved = reached;
@@ -233,21 +230,36 @@ function useCurrentSection(
       }
     };
     const schedule = () => {
-      if (pending === 0) pending = requestAnimationFrame(measure);
+      if (pending === 0) pending = requestAnimationFrame(select);
     };
+    const remeasure = () => {
+      layoutChanged = true;
+      schedule();
+    };
+    // Rects are painted coordinates. The dialog opens at 95% scale, which
+    // scales every cached heading offset without changing anything a
+    // ResizeObserver watches. Measure once more when that paint-only animation
+    // returns the popup to its ordinary coordinate space.
+    const animatedSurface = frame.closest<HTMLElement>(
+      '[data-slot="dialog-content"]',
+    );
+    animatedSurface?.addEventListener("animationend", remeasure);
+    animatedSurface?.addEventListener("animationcancel", remeasure);
 
-    measure();
+    select();
     frame.addEventListener("scroll", schedule, { passive: true });
     // The document itself changes size -- a preview follows the file it was
     // read from, and a section can be written while it is being read -- and
     // that moves every heading under the reader without a scroll to say so.
-    const resizes = new ResizeObserver(schedule);
+    const resizes = new ResizeObserver(remeasure);
     resizes.observe(frame);
     const document_ = frame.querySelector(".typeset");
     if (document_ !== null) resizes.observe(document_);
     return () => {
       if (pending !== 0) cancelAnimationFrame(pending);
       frame.removeEventListener("scroll", schedule);
+      animatedSurface?.removeEventListener("animationend", remeasure);
+      animatedSurface?.removeEventListener("animationcancel", remeasure);
       resizes.disconnect();
     };
   }, [headings, navRef]);
@@ -264,8 +276,8 @@ function useCurrentSection(
  *
  * Called when the mark MOVES, and not otherwise, which is what makes the two
  * scrolls independent. A reader who scrolls the list to look further down the
- * file has left the marked entry off the top of it, so every measurement
- * after that -- and one is taken on every frame the document scrolls in --
+ * file has left the marked entry off the top of it, so every section check
+ * after that -- and one runs on every frame the document scrolls in --
  * found the entry out of view and hauled the list back to it. Reading on by a
  * line snapped the list shut. Only a new section is a reason to move it, and
  * a new section is a reason: the mark is no use where it cannot be seen.

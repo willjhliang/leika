@@ -1223,6 +1223,25 @@ def test_the_contents_toggle_is_remembered_for_that_file(
     _press(preview_page, "Show notes")
     expect(_contents(preview_page)).to_be_visible()
 
+    # A remembered list mounts with the popup, while its existing opening
+    # animation is still painting the document at 95%. Its cached positions
+    # are measured again when that animation ends: just before Seeds is still
+    # Setup. Keeping the scaled positions would mark Seeds early.
+    _settle(preview_page)
+    frame = dialog.locator("div.overflow-auto").first
+    seeds = dialog.get_by_role("heading", name="Seeds")
+    seeds_top = frame.evaluate(
+        """(el, heading) =>
+             el.scrollTop + heading.getBoundingClientRect().top
+                          - el.getBoundingClientRect().top""",
+        seeds.element_handle(),
+    )
+    frame.evaluate("(el, top) => { el.scrollTop = top * 0.96; }", seeds_top)
+    expect(_contents(preview_page).get_by_role("link", name="Setup")).to_have_attribute(
+        "aria-current", "true"
+    )
+    frame.evaluate("el => { el.scrollTop = 0; }")
+
     # Another file is untouched by it: this document was never asked.
     preview_page.keyboard.press("Escape")
     expect(dialog).to_have_count(0)
