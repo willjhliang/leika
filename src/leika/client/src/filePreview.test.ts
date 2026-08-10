@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   abortFilePreviewTransfer,
+  beginFilePreviewScroll,
   closeFilePreview,
   filePreviewStore,
   filePreviewWatchStore,
+  finishFilePreviewScroll,
   formatBytes,
   isMediaKind,
   isReadingKind,
-  noteFilePreviewScroll,
   openFilePreview,
   noteReloadStarted,
   previewKindFor,
@@ -162,7 +163,6 @@ describe("the preview store", () => {
 
   afterEach(() => {
     resetFilePreviewState();
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -255,28 +255,20 @@ describe("the preview store", () => {
     expect(warmedContents("button", "notes.md", "1:4")).not.toBeNull();
   });
 
-  it("keeps warmed contents stable until an active scroll burst ends", () => {
-    vi.useFakeTimers();
+  it("keeps warmed contents stable until an active scroll gesture ends", () => {
     const revoke = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
     const early = contents();
     openFilePreview({ ...metadata("a"), contents: early });
-    noteFilePreviewScroll("a");
+    beginFilePreviewScroll("a");
 
     const fresh = contents();
     resolveFilePreview("a", fresh);
     expect(filePreviewStore.snapshot()?.contents).toBe(early);
     expect(revoke).not.toHaveBeenCalledWith(early.url);
 
-    // A later scroll event owns a fresh idle deadline; the original timer
-    // cannot swap the document while the gesture is still producing frames.
-    vi.advanceTimersByTime(100);
-    noteFilePreviewScroll("a");
-    vi.advanceTimersByTime(119);
-    expect(filePreviewStore.snapshot()?.contents).toBe(early);
-
-    vi.advanceTimersByTime(1);
+    finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
     expect(revoke).toHaveBeenCalledWith(early.url);
   });
@@ -325,8 +317,7 @@ describe("the preview store", () => {
     });
   });
 
-  it("holds a completed reload until scrolling is idle", () => {
-    vi.useFakeTimers();
+  it("holds a completed reload until the scroll gesture finishes", () => {
     const revoke = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
@@ -334,7 +325,7 @@ describe("the preview store", () => {
     const first = contents();
     resolveFilePreview("a", first);
 
-    noteFilePreviewScroll("a");
+    beginFilePreviewScroll("a");
     const second = contents();
     reload(second, { sourceVersion: "2:9" });
 
@@ -348,20 +339,19 @@ describe("the preview store", () => {
     });
     expect(revoke).not.toHaveBeenCalledWith(first.url);
 
-    vi.runAllTimers();
+    finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(second);
     expect(revoke).toHaveBeenCalledWith(first.url);
   });
 
-  it("keeps only the newest reload completed during one scroll burst", () => {
-    vi.useFakeTimers();
+  it("keeps only the newest reload completed during one scroll gesture", () => {
     const revoke = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
     openFilePreview(metadata("a"));
     const first = contents();
     resolveFilePreview("a", first);
-    noteFilePreviewScroll("a");
+    beginFilePreviewScroll("a");
 
     const second = contents();
     const third = contents();
@@ -372,20 +362,19 @@ describe("the preview store", () => {
     expect(filePreviewStore.snapshot()?.contents).toBe(first);
     expect(filePreviewWatchStore.snapshot()?.sourceVersion).toBe("3");
 
-    vi.runAllTimers();
+    finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(third);
     expect(revoke).toHaveBeenCalledWith(first.url);
   });
 
   it("discards a held reload when its preview closes", () => {
-    vi.useFakeTimers();
     const revoke = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);
     openFilePreview(metadata("a"));
     const first = contents();
     resolveFilePreview("a", first);
-    noteFilePreviewScroll("a");
+    beginFilePreviewScroll("a");
 
     const second = contents();
     reload(second, { sourceVersion: "2" });
@@ -396,7 +385,7 @@ describe("the preview store", () => {
     expect(filePreviewStore.snapshot()).toBeNull();
     expect(filePreviewWatchStore.snapshot()).toBeNull();
 
-    vi.runAllTimers();
+    finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()).toBeNull();
   });
 

@@ -14,13 +14,14 @@ import {
   useThrottledMessageSender,
 } from "../WebsocketUtils";
 import {
+  beginFilePreviewScroll,
   closeFilePreview,
   filePreviewStore,
   filePreviewWatchStore,
+  finishFilePreviewScroll,
   formatBytes,
   isMediaKind,
   isReadingKind,
-  noteFilePreviewScroll,
   previewKindFor,
   previewMemoryKey,
   reloadIsOnItsWay,
@@ -515,6 +516,39 @@ export function FilePreviewDialog({
   // Read rather than passed down: the popup owns the toggle, and the document
   // frame is the one thing inside it that has to know.
   const [fullscreen] = usePreviewFullscreen(memoryKey);
+  const [readingFrame, setReadingFrame] = React.useState<HTMLDivElement | null>(
+    null,
+  );
+
+  React.useEffect(() => {
+    const frame = readingFrame;
+    if (frame === null) return;
+    const id = preview.id;
+
+    // `scrollend` is the browser's definitive gesture-completion signal. It
+    // does not bubble from an element, so listen on the frame that actually
+    // scrolls. One start listener per gesture keeps continuous scroll frames
+    // out of JavaScript altogether on every browser Leika currently targets.
+    if (!Reflect.has(frame, "onscrollend")) return;
+
+    const start = () => beginFilePreviewScroll(id);
+    const finish = () => {
+      finishFilePreviewScroll(id);
+      frame.addEventListener("scroll", start, {
+        once: true,
+        passive: true,
+      });
+    };
+    frame.addEventListener("scroll", start, {
+      once: true,
+      passive: true,
+    });
+    frame.addEventListener("scrollend", finish);
+    return () => {
+      frame.removeEventListener("scroll", start);
+      frame.removeEventListener("scrollend", finish);
+    };
+  }, [preview.id, readingFrame]);
 
   // The file as writing, read here rather than in the body below it: what the
   // corner offers depends on what the document turns out to hold, and the
@@ -607,7 +641,8 @@ export function FilePreviewDialog({
         body
       ) : (
         <div
-          onScroll={() => noteFilePreviewScroll(preview.id)}
+          ref={setReadingFrame}
+          data-slot="file-preview-reading-frame"
           className={cn(
             // `min-h-0` is what lets the frame be shorter than the document
             // in it, so the scroll happens here. `overscroll-contain` keeps

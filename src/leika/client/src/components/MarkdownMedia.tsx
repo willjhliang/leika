@@ -18,14 +18,10 @@ import {
 } from "./previewFullscreen";
 
 interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
-  alt?: string;
-  decoding?: "async" | "auto" | "sync";
   /** Supplied only by MarkdownLink, so its button can be a sibling of the
    * anchor rather than invalid interactive content inside it. */
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>;
-  loading?: "eager" | "lazy";
   src?: string;
-  title?: string;
 }
 
 interface SelectedImage {
@@ -51,33 +47,27 @@ function SelectedImagePreview({
   open,
   onOpenChange,
 }: {
-  image: SelectedImage | null;
+  image: SelectedImage;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const closedKey = React.useId();
-  const rememberAs = image?.key ?? closedKey;
-  const [fullscreen] = usePreviewFullscreen(rememberAs);
+  const [fullscreen] = usePreviewFullscreen(image.key);
   return (
     <MediaPreview
       open={open}
       onOpenChange={onOpenChange}
-      title={image?.title ?? "Image"}
-      rememberAs={rememberAs}
-      width={mediaPreviewWidth(image?.size ?? null)}
+      title={image.title}
+      rememberAs={image.key}
+      width={mediaPreviewWidth(image.size)}
     >
-      {image === null ? null : (
-        <img
-          src={image.src}
-          alt={image.alt}
-          title={image.titleAttribute}
-          width={image.size?.width}
-          height={image.size?.height}
-          loading="eager"
-          decoding="sync"
-          className={previewMediaClassName(fullscreen)}
-        />
-      )}
+      <img
+        src={image.src}
+        alt={image.alt}
+        title={image.titleAttribute}
+        width={image.size?.width}
+        height={image.size?.height}
+        className={previewMediaClassName(fullscreen)}
+      />
     </MediaPreview>
   );
 }
@@ -194,7 +184,7 @@ export function MarkdownImage({
       ref={imageRef}
       {...props}
       loading={canDefer ? "lazy" : props.loading}
-      decoding={canDefer ? "sync" : props.decoding}
+      decoding={canDefer ? "async" : props.decoding}
     />
   );
 

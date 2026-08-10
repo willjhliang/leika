@@ -207,10 +207,10 @@ const listeners = new Set<() => void>();
 /** The revision the watcher should compare against.
  *
  * Usually this is the revision on screen. While a reader is scrolling, a
- * freshly arrived reload is held for the first quiet frame rather than
- * replacing a long document underneath the compositor. The watcher must
- * still move on immediately: asking again with the displayed revision would
- * download the same new file once per tick until scrolling stopped.
+ * freshly arrived reload is held until the active scroll gesture ends,
+ * rather than replacing a long document underneath the compositor. The
+ * watcher must still move on: asking again with the displayed revision would
+ * download the same new file once per tick while the old copy remains visible.
  */
 type FilePreviewWatchTarget = Pick<FilePreview, "sourceUuid" | "sourceVersion">;
 let watchTarget: FilePreviewWatchTarget | null = null;
@@ -218,9 +218,6 @@ let watchTarget: FilePreviewWatchTarget | null = null;
 /** A completed replacement waiting for the reader to stop scrolling. */
 let deferredReplacement: CompleteFilePreview | null = null;
 
-/** A scroll burst is idle once no event has arrived for this long. */
-const SCROLL_IDLE_MS = 120;
-let scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let scrollingPreviewId: string | null = null;
 
 function announce(): void {
@@ -240,9 +237,7 @@ function setWatchTarget(
   watchTarget = { sourceUuid, sourceVersion };
 }
 
-function cancelScrollIdleTimer(): void {
-  if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
-  scrollIdleTimer = null;
+function cancelFilePreviewScroll(): void {
   scrollingPreviewId = null;
 }
 
@@ -254,7 +249,7 @@ function revokeDeferredReplacement(): void {
 }
 
 function discardDeferredReplacement(): void {
-  cancelScrollIdleTimer();
+  cancelFilePreviewScroll();
   revokeDeferredReplacement();
 }
 
@@ -292,7 +287,7 @@ export function openFilePreview(preview: FilePreview): void {
  *
  * A dialog opened from warmed contents already has something on screen. The
  * arrived transfer replaces it, since the press is always answered with what
- * the file holds *now*, but waits for an active scroll burst to end before it
+ * the file holds *now*, but waits for an active scroll gesture to end before it
  * reparses a long document underneath the reader.
  */
 export function resolveFilePreview(id: string, contents: FileContents): void {
@@ -407,24 +402,20 @@ export function reloadFilePreview({
   applyReplacement(next);
 }
 
-/** Keep a completed reload off screen until this scroll burst is idle.
- *
- * Called by the document's actual scroll frame. It changes no fetch or watch
- * timing, and does nothing unless a reload happens to land during the burst.
- */
-export function noteFilePreviewScroll(id: string): void {
+/** Mark the preview as moving until its scroll frame reports `scrollend`. */
+export function beginFilePreviewScroll(id: string): void {
   if (current === null || current.id !== id) return;
-  if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
   scrollingPreviewId = id;
-  scrollIdleTimer = setTimeout(() => {
-    scrollIdleTimer = null;
-    if (scrollingPreviewId !== id) return;
-    scrollingPreviewId = null;
+}
 
-    const next = deferredReplacement;
-    deferredReplacement = null;
-    if (next !== null) applyReplacement(next);
-  }, SCROLL_IDLE_MS);
+/** Apply the newest replacement held during one completed scroll gesture. */
+export function finishFilePreviewScroll(id: string): void {
+  if (scrollingPreviewId !== id) return;
+  cancelFilePreviewScroll();
+
+  const next = deferredReplacement;
+  deferredReplacement = null;
+  if (next !== null) applyReplacement(next);
 }
 
 /** Files that arrived ahead of their press, newest last.

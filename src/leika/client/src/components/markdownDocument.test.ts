@@ -55,10 +55,10 @@ test("a served figure reserves the size the server measured", () => {
   expect(drawn).toContain('alt="Plot"');
 });
 
-test("figures defer offscreen loading and request atomic presentation", () => {
+test("figures defer offscreen loading and decode asynchronously", () => {
   const drawn = html("![Plot](/leika-assets/abc.png?w=640&h=360)");
   expect(drawn).toContain('loading="lazy"');
-  expect(drawn).toContain('decoding="sync"');
+  expect(drawn).toContain('decoding="async"');
   // Scheduling hints must not trade away the stable geometry that prevents
   // images arriving under the reader from moving the document.
   expect(drawn).toContain('width="640"');

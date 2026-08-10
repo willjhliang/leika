@@ -912,6 +912,49 @@ def test_reload_asks_the_button_for_the_file_again(
     assert page_errors == []
 
 
+def test_a_reload_waits_for_the_readers_scroll_to_end(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """The actual reading frame owns native scroll start and end events."""
+    presses = {"count": 0}
+
+    def content(_: leika.GuiEvent) -> bytes:
+        presses["count"] += 1
+        return f"# Reading {presses['count']}\n".encode()
+
+    leika_server.gui.add_preview_button("Show reading", content, filename="reading.md")
+    _press(preview_page, "Show reading")
+
+    dialog = _dialog(preview_page)
+    expect(dialog).to_contain_text("Reading 1")
+    frame = dialog.locator('[data-slot="file-preview-reading-frame"]')
+    assert frame.evaluate("element => 'onscrollend' in element")
+
+    def reload_during_scroll(displayed: int) -> None:
+        next_reading = displayed + 1
+        # A synthetic start without moving the frame cannot cause the browser
+        # to emit its own completion event. This leaves the gate open long
+        # enough to prove that an arrived replacement is held, without racing
+        # a wheel or compositor animation in CI.
+        frame.dispatch_event("scroll")
+        dialog.get_by_role("button", name="Reload").click()
+        deadline = time.monotonic() + 5.0
+        while presses["count"] < next_reading and time.monotonic() < deadline:
+            preview_page.wait_for_timeout(10)
+        assert presses["count"] == next_reading
+        preview_page.wait_for_timeout(250)
+        expect(dialog).to_contain_text(f"Reading {displayed}")
+        expect(dialog).not_to_contain_text(f"Reading {next_reading}")
+
+        frame.dispatch_event("scrollend")
+        expect(dialog).to_contain_text(f"Reading {next_reading}")
+        expect(dialog).not_to_contain_text(f"Reading {displayed}")
+
+    reload_during_scroll(1)
+    reload_during_scroll(2)
+    assert page_errors == []
+
+
 #: How long one turn of the reload icon takes -- Tailwind's `animate-spin`,
 #: which is what the icon is spun with. Named here only so the floor below
 #: reads as the period it is, and not as a number somebody picked.
@@ -1519,10 +1562,10 @@ def test_only_the_document_scrolls_not_the_dialog_around_it(
     # frame carried a height of its own -- the window less a hand-counted 6rem
     # of chrome -- the count came out 3px under what the chrome measured, and
     # those 3px made the popup a scroller too. Reaching the end of a document
-    # then chained the scroll outwards and shifted the dialog under the reader,
-    # which on a page of live plots reads as a flicker. The frame is sized by
-    # layout now, so the two cannot disagree, and `overscroll-contain` keeps
-    # the end of a document from being passed outwards even if they did.
+    # then chained the scroll outwards and shifted the dialog under the reader.
+    # The frame is sized by layout now, so the two cannot disagree; its
+    # overscroll containment also keeps the end of a document from being
+    # passed outwards even if they did.
     leika_server.gui.add_preview_button("Show report", _long_document(), filename="report.md")
 
     _press(preview_page, "Show report")
@@ -1532,7 +1575,7 @@ def test_only_the_document_scrolls_not_the_dialog_around_it(
 
     measure = """(element) => element.scrollHeight - element.clientHeight"""
     assert frame.evaluate(measure) > 0, "the document should have somewhere to scroll"
-    assert dialog.evaluate(measure) == 0, "the popup is a scroller in its own right"
+    assert dialog.evaluate(measure) == 0, "the popup itself should not scroll"
 
     # Scroll well past the end of the document, then back past the start.
     frame.hover()
