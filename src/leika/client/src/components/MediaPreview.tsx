@@ -29,10 +29,15 @@ import {
  */
 function ExpandButton({
   subject,
+  accessibleLabel,
   onExpand,
 }: {
   /** What is being expanded, lowercase: completes "Expand ___". */
   subject: string;
+  /** A more specific name for repeated controls. The tooltip deliberately
+   * stays short; this is only what assistive technology uses to distinguish
+   * one otherwise-identical corner from the next. */
+  accessibleLabel?: string;
   onExpand: () => void;
 }) {
   const label = `Expand ${subject}`;
@@ -49,11 +54,55 @@ function ExpandButton({
         // and legends usually sit.
         className="absolute right-2 bottom-2 size-6 opacity-0 group-hover/media:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
         onClick={onExpand}
-        aria-label={label}
+        aria-label={accessibleLabel ?? label}
       >
         <Maximize2Icon />
       </Button>
     </HintTooltip>
+  );
+}
+
+/** The same media chrome, on a phrasing host suitable for a document.
+ *
+ * A Markdown image ordinarily lives inside a paragraph (and can itself be
+ * inside a link), where {@link MediaSurface}'s `div` is invalid. The span is
+ * only a positioned, shrink-wrapped surface for the corner button; it does
+ * not give the image a size or ask it to load. Keeping this explicit rather
+ * than making MediaSurface polymorphic also keeps refs honest at both call
+ * sites. Its block flow is deliberate: Tailwind's base rule already makes a
+ * bare image block-level, so an inline wrapper would pull an image written
+ * between words onto their line and change the document it was added to.
+ */
+export function InlineMediaSurface({
+  subject,
+  accessibleLabel,
+  className,
+  ref,
+  onExpand,
+  children,
+}: {
+  subject: string;
+  accessibleLabel?: string;
+  className?: string;
+  ref?: React.Ref<HTMLSpanElement>;
+  onExpand?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      ref={ref}
+      className={cn("group/media relative block w-fit max-w-full", className)}
+      data-leika-inline-media
+    >
+      {children}
+      {onExpand === undefined ? null : (
+        <ExpandButton
+          subject={subject}
+          accessibleLabel={accessibleLabel}
+          onExpand={onExpand}
+        />
+      )}
+    </span>
   );
 }
 

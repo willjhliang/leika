@@ -93,6 +93,177 @@ def test_a_documents_images_are_fetched_beside_it(
     assert page_errors == []
 
 
+def test_a_markdown_figure_expands_without_moving_its_document(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    """The inline figure keeps its box while a corner opens a nested viewer."""
+    (tmp_path / "figure.png").write_bytes(_png(1200, 600))
+    before = "\n\n".join(
+        f"Opening paragraph {index} keeps the figure below the first frame." for index in range(24)
+    )
+    after = "\n\n".join(
+        f"Closing paragraph {index} keeps the report scrollable." for index in range(12)
+    )
+    report = tmp_path / "report.md"
+    report.write_text(f"# Report\n\n{before}\n\n![Validation curve](figure.png)\n\n{after}\n")
+
+    # Hold the asset so this observes the geometry reserved from its measured
+    # header rather than racing the decode on localhost.
+    held: List[Route] = []
+
+    def hold(route: Route) -> None:
+        held.append(route)
+
+    preview_page.route("**/leika-assets/**", hold)
+    leika_server.gui.add_preview_button("Show report", report)
+    _press(preview_page, "Show report")
+
+    outer = preview_page.get_by_role("dialog", name="report.md", exact=True)
+    expect(outer).to_be_visible()
+    expect(outer).to_have_css("transform", "none")
+    image = outer.get_by_role("img", name="Validation curve", exact=True)
+    expect(image).to_be_attached()
+    expand = outer.get_by_role("button", name="Expand image: Validation curve", exact=True)
+    expect(expand).to_be_attached()
+    expect(expand).to_have_css("opacity", "0")
+
+    geometry = """image => {
+        const surface = image.parentElement;
+        const paragraph = image.closest("p");
+        const frame = image.closest(".overflow-auto");
+        const box = (element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: rect.width, height: rect.height };
+        };
+        return {
+            image: box(image),
+            surface: box(surface),
+            paragraph: box(paragraph),
+            expectedImageWidth: Math.min(
+                image.closest(".typeset").getBoundingClientRect().width,
+                Number.parseFloat(getComputedStyle(paragraph).maxWidth),
+            ),
+            documentScrollHeight: frame.scrollHeight,
+        };
+    }"""
+    reserved = image.evaluate(geometry)
+    assert image.get_attribute("width") == "1200"
+    assert image.get_attribute("height") == "600"
+    assert image.evaluate("element => element.naturalWidth") == 0
+    assert reserved["image"]["width"] == pytest.approx(reserved["expectedImageWidth"], abs=0.1)
+    assert reserved["image"]["height"] == pytest.approx(reserved["image"]["width"] / 2, abs=0.1)
+    assert reserved["surface"] == reserved["image"]
+    assert reserved["paragraph"] == reserved["image"]
+
+    deadline = time.monotonic() + 5.0
+    while not held and time.monotonic() < deadline:
+        preview_page.wait_for_timeout(10)
+    assert held, "the figure request was supposed to still be in flight"
+    for route in held:
+        route.continue_()
+    expect(image).to_have_js_property("naturalWidth", 1200)
+    preview_page.wait_for_timeout(100)
+    assert image.evaluate(geometry) == reserved, "the figure moved when its pixels arrived"
+
+    reading_scroll = image.evaluate(
+        """image => {
+            const frame = image.closest(".overflow-auto");
+            frame.scrollTop += image.getBoundingClientRect().top
+                             - frame.getBoundingClientRect().top
+                             - frame.clientHeight / 3;
+            return frame.scrollTop;
+        }"""
+    )
+    assert reading_scroll > 0
+    image.hover()
+    expect(expand).to_have_css("opacity", "1")
+    inline_box = image.bounding_box()
+    assert inline_box is not None
+
+    address = preview_page.url
+    expand.click()
+    expect(_dialog(preview_page)).to_have_count(2)
+    inner = preview_page.get_by_role("dialog", name="Validation curve", exact=True)
+    expect(inner).to_be_visible()
+    expect(inner.locator('[data-slot="dialog-title"]')).to_have_text("Validation curve")
+    expanded = inner.get_by_role("img", name="Validation curve", exact=True)
+    expect(expanded).to_have_js_property("naturalWidth", 1200)
+    expanded_box = expanded.bounding_box()
+    viewport = preview_page.viewport_size
+    assert expanded_box is not None and viewport is not None
+    assert expanded_box["width"] > inline_box["width"] + 100
+    assert expanded_box["x"] >= 0 and expanded_box["y"] >= 0
+    assert expanded_box["x"] + expanded_box["width"] <= viewport["width"] + 1
+    assert expanded_box["y"] + expanded_box["height"] <= viewport["height"] + 1
+    assert preview_page.url == address
+
+    preview_page.keyboard.press("Escape")
+    expect(inner).to_have_count(0)
+    expect(outer).to_be_visible()
+    assert image.evaluate(
+        'element => element.closest(".overflow-auto").scrollTop'
+    ) == pytest.approx(reading_scroll, abs=1.0)
+
+    # A tooltip restored with focus must not consume the next Escape.
+    preview_page.keyboard.press("Escape")
+    expect(outer).to_have_count(0)
+    assert page_errors == []
+
+
+def test_a_linked_markdown_image_keeps_link_and_expand_as_siblings(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    """The link and its sibling expand control remain independent actions."""
+    (tmp_path / "linked.png").write_bytes(_png(1200, 600))
+    middle = "\n\n".join(
+        f"Paragraph {index} separates the link from its destination." for index in range(30)
+    )
+    report = tmp_path / "links.md"
+    report.write_text(
+        "# Links\n\n"
+        "[![Linked diagram](linked.png)](#destination)\n\n"
+        f"{middle}\n\n## Destination\n\nArrived.\n"
+    )
+    leika_server.gui.add_preview_button("Show links", report)
+
+    _press(preview_page, "Show links")
+    outer = preview_page.get_by_role("dialog", name="links.md", exact=True)
+    expect(outer).to_be_visible()
+    outer_dom = _dialog(preview_page).first
+    link = outer.get_by_role("link", name="Linked diagram", exact=True)
+    expect(link.locator(":scope > img")).to_have_count(1)
+    expect(link.get_by_role("button")).to_have_count(0)
+    expand = outer.get_by_role("button", name="Expand image: Linked diagram", exact=True)
+    expect(expand).to_have_count(1)
+
+    frame = outer_dom.locator("div.overflow-auto").first
+    address = preview_page.url
+    start = frame.evaluate("element => element.scrollTop")
+    link.get_by_role("img", name="Linked diagram", exact=True).hover()
+    expect(expand).to_have_css("opacity", "1")
+    expand.click()
+    inner = preview_page.get_by_role("dialog", name="Linked diagram", exact=True)
+    expect(inner).to_be_visible()
+    assert preview_page.url == address
+    assert frame.evaluate("element => element.scrollTop") == start
+
+    preview_page.keyboard.press("Escape")
+    expect(inner).to_have_count(0)
+    expect(outer).to_be_visible()
+
+    link.click()
+    expect(preview_page.get_by_role("dialog")).to_have_count(1)
+    assert preview_page.url == address
+    assert frame.evaluate("element => element.scrollTop") > start
+    assert page_errors == []
+
+
 def test_a_preview_in_view_is_warmed_before_its_press(
     leika_server: leika.Server,
     preview_page: Page,

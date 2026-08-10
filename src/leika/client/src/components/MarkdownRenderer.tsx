@@ -7,6 +7,7 @@ import {
   type DocumentHeading,
 } from "../markdown";
 import { renderMarkdown } from "./markdownDocument";
+import { MarkdownMediaController } from "./MarkdownMedia";
 import {
   sectionAtScroll,
   type MeasuredSection,
@@ -445,8 +446,9 @@ export function MarkdownRenderer(props: {
   // either way it does not even re-wrap.
   const showing = listed.length > 0;
   return (
-    <div className="@container/document" onClick={followLinkWithinDocument}>
-      {/* The contents are placed in the second column rather than written
+    <MarkdownMediaController>
+      <div className="@container/document" onClick={followLinkWithinDocument}>
+        {/* The contents are placed in the second column rather than written
           there: first in the document, so that reaching them does not mean
           reading past the file to get to them, and last on the screen, where
           they were asked for.
@@ -473,26 +475,27 @@ export function MarkdownRenderer(props: {
           its own longest line. The cap is the space available, so a table
           wider than the frame scrolls inside its own box, as it does
           everywhere else, instead of widening the popup. */}
-      <div
-        className={cn(
-          showing &&
-            "grid @min-[67rem]/document:grid-cols-[fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-6",
-        )}
-      >
-        {showing ? <DocumentContents headings={listed} /> : null}
-        {/* Both placed by hand, and both told which row: auto-placement fills
-            forwards only, so a document asking for the column to the left of
-            the contents would be put on the row below them. */}
         <div
           className={cn(
-            "typeset reading-measure",
             showing &&
-              "@min-[67rem]/document:col-start-1 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]",
+              "grid @min-[67rem]/document:grid-cols-[fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-6",
           )}
         >
-          {element}
+          {showing ? <DocumentContents headings={listed} /> : null}
+          {/* Both placed by hand, and both told which row: auto-placement fills
+            forwards only, so a document asking for the column to the left of
+            the contents would be put on the row below them. */}
+          <div
+            className={cn(
+              "typeset reading-measure",
+              showing &&
+                "@min-[67rem]/document:col-start-1 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]",
+            )}
+          >
+            {element}
+          </div>
         </div>
       </div>
-    </div>
+    </MarkdownMediaController>
   );
 }

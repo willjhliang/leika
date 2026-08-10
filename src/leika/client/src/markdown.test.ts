@@ -71,6 +71,53 @@ describe("what a document may contain", () => {
     );
   });
 
+  test("a responsive picture keeps source and image as direct children", () => {
+    const out = html(
+      '<picture><source srcset="/wide.png 2x" src="/not-for-pictures.png" type="image/png" sizes="100vw" media="(min-width: 40rem)"><img src="/fallback.png" alt="Plot"></picture>',
+    );
+    const matched = out.match(/<picture>.*?<\/picture>/);
+    expect(matched).not.toBeNull();
+    const picture = matched![0];
+
+    // A picture only participates in source selection when its source nodes
+    // and fallback image remain its own children. A component that wraps every
+    // image independently would leave valid React but invalid picture HTML.
+    expect(picture).toMatch(
+      /^<picture><source\b[^>]*\/><img\b[^>]*\/><\/picture>$/,
+    );
+    expect(picture).toMatch(/<source\b[^>]*srcset=/i);
+    expect(picture).toContain('media="(min-width: 40rem)"');
+    expect(picture).toContain('src="/fallback.png"');
+    expect(picture).toContain('alt="Plot"');
+    // GitHub's picture allowlist is deliberately narrower than the browser's
+    // source element: these do not become an accidental second media surface.
+    expect(picture).not.toContain("/not-for-pictures.png");
+    expect(picture).not.toContain("type=");
+    expect(picture).not.toContain("sizes=");
+  });
+
+  test("video and audio HTML do not become playable document content", () => {
+    const out = html(
+      '<video src="/movie.mp4" controls><source src="/movie.webm" type="video/webm">Video fallback</video>' +
+        '<audio src="/sound.mp3" controls>Audio fallback</audio>',
+    );
+
+    // File previews can show these formats, but the Markdown allowlist does
+    // not. Pin that boundary so adding a React component cannot silently make
+    // untrusted document HTML start fetching or playing media.
+    expect(out).not.toMatch(/<(?:video|audio)\b/);
+    expect(out).toContain("Video fallback");
+    expect(out).toContain("Audio fallback");
+  });
+
+  test("a linked image remains the link's direct noninteractive content", () => {
+    const out = html("[![Plot](/plot.png)](https://example.com/report)");
+    const link = out.match(/<a\b[^>]*>.*<\/a>/)?.[0];
+
+    expect(link).toMatch(/^<a\b[^>]*><img\b[^>]*\/><\/a>$/);
+    expect(link).not.toContain("<button");
+  });
+
   test("a large inlined image survives whole, and as its own", () => {
     // Long data URLs are lifted out of the source before parsing and put
     // back after -- an inlined image is megabytes the parser would otherwise

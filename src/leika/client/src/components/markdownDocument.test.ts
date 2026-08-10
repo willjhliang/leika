@@ -8,13 +8,30 @@
  * served figure reserves before it arrives.
  */
 
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
 import { renderMarkdown } from "./markdownDocument";
+import { MarkdownMediaController } from "./MarkdownMedia";
 
 const html = (markdown: string) =>
   renderToStaticMarkup(renderMarkdown(markdown).element);
+
+const interactiveHtml = (markdown: string) =>
+  renderToStaticMarkup(
+    createElement(
+      MarkdownMediaController,
+      null,
+      renderMarkdown(markdown).element,
+    ),
+  );
+
+function matching(markup: string, pattern: RegExp): string {
+  const match = markup.match(pattern)?.[0];
+  expect(match).toBeDefined();
+  return match ?? "";
+}
 
 test("the same document answers with the same tree", () => {
   expect(renderMarkdown("# Setup\n\ntext")).toBe(
@@ -64,6 +81,61 @@ test("external declared geometry keeps its eager loading behavior", () => {
   expect(drawn).toContain('height="360"');
   expect(drawn).not.toContain('loading="lazy"');
   expect(drawn).not.toContain("decoding=");
+});
+
+test("a controlled figure has one accessible expand control", () => {
+  const drawn = interactiveHtml("![Plot](/plot.png)");
+  const surface = matching(
+    drawn,
+    /<span\b[^>]*data-leika-inline-media[^>]*>.*?<\/span>/,
+  );
+
+  expect(surface).toMatch(/^<span\b[^>]*><img\b/);
+  // Tailwind already makes the bare image block-level. Its phrasing span must
+  // keep that flow while shrink-wrapping the button, or an image written
+  // between words would move onto their line.
+  expect(surface).toMatch(/class="[^"]*\bblock\b[^"]*\bw-fit\b/);
+  expect(surface.match(/<button\b/g)).toHaveLength(1);
+  expect(surface).toContain('aria-label="Expand image: Plot"');
+});
+
+test("a linked figure keeps link and expand as sibling actions", () => {
+  const drawn = interactiveHtml(
+    "[![Plot](/plot.png)](https://example.com/report)",
+  );
+  const surface = matching(
+    drawn,
+    /<span\b[^>]*data-leika-inline-media[^>]*>.*?<\/span>/,
+  );
+  const link = matching(surface, /<a\b[^>]*>.*?<\/a>/);
+
+  expect(surface).toMatch(
+    /^<span\b[^>]*><a\b[^>]*><img\b[^>]*\/><\/a><button\b/,
+  );
+  expect(link).not.toContain("<button");
+  expect(surface.match(/<button\b/g)).toHaveLength(1);
+});
+
+test("an ordinary text link remains ordinary", () => {
+  const drawn = interactiveHtml("[Read report](https://example.com/report)");
+  const link = matching(drawn, /<a\b[^>]*>.*?<\/a>/);
+
+  expect(link).toContain('href="https://example.com/report"');
+  expect(link).toContain(">Read report</a>");
+  expect(link).not.toContain("<button");
+});
+
+test("a controlled picture keeps its selection tree and has no button", () => {
+  const drawn = interactiveHtml(
+    '<picture><source srcset="/wide.png 2x"><img src="/plot.png" alt="Plot"></picture>',
+  );
+  const picture = matching(drawn, /<picture>.*?<\/picture>/);
+
+  expect(picture).toMatch(
+    /^<picture><source\b[^>]*\/><img\b[^>]*\/><\/picture>$/,
+  );
+  expect(drawn).not.toContain("data-leika-inline-media");
+  expect(drawn).not.toContain("<button");
 });
 
 test("a caption under a figure is still markdown", () => {

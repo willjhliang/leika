@@ -7,13 +7,12 @@
  * fast refresh wants left to components alone).
  */
 
-import React from "react";
-
 import {
   createMarkdownRenderer,
   type MarkdownComponents,
   type RenderedDocument,
 } from "../markdown";
+import { MarkdownImage, MarkdownLink, MarkdownPicture } from "./MarkdownMedia";
 
 // What a document looks like is shadcn/typeset's, whole: `src/typeset.css`
 // draws every element markdown makes -- the heading scale, the leading, the
@@ -22,18 +21,18 @@ import {
 // how a document looks, and nothing here should be.
 //
 // A component is worth writing only for what a tag *does*, or for structure a
-// stylesheet cannot add for itself. There are three.
+// stylesheet cannot add for itself. There are four.
 const components: MarkdownComponents = {
   // A document can be opened on a file from anywhere, and a link in one is a
   // link out of Leika. The referrer is the one thing following it should not
   // carry with it.
-  a: (props) => <a rel="noreferrer" {...props} />,
+  a: MarkdownLink,
   // A figure served beside its document has no size until it has arrived, so
   // the browser leaves it no room and lays the document out again when it
   // lands -- under the reader, who has been reading since the text arrived.
   // The server measures what it serves and says so in the URL; this is where
   // that becomes the width and height the browser reserves from. See
-  // `_link_markdown_assets`, and `reservedSize` below for why it travels
+  // `_link_markdown_assets`, and MarkdownImage for why it travels
   // there rather than in the tag.
   // Warming still fetches every immutable image URL ahead of a press, but
   // fetching bytes and decoding them are separate browser costs. Ask the
@@ -43,16 +42,8 @@ const components: MarkdownComponents = {
   // compositors. Only a Leika asset is already warm, and only a measured one
   // has a box to hold its place; every external or unmeasured image keeps its
   // prior eager behavior. Neither hint changes a served image's box or styling.
-  img: (props) => {
-    const size = reservedSize(props.src);
-    const canDefer =
-      props.src?.startsWith("/leika-assets/") && size.width !== undefined;
-    return !canDefer ? (
-      <img {...props} {...size} />
-    ) : (
-      <img {...props} {...size} loading="lazy" decoding="sync" />
-    );
-  },
+  img: MarkdownImage,
+  picture: MarkdownPicture,
   // typeset holds a table's headings on one line, so a table with long ones
   // is wider than the page whatever the page does, and the wrapper is what it
   // ships to say where that width is allowed to go: the table scrolls inside
@@ -67,28 +58,6 @@ const components: MarkdownComponents = {
     </div>
   ),
 };
-
-/** The size the server measured for a picture it is serving, from its URL.
- *
- * `?w=&h=` rather than an `<img>` written into the document, because a tag on
- * a line of its own opens an HTML block in markdown and everything down to
- * the next blank line stops being parsed -- a caption under a figure would
- * arrive as its own asterisks. A query is invisible to the parser and
- * ignored by the server serving the file, so the document stays markdown and
- * the URL stays one file.
- *
- * Nothing is asserted about pictures from anywhere else: a document may name
- * any URL, and one that happens to carry these is a document saying what size
- * its own figure is, which is all this ever claims to be.
- */
-function reservedSize(src: string | undefined): {
-  width?: number;
-  height?: number;
-} {
-  const measured = /[?&]w=(\d+)&h=(\d+)/.exec(src ?? "");
-  if (measured === null) return {};
-  return { width: Number(measured[1]), height: Number(measured[2]) };
-}
 
 const render = createMarkdownRenderer(components);
 
