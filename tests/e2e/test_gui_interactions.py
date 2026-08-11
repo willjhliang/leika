@@ -11,7 +11,7 @@ from playwright.sync_api import Locator, Page, expect
 
 import leika
 
-from .utils import find_gui_input, find_gui_row, wait_until
+from .utils import assert_stable_viewer, find_gui_input, find_gui_row, wait_until
 
 
 def test_core_controls_render_and_update(
@@ -942,6 +942,11 @@ def test_a_plots_preview_is_titled_like_an_images(
         button = leika_page.get_by_role("button", name=control)
         expect(button).to_be_attached(timeout=15_000)
         button.click()
+        viewer = leika_page.locator(
+            '[data-slot="dialog-content"][data-dialog-presentation="viewer"]'
+        )
+        expect(viewer).to_be_visible(timeout=5_000)
+        assert_stable_viewer(viewer)
         # Visible, not merely present: `sr-only` would still satisfy a text
         # assertion, and being reachable by sight is the whole point.
         expect(title).to_be_visible(timeout=5_000)

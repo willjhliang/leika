@@ -237,16 +237,6 @@ function useCurrentSection(
       layoutChanged = true;
       schedule();
     };
-    // Rects are painted coordinates. The dialog opens at 95% scale, which
-    // scales every cached heading offset without changing anything a
-    // ResizeObserver watches. Measure once more when that paint-only animation
-    // returns the popup to its ordinary coordinate space.
-    const animatedSurface = frame.closest<HTMLElement>(
-      '[data-slot="dialog-content"]',
-    );
-    animatedSurface?.addEventListener("animationend", remeasure);
-    animatedSurface?.addEventListener("animationcancel", remeasure);
-
     select();
     frame.addEventListener("scroll", schedule, { passive: true });
     // The document itself changes size -- a preview follows the file it was
@@ -259,8 +249,6 @@ function useCurrentSection(
     return () => {
       if (pending !== 0) cancelAnimationFrame(pending);
       frame.removeEventListener("scroll", schedule);
-      animatedSurface?.removeEventListener("animationend", remeasure);
-      animatedSurface?.removeEventListener("animationcancel", remeasure);
       resizes.disconnect();
     };
   }, [headings, navRef]);

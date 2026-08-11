@@ -21,15 +21,26 @@ function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
+type DialogPresentation = "dialog" | "viewer";
+
 function DialogOverlay({
   className,
+  presentation = "dialog",
+  dialogInstance,
   ...props
-}: DialogPrimitive.Backdrop.Props) {
+}: DialogPrimitive.Backdrop.Props & {
+  presentation?: DialogPresentation;
+  dialogInstance?: string;
+}) {
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
+      data-dialog-instance={dialogInstance}
+      data-dialog-presentation={presentation}
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-black/10",
+        presentation === "dialog" &&
+          "duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className,
       )}
       {...props}
@@ -41,17 +52,36 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  presentation = "dialog",
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
+  /**
+   * `viewer` is the one stable presentation used by every Leika preview: its
+   * popup is opaque from frame one. Ordinary action dialogs retain their
+   * standard motion. Full-viewport backdrops never filter live plot layers.
+   */
+  presentation?: DialogPresentation;
 }) {
+  const dialogInstance = React.useId();
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay
+        // Base UI suppresses a nested backdrop by default. Leika's nested
+        // viewers own the same dim layer and outside-click target as any other
+        // preview, so the popup and backdrop remain one visual surface.
+        forceRender
+        dialogInstance={dialogInstance}
+        presentation={presentation}
+      />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
+        data-dialog-instance={dialogInstance}
+        data-dialog-presentation={presentation}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none sm:max-w-sm",
+          presentation === "dialog" &&
+            "duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         {...props}

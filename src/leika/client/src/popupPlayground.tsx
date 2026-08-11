@@ -404,27 +404,21 @@ function previewOf(
 /* -------------------------------------------------------------------------- */
 
 /** The dialog `add_modal` opens, drawn the way `Modal.tsx` draws it: a title,
- * the server's components, and a backdrop that dismisses on a click outside.
- * `index` is the stacking offset a second modal gets. */
+ * the server's components, and a backdrop that dismisses on a click outside. */
 function GuiModal({
   open,
   onOpenChange,
   title,
-  index = 0,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  index?: number;
   children: React.ReactNode;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
-        style={{ zIndex: 100 + index }}
-      >
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -453,7 +447,7 @@ function ModalSpecimen() {
 }
 
 /** Two modals at once, which the protocol allows: `add_modal` can be called
- * again while one is up, and the second sits a z-index above the first. */
+ * again while one is up. The later portal and backdrop own the top layer. */
 function StackedModalSpecimen() {
   const [depth, setDepth] = React.useState(0);
   return (
@@ -468,11 +462,10 @@ function StackedModalSpecimen() {
         open={depth >= 1}
         onOpenChange={(next) => !next && setDepth(0)}
         title="First modal"
-        index={0}
       >
         <p className="text-muted-foreground">
-          Its backdrop stays where it is, so the second modal draws over two of
-          them.
+          Its surface stays mounted while the second dialog and its backdrop
+          take the top layer.
         </p>
         <SampleGuiRows prefix="stacked-first" />
         <Button
@@ -487,11 +480,10 @@ function StackedModalSpecimen() {
         open={depth >= 2}
         onOpenChange={(next) => !next && setDepth(1)}
         title="Second modal"
-        index={1}
       >
         <p className="text-muted-foreground">
-          A z-index above the first, and dismissed on its own — Escape closes
-          the innermost open thing.
+          Dismissed on its own — Escape closes the innermost open thing and
+          returns to the first.
         </p>
       </GuiModal>
     </>

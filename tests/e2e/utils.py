@@ -40,6 +40,74 @@ def box(page: Page, selector: str) -> dict[str, float]:
     return value
 
 
+def assert_stable_viewer(dialog: Locator) -> dict:
+    """Assert the visual contract shared by every Leika preview surface."""
+    state = dialog.evaluate(
+        """dialog => {
+          const instance = dialog.dataset.dialogInstance;
+          const overlay = [...document.querySelectorAll(
+            '[data-slot="dialog-overlay"]'
+          )].find(element => element.dataset.dialogInstance === instance);
+          if (!(overlay instanceof HTMLElement)) {
+            const seen = [...document.querySelectorAll(
+              '[data-slot="dialog-overlay"]'
+            )].map(element => ({
+              instance: element.dataset.dialogInstance,
+              presentation: element.dataset.dialogPresentation,
+            }));
+            throw new Error(
+              `No paired overlay for dialog ${instance}; saw ${JSON.stringify(seen)}`
+            );
+          }
+          const rect = dialog.getBoundingClientRect();
+          const top = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          );
+          const owner = top?.closest('[data-slot="dialog-content"]');
+          const popupStyle = getComputedStyle(dialog);
+          const overlayStyle = getComputedStyle(overlay);
+          return {
+            instance,
+            popupPresentation: dialog.dataset.dialogPresentation,
+            overlayPresentation: overlay.dataset.dialogPresentation,
+            popupClasses: [...dialog.classList],
+            overlayClasses: [...overlay.classList],
+            popupOpacity: popupStyle.opacity,
+            popupAnimation: popupStyle.animationName,
+            popupAnimations: dialog.getAnimations().length,
+            popupBackground: popupStyle.backgroundColor,
+            overlayAnimation: overlayStyle.animationName,
+            backdropFilter: overlayStyle.backdropFilter,
+            ownsCenter: owner?.dataset.dialogInstance === instance,
+          };
+        }"""
+    )
+
+    motion = {
+        "duration-100",
+        "data-open:animate-in",
+        "data-open:fade-in-0",
+        "data-open:zoom-in-95",
+        "data-closed:animate-out",
+        "data-closed:fade-out-0",
+        "data-closed:zoom-out-95",
+    }
+    assert state["instance"], state
+    assert state["popupPresentation"] == "viewer", state
+    assert state["overlayPresentation"] == "viewer", state
+    assert motion.isdisjoint(state["popupClasses"]), state
+    assert motion.isdisjoint(state["overlayClasses"]), state
+    assert state["popupOpacity"] == "1", state
+    assert state["popupAnimation"] == "none", state
+    assert state["popupAnimations"] == 0, state
+    assert state["overlayAnimation"] == "none", state
+    assert state["backdropFilter"] == "none", state
+    assert state["popupBackground"] not in {"transparent", "rgba(0, 0, 0, 0)"}, state
+    assert state["ownsCenter"], state
+    return state
+
+
 # Mouse coordinates, in CSS pixels relative to the viewport.
 Point = Tuple[float, float]
 

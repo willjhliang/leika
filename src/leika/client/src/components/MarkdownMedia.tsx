@@ -78,8 +78,8 @@ export function MarkdownMediaController({
 }: {
   children: React.ReactNode;
 }) {
-  // Keep the selected image after closing so Dialog can finish its controlled
-  // close without its title and media disappearing underneath the animation.
+  // Keep the selected image after closing until Dialog finishes its controlled
+  // teardown, so its title and media cannot disappear independently.
   const [selected, setSelected] = React.useState<SelectedImage | null>(null);
   const [open, setOpen] = React.useState(false);
   const openImage = React.useCallback((image: SelectedImage) => {

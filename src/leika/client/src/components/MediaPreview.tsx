@@ -237,14 +237,19 @@ export function MediaPreview({
         ref={popupRef}
         initialFocus={popupRef}
         finalFocus={false}
+        // A preview can be almost a viewport of Markdown above live Plotly
+        // canvases. Fading/scaling that surface and sampling those canvases
+        // through a backdrop filter makes the underlying layers part of each
+        // opening frame. The viewer is deliberately opaque from frame one.
+        presentation="viewer"
         // A branch, not a pile of overrides. Both halves reach the element
         // through `cn`, whose merge deletes the class it beats rather than
         // trusting it to be printed later, so "max-h-none after max-h-[...]"
         // would in fact have worked -- but a reader would have to know that to
         // believe it, and the two boxes have almost nothing in common anyway.
         className={cn(
-          // Resizes land in one paint. The dialog carries `duration-100` for
-          // its opening keyframes, and `transition-property` is left at its
+          // Resizes land in one paint. Before previews opted out of the
+          // dialog's opening keyframes, `transition-property` was left at its
           // default of `all` -- so every property this popup changes after it
           // is on screen was being interpolated over 100ms, and half of them
           // cannot be. Going full-window snapped its height (`auto` to a
@@ -254,7 +259,7 @@ export function MediaPreview({
           // partial reads worse than no motion, and it was doing it to the
           // ordinary case too -- a preview grows when its picture finishes
           // decoding and the measured width replaces the floor.
-          "transition-none",
+          "isolate transition-none",
           fullscreen
             ? // Everything the centered box does, undone. The margin, the
               // rounding and the shadow are how a popup says it is sitting on
@@ -274,6 +279,11 @@ export function MediaPreview({
                 // Reaching the end of a document then scrolls the dialog.
                 "max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] overflow-auto",
                 width === undefined ? "sm:max-w-4xl" : "sm:max-w-none",
+                // A fixed-height reader already knows its top and height.
+                // Centre it with auto margins instead of keeping the whole
+                // document in a transformed raster layer.
+                height !== undefined &&
+                  "top-4 right-0 left-0 mx-auto translate-x-0 translate-y-0",
               ),
         )}
         // A size measured for a centered box is the wrong answer when the

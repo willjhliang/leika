@@ -13,20 +13,14 @@ export function LeikaModal() {
   const viewer = useViewer();
 
   const modalList = viewer.useGui((state) => state.modals, shallowArrayEqual);
-  const modals = modalList.map((conf, index) => {
-    return <GeneratedModal key={conf.uuid} conf={conf} index={index} />;
+  const modals = modalList.map((conf) => {
+    return <GeneratedModal key={conf.uuid} conf={conf} />;
   });
 
   return modals;
 }
 
-function GeneratedModal({
-  conf,
-  index,
-}: {
-  conf: GuiModalMessage;
-  index: number;
-}) {
+function GeneratedModal({ conf }: { conf: GuiModalMessage }) {
   const viewer = useViewer();
   return (
     <Dialog
@@ -43,10 +37,10 @@ function GeneratedModal({
         });
       }}
     >
-      <DialogContent
-        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
-        style={{ zIndex: 100 + index }}
-      >
+      {/* Dialogs and their nested portals share one z-layer and stack by
+          portal order. Raising only this popup would strand its own backdrop,
+          previews, selects, and tooltips underneath it. */}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{conf.title}</DialogTitle>
         </DialogHeader>

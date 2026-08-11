@@ -15,6 +15,8 @@ from playwright.sync_api import Browser, Locator, Page, expect
 
 import leika
 
+from .utils import assert_stable_viewer
+
 
 def dialog(page: Page) -> Locator:
     return page.locator('[data-slot="dialog-content"]')
@@ -31,7 +33,29 @@ def open_modal(server: leika.Server, page: Page) -> leika.GuiModalHandle:
     handle = server.gui.add_modal("Details")
     with handle:
         server.gui.add_slider("Local control", min=0.0, max=1.0, step=0.01, initial_value=0.5)
-    expect(dialog(page)).to_be_visible(timeout=5_000)
+    surface = dialog(page)
+    expect(surface).to_be_visible(timeout=5_000)
+    expect(surface).to_have_attribute("data-dialog-presentation", "dialog")
+    state = surface.evaluate(
+        """surface => {
+          const instance = surface.dataset.dialogInstance;
+          const overlay = [...document.querySelectorAll(
+            '[data-slot="dialog-overlay"]'
+          )].find(element => element.dataset.dialogInstance === instance);
+          return {
+            popupClasses: [...surface.classList],
+            overlayClasses: [...overlay.classList],
+            overlayPresentation: overlay.dataset.dialogPresentation,
+            backdropFilter: getComputedStyle(overlay).backdropFilter,
+          };
+        }"""
+    )
+    assert {"duration-100", "data-open:animate-in", "data-open:zoom-in-95"}.issubset(
+        state["popupClasses"]
+    ), state
+    assert {"duration-100", "data-open:animate-in"}.issubset(state["overlayClasses"]), state
+    assert state["overlayPresentation"] == "dialog", state
+    assert state["backdropFilter"] == "none", state
     return handle
 
 
@@ -62,6 +86,36 @@ def test_each_dismissal_gesture_closes_and_tears_down(
     modal = open_modal(leika_server, leika_page)
     leika_page.keyboard.press("Escape")
     expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
+    wait_until_closed(modal)
+    assert modal.closed
+    assert page_errors == []
+
+
+def test_a_preview_opened_from_a_modal_owns_the_top_layer(
+    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
+) -> None:
+    """Nested preview chrome and backdrop must sit above their parent modal."""
+    modal = leika_server.gui.add_modal("Details")
+    with modal:
+        leika_server.gui.add_preview_button(
+            "Inspect report", b"# Nested report\n\nSome prose.\n", filename="nested.md"
+        )
+
+    outer = leika_page.locator('[data-slot="dialog-content"][data-dialog-presentation="dialog"]')
+    expect(outer).to_be_visible(timeout=5_000)
+    outer.get_by_role("button", name="Inspect report", exact=True).click()
+
+    viewer = leika_page.locator('[data-slot="dialog-content"][data-dialog-presentation="viewer"]')
+    expect(viewer).to_be_visible(timeout=5_000)
+    assert_stable_viewer(viewer)
+
+    # Escape closes only the topmost viewer and returns to the modal beneath.
+    leika_page.keyboard.press("Escape")
+    expect(viewer).to_have_count(0)
+    expect(outer).to_be_visible()
+
+    outer.locator('[data-slot="dialog-close"]').click()
+    expect(outer).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
     assert modal.closed
     assert page_errors == []

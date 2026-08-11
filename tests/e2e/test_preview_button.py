@@ -15,6 +15,8 @@ from playwright.sync_api import Locator, Page, Route, expect
 
 import leika
 
+from .utils import assert_stable_viewer
+
 
 def _png(width: int, height: int) -> bytes:
     """A real PNG, so the browser has something it will actually decode."""
@@ -188,6 +190,7 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     expect(_dialog(preview_page)).to_have_count(2)
     inner = preview_page.get_by_role("dialog", name="Validation curve", exact=True)
     expect(inner).to_be_visible()
+    assert_stable_viewer(inner)
     expect(inner.locator('[data-slot="dialog-title"]')).to_have_text("Validation curve")
     expanded = inner.get_by_role("img", name="Validation curve", exact=True)
     expect(expanded).to_have_js_property("naturalWidth", 1200)
@@ -317,6 +320,30 @@ def test_markdown_is_rendered(
     # Rendered, not printed: the hashes became a heading and the stars bold.
     expect(dialog.get_by_role("heading", name="Heading")).to_be_visible()
     expect(dialog.locator("strong")).to_have_text("bold")
+    assert page_errors == []
+
+
+def test_a_markdown_reader_is_a_stable_opaque_surface(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    leika_server.gui.add_preview_button(
+        "Show stable notes", b"# Heading\n\nSome prose.\n", filename="stable.md"
+    )
+
+    _press(preview_page, "Show stable notes")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_be_visible()
+    state = assert_stable_viewer(dialog)
+    frame_background = dialog.locator('[data-slot="file-preview-reading-frame"]').evaluate(
+        "frame => getComputedStyle(frame).backgroundColor"
+    )
+
+    assert {"top-4", "left-0", "translate-x-0", "translate-y-0"}.issubset(state["popupClasses"]), (
+        state
+    )
+    assert "-translate-x-1/2" not in state["popupClasses"], state
+    assert "-translate-y-1/2" not in state["popupClasses"], state
+    assert frame_background not in {"transparent", "rgba(0, 0, 0, 0)"}, state
     assert page_errors == []
 
 
@@ -1437,10 +1464,9 @@ def test_the_contents_toggle_is_remembered_for_that_file(
     _press(preview_page, "Show notes")
     expect(_contents(preview_page)).to_be_visible()
 
-    # A remembered list mounts with the popup, while its existing opening
-    # animation is still painting the document at 95%. Its cached positions
-    # are measured again when that animation ends: just before Seeds is still
-    # Setup. Keeping the scaled positions would mark Seeds early.
+    # A remembered list mounts with the popup. Let its initial observer-backed
+    # heading measurement settle; just before Seeds is still Setup, and a
+    # stale or wrongly scaled position would mark Seeds early.
     _settle(preview_page)
     frame = dialog.locator("div.overflow-auto").first
     seeds = dialog.get_by_role("heading", name="Seeds")
