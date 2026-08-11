@@ -347,6 +347,43 @@ def test_a_markdown_reader_is_a_stable_opaque_surface(
     assert page_errors == []
 
 
+def test_long_markdown_defers_distant_blocks_without_removing_them(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    paragraphs = [f"Paragraph {index} of the report." for index in range(320)]
+    source = "\n\n".join(
+        ["# Start", "[Jump to the tail](#tail)", *paragraphs, "## Tail", "Last line."]
+    )
+    leika_server.gui.add_preview_button("Show long notes", source.encode(), filename="long.md")
+
+    _press(preview_page, "Show long notes")
+    dialog = _dialog(preview_page)
+    frame = dialog.locator('[data-slot="file-preview-reading-frame"]')
+    blocks = dialog.locator(".typeset > p")
+    expect(blocks).to_have_count(322)
+    far_block = blocks.nth(300)
+    styles = far_block.evaluate(
+        """element => {
+          const style = getComputedStyle(element);
+          return {
+            visibility: style.contentVisibility,
+            intrinsicBlockSize: style.containIntrinsicBlockSize,
+          };
+        }"""
+    )
+    assert styles["visibility"] == "auto", styles
+    assert styles["intrinsicBlockSize"].startswith("auto "), styles
+
+    # The tail has not been conditionally unmounted: native fragment behavior,
+    # focus for assistive technology, and in-document search can still find it.
+    tail = dialog.get_by_role("heading", name="Tail", exact=True)
+    expect(tail).to_be_attached()
+    dialog.get_by_role("link", name="Jump to the tail", exact=True).click()
+    expect(tail).to_be_focused()
+    preview_page.wait_for_function("frame => frame.scrollTop > 0", frame.element_handle())
+    assert page_errors == []
+
+
 def _columns(page: Page, *selectors: str) -> dict[str, dict]:
     """Where each of a viewer's blocks sits inside the dialog.
 

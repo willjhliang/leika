@@ -220,6 +220,72 @@
   }
 }
 
+/* A file preview keeps the complete document in the DOM: links, browser find,
+   selection and assistive technology can therefore still reach its tail.
+   The expensive style/layout/paint work for distant blocks is left until the
+   browser's proximity window reaches them, however, so the beginning gets the
+   first useful paint. `auto` remembers the real block size after it has been
+   visited; the non-zero fallback keeps a stable scroll runway beforehand.
+
+   Headings stay active because the optional contents rail measures them.
+   Media keeps its existing measured geometry and native lazy-loading path. */
+[data-slot="file-preview-reading-frame"]
+  .typeset
+  > :not(
+    :is(
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6,
+      hr,
+      img,
+      picture,
+      video,
+      audio,
+      canvas,
+      svg,
+      iframe,
+      object,
+      embed
+    )
+  ):not(:has(img, picture, video, audio, canvas, svg, iframe, object, embed)) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 6rem;
+}
+
+[data-slot="file-preview-reading-frame"]
+  .typeset
+  > p:not(
+    :has(img, picture, video, audio, canvas, svg, iframe, object, embed)
+  ) {
+  contain-intrinsic-block-size: auto 1lh;
+}
+
+[data-slot="file-preview-reading-frame"]
+  .typeset
+  > :is(
+    ul,
+    ol,
+    blockquote,
+    pre,
+    details,
+    figure,
+    .typeset-scroll,
+    section,
+    div
+  ):not(:has(img, picture, video, audio, canvas, svg, iframe, object, embed)) {
+  contain-intrinsic-block-size: auto 16rem;
+}
+
+@media print {
+  [data-slot="file-preview-reading-frame"] .typeset > * {
+    content-visibility: visible;
+    contain-intrinsic-block-size: none;
+  }
+}
+
 /* typeset's two weights, stepped down one to the scale this UI is set on.
    It writes 600 for a heading and 500 for a link as literal numbers, which
    are the right *distances* from the 400 body a stock shadcn app has: a
