@@ -120,6 +120,32 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
     assert page_errors == []
 
 
+def test_color_format_survives_refresh(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    leika_server.gui.add_rgb("Plot color", initial_value=(10, 20, 30))
+
+    picker = _open_color_picker(leika_page, "Plot color")
+    format_trigger = picker.locator("[data-leika-color-format]")
+    format_trigger.click()
+    leika_page.get_by_role("option", name="HSL").click()
+    expect(format_trigger).to_contain_text("HSL")
+
+    leika_page.reload()
+    picker = _open_color_picker(leika_page, "Plot color")
+    expect(picker.locator("[data-leika-color-format]")).to_contain_text("HSL")
+
+    # Returning to the default is a preference change too.
+    picker.locator("[data-leika-color-format]").click()
+    leika_page.get_by_role("option", name="HEX").click()
+    leika_page.reload()
+    picker = _open_color_picker(leika_page, "Plot color")
+    expect(picker.locator("[data-leika-color-format]")).to_contain_text("HEX")
+    assert page_errors == []
+
+
 def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     leika_server: leika.Server,
     leika_page: Page,

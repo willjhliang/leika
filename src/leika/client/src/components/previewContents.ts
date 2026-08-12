@@ -13,7 +13,9 @@
 
 import { previewFlag, usePreviewFlag } from "./previewFlags";
 
-const contents = previewFlag();
+export const PREVIEW_CONTENTS_STORAGE_KEY = "leika.preview-contents.v1";
+
+const contents = previewFlag(PREVIEW_CONTENTS_STORAGE_KEY);
 
 export const previewContentsStore = contents.store;
 

@@ -9,6 +9,7 @@ import {
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
+import { useViewer } from "../ViewerContext";
 import { CONTROL_MAX_WIDTH_CLASS } from "./controlWidth";
 
 const BottomPanelContext = React.createContext<null | {
@@ -21,7 +22,9 @@ export default function BottomPanel({
 }: {
   children: string | React.ReactNode;
 }) {
-  const [expanded, setExpanded] = React.useState(true);
+  const viewer = useViewer();
+  const expanded = viewer.useSettings((state) => state.mobileControlsExpanded);
+  const { setMobileControlsExpanded } = viewer.settingsActions;
   return (
     <BottomPanelContext.Provider value={{ expanded }}>
       <Card
@@ -33,7 +36,7 @@ export default function BottomPanel({
       >
         <Collapsible
           open={expanded}
-          onOpenChange={setExpanded}
+          onOpenChange={setMobileControlsExpanded}
           className="contents"
         >
           {children}

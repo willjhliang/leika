@@ -38,8 +38,10 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
-
-type ColorFormat = "hex" | "rgb" | "css" | "hsl";
+import {
+  type ColorFormat,
+  useColorFormatPreference,
+} from "./colorFormatPreference";
 
 const FORMATS: ColorFormat[] = ["hex", "rgb", "css", "hsl"];
 const CHECKERBOARD =
@@ -199,7 +201,7 @@ function ColorPicker({
   // The draft is only overruled when the incoming color is one it does not
   // produce -- an edit from the output fields, the eyedropper, or the server.
   const hsv = rgbEqual(hsvToRgb(draftHsv), rgb) ? draftHsv : rgbToHsv(rgb);
-  const [outputFormat, setOutputFormat] = React.useState<ColorFormat>("hex");
+  const [outputFormat, setOutputFormat] = useColorFormatPreference();
   const [dragging, setDragging] = React.useState(false);
   const selectionElementRef = React.useRef<HTMLDivElement | null>(null);
 

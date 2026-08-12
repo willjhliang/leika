@@ -169,6 +169,42 @@ def test_control_panel_docks_to_the_left_edge_and_insets_the_canvas(
     assert page_errors == []
 
 
+def test_desktop_dock_arrangement_survives_refresh(dock_page: Page, page_errors: list[str]) -> None:
+    page = dock_page
+    dock_control_panel_left(page)
+
+    resizer = page.locator("[data-dock-region-resize='left']")
+    grip = center(resizer)
+    drag(page, grip, (grip[0] + 75.0, grip[1]))
+    saved_width = bounds(control_panel(page))["width"]
+
+    alpha_window = tear_out_tab(page, "Alpha", CANVAS)
+    saved_alpha = bounds(alpha_window)
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+
+    page.reload()
+    strip = page.get_by_test_id("control-panel-handle")
+    expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
+    assert canvas_inset(page) == pytest.approx(MINIMIZED_STRIP_PX, abs=1.0)
+    expect(page.get_by_text("Alpha body", exact=True)).to_be_visible(timeout=5_000)
+
+    restored_alpha = bounds(
+        page.get_by_text("Alpha body", exact=True).locator(
+            "xpath=ancestor::*[@data-floating-window]"
+        )
+    )
+    assert restored_alpha["x"] == pytest.approx(saved_alpha["x"], abs=2.0)
+    assert restored_alpha["y"] == pytest.approx(saved_alpha["y"], abs=2.0)
+
+    strip.locator("[data-dock-minimize]").click()
+    expect(control_panel(page)).to_have_attribute("data-dock-side", "left")
+    assert bounds(control_panel(page))["width"] == pytest.approx(saved_width, abs=2.0)
+    expect(gui_area(page).get_by_role("tab", name="Alpha", exact=True)).to_have_count(0)
+    expect(gui_area(page).get_by_role("tab", name="Beta", exact=True)).to_be_visible()
+    assert page_errors == []
+
+
 def test_edge_drop_hint_previews_the_dock_and_escape_abandons_it(
     dock_page: Page, page_errors: list[str]
 ) -> None:

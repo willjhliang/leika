@@ -901,6 +901,42 @@ def test_a_preview_fills_the_window_and_stays_that_way(
     assert page_errors == []
 
 
+def test_preview_toggles_survive_page_refresh(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    """Fullscreen and contents choices persist beyond the current page."""
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
+    dialog = _dialog(preview_page)
+
+    _press(preview_page, "Show notes")
+    preview_page.get_by_role("button", name="Fill the window").click()
+    dialog.get_by_role("button", name="Show contents").click()
+    expect(dialog).to_have_attribute("data-preview-fullscreen", "true")
+    expect(_contents(preview_page)).to_be_visible()
+
+    preview_page.reload()
+    _press(preview_page, "Show notes")
+    expect(dialog).to_have_attribute("data-preview-fullscreen", "true")
+    expect(dialog.get_by_role("button", name="Hide contents")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(_contents(preview_page)).to_be_visible()
+
+    # Returning either toggle to its default removes that preview from the
+    # persisted set; the defaults therefore survive a reload too.
+    preview_page.get_by_role("button", name="Exit full window").click()
+    dialog.get_by_role("button", name="Hide contents").click()
+    preview_page.reload()
+    _press(preview_page, "Show notes")
+    expect(dialog).not_to_have_attribute("data-preview-fullscreen", "true")
+    expect(dialog.get_by_role("button", name="Show contents")).to_have_attribute(
+        "aria-pressed", "false"
+    )
+    expect(_contents(preview_page)).to_have_count(0)
+    assert page_errors == []
+
+
 def test_a_preview_takes_the_file_again_when_it_is_rewritten(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str], tmp_path: Path
 ) -> None:

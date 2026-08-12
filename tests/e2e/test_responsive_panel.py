@@ -18,6 +18,28 @@ def _assert_inside_viewport(page: Page) -> None:
     assert bounds["y"] + bounds["height"] <= viewport["height"] + 0.5
 
 
+def test_mobile_control_sheet_expansion_survives_refresh(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    leika_server.gui.add_text("Ready", initial_value="yes")
+    leika_page.set_viewport_size({"width": 420, "height": 700})
+    handle = leika_page.locator("[data-leika-bottom-panel-handle]")
+    expect(handle).to_have_attribute("aria-expanded", "true", timeout=5_000)
+
+    handle.click()
+    expect(handle).to_have_attribute("aria-expanded", "false")
+    leika_page.reload()
+    expect(handle).to_have_attribute("aria-expanded", "false", timeout=5_000)
+
+    handle.click()
+    expect(handle).to_have_attribute("aria-expanded", "true")
+    leika_page.reload()
+    expect(handle).to_have_attribute("aria-expanded", "true", timeout=5_000)
+    assert page_errors == []
+
+
 def test_initial_hover_panel_preserves_right_inset(
     leika_server: leika.Server,
     page: Page,

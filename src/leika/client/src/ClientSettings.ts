@@ -35,6 +35,8 @@ export interface ClientSettings {
   accentColor: string | null;
   /** How image panes size themselves when Python did not say. */
   imageFit: ImageFit;
+  /** Whether the phone's bottom control sheet is unfolded. */
+  mobileControlsExpanded: boolean;
 }
 
 export interface ClientSettingsActions {
@@ -45,6 +47,7 @@ export interface ClientSettingsActions {
   setShowPaneTitles: (showPaneTitles: boolean) => void;
   setAccentColor: (accentColor: string | null) => void;
   setImageFit: (imageFit: ImageFit) => void;
+  setMobileControlsExpanded: (expanded: boolean) => void;
 }
 
 export interface ClientSettingsStorage {
@@ -70,6 +73,7 @@ export function defaultClientSettings(): ClientSettings {
     showPaneTitles: false,
     accentColor: null,
     imageFit: "fit",
+    mobileControlsExpanded: true,
   };
 }
 
@@ -122,6 +126,10 @@ export function readClientSettings(
     imageFit: IMAGE_FITS.includes(stored.imageFit as ImageFit)
       ? (stored.imageFit as ImageFit)
       : defaults.imageFit,
+    mobileControlsExpanded:
+      typeof stored.mobileControlsExpanded === "boolean"
+        ? stored.mobileControlsExpanded
+        : defaults.mobileControlsExpanded,
   };
 }
 
@@ -156,6 +164,8 @@ export function useClientSettings(
       setShowPaneTitles: (showPaneTitles) => update({ showPaneTitles }),
       setAccentColor: (accentColor) => update({ accentColor }),
       setImageFit: (imageFit) => update({ imageFit }),
+      setMobileControlsExpanded: (mobileControlsExpanded) =>
+        update({ mobileControlsExpanded }),
     };
   }, [storage, store]);
 

@@ -8,16 +8,17 @@
 //
 // Held outside React because it outlives every component that reads it: the
 // preview a flag belongs to is unmounted the moment it closes, which is
-// exactly when the answer has to survive.
+// exactly when the answer has to survive. The set is restored from browser
+// storage as the module starts, so the same answer also survives a reload.
 //
 // A set of the keys that are ON rather than a map to booleans, so what is
 // remembered is only what somebody asked for. Going back to the default
 // forgets the key instead of writing `false` against it, and a session that
 // opens a thousand files carries nothing for the ones it left alone.
 //
-// Not written to storage. These are ways of looking at something, not
-// preferences somebody set: every preference that outlives the tab is one a
-// viewer can find and change in the settings popout. Reloading starts plain.
+// Written as one small array per kind of flag. Keeping the two flags apart
+// lets each owner update its answer without reading, merging, and possibly
+// overwriting the other owner's newer answer.
 
 import * as React from "react";
 
@@ -32,9 +33,46 @@ export interface PreviewFlag {
   set: (key: string, next: boolean) => void;
 }
 
-/** Open a flag of its own. One call per thing worth remembering. */
-export function previewFlag(): PreviewFlag {
-  const on = new Set<string>();
+export interface PreviewFlagStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+function browserStorage(): PreviewFlagStorage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readPreviewFlag(
+  storageKey: string,
+  storage: PreviewFlagStorage | null,
+): Set<string> {
+  if (storage === null) return new Set();
+  try {
+    const raw = storage.getItem(storageKey);
+    if (raw === null) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed.filter((key): key is string => typeof key === "string"),
+    );
+  } catch {
+    // Storage can be inaccessible, or an older/hand-edited value can be
+    // malformed. Neither should stop previews working for this session.
+    return new Set();
+  }
+}
+
+/** Open a persistent flag of its own. One call per thing worth remembering. */
+export function previewFlag(
+  storageKey: string,
+  storage: PreviewFlagStorage | null = browserStorage(),
+): PreviewFlag {
+  const on = readPreviewFlag(storageKey, storage);
   const listeners = new Set<() => void>();
   return {
     store: {
@@ -54,6 +92,14 @@ export function previewFlag(): PreviewFlag {
       if (next === on.has(key)) return;
       if (next) on.add(key);
       else on.delete(key);
+      if (storage !== null) {
+        try {
+          storage.setItem(storageKey, JSON.stringify([...on]));
+        } catch {
+          // A private/full store still leaves the in-memory flag useful until
+          // the page goes away.
+        }
+      }
       for (const listener of listeners) listener();
     },
   };

@@ -13,6 +13,8 @@ export interface GuiState {
   theme: ThemeConfigurationMessage;
   label: string;
   server: string;
+  /** Server-provided namespace for browser-owned workspace state. */
+  workspaceId: string | null;
   websocketState: "connected" | "reconnecting" | "inactive";
   /** Fatal reason the server refused this client (e.g. a version mismatch),
    * shown in place of the connection status. Null whenever the connection is
@@ -79,6 +81,7 @@ const cleanGuiState: GuiState = {
   },
   label: "",
   server: "",
+  workspaceId: null,
   websocketState: "inactive",
   connectionError: null,
   guiUuidSetFromContainerUuid: { [ROOT_GUI_CONTAINER_ID]: {} },

@@ -47,6 +47,7 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
 
     switch (message.type) {
       case "WorkspaceConfigurationMessage":
+        viewer.useGui.set({ workspaceId: message.workspace_id });
         viewer.viewportActions.setPersistenceWorkspace(message.workspace_id);
         return;
       case "SetGuiPanelLabelMessage":
