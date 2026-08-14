@@ -115,9 +115,13 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     # Hold the asset so this observes the geometry reserved from its measured
     # header rather than racing the decode on localhost.
     held: List[Route] = []
+    holding = True
 
     def hold(route: Route) -> None:
-        held.append(route)
+        if holding:
+            held.append(route)
+        else:
+            route.continue_()
 
     preview_page.route("**/leika-assets/**", hold)
     leika_server.gui.add_preview_button("Show report", report)
@@ -135,7 +139,6 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     geometry = """image => {
         const surface = image.parentElement;
         const paragraph = image.closest("p");
-        const frame = image.closest(".overflow-auto");
         const box = (element) => {
             const rect = element.getBoundingClientRect();
             return { width: rect.width, height: rect.height };
@@ -148,7 +151,6 @@ def test_a_markdown_figure_expands_without_moving_its_document(
                 image.closest(".typeset").getBoundingClientRect().width,
                 Number.parseFloat(getComputedStyle(paragraph).maxWidth),
             ),
-            documentScrollHeight: frame.scrollHeight,
         };
     }"""
     reserved = image.evaluate(geometry)
@@ -160,17 +162,31 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     assert reserved["surface"] == reserved["image"]
     assert reserved["paragraph"] == reserved["image"]
 
+    # Bring the lazy image into range while its request is still held. This can
+    # materialize deferred Markdown blocks, so take the decode comparison only
+    # after that independent layout work has settled.
+    image.scroll_into_view_if_needed()
     deadline = time.monotonic() + 5.0
     while not held and time.monotonic() < deadline:
         preview_page.wait_for_timeout(10)
     assert held, "the figure request was supposed to still be in flight"
+    preview_page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
+    reserved_in_view = image.evaluate(geometry)
+
+    # A route already delivered to this handler stays owned by it. Explicitly
+    # release every captured request, and let any request which races the
+    # hand-off continue immediately before removing the handler.
+    holding = False
     for route in held:
         route.continue_()
+    preview_page.unroute("**/leika-assets/**", hold)
     expect(image).to_have_js_property("naturalWidth", 1200)
     preview_page.wait_for_timeout(100)
-    assert image.evaluate(geometry) == reserved, "the figure moved when its pixels arrived"
+    assert image.evaluate(geometry) == reserved_in_view, "the figure moved when its pixels arrived"
 
-    reading_scroll = image.evaluate(
+    image.evaluate(
         """image => {
             const frame = image.closest(".overflow-auto");
             frame.scrollTop += image.getBoundingClientRect().top
@@ -179,8 +195,9 @@ def test_a_markdown_figure_expands_without_moving_its_document(
             return frame.scrollTop;
         }"""
     )
-    assert reading_scroll > 0
     image.hover()
+    reading_scroll = image.evaluate('element => element.closest(".overflow-auto").scrollTop')
+    assert reading_scroll > 0
     expect(expand).to_have_css("opacity", "1")
     inline_box = image.bounding_box()
     assert inline_box is not None
@@ -380,7 +397,7 @@ def test_long_markdown_defers_distant_blocks_without_removing_them(
     expect(tail).to_be_attached()
     dialog.get_by_role("link", name="Jump to the tail", exact=True).click()
     expect(tail).to_be_focused()
-    preview_page.wait_for_function("frame => frame.scrollTop > 0", frame.element_handle())
+    preview_page.wait_for_function("frame => frame.scrollTop > 0", arg=frame.element_handle())
     assert page_errors == []
 
 
@@ -585,6 +602,121 @@ def test_a_link_to_a_heading_scrolls_the_document_to_it(
     expect(dialog.get_by_role("heading", name="Setup")).to_be_in_viewport()
     # The one thing that did not move. A preview is a window onto a file, and
     # the file's own anchors are not the app's address.
+    assert preview_page.url == address
+    assert page_errors == []
+
+
+def test_a_link_to_a_heading_finishes_flush_after_deferred_blocks_expand(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    def tall_code_block(section: str, index: int) -> str:
+        rows = "\n".join(
+            f"{section} block {index:02d}, row {row:02d}: deferred layout has real height"
+            for row in range(40)
+        )
+        return f"```text\n{rows}\n```"
+
+    before = [tall_code_block("opening", index) for index in range(32)]
+    after = [tall_code_block("closing", index) for index in range(16)]
+    source = "\n\n".join(
+        [
+            "# Start",
+            "[Jump to the tail](#tail)",
+            *before,
+            "## Tail",
+            "The requested section starts here.",
+            *after,
+        ]
+    )
+    leika_server.gui.add_preview_button(
+        "Show shifting notes", source.encode(), filename="shifting.md"
+    )
+    address = preview_page.url
+
+    _press(preview_page, "Show shifting notes")
+    dialog = _dialog(preview_page)
+    expect(dialog).to_be_visible()
+    link = dialog.get_by_role("link", name="Jump to the tail", exact=True)
+    tail = dialog.get_by_role("heading", name="Tail", exact=True)
+    expect(link).to_be_visible()
+    expect(tail).to_be_attached()
+
+    # The suite normally asks browsers to reduce motion. This path deliberately
+    # exercises the animated carry whose destination can move as content-
+    # visibility replaces the distant blocks' estimates with their real size.
+    preview_page.emulate_media(reduced_motion="no-preference")
+    dialog.evaluate(
+        """dialog => {
+          const frame = dialog.querySelector(
+            '[data-slot="file-preview-reading-frame"]'
+          );
+          const link = [...dialog.querySelectorAll("a")].find(
+            element => element.textContent === "Jump to the tail"
+          );
+          const tail = [...dialog.querySelectorAll("h2")].find(
+            element => element.textContent === "Tail"
+          );
+          if (!(frame instanceof HTMLElement)
+              || !(link instanceof HTMLElement)
+              || !(tail instanceof HTMLElement)) {
+            throw new Error("anchor regression fixture was not rendered");
+          }
+
+          const coordinate = () => tail.getBoundingClientRect().top
+            - frame.getBoundingClientRect().top + frame.scrollTop;
+          link.addEventListener("click", () => {
+            const started = performance.now();
+            const initialCoordinate = coordinate();
+            let previousScrollTop = frame.scrollTop;
+            const probe = {
+              done: false,
+              initialCoordinate,
+              largestShiftWhileScrolling: 0,
+            };
+            window.__leikaAnchorCarryProbe = probe;
+
+            const sample = now => {
+              const scrollTop = frame.scrollTop;
+              const shift = Math.abs(coordinate() - initialCoordinate);
+              if (Math.abs(scrollTop - previousScrollTop) > 0.25) {
+                probe.largestShiftWhileScrolling = Math.max(
+                  probe.largestShiftWhileScrolling,
+                  shift,
+                );
+              }
+              previousScrollTop = scrollTop;
+              if (now - started < 600) {
+                requestAnimationFrame(sample);
+              } else {
+                probe.done = true;
+              }
+            };
+            requestAnimationFrame(sample);
+          }, { capture: true, once: true });
+        }"""
+    )
+
+    link.click()
+    preview_page.wait_for_function(
+        "() => window.__leikaAnchorCarryProbe?.done === true", timeout=3_000
+    )
+    probe = preview_page.evaluate("() => window.__leikaAnchorCarryProbe")
+    assert probe["largestShiftWhileScrolling"] > 500, probe
+
+    expect(tail).to_be_focused()
+    settled = tail.evaluate(
+        """tail => {
+          const frame = tail.closest('[data-slot="file-preview-reading-frame"]');
+          return {
+            offset: tail.getBoundingClientRect().top
+              - frame.getBoundingClientRect().top,
+            runway: frame.scrollHeight - frame.clientHeight - frame.scrollTop,
+            frameHeight: frame.clientHeight,
+          };
+        }"""
+    )
+    assert abs(settled["offset"]) <= 1, settled
+    assert settled["runway"] > settled["frameHeight"], settled
     assert preview_page.url == address
     assert page_errors == []
 
@@ -1731,18 +1863,33 @@ def test_a_document_does_not_reflow_as_its_figures_arrive(
     # Held, so that "before the figures arrive" is a state with a duration
     # rather than a race against localhost.
     held: List[Route] = []
+    holding = True
 
     def hold(route: Route) -> None:
-        # A plain `held.append` is a builtin, which Playwright cannot tag as
-        # a handler; a route left unhandled is a request left in flight.
-        held.append(route)
+        if holding:
+            held.append(route)
+        else:
+            route.continue_()
 
     preview_page.route("**/leika-assets/**", hold)
 
     leika_server.gui.add_preview_button("Show report", document)
     _press(preview_page, "Show report")
     frame = _dialog(preview_page).locator("div.overflow-auto").first
-    expect(_dialog(preview_page).locator("img")).to_have_count(5)
+    images = _dialog(preview_page).locator("img")
+    expect(images).to_have_count(5)
+
+    # Exercise every lazy boundary while the pixel requests are held. This
+    # separates any deferred document materialization from image decode.
+    for index in range(5):
+        images.nth(index).scroll_into_view_if_needed()
+    deadline = time.monotonic() + 5.0
+    while not held and time.monotonic() < deadline:
+        preview_page.wait_for_timeout(10)
+    assert held, "the figure requests were supposed to still be in flight"
+    preview_page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
 
     height = "(element) => element.scrollHeight"
     reserved = frame.evaluate(height)
@@ -1754,9 +1901,13 @@ def test_a_document_does_not_reflow_as_its_figures_arrive(
     ), "the figures were supposed to still be in flight"
     assert reserved > 5 * 400, "no room was left for the figures"
 
+    holding = False
     for route in held:
         route.continue_()
-    expect(_dialog(preview_page).locator("img").first).to_have_js_property("naturalWidth", 600)
+    preview_page.unroute("**/leika-assets/**", hold)
+    for index in range(5):
+        images.nth(index).scroll_into_view_if_needed()
+        expect(images.nth(index)).to_have_js_property("naturalWidth", 600)
     preview_page.wait_for_timeout(200)
 
     assert frame.evaluate(height) == reserved, "the document changed height when its figures landed"

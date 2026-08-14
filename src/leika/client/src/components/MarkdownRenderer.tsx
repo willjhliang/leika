@@ -7,6 +7,7 @@ import {
   type DocumentHeading,
 } from "../markdown";
 import { renderMarkdown } from "./markdownDocument";
+import { cancelMarkdownCarry, startMarkdownCarry } from "./markdownCarry";
 import { MarkdownMediaController } from "./MarkdownMedia";
 import {
   sectionAtScroll,
@@ -30,16 +31,6 @@ function fragmentOf(href: string): string {
     return raw;
   }
 }
-
-/** How long the carry from a link to its heading takes.
- *
- * A fixed beat: long enough to read as motion through the document rather
- * than a cut, short enough that the reader is never waiting on it. This is
- * why the scroll is animated by hand at all -- the browser's own smooth
- * scroll has no duration to set, and the one it picks grows with distance,
- * so a contents link pointing deep into a README turns into a glide.
- */
-const SCROLL_DURATION_MS = 200;
 
 /** The box the document is read through, whether or not it is scrolled.
  *
@@ -77,31 +68,6 @@ function scrollFrameOf(element: HTMLElement): HTMLElement | null {
   return null;
 }
 
-// The scroll in flight, so a second click supersedes it rather than fighting
-// it frame by frame. One is enough: only one document is ever being carried.
-let cancelCarry: (() => void) | null = null;
-
-/** Scroll `frame` until `target` sits at its top, in one short eased move. */
-function carryTo(frame: HTMLElement, target: HTMLElement): void {
-  cancelCarry?.();
-  const from = frame.scrollTop;
-  const offset =
-    target.getBoundingClientRect().top - frame.getBoundingClientRect().top;
-  const to = Math.max(
-    0,
-    Math.min(from + offset, frame.scrollHeight - frame.clientHeight),
-  );
-  const started = performance.now();
-  let handle = requestAnimationFrame(function step(now: number) {
-    const at = Math.min(1, (now - started) / SCROLL_DURATION_MS);
-    // Ease-out: the move spends its speed early and lands softly, which is
-    // what makes a fast scroll read as travel rather than as a jolt.
-    frame.scrollTop = from + (to - from) * (1 - (1 - at) ** 3);
-    if (at < 1) handle = requestAnimationFrame(step);
-  });
-  cancelCarry = () => cancelAnimationFrame(handle);
-}
-
 /**
  * Follow a link from one part of a document to another.
  *
@@ -121,7 +87,10 @@ function carryTo(frame: HTMLElement, target: HTMLElement): void {
  * navigating, which is the same nothing the reader saw before, minus the
  * address that had changed to say otherwise.
  */
-function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
+function followLinkWithinDocument(
+  event: React.MouseEvent<HTMLElement>,
+  carryOwner: object,
+): void {
   const href = (event.target as HTMLElement).closest("a")?.getAttribute("href");
   if (href === undefined || href === null || !href.startsWith("#")) return;
   event.preventDefault();
@@ -145,10 +114,11 @@ function followLinkWithinDocument(event: React.MouseEvent<HTMLElement>): void {
     frame === null ||
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   ) {
+    cancelMarkdownCarry();
     target.scrollIntoView({ behavior: "auto", block: "start" });
     return;
   }
-  carryTo(frame, target);
+  startMarkdownCarry(frame, target, carryOwner);
 }
 
 /** Measure headings once, after layout changes, in document coordinates. */
@@ -305,7 +275,10 @@ function keepInView(nav: HTMLElement, fragment: string | null): void {
  * readers are told, since they cannot see the shape of it.
  */
 function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
-  const shallowest = Math.min(...headings.map((heading) => heading.level));
+  let shallowest = Number.POSITIVE_INFINITY;
+  for (const heading of headings) {
+    shallowest = Math.min(shallowest, heading.level);
+  }
   const navRef = React.useRef<HTMLElement>(null);
   const current = useCurrentSection(headings, navRef);
   return (
@@ -408,6 +381,12 @@ export function MarkdownRenderer(props: {
   contents?: boolean;
 }) {
   const source = props.children ?? "";
+  const carryOwner = React.useRef<object>(null);
+  if (carryOwner.current === null) carryOwner.current = {};
+  React.useEffect(
+    () => () => cancelMarkdownCarry(carryOwner.current ?? undefined),
+    [],
+  );
   const { element, headings } = renderMarkdown(source);
   // Held still across renders, because it is what the marking of the current
   // section watches: a fresh array every render is a fresh set of listeners
@@ -435,7 +414,12 @@ export function MarkdownRenderer(props: {
   const showing = listed.length > 0;
   return (
     <MarkdownMediaController>
-      <div className="@container/document" onClick={followLinkWithinDocument}>
+      <div
+        className="@container/document"
+        onClick={(event) =>
+          followLinkWithinDocument(event, carryOwner.current!)
+        }
+      >
         {/* The contents are placed in the second column rather than written
           there: first in the document, so that reaching them does not mean
           reading past the file to get to them, and last on the screen, where
