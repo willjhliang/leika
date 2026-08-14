@@ -69,7 +69,7 @@
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.4.1",
-    "globals": "^16.5.0",
+    "globals": "^17.9.0",
     "lucide-static": "^1.26.0",
     "prettier": "^3.9.6",
     "shadcn": "4.14.1",
