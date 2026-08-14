@@ -16,6 +16,7 @@
 //   TabGroups (a "snap group"). A stack of one is a normal floating panel.
 
 import React from "react";
+import { emptyRecord } from "../recordUtils";
 
 export type PanelId = string;
 export type GroupId = string;
@@ -282,10 +283,10 @@ export type GroupLocation =
   | { kind: "area"; areaId: AreaId };
 
 export const emptyLayout = (): DockLayout => ({
-  groups: {},
+  groups: emptyRecord(),
   docked: { left: null, right: null },
   floating: [],
-  areas: {},
+  areas: emptyRecord(),
 });
 
 /** The layout's region widths with defaults filled in (the one place the

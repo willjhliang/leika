@@ -12,6 +12,7 @@
 
 import { Card } from "../components/ui/card";
 import React from "react";
+import { emptyRecord } from "../recordUtils";
 import { createDragController } from "./dragController";
 import { createGestureCoordinator } from "./gestures";
 import {
@@ -493,7 +494,7 @@ export function DockManager({
                           // stays the single source of truth for the width.
                           let next = layoutRef.current;
                           if (!plan.singleColumn) {
-                            const byId: Record<string, number> = {};
+                            const byId = emptyRecord<number>();
                             ids.forEach((id, i) => {
                               byId[id] = widths[i];
                             });

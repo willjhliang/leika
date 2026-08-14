@@ -10,6 +10,8 @@ import {
   defaultClientSettings,
   readClientSettings,
   useClientSettings,
+  MAX_ACCENT_COLOR_CODE_UNITS,
+  MAX_CLIENT_SETTINGS_JSON_CODE_UNITS,
 } from "./ClientSettings";
 
 class MemoryStorage implements ClientSettingsStorage {
@@ -111,6 +113,21 @@ describe("readClientSettings", () => {
       imageFit: "fit",
       mobileControlsExpanded: true,
     });
+  });
+
+  it("bounds persisted JSON and accent strings before parsing colors", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(
+      CLIENT_SETTINGS_STORAGE_KEY,
+      " ".repeat(MAX_CLIENT_SETTINGS_JSON_CODE_UNITS + 1),
+    );
+    expect(readClientSettings(storage)).toEqual(defaultClientSettings());
+    stored(storage, {
+      darkMode: true,
+      accentColor: `#${"0".repeat(MAX_ACCENT_COLOR_CODE_UNITS)}`,
+    });
+    expect(readClientSettings(storage).accentColor).toBeNull();
+    expect(readClientSettings(storage).darkMode).toBe(true);
   });
 
   it("drops an image fit that is not one of the three", () => {

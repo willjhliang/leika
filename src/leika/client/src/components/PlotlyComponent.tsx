@@ -2,14 +2,9 @@ import React from "react";
 
 import { GuiPlotlyMessage } from "../WebsocketMessages";
 import { useElementSize } from "../hooks/useElementSize";
-import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
+import { usePlotlyRenderer } from "../hooks/usePlotlyRenderer";
+import { parsePlotlyFigure } from "../viewport/plotlyPayload";
 import { MediaPreview, MediaSurface } from "./MediaPreview";
-
-type PlotDescription = {
-  data: unknown;
-  layout?: Record<string, unknown>;
-  config?: unknown;
-};
 
 const PlotWithAspect = React.memo(function PlotWithAspect({
   jsonStr,
@@ -22,43 +17,36 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
   onExpand?: () => void;
 }) {
   const { ref, width } = useElementSize();
-  const plotRef = React.useRef<HTMLDivElement>(null);
-  const plot = React.useMemo(() => {
-    const parsed = JSON.parse(jsonStr) as PlotDescription;
-    return {
-      ...parsed,
-      layout: { ...parsed.layout, uirevision: "true" },
-    };
-  }, [jsonStr]);
-
-  React.useEffect(() => {
-    const node = plotRef.current;
-    if (width <= 0 || node === null) return;
-    let active = true;
-    const render = (plotly: PlotlyGlobal) => {
-      if (!active) return;
-      plotly.react(
-        node,
-        plot.data,
-        { ...plot.layout, width, height: width / aspect },
-        plot.config,
-      );
-    };
-    const plotly = getPlotly();
-    if (plotly === undefined) void plotlyReady.then(render);
-    else render(plotly);
-    return () => {
-      active = false;
-    };
-  }, [plot, width, aspect]);
-
-  React.useEffect(() => {
-    const node = plotRef.current;
-    return () => {
-      const plotly = getPlotly();
-      if (node !== null && plotly !== undefined) plotly.purge(node);
-    };
-  }, []);
+  const parseResult = React.useMemo(
+    () => parsePlotlyFigure(jsonStr),
+    [jsonStr],
+  );
+  const plot = parseResult.ok ? parseResult.value : null;
+  const parseError = parseResult.ok ? null : parseResult.error;
+  const aspectError =
+    Number.isFinite(aspect) && aspect > 0
+      ? null
+      : "Plot aspect must be a positive number.";
+  const displayAspect = aspectError === null ? aspect : 1;
+  const request = React.useMemo(
+    () =>
+      plot === null || aspectError !== null
+        ? null
+        : {
+            figure: plot,
+            layout: {
+              ...plot.layout,
+              width,
+              height: width / displayAspect,
+            },
+          },
+    [plot, width, displayAspect, aspectError],
+  );
+  const { plotRef, message: plotlyMessage } = usePlotlyRenderer({
+    request,
+    inputError: parseError ?? aspectError,
+    ready: width > 0,
+  });
 
   return (
     <MediaSurface
@@ -67,7 +55,21 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
       ref={ref}
       onExpand={onExpand}
     >
-      <div ref={plotRef} />
+      <div
+        ref={plotRef}
+        style={{ minHeight: width > 0 ? width / displayAspect : undefined }}
+      />
+      {plotlyMessage === null ? null : (
+        <div
+          role="status"
+          className={
+            "absolute inset-0 z-10 flex items-center justify-center " +
+            "bg-background text-sm text-muted-foreground"
+          }
+        >
+          {plotlyMessage}
+        </div>
+      )}
     </MediaSurface>
   );
 });

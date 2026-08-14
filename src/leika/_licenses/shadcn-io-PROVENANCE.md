@@ -6,10 +6,12 @@ that produced the rest of `components/ui/` (see `shadcn-ui-PROVENANCE.md`).
 
 - Upstream: <https://www.shadcn.io/components/status>
 - Organization: <https://github.com/shadcnio>
-- License: MIT, per the `shadcnio/react-shadcn-components` repository metadata.
-  The component page distributes source through an authenticated registry
-  rather than a public file, so no upstream license header shipped with it and
-  none is reproduced here.
+- License: MIT; the complete upstream text and copyright notice from
+  `shadcnio/react-shadcn-components` commit
+  `2dc66e0e7b159fa92e761c84f3c5325c9700c415` are preserved in
+  `shadcn-io-LICENSE.txt`. The component page distributes source through an
+  authenticated registry rather than a public file, so no license header was
+  present in the copied source itself.
 
 The vendored copy drops the page's `Demo` export and its `props as any` casts;
 it is otherwise unchanged. It composes `components/ui/badge.tsx`, which IS a

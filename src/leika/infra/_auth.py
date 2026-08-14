@@ -15,12 +15,15 @@ handshake.
 from __future__ import annotations
 
 import http
+import os
 import secrets
+import stat
 import time
 from collections import deque
 from hmac import compare_digest
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import unquote
 
 from websockets.datastructures import Headers
@@ -36,6 +39,8 @@ PASSWORD_HEADER = "x-leika-password"
 # Global rather than per-client: through a tunnel, addresses are cheap.
 MAX_PASSWORD_FAILURES = 10
 FAILURE_WINDOW_SECONDS = 60.0
+MAX_PASSWORD_BYTES = 1024
+MAX_PASSWORD_HEADER_CHARS = 4096
 
 # The client inlines Geist into its single-file build, which sits behind the
 # gate, so the login page gets its faces from pre-auth endpoints: Geist for
@@ -67,13 +72,21 @@ class HttpPasswordGuard:
     """
 
     def __init__(self, password: str) -> None:
-        if not password:
+        if not isinstance(password, str):
+            raise TypeError("password must be a string.")
+        try:
+            encoded = password.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise ValueError("password must contain valid Unicode.") from error
+        if not encoded:
             raise ValueError("password must not be empty.")
-        self._password = password
+        if len(encoded) > MAX_PASSWORD_BYTES:
+            raise ValueError("password must be at most 1024 UTF-8 bytes.")
+        self._password_bytes = encoded
         self._session_token = secrets.token_urlsafe(32)
         self._failure_times: deque[float] = deque(maxlen=MAX_PASSWORD_FAILURES)
 
-    def process(self, request: Request) -> Response | None:
+    def process(self, request: Request, *, secure: bool = False) -> Response | None:
         """Check one request. ``None`` means authenticated: let it through."""
         path = request.path.partition("?")[0]
         if path in _FONT_FILES:
@@ -81,10 +94,11 @@ class HttpPasswordGuard:
             # typefaces, and a font discloses nothing about the workspace.
             return _font_response(path)
         if path == AUTH_PATH:
-            return self._handle_login(request)
+            return self._handle_login(request, secure=secure)
         if self._authenticated(request):
             return None
-        if request.headers.get("Upgrade") == "websocket":
+        upgrades = request.headers.get_all("Upgrade")
+        if len(upgrades) == 1 and upgrades[0].lower() == "websocket":
             # Rejecting the handshake here (rather than after the upgrade)
             # keeps unauthenticated sockets out of the connection accounting.
             return _plain_response(http.HTTPStatus.UNAUTHORIZED, b"UNAUTHORIZED")
@@ -100,7 +114,7 @@ class HttpPasswordGuard:
             _LOGIN_PAGE,
         )
 
-    def _handle_login(self, request: Request) -> Response:
+    def _handle_login(self, request: Request, *, secure: bool) -> Response:
         if self._throttled():
             return _plain_response(http.HTTPStatus.TOO_MANY_REQUESTS, b"TOO MANY REQUESTS")
         if not self._password_matches(request):
@@ -108,7 +122,7 @@ class HttpPasswordGuard:
         cookie = f"{COOKIE_NAME}={self._session_token}; Path=/; HttpOnly; SameSite=Lax"
         # `Secure` only when the browser reached us over TLS (i.e. through a
         # tunnel); over plain http://localhost it would strand the cookie.
-        if request.headers.get("X-Forwarded-Proto") == "https":
+        if secure:
             cookie += "; Secure"
         return Response(
             http.HTTPStatus.NO_CONTENT,
@@ -119,25 +133,37 @@ class HttpPasswordGuard:
     def _authenticated(self, request: Request) -> bool:
         cookie: SimpleCookie = SimpleCookie()
         # A client may fold cookies into several headers; parse each.
-        for header_value in request.headers.get_all("Cookie"):
-            cookie.load(header_value)
+        try:
+            for header_value in request.headers.get_all("Cookie"):
+                cookie.load(header_value)
+        except CookieError:
+            return False
         morsel = cookie.get(COOKIE_NAME)
         if morsel is not None and compare_digest(morsel.value, self._session_token):
             return True
         return self._password_matches(request)
 
     def _password_matches(self, request: Request) -> bool:
-        header = request.headers.get(PASSWORD_HEADER)
-        # No header is anonymous browsing, not a guess: it neither counts
-        # toward the throttle nor is blocked by it.
-        if header is None:
+        headers = request.headers.get_all(PASSWORD_HEADER)
+        # No header is anonymous browsing, not a guess. Duplicates are
+        # malformed rather than an exception or an ambiguous credential.
+        if len(headers) != 1:
+            return False
+        header = headers[0]
+        if len(header) > MAX_PASSWORD_HEADER_CHARS:
             return False
         if self._throttled():
             return False
         # URL-encoded so passwords survive the ASCII-only header rules that
         # `fetch` enforces; a no-op for the plain-ASCII common case.
         supplied = unquote(header)
-        if compare_digest(supplied.encode(), self._password.encode()):
+        try:
+            supplied_bytes = supplied.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        if len(supplied_bytes) <= MAX_PASSWORD_BYTES and compare_digest(
+            supplied_bytes, self._password_bytes
+        ):
             self._failure_times.clear()
             return True
         self._failure_times.append(time.monotonic())
@@ -150,16 +176,34 @@ class HttpPasswordGuard:
         )
 
 
-_font_cache: dict[str, bytes] = {}
+_MAX_FONT_BYTES = 512 * 1024
+
+
+def _load_font_payloads() -> MappingProxyType[str, bytes]:
+    """Load the two immutable login fonts once, before request processing."""
+    payloads: dict[str, bytes] = {}
+    for url_path, file_path in _FONT_FILES.items():
+        try:
+            with file_path.open("rb") as file:
+                metadata = os.fstat(file.fileno())
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError("font asset is not a regular file")
+                if metadata.st_size > _MAX_FONT_BYTES:
+                    raise OSError("font asset exceeds its bounded size")
+                payload = file.read(_MAX_FONT_BYTES + 1)
+        except OSError as error:
+            raise RuntimeError(f"cannot load bundled login font {file_path}") from error
+        if len(payload) > _MAX_FONT_BYTES or not payload.startswith(b"wOF2"):
+            raise RuntimeError(f"invalid bundled login font {file_path}")
+        payloads[url_path] = payload
+    return MappingProxyType(payloads)
+
+
+_FONT_PAYLOADS = _load_font_payloads()
 
 
 def _font_response(path: str) -> Response:
-    if path not in _font_cache:
-        file = _FONT_FILES[path]
-        if not file.is_file():
-            return _plain_response(http.HTTPStatus.NOT_FOUND, b"NOT FOUND")
-        _font_cache[path] = file.read_bytes()
-    payload = _font_cache[path]
+    payload = _FONT_PAYLOADS[path]
     return Response(
         http.HTTPStatus.OK,
         "OK",

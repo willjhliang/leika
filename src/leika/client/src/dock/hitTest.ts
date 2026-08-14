@@ -491,10 +491,11 @@ export function hitTest(
   // tab-insert target anyway, and without this a lone unmergeable docked panel
   // offers no way to dock above at all: the region's top band is suppressed as
   // redundant for single-leaf regions.)
-  const tabsTop =
-    g.tabs.length > 0
-      ? Math.min(...g.tabs.map((tab) => tab.rect.top))
-      : (strip?.top ?? r.top);
+  let tabsTop = strip?.top ?? r.top;
+  if (g.tabs.length > 0) {
+    tabsTop = Number.POSITIVE_INFINITY;
+    for (const tab of g.tabs) tabsTop = Math.min(tabsTop, tab.rect.top);
+  }
   if (
     strip !== null &&
     (clientY < tabsTop || (g.unmergeable === true && clientY <= strip.bottom))

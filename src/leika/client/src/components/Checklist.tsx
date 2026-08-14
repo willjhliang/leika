@@ -1,9 +1,8 @@
-import * as React from "react";
-
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
+import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
 import { GuiChecklistMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
@@ -140,9 +139,15 @@ export default function ChecklistComponent({
             aria-label={`${label ?? "Checklist"} entry ${row.place + 1}`}
             className={cn(entryBoxClassName(row), ENTRY_BOX_CONTROLS, "pl-7")}
             disabled={disabled}
-            onChange={(event) =>
-              rewrite(row.place, [event.currentTarget.value, item[1]])
-            }
+            maxLength={MAX_GUI_COLLECTION_ITEM_CODE_UNITS}
+            onChange={(event) => {
+              if (
+                event.currentTarget.value.length >
+                MAX_GUI_COLLECTION_ITEM_CODE_UNITS
+              )
+                return;
+              rewrite(row.place, [event.currentTarget.value, item[1]]);
+            }}
             data-leika-checklist-entry
           />
           {/* Inside the box at its start, as its controls are inside at its

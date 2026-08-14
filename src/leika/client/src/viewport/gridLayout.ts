@@ -69,9 +69,12 @@ function minimumSubtreeSpan(
   const childSpans = node.children.map((child) =>
     minimumSubtreeSpan(child, axis),
   );
-  return node.direction === axis
-    ? childSpans.reduce((sum, span) => sum + span, 0)
-    : Math.max(...childSpans);
+  if (node.direction === axis) {
+    return childSpans.reduce((sum, span) => sum + span, 0);
+  }
+  let maximum = 0;
+  for (const span of childSpans) maximum = Math.max(maximum, span);
+  return maximum;
 }
 
 /** Create a square-cell grid large enough for every layout subtree. */
@@ -263,10 +266,13 @@ export function directionalPaneTarget(
     const cross = horizontal ? deltaY : deltaX;
     return [{ paneId, distance: primary * primary + cross * cross }];
   });
-  candidates.sort(
-    (left, right) =>
-      left.distance - right.distance || left.paneId.localeCompare(right.paneId),
-  );
+  candidates.sort((left, right) => {
+    const distance = left.distance - right.distance;
+    if (distance !== 0) return distance;
+    // Pane IDs are protocol identifiers, not natural-language labels. A
+    // code-unit tie break is reproducible across browser/OS locales.
+    return left.paneId < right.paneId ? -1 : left.paneId > right.paneId ? 1 : 0;
+  });
   return candidates[0]?.paneId ?? null;
 }
 

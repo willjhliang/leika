@@ -7,7 +7,9 @@ Run ``make gallery`` after visual client changes.
 from __future__ import annotations
 
 import argparse
-import socket
+import os
+import stat
+import tempfile
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -331,10 +333,34 @@ ENTRIES = [
 ]
 
 
-def find_free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+def _fsync_directory(directory: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace a generated page only after its complete contents are durable."""
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise RuntimeError(f"refusing to replace non-regular gallery page: {path}")
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def wait_for_scheme(page, scheme: str) -> None:
@@ -488,7 +514,7 @@ def write_page() -> None:
                 "</a>",
             ]
         lines += ["</div>", "```", ""]
-    doc.write_text("\n".join(lines))
+    _atomic_write_text(doc, "\n".join(lines) + "\n")
     print(f"wrote {display_path(doc)}")
 
 
@@ -516,14 +542,8 @@ def main() -> int:
     from playwright.sync_api import sync_playwright
 
     import leika
-    import leika._client_autobuild
 
-    leika._client_autobuild.ensure_client_is_built(ignore_dev_server=True)
-    # Server.__init__ checks again; the line above already settled it.
-    leika._client_autobuild.ensure_client_is_built = lambda: None
-
-    port = find_free_port()
-    server = leika.Server(host="127.0.0.1", port=port, workspace_id="gallery", verbose=False)
+    server = leika.Server(host="127.0.0.1", port=0, workspace_id="gallery", verbose=False)
     gui = server.gui
     exec_ns = {"gui": gui, "leika": leika, "np": np}
 

@@ -7,41 +7,150 @@ on:
   pull_request:
   workflow_dispatch:
 
+  schedule:
+    - cron: "17 6 * * 1"
 concurrency:
   group: python-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    name: Unit tests on Python ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/build-client
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-client
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            uv.lock
+            build-constraints.txt
           cache-suffix: ${{ matrix.python-version }}
       - name: Unit tests
-        run: uv run --extra dev --python ${{ matrix.python-version }} pytest --ignore=tests/e2e
+        env:
+          LEIKA_PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv run --locked --extra dev --python "$LEIKA_PYTHON_VERSION" pytest --ignore=tests/e2e
+      - name: Unit tests without runtime asserts
+        if: matrix.python-version == '3.12'
+        env:
+          PYTHONOPTIMIZE: "1"
+        run: uv run --locked --extra dev --python 3.12 pytest --ignore=tests/e2e
 
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    name: Python quality
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            uv.lock
+            build-constraints.txt
       - name: Ruff
         run: |
-          uvx ruff check src tests examples scripts sync_client_server.py --output-format github
-          uvx ruff format --check src tests examples scripts sync_client_server.py
+          uv run --locked --extra dev ruff check src tests examples scripts hatch_build.py sync_client_server.py --output-format github
+          uv run --locked --extra dev ruff format --check src tests examples scripts hatch_build.py sync_client_server.py
       - name: Pyright
-        run: uv run --extra dev --python 3.12 pyright src examples
+        run: uv run --locked --extra dev --python 3.12 pyright src examples
       - name: Documentation and examples
         run: python scripts/check_docs.py
+
+  minimum-dependencies:
+    runs-on: ubuntu-24.04
+    name: Minimum direct dependencies
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-client
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            build-constraints.txt
+      - name: Test declared direct-dependency floors
+        run: |
+          floor_environment="$(mktemp -d)"
+          uv pip compile pyproject.toml --extra dev --resolution lowest-direct \
+            --python-version 3.10 --output-file "$floor_environment/requirements.txt"
+          uv venv --python 3.10 "$floor_environment/environment"
+          uv pip sync --python "$floor_environment/environment/bin/python" \
+            "$floor_environment/requirements.txt"
+          PYTHONPATH=src "$floor_environment/environment/bin/python" \
+            scripts/check_dependency_floors.py --pytest
+      - name: Ensure floor resolution leaves the universal lock unchanged
+        run: git diff --exit-code -- uv.lock
+
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    name: Audit ${{ matrix.extra }} dependencies on Python ${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+        extra: [base, examples]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-suffix: audit-${{ matrix.python-version }}-${{ matrix.extra }}
+      - name: Audit exact locked production dependencies
+        env:
+          AUDIT_EXTRA: ${{ matrix.extra }}
+          AUDIT_PYTHON: ${{ matrix.python-version }}
+        run: >-
+          python scripts/check_dependency_audit.py
+          --python "$AUDIT_PYTHON" --extra "$AUDIT_EXTRA"
+
+  platforms:
+    name: Unit tests on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: src/leika/client/.nvmrc
+          cache: npm
+          cache-dependency-path: src/leika/client/package-lock.json
+      - name: Install client toolchain
+        working-directory: src/leika/client
+        run: npm ci
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            build-constraints.txt
+      - name: Unit tests
+        run: uv run --locked --extra dev --python 3.12 pytest --ignore=tests/e2e
+      - name: Generated protocol
+        run: uv run --locked --extra dev --python 3.12 python sync_client_server.py --check

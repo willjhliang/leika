@@ -28,6 +28,7 @@ import {
   WindowId,
 } from "./types";
 import { createDockIdAllocator, DockIdAllocator, freshDockId } from "./dockIds";
+import { emptyRecord } from "../recordUtils";
 
 // A typed recursive deep-clone, ~10x faster than structuredClone for the
 // layout's plain JSON-ish shape (objects/arrays/numbers/strings/booleans --
@@ -42,7 +43,7 @@ const clone = <T>(value: T): T => {
     return (value as unknown[]).map(clone) as unknown as T;
   }
   if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out = emptyRecord<unknown>();
     for (const key in value as Record<string, unknown>) {
       if (Object.prototype.hasOwnProperty.call(value, key)) {
         out[key] = clone((value as Record<string, unknown>)[key]);
@@ -255,7 +256,11 @@ export function minRegionWidth(
       dividerPx * (node.children.length - 1)
     );
   }
-  return Math.max(...node.children.map((c) => minRegionWidth(c, dividerPx)));
+  let minimum = 0;
+  for (const child of node.children) {
+    minimum = Math.max(minimum, minRegionWidth(child, dividerPx));
+  }
+  return minimum;
 }
 
 /** Maximum width a docked region may take while keeping the per-panel maximum.
@@ -273,7 +278,11 @@ export function maxRegionWidth(
       dividerPx * (node.children.length - 1)
     );
   }
-  return Math.max(...node.children.map((c) => maxRegionWidth(c, dividerPx)));
+  let maximum = 0;
+  for (const child of node.children) {
+    maximum = Math.max(maximum, maxRegionWidth(child, dividerPx));
+  }
+  return maximum;
 }
 
 /** The area id whose tab group is `groupId`, or null. A group that backs a
@@ -703,7 +712,7 @@ export function insertTabsInto(
     const source = draft.groups[sourceId];
     if (source === undefined) continue;
     detachInPlace(draft, sourceId);
-    incoming.push(...source.panelIds);
+    for (const panelId of source.panelIds) incoming.push(panelId);
     active = source.activeId;
     delete draft.groups[sourceId];
   }
@@ -761,7 +770,7 @@ export function setStackWeights(
   if (windowIndex === -1) return layout;
   const win = layout.floating[windowIndex];
   const liveGroupIds = new Set(win.stack);
-  const next: Record<GroupId, number> = {};
+  const next = emptyRecord<number>();
 
   for (const [groupId, weight] of Object.entries(win.stackWeights ?? {})) {
     if (liveGroupIds.has(groupId)) next[groupId] = weight;
@@ -793,7 +802,7 @@ export function restoreStackWeights(
   const win = layout.floating[windowIndex];
   const liveGroupIds = new Set(win.stack);
   const captured = new Set(capturedGroupIds);
-  const next: Record<GroupId, number> = {};
+  const next = emptyRecord<number>();
 
   for (const [groupId, weight] of Object.entries(win.stackWeights ?? {})) {
     if (liveGroupIds.has(groupId) && !captured.has(groupId)) {
@@ -1091,7 +1100,7 @@ export function floatColumn(
   if (stack.some((g) => isAreaGroup(layout, g))) {
     return { layout, windowId: null };
   }
-  const stackWeights: Record<GroupId, number> = {};
+  const stackWeights = emptyRecord<number>();
   leaves.forEach((l) => {
     stackWeights[l.group] = l.weight;
   });
@@ -1242,7 +1251,11 @@ export function snapToWindowStack(
     index === undefined
       ? target.stack.length
       : Math.max(0, Math.min(target.stack.length, index));
-  target.stack.splice(i, 0, ...groupIds);
+  target.stack = [
+    ...target.stack.slice(0, i),
+    ...groupIds,
+    ...target.stack.slice(i),
+  ];
   if (target.height === undefined && sourceHeight !== undefined)
     target.height = sourceHeight;
   return draft;

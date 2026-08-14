@@ -1,5 +1,6 @@
 import { cascadeResize, weightedCellSizes } from "./layoutOps";
 import { GroupId } from "./types";
+import { cloneRecord, emptyRecord } from "../recordUtils";
 
 const SIZE_EPSILON_PX = 1e-6;
 /** Expanded floating-stack cells share only the space left after fixed
@@ -77,7 +78,7 @@ export function createFloatingStackResizeSession({
   if (stackWeights === undefined) {
     originalStackWeights = undefined;
   } else {
-    originalStackWeights = {};
+    originalStackWeights = emptyRecord();
     for (const groupId of startStack) {
       if (Object.prototype.hasOwnProperty.call(stackWeights, groupId)) {
         originalStackWeights[groupId] = stackWeights[groupId];
@@ -101,7 +102,7 @@ export function createFloatingStackResizeSession({
       const pinAutoHeight = changesSize && !fixedHeight && !pinnedAutoHeight;
       if (pinAutoHeight) pinnedAutoHeight = true;
 
-      const nextWeights: Record<GroupId, number> = {};
+      const nextWeights = emptyRecord<number>();
       startStack.forEach((groupId, index) => {
         if (!startCollapsed[index]) nextWeights[groupId] = next[index];
       });
@@ -114,7 +115,7 @@ export function createFloatingStackResizeSession({
         stackWeights:
           originalStackWeights === undefined
             ? undefined
-            : { ...originalStackWeights },
+            : cloneRecord(originalStackWeights),
         restoreAutoHeight: pinnedAutoHeight,
       };
     },

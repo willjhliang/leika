@@ -15,6 +15,9 @@ import leika._messages
 import leika.infra
 
 VERSION_INFO = Path(__file__).resolve().parents[1] / "src/leika/client/src/VersionInfo.ts"
+WEBSOCKET_MESSAGES = (
+    Path(__file__).resolve().parents[1] / "src/leika/client/src/WebsocketMessages.ts"
+)
 
 
 def test_version_and_server_signature() -> None:
@@ -64,7 +67,9 @@ def test_client_carries_the_protocol_fingerprint() -> None:
     what a server left running across an edit does: it feeds the page fields
     the page has never heard of, and the page goes blank rather than saying so.
     """
-    generated = re.search(r'LEIKA_PROTOCOL = "([^"]+)"', VERSION_INFO.read_text(encoding="utf-8"))
+    generated = re.search(
+        r'LEIKA_PROTOCOL = "([^"]+)"', WEBSOCKET_MESSAGES.read_text(encoding="utf-8")
+    )
     assert generated is not None
     assert generated.group(1) == leika.infra.protocol_fingerprint(leika._messages.Message)
 

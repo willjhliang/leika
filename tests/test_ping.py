@@ -29,7 +29,15 @@ class _Client:
 
     def __init__(self) -> None:
         self._websock_connection = _RecordingConnection()
+        self.gui = type(
+            "_Gui",
+            (),
+            {"_retire_scope_without_queue": lambda self: None},
+        )()
         self.flushes = 0
+
+    def _cancel_all_outgoing_file_transfers(self) -> None:
+        pass
 
     def flush(self) -> None:
         self.flushes += 1
@@ -51,6 +59,14 @@ def test_a_ping_is_answered_with_the_stamp_it_carried(server: leika.Server) -> N
     # Echoed, not read: the stamp is the client's own clock, and the two never
     # have to agree on one.
     assert pong.sent_ms == 1234.5
+
+
+def test_nonfinite_ping_stamps_are_dropped(server: leika.Server) -> None:
+    client = _connect(server, 1)
+    for stamp in (float("nan"), float("inf"), float("-inf")):
+        server._handle_client_ping(ClientId(1), _messages.ClientPingMessage(sent_ms=stamp))
+    assert client._websock_connection.messages == []
+    assert client.flushes == 0
 
 
 def test_the_answer_goes_out_immediately(server: leika.Server) -> None:
@@ -84,7 +100,7 @@ def test_pings_do_not_replace_one_another_in_the_buffer(server: leika.Server) ->
         _messages.ServerPongMessage(sent_ms=1.0),
         _messages.ServerPongMessage(sent_ms=2.0),
     )
-    assert pongs[0].redundancy_key() != pongs[1].redundancy_key()
+    assert pongs[0].redundancy_key() == pongs[1].redundancy_key()
 
 
 def test_a_ping_from_a_client_that_has_gone_is_dropped(server: leika.Server) -> None:

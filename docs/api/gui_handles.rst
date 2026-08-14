@@ -7,6 +7,13 @@ Handles are returned by the ``leika.GuiApi.add_*`` methods. Input handles carry
 a ``value`` and support ``on_update`` callbacks; container handles can be used
 as context managers to scope the controls added inside them.
 
+Removal is terminal. A handle's stable ``id`` remains readable, but other
+synchronized state reads, updates, and new callback registrations raise
+``RuntimeError``. Removing a container also makes every descendant terminal,
+and charged payloads are released and scrubbed. Repeating an explicit removal
+emits a warning and is otherwise a harmless no-op. The same lifecycle applies
+to commands, modals, and notifications.
+
 Inputs
 ------
 
@@ -51,6 +58,7 @@ Inputs
 
 .. autoclass:: GuiUploadButtonHandle
    :members:
+   :exclude-members: value
 
 .. autoclass:: UploadedFile
    :members:
@@ -114,6 +122,9 @@ Display
    :members:
 
 .. autoclass:: GuiDividerHandle
+   :members:
+
+.. autoclass:: NotificationHandle
    :members:
 
 Events and commands

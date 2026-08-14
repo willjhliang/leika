@@ -145,6 +145,26 @@ def test_settings_open_in_a_popout_off_the_gear(
     checkbox = leika_page.get_by_role("checkbox", name="Enabled", exact=True)
     expect(checkbox).to_be_visible(timeout=5_000)
 
+    # The folder opens on an intrinsic-height animation. Visibility proves the
+    # checkbox has arrived, but not that its ancestors have reached their final
+    # height; under load, the baseline below could otherwise catch a frame of
+    # that animation and mistake the remaining growth for settings reflow.
+    folder_contents = leika_page.locator(
+        '[data-leika-section="folder"] [data-slot="accordion-content"]'
+    )
+    folder_contents.evaluate(
+        """async element => {
+            const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+            await frame();
+            await frame();
+            await Promise.all(
+                element.getAnimations().map(animation =>
+                    animation.finished.catch(() => undefined),
+                ),
+            );
+        }"""
+    )
+
     panel = leika_page.locator("[data-dock-group]").first
     before_panel = panel.bounding_box()
     before_checkbox = checkbox.bounding_box()

@@ -3,25 +3,39 @@
 ## Bootstrap
 
 ```bash
-make install   # or: python -m pip install -e ".[dev]" && leika-build-client
+make install   # Uses the tracked uv.lock.
+# pip fallback: python -m pip install -e ".[dev]" && leika-build-client
 ```
 
-The Python package serves `src/leika/client/build/index.html`. `make help`
-lists every target.
+The Python package serves `src/leika/client/build/index.html`. The Python-facing
+Make targets run through the tracked `uv.lock`; `make help` lists every target.
+The pip fallback honors published ranges instead of the development lock.
 
 ## Building the client
 
 `leika-build-client` -- equivalently `make build-client` -- is the only way the
 client is built. CI runs it, the bootstrap above runs it, and a server that
 finds no usable build runs it for you. What a build *is* stays in the client's
-`package.json`; the entry point only invokes `npm ci && npm run build`, so
-there is no second definition to drift.
+`package.json`. The entry point resolves the pinned Node runtime, refreshes
+dependencies with `npm ci` when the package inputs change, and then invokes
+the package's `npm run build`; there is no second build definition to drift.
 
 A build records the hash of the sources it came from in
 `build/.leika-sources`, and is rebuilt when that no longer matches the tree.
 Timestamps are not consulted: checkouts, cache restores, and pip all rewrite
-them. The stamp is written only after a successful build, so an interrupted
-one is rebuilt rather than served.
+them. A completed generation is staged and validated before an atomic directory
+swap, so an interrupted build leaves either the previous generation or a
+recoverable new one rather than a mixed bundle. Files and directory entries are
+explicitly flushed on POSIX. Python does not expose directory fsync on Windows,
+so there the backup transaction guarantees process-crash recovery while
+power-loss durability remains the filesystem's responsibility.
+
+Hatch's custom build hook is validation-only: it never starts Node, npm, or a
+network request. A standard wheel built directly from a checkout fails fast if
+the bundle is missing or stale and points to `leika-build-client --force` or
+`make package`. Editable and sdist builds remain possible from a clean checkout.
+When a wheel is built from an extracted sdist, the hook validates the complete
+bundled client without requiring the checkout-only source stamp.
 
 Set `LEIKA_CLIENT_BUILD` to control this from a script:
 
@@ -40,8 +54,9 @@ Use that same version (`nvm use`) before running any command that rewrites
 `package-lock.json`. npm versions disagree about which optional transitive
 packages belong in a lockfile, so regenerating it on an older npm silently
 drops entries that CI's npm then rejects with a confusing
-`npm ci` "package.json and package-lock.json are not in sync" error. Builds
-themselves use `npm ci` and never rewrite the lockfile.
+`npm ci` "package.json and package-lock.json are not in sync" error.
+Dependency refreshes use `npm ci` and never rewrite the lockfile; release
+packaging forces a clean refresh even when the local install stamp matches.
 
 ## Checks
 
@@ -51,21 +66,26 @@ make typecheck
 make client-test
 make test
 python scripts/check_docs.py
+make docs
 make test-e2e
 make package
 ```
 
-Run the first five before opening a change; add `make test-e2e` for
+Run through `make docs` before opening a change; add `make test-e2e` for
 browser-facing changes and `make package` for packaging changes.
-`check_docs.py` resolves every local Markdown link and compiles every shipped
-example. It has no `make` target but CI runs it, so skipping it locally is a
-way to go red on a broken link.
+`check_docs.py` recursively validates local Markdown and reStructuredText links,
+then compiles every shipped example and Markdown Python block. It has no `make`
+target but CI runs it, so skipping it locally is a way to go red on a broken
+link or snippet.
 
 Unit tests must work without the optional plotting libraries unless marked
 `plotly` or `matplotlib`. `make package` builds the distributions and validates
 them with `scripts/check_wheel.py` and `scripts/check_sdist.py`: the browser
 bundle must be present, files that do not belong in a release wheel are
-rejected, and a 5,000,000-byte ceiling is enforced.
+rejected, and archive size, shape, and integrity limits are enforced. The
+universal `uv.lock` is tracked for repeatable development and CI across every
+supported Python version; CI uses `--locked`, while a separate lowest-direct
+job checks that the broad published lower bounds remain usable.
 
 ## Documentation
 
@@ -86,25 +106,54 @@ in `docs/api/`; autodoc will not discover it otherwise.
 
 ## Releases
 
-Bump `__version__` in `src/leika/__init__.py`, rerun `python
-sync_client_server.py`, then rebuild the client before running anything
-locally:
+Before tagging, bump `__version__` in `src/leika/__init__.py`, add the dated
+entry to `CHANGELOG.md`, regenerate the protocol/version file, run the normal
+release checks, and build the canonical distributions:
 
 ```bash
-LEIKA_CLIENT_BUILD=always leika-build-client
+python sync_client_server.py
+make lint typecheck client-test test
+npm audit --prefix src/leika/client --audit-level=moderate
+npm audit --prefix src/leika/client --omit=dev --audit-level=moderate
+for python in 3.10 3.14; do
+  for extra in base examples; do
+    python scripts/check_dependency_audit.py --python "$python" --extra "$extra"
+  done
+done
+python scripts/check_docs.py
+make docs
+make test-e2e
+make package
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z"
 ```
 
-The rebuild matters because the bundle carries the version it was built with,
-and a client whose version does not match the server's is turned away for
-good -- it does not retry. Skip it and the page comes up blank: no panes, no
-GUI, just the status badge red and reading "Inactive", with the rejection
-behind it. The server looks healthy throughout, so it reads as a bug in
-whatever you last changed. `always` is what forces the build: the source hash
-did change, but a running `npm run dev` makes the default `auto` skip the
-check entirely.
+`make package` is the single release build path. It performs a fresh locked
+`npm ci` and production client build, checks the generated protocol, builds
+with hashed constraints, validates both archives plus `twine check --strict`,
+and recoverably swaps `dist/` for the exact validated pair. Client freshness
+matters because its bundle carries the server version and mismatches refuse to
+connect. The npm and Python dependency audits above are also required because registry
+advisory data is network-backed and intentionally not part of the artifact
+builder. The Python audit compares the exact isolated installation with the
+marker-selected locked export before querying advisories, for both the base and
+user-installable examples dependency sets at the oldest and newest supported
+Python versions.
+
+Release packaging and the published package require Python 3.10 or newer.
+Release commands require uv 0.12.3, enforced by `pyproject.toml`;
+`uv self update 0.12.3` updates an older installation. When changing the
+reviewed Hatchling pin in `build-constraints.in`, regenerate and commit the
+complete hashed closure with the pinned build tool:
+
+```bash
+uvx uv@0.12.3 pip compile build-constraints.in \
+  --generate-hashes --python-version 3.10 \
+  --custom-compile-command \
+  "uvx uv@0.12.3 pip compile build-constraints.in (see docs/development.md)" \
+  --output-file build-constraints.txt
+```
 
 Publishing the release runs `.github/workflows/package.yml`, which checks the
 generated protocol and version, reruns the Python, client, docs, and browser
@@ -151,10 +200,12 @@ Base UI. The checked-in `src/leika/client/components.json` pins that preset,
 the neutral base color, and Lucide; Geist and the radius scale are theme tokens
 in `src/leika/client/src/index.css`. Generated component source lives in
 `src/leika/client/src/components/ui`. From the client directory, add or refresh
-a component with the pinned CLI version:
+a component with the project-pinned CLI. Install the lockfile first with
+`npm ci`; `npm exec --` then resolves only that local dependency instead of
+downloading and executing a registry package ad hoc:
 
 ```bash
-npx --yes shadcn@4.14.1 add <component>
+npm exec -- shadcn add <component>
 ```
 
 The `shadcn` package remains pinned because `src/leika/client/src/index.css`

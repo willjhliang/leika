@@ -14,7 +14,8 @@ def svg_from_icon(icon_name: IconName) -> str:
     Raises:
         ValueError: If no icon with that name is bundled.
     """
-    assert isinstance(icon_name, str)
+    if not isinstance(icon_name, str):
+        raise TypeError("icon_name must be a string from leika.Icon.")
     with zipfile.ZipFile(ICONS_ARCHIVE) as zip_file:
         try:
             with zip_file.open(f"{icon_name}.svg") as icon_file:

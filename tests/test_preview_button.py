@@ -23,9 +23,11 @@ from unittest import mock
 import pytest
 
 import leika
+from leika import _gui_api as gui_api_impl
 from leika import _messages
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
 from leika.infra import ClientId
+from leika.infra import _infra as infra_impl
 
 
 class _Client:
@@ -43,6 +45,9 @@ class _Client:
         self.shown: List[Tuple[str, str, Any, int, str | None, str | None]] = []
         self.downloaded: List[Tuple[str, Any]] = []
         self.warmed: List[Tuple[str, Any, str | None, str | None]] = []
+
+    def _cancel_all_outgoing_file_transfers(self) -> None:
+        """Production-shaped disconnect cleanup; this fake has no transfers."""
 
     @property
     def previewed(self) -> List[Tuple[str, Any, int]]:
@@ -180,6 +185,22 @@ def test_a_path_backed_markdown_preview_links_relative_images(
     with urllib.request.urlopen(f"http://127.0.0.1:{server.port}{urls[0]}") as response:
         assert response.read() == png
         assert response.headers["Content-Type"] == "image/png"
+
+
+def test_oversized_path_markdown_is_not_read_before_preview_rejection(
+    server: leika.Server, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = tmp_path / "notes.md"
+    document.write_bytes(b"12345")
+    handle = server.gui.add_preview_button("Look", document, max_bytes=4)
+
+    def forbidden_read(self: Path) -> bytes:
+        raise AssertionError("oversized Markdown was read before its size gate")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    client = _press(handle, server)
+
+    assert client.previewed == [("notes.md", document, 4)]
 
 
 def test_an_image_that_cannot_be_read_keeps_its_reference(
@@ -413,14 +434,14 @@ def test_a_pictures_size_is_learned_from_the_bytes_used_for_its_digest(
     asset.write_bytes(_one_pixel_png())
 
     reads: List[Any] = []
-    original = Path.read_bytes
+    original = infra_impl._read_bounded_file
 
-    def counted(self: Path) -> bytes:
-        if self == asset:
-            reads.append(self)
-        return original(self)
+    def counted(path: Path, max_bytes: int, **kwargs: object) -> bytes:
+        if path == asset:
+            reads.append(path)
+        return original(path, max_bytes, **kwargs)
 
-    with mock.patch.object(Path, "read_bytes", counted):
+    with mock.patch.object(infra_impl, "_read_bounded_file", counted):
         first = server._register_http_image(asset)
         again = server._register_http_image(asset)
 
@@ -448,6 +469,93 @@ def test_the_error_names_the_method_that_was_called(server: leika.Server) -> Non
 def test_a_str_is_refused_at_creation(server: leika.Server) -> None:
     with pytest.raises(TypeError, match="bytes, a Path"):
         server.gui.add_preview_button("Look", "notes.md")  # type: ignore[arg-type]
+
+
+def test_file_sources_reject_unsupported_and_async_providers_before_commit(
+    server: leika.Server,
+) -> None:
+    async def async_provider(_: GuiEvent[Any]) -> bytes:
+        return b"async"
+
+    class AsyncCallable:
+        async def __call__(self, _: GuiEvent[Any]) -> bytes:
+            return b"async"
+
+    for invalid in (object(), async_provider, AsyncCallable()):
+        with pytest.raises(TypeError, match="bytes, a Path|synchronous"):
+            server.gui.add_preview_button(
+                "Look",
+                invalid,  # type: ignore[arg-type]
+                filename="notes.txt",
+            )
+        with pytest.raises(TypeError, match="bytes, a Path|synchronous"):
+            server.gui.add_download_button(
+                "Save",
+                invalid,  # type: ignore[arg-type]
+                filename="notes.txt",
+            )
+
+    handle = server.gui.add_preview_button("Look", b"old", filename="notes.txt")
+    with pytest.raises(TypeError, match="bytes, a Path"):
+        handle.content = object()  # type: ignore[assignment]
+    assert handle.content == b"old"
+
+
+def test_file_provider_result_is_exact_and_unexpected_coroutine_is_closed(
+    server: leika.Server,
+) -> None:
+    invalid = server.gui.add_preview_button(
+        "Invalid",
+        lambda _: object(),
+        filename="notes.txt",  # type: ignore[arg-type]
+    )
+    with pytest.raises(TypeError, match="must return bytes or a Path"):
+        _press(invalid)
+    assert invalid.disabled is False
+
+    async def produced() -> bytes:
+        return b"late"
+
+    coroutine = produced()
+    unexpected_async = server.gui.add_preview_button(
+        "Async",
+        lambda _: coroutine,
+        filename="notes.txt",  # type: ignore[arg-type]
+    )
+    with pytest.raises(TypeError, match="async providers are not supported"):
+        _press(unexpected_async)
+    assert coroutine.cr_frame is None
+    assert unexpected_async.disabled is False
+
+
+def test_direct_file_bytes_are_transactionally_charged_and_released(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    handle = server.gui.add_preview_button("Look", b"old", filename="notes.txt")
+    assert server.gui._retained_extra_bytes_from_gui_uuid[handle.id] == 3
+
+    old_total = server.gui._resource_total.payload_bytes
+    monkeypatch.setattr(
+        gui_api_impl,
+        "_GUI_AGGREGATE_PAYLOAD_MAX_BYTES",
+        old_total + 1,
+    )
+    with pytest.raises(RuntimeError, match="retained payload"):
+        handle.content = b"replacement"
+    assert handle.content == b"old"
+    assert server.gui._retained_extra_bytes_from_gui_uuid[handle.id] == 3
+
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"path-backed")
+    handle.content = path
+    assert handle.content == path
+    assert handle.id not in server.gui._retained_extra_bytes_from_gui_uuid
+
+    handle.remove()
+    with pytest.raises(RuntimeError, match="removed file button"):
+        _ = handle.content
+    assert handle._content == b""
+    assert handle.id not in server.gui._resource_from_gui_uuid
 
 
 def test_preview_work_for_one_client_and_source_is_fifo(
@@ -600,7 +708,7 @@ def test_disconnecting_drops_queued_preview_work(
         "_resolve_client",
         lambda requested: client if requested == client_id else None,
     )
-    client.gui = SimpleNamespace(_discard_client_work=lambda _: None)
+    client.gui = SimpleNamespace(_discard_client_work=lambda *_args, **_kwargs: None)
     with server._client_lock:
         server._connected_clients[client_id] = client  # type: ignore[assignment]
 
@@ -654,3 +762,30 @@ def test_disconnecting_drops_queued_preview_work(
     assert worker is not None
     worker.result(timeout=2.0)
     assert events == ["warm:start", "warm:end"]
+
+
+def test_markdown_preview_snapshot_rejects_same_size_in_place_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from leika import _gui_handles as handles_impl
+
+    source = tmp_path / "notes.md"
+    source.write_bytes(b"before")
+    real_fstat = handles_impl.os.fstat
+    calls = 0
+
+    def rewrite_between_descriptor_stats(descriptor: int) -> os.stat_result:
+        nonlocal calls
+        metadata = real_fstat(descriptor)
+        calls += 1
+        if calls == 2:
+            source.write_bytes(b"after!")
+            timestamp = metadata.st_mtime_ns + 1_000_000_000
+            os.utime(source, ns=(timestamp, timestamp))
+        return metadata if calls == 2 else real_fstat(descriptor)
+
+    monkeypatch.setattr(handles_impl.os, "fstat", rewrite_between_descriptor_stats)
+    with pytest.raises(OSError, match="changed while it was being read"):
+        handles_impl._read_preview_markdown(source, 64)

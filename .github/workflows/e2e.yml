@@ -11,26 +11,40 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    name: ${{ matrix.browser }} on Python ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.13"]
+        include:
+          - { python-version: "3.10", browser: chromium }
+          - { python-version: "3.14", browser: chromium }
+          - { python-version: "3.12", browser: firefox }
+          - { python-version: "3.12", browser: webkit }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/build-client
       - uses: ./.github/actions/setup-e2e
         with:
+          browser: ${{ matrix.browser }}
           python-version: ${{ matrix.python-version }}
       - name: Browser tests
-        run: uv run pytest tests/e2e -n auto
+        env:
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+          LEIKA_PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv run --locked --extra dev --python "$LEIKA_PYTHON_VERSION" pytest tests/e2e -n auto --browser "$PLAYWRIGHT_BROWSER"
       - name: Failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-${{ matrix.python-version }}
+          name: playwright-${{ matrix.browser }}-py${{ matrix.python-version }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 14

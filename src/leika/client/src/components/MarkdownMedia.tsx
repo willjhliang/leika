@@ -12,10 +12,19 @@ import * as React from "react";
 
 import { InlineMediaSurface, MediaPreview } from "./MediaPreview";
 import { mediaPreviewWidth, type MediaSize } from "./mediaPreviewSize";
+import { inspectMarkdownImageSource } from "./markdownMediaSafety";
 import {
   previewMediaClassName,
   usePreviewFullscreen,
 } from "./previewFullscreen";
+import {
+  IMAGE_DECODE_FAILURE_MESSAGE,
+  useImageDecodeError,
+} from "../imageDecodeError";
+import {
+  RASTER_PIXEL_BUDGET_MESSAGE,
+  useRasterPixelLease,
+} from "../useRasterPixelLease";
 
 interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   /** Supplied only by MarkdownLink, so its button can be a sibling of the
@@ -23,6 +32,11 @@ interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>;
   src?: string;
 }
+
+type AdmittedMarkdownImageProps = MarkdownImageProps & {
+  measured: MediaSize;
+  sourceKind: "asset" | "data";
+};
 
 interface SelectedImage {
   alt: string;
@@ -52,6 +66,8 @@ function SelectedImagePreview({
   onOpenChange: (open: boolean) => void;
 }) {
   const [fullscreen] = usePreviewFullscreen(image.key);
+  const decodeError = useImageDecodeError(image.src);
+  const pixels = useRasterPixelLease(image.src, image.size, open);
   return (
     <MediaPreview
       open={open}
@@ -60,14 +76,31 @@ function SelectedImagePreview({
       rememberAs={image.key}
       width={mediaPreviewWidth(image.size)}
     >
-      <img
-        src={image.src}
-        alt={image.alt}
-        title={image.titleAttribute}
-        width={image.size?.width}
-        height={image.size?.height}
-        className={previewMediaClassName(fullscreen)}
-      />
+      {!pixels.pending && !pixels.admitted ? (
+        <span role="status" className="text-muted-foreground text-sm">
+          {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
+          <a href={image.src} rel="noreferrer noopener">
+            Open image: {image.title}
+          </a>
+        </span>
+      ) : decodeError.failed ? (
+        <span role="status" className="text-muted-foreground text-sm">
+          {IMAGE_DECODE_FAILURE_MESSAGE}{" "}
+          <a href={image.src} rel="noreferrer noopener">
+            Open image: {image.title}
+          </a>
+        </span>
+      ) : pixels.admitted ? (
+        <img
+          src={image.src}
+          alt={image.alt}
+          title={image.titleAttribute}
+          width={image.size?.width}
+          height={image.size?.height}
+          className={previewMediaClassName(fullscreen)}
+          onError={decodeError.onError}
+        />
+      ) : null}
     </MediaPreview>
   );
 }
@@ -109,12 +142,6 @@ export function MarkdownMediaController({
  * and ignored by the asset server, while giving the browser a stable box
  * before the pixels arrive.
  */
-function reservedSize(src: string | undefined): Partial<MediaSize> {
-  const measured = /[?&]w=(\d+)&h=(\d+)/.exec(src ?? "");
-  if (measured === null) return {};
-  return { width: Number(measured[1]), height: Number(measured[2]) };
-}
-
 function positiveDimension(value: number | string | undefined): number | null {
   if (value === undefined || value === "") return null;
   const number = Number(value);
@@ -159,7 +186,7 @@ function anchorAround(
 ): React.ReactElement {
   if (linkedBy === undefined) return image;
   return (
-    <a rel="noreferrer" {...linkedBy}>
+    <a {...linkedBy} rel="noreferrer noopener">
       {image}
     </a>
   );
@@ -170,21 +197,99 @@ export function MarkdownImage({
   linkedBy,
   ...sourceProps
 }: MarkdownImageProps) {
+  const inspected = inspectMarkdownImageSource(sourceProps.src);
+  const measured = inspected.admission.ok ? inspected.admission.size : null;
+  const pixels = useRasterPixelLease(sourceProps.src ?? null, measured);
+  if (sourceProps.src === undefined) {
+    return (
+      <span role="status" className="text-muted-foreground text-sm">
+        Image preview is unavailable because its source is missing.
+      </span>
+    );
+  }
+  if (!inspected.admission.ok) {
+    const title = sourceProps.alt?.trim() || "Image";
+    return (
+      <span role="status" className="text-muted-foreground text-sm">
+        {inspected.admission.reason}{" "}
+        <a
+          href={sourceProps.src}
+          download={inspected.sourceKind === "data" ? title : undefined}
+          rel="noreferrer noopener"
+        >
+          Open image: {title}
+        </a>
+      </span>
+    );
+  }
+  // From here admission succeeded, so the size passed to the hook is exact.
+  if (measured === null) return null;
+  if (!pixels.pending && !pixels.admitted) {
+    const title = sourceProps.alt?.trim() || "Image";
+    return (
+      <span role="status" className="text-muted-foreground text-sm">
+        {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
+        <a
+          href={sourceProps.src}
+          download={inspected.sourceKind === "data" ? title : undefined}
+          rel="noreferrer noopener"
+        >
+          Open image: {title}
+        </a>
+      </span>
+    );
+  }
+  if (!pixels.admitted) return null;
+  return (
+    <AdmittedMarkdownImage
+      {...sourceProps}
+      linkedBy={linkedBy}
+      measured={measured}
+      sourceKind={inspected.sourceKind === "asset" ? "asset" : "data"}
+    />
+  );
+}
+
+/** Draw an already-admitted image. Split from the lease gate so its markup
+ * and link/button semantics remain testable without pretending SSR effects
+ * can reserve a browser-only pixel owner. */
+export function AdmittedMarkdownImage({
+  linkedBy,
+  measured,
+  sourceKind,
+  ...sourceProps
+}: AdmittedMarkdownImageProps) {
   const controller = React.useContext(MarkdownMediaContext);
   const insidePicture = React.useContext(InsidePictureContext);
   const insideUnliftedLink = React.useContext(InsideUnliftedLinkContext);
   const imageRef = React.useRef<HTMLImageElement | null>(null);
+  const decodeError = useImageDecodeError(sourceProps.src ?? null);
+  if (sourceProps.src === undefined) return null;
+  if (decodeError.failed) {
+    const title = sourceProps.alt?.trim() || "Image";
+    return (
+      <span role="status" className="text-muted-foreground text-sm">
+        {IMAGE_DECODE_FAILURE_MESSAGE}{" "}
+        <a
+          href={sourceProps.src}
+          download={sourceKind === "data" ? title : undefined}
+          rel="noreferrer noopener"
+        >
+          Open image: {title}
+        </a>
+      </span>
+    );
+  }
 
-  const measured = reservedSize(sourceProps.src);
   const props = { ...sourceProps, ...measured };
-  const canDefer =
-    props.src?.startsWith("/leika-assets/") && measured.width !== undefined;
+  const canDefer = sourceKind === "asset";
   const image = (
     <img
       ref={imageRef}
       {...props}
       loading={canDefer ? "lazy" : props.loading}
       decoding={canDefer ? "async" : props.decoding}
+      onError={decodeError.onError}
     />
   );
 
@@ -237,11 +342,13 @@ export function MarkdownLink({
     React.isValidElement<MarkdownImageProps>(child) &&
     child.type === MarkdownImage
   ) {
-    return React.cloneElement(child, { linkedBy: { ...props, children } });
+    return React.cloneElement(child, {
+      linkedBy: { ...props, children },
+    });
   }
   return (
     <InsideUnliftedLinkContext value={true}>
-      <a rel="noreferrer" {...props}>
+      <a {...props} rel="noreferrer noopener">
         {children}
       </a>
     </InsideUnliftedLinkContext>
@@ -252,9 +359,16 @@ export function MarkdownLink({
 export function MarkdownPicture(
   props: React.HTMLAttributes<HTMLPictureElement>,
 ) {
+  // `source[srcset]` starts fetching before a fallback component can inspect
+  // the bytes. Render only the fallback image through MarkdownImage's safe
+  // admission; responsive author sources remain inert rather than causing an
+  // involuntary remote request.
+  const fallbackImages = React.Children.toArray(props.children).filter(
+    (child) =>
+      React.isValidElement(child) &&
+      (child.type === MarkdownImage || child.type === AdmittedMarkdownImage),
+  );
   return (
-    <InsidePictureContext value={true}>
-      <picture {...props} />
-    </InsidePictureContext>
+    <InsidePictureContext value={false}>{fallbackImages}</InsidePictureContext>
   );
 }

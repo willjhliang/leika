@@ -2,13 +2,7 @@
 // fixed area groups, and validated numeric geometry.
 
 import { describe, it, expect } from "vitest";
-import {
-  DockEdge,
-  DockLayout,
-  GroupId,
-  MIN_PANEL_WIDTH_PX,
-  emptyLayout,
-} from "./types";
+import { DockLayout, GroupId, MIN_PANEL_WIDTH_PX, emptyLayout } from "./types";
 import {
   leaf,
   row,
@@ -393,12 +387,8 @@ describe("dockToRegionEdge", () => {
 // ===========================================================================
 
 describe("dropOnDockedLeaf", () => {
-  /** Helper: find the node id of the leaf holding `group` on the given edge. */
-  function leafIdOf(
-    layout: DockLayout,
-    edge: DockEdge,
-    group: GroupId,
-  ): string {
+  /** Helper: find the node id of the docked leaf holding `group`. */
+  function leafIdOf(layout: DockLayout, group: GroupId): string {
     const loc = findGroupLocation(layout, group);
     if (loc === null || loc.kind !== "docked") throw new Error("not docked");
     return loc.nodeId;
@@ -406,7 +396,7 @@ describe("dropOnDockedLeaf", () => {
 
   it("no-op for empty dragged list", () => {
     const layout = makeLayout({ left: leaf("a") });
-    const id = leafIdOf(layout, "left", "a");
+    const id = leafIdOf(layout, "a");
     expect(dropOnDockedLeaf(layout, [], "left", id, "center")).toBe(layout);
   });
 
@@ -433,7 +423,7 @@ describe("dropOnDockedLeaf", () => {
       floating: [{ id: "w1", stack: ["b"] }],
       groups: { a: 1, b: 2 },
     });
-    const id = leafIdOf(layout, "left", "a");
+    const id = leafIdOf(layout, "a");
     const out = dropOnDockedLeaf(layout, ["b"], "left", id, "center");
     expect(shapeOf(out.docked.left)).toEqual({ leaf: "a" });
     expect(out.groups["a"].panelIds).toEqual(["a:0", "b:0", "b:1"]);
@@ -453,7 +443,7 @@ describe("dropOnDockedLeaf", () => {
       left: leaf("a"),
       floating: [{ id: "w1", stack: ["b"] }],
     });
-    const id = leafIdOf(layout, "left", "a");
+    const id = leafIdOf(layout, "a");
     const out = dropOnDockedLeaf(layout, ["b"], "left", id, region);
     expect(shapeOf(out.docked.left)).toEqual({
       dir,
@@ -466,7 +456,7 @@ describe("dropOnDockedLeaf", () => {
       left: row([leaf("a", 4), leaf("t", 7)]),
       floating: [{ id: "w1", stack: ["b"] }],
     });
-    const id = leafIdOf(layout, "left", "t");
+    const id = leafIdOf(layout, "t");
     // Drop "b" above "t" -> a column split replacing the "t" leaf, weight 7.
     const out = dropOnDockedLeaf(layout, ["b"], "left", id, "top");
     expect(shapeOf(out.docked.left, true)).toEqual({
@@ -489,7 +479,7 @@ describe("dropOnDockedLeaf", () => {
   it("a same-edge dragged group is detached before the split (no duplication)", () => {
     // Both a and b live on the left; drop b to the right of a.
     const layout = makeLayout({ left: row([leaf("a"), leaf("b")]) });
-    const id = leafIdOf(layout, "left", "a");
+    const id = leafIdOf(layout, "a");
     const out = dropOnDockedLeaf(layout, ["b"], "left", id, "right");
     // b removed from its old spot, then re-inserted next to a; flattened to a row.
     expect(groupsInTree(out.docked.left).sort()).toEqual(["a", "b"]);
@@ -504,7 +494,7 @@ describe("dropOnDockedLeaf", () => {
       left: leaf("a"),
       floating: [{ id: "w1", stack: ["b", "c"] }],
     });
-    const id = leafIdOf(layout, "left", "a");
+    const id = leafIdOf(layout, "a");
     const out = dropOnDockedLeaf(layout, ["b", "c"], "left", id, "right");
     expect(shapeOf(out.docked.left)).toEqual({
       dir: "row",
@@ -567,6 +557,23 @@ describe("BUG #3 (by design): self-drop onto a sole docked leaf is a no-op", () 
 // ===========================================================================
 
 describe("insertTabsInto", () => {
+  it("moves a tab list larger than JavaScript's call argument limit", () => {
+    const panelIds = Array.from(
+      { length: 150_000 },
+      (_, index) => `panel-${index}`,
+    );
+    const layout = emptyLayout();
+    layout.groups.t = { id: "t", panelIds: ["target"], activeId: "target" };
+    layout.groups.s = { id: "s", panelIds, activeId: panelIds.at(-1)! };
+    layout.floating = [
+      { id: "target-window", x: 0, y: 0, width: 300, stack: ["t"] },
+      { id: "source-window", x: 0, y: 0, width: 300, stack: ["s"] },
+    ];
+
+    const output = insertTabsInto(layout, "t", ["s"], 1);
+    expect(output.groups.t.panelIds).toHaveLength(panelIds.length + 1);
+    expect(output.groups.t.panelIds.at(-1)).toBe(panelIds.at(-1));
+  });
   it("inserts source panels at the given index, dropping the source group", () => {
     const layout = makeLayout({
       left: row([leaf("t"), leaf("s")]),
@@ -1355,6 +1362,20 @@ describe("setActiveTab", () => {
 // ===========================================================================
 
 describe("moveWindow", () => {
+  it("deep-clones own prototype-named keys without invoking setters", () => {
+    const layout = floatingLayout([{ id: "w1", stack: ["a"] }]);
+    Object.defineProperty(layout.groups, "__proto__", {
+      configurable: true,
+      enumerable: true,
+      value: { id: "__proto__", panelIds: ["x"], activeId: "x" },
+      writable: true,
+    });
+
+    const output = moveWindow(layout, "w1", 30, 40);
+    expect(Object.getPrototypeOf(output.groups)).toBeNull();
+    expect(Object.hasOwn(output.groups, "__proto__")).toBe(true);
+    expect(output.groups.__proto__.id).toBe("__proto__");
+  });
   it("sets position", () => {
     const layout = makeLayout({
       floating: [{ id: "w1", stack: ["a"], x: 0, y: 0 }],

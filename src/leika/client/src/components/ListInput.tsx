@@ -1,8 +1,7 @@
-import * as React from "react";
-
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
+import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
 import { GuiListMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
@@ -37,7 +36,13 @@ export default function ListInputComponent({
           aria-label={`${label ?? "List"} entry ${row.place + 1}`}
           className={cn(entryBoxClassName(row), !frozen && ENTRY_BOX_CONTROLS)}
           disabled={disabled}
+          maxLength={MAX_GUI_COLLECTION_ITEM_CODE_UNITS}
           onChange={(event) => {
+            if (
+              event.currentTarget.value.length >
+              MAX_GUI_COLLECTION_ITEM_CODE_UNITS
+            )
+              return;
             const next = [...value];
             next[row.place] = event.currentTarget.value;
             commit(next);

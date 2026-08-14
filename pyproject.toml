@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,16 +7,19 @@ name = "leika"
 dynamic = ["version"]
 description = "A lightweight canvas for interactive Python visualizations."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = [
+  "LICENSE",
+  "src/leika/_licenses/*",
+  "src/leika/client/third-party-license-overrides/*",
+  "src/leika/client/build/THIRD_PARTY_NOTICES.txt",
+]
 authors = [{ name = "Will Liang", email = "willjhliang@gmail.com" }]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -25,11 +28,12 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "imageio>=2.16.0,<3.0.0",
   "msgspec>=0.18.6,<1.0.0",
-  "numpy>=1.21.0,<3.0.0",
+  "numpy>=1.21.3,<3.0.0",
+  "pillow>=12.3,<13",
+  "pygments>=2.20,<3",
   "rich>=13.3.3,<15.0.0",
-  "typing-extensions>=4.4.0",
+  "typing-extensions>=4.4.0,<5",
   "websockets>=13.1,<17.0.0",
   "zstandard>=0.20.0,<1.0.0",
 ]
@@ -43,12 +47,12 @@ Issues = "https://github.com/willjhliang/leika/issues"
 [project.optional-dependencies]
 examples = ["matplotlib>=3.6", "plotly>=5.21,<7", "viser>=1.0.30,<2"]
 dev = [
+  "imageio>=2.16.1,<3.0.0",
   "matplotlib>=3.6",
   "plotly>=5.21,<7",
   "viser>=1.0.30,<2",
-  "build>=1.2",
-  "hypothesis[numpy]>=6",
   "nodeenv>=1.9.1,<2.0.0",
+  "packaging>=24,<27",
   "playwright>=1.40.0",
   "psutil>=5.9.5,<8.0.0",
   "pyright>=1.1.390",
@@ -56,29 +60,54 @@ dev = [
   "pytest-playwright>=0.4.0",
   "pytest-xdist>=3.0.0",
   "ruff>=0.9.3",
+  "tomli>=2; python_version < '3.11'",
+  "twine>=6,<7",
 ]
 docs = [
-  # These tools require Python 3.9, while the base package supports 3.8.
-  "furo>=2025.12.19; python_version >= '3.9'",
+  "furo>=2025.12.19",
   "myst-parser>=3,<5",
   "sphinx>=7,<9",
-  "sphinx-autobuild>=2024.2.4; python_version >= '3.9'",
+  "sphinx-autobuild>=2024.2.4",
   "sphinx-copybutton>=0.5.2",
 ]
+
+[dependency-groups]
+audit = ["pip-audit==2.10.1"]
 
 [project.scripts]
 leika-build-client = "leika._client_autobuild:build_client_entrypoint"
 
+[tool.uv]
+required-version = "==0.12.3"
+
 [tool.hatch.version]
 path = "src/leika/__init__.py"
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build]
 ignore-vcs = true
+reproducible = true
 exclude = [
   "**/__pycache__/**",
+  "/core",
+  "/core.*",
+  "**/.leika-build-backup",
+  "**/.leika-build-backup/**",
+  "**/.leika-build-stage-*",
+  "**/.leika-build-stage-*/**",
+  "**/.*.leika-backup",
+  "**/.*.leika-backup/**",
+  "**/.*.leika-stage-*",
+  "**/.*.leika-stage-*/**",
+  "**/.*.leika-transaction",
+  "src/leika/.leika-icons-stage-*",
+  "src/leika/.leika-icons-stage-*/**",
   "docs/_build/**",
   "src/leika/client/.leika-build.lock",
   "src/leika/client/.nodeenv/**",
+  "src/leika/client/build/.leika-sources",
   "src/leika/client/node_modules/**",
 ]
 
@@ -90,16 +119,24 @@ include = [
   "/scripts",
   "/docs",
   "/CONTRIBUTING.md",
+  "/CHANGELOG.md",
   "/LICENSE",
+  "/build-constraints.txt",
+  "/build-constraints.in",
+  "/hatch_build.py",
   "/Makefile",
   "/README.md",
   "/pyproject.toml",
   "/sync_client_server.py",
+  "/uv.lock",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/leika"]
-artifacts = ["src/leika/client/build/**"]
+artifacts = [
+  "src/leika/client/build/index.html",
+  "src/leika/client/build/THIRD_PARTY_NOTICES.txt",
+]
 exclude = [
   "src/leika/client/.nodeenv/**",
   "src/leika/client/node_modules/**",
@@ -107,6 +144,7 @@ exclude = [
   "src/leika/client/.nvmrc",
   "src/leika/client/.gitignore",
   "src/leika/client/.prettierignore",
+  "src/leika/_icons_generate_enum.py",
   "src/leika/client/components.json",
   "src/leika/client/dock_test.html",
   "src/leika/client/eslint.config.mjs",
@@ -115,6 +153,8 @@ exclude = [
   "src/leika/client/package-lock.json",
   "src/leika/client/popup_test.html",
   "src/leika/client/tsconfig.json",
+  "src/leika/client/third-party-license-overrides/**",
+  "src/leika/client/vite-plugin-third-party-notices.mts",
   "src/leika/client/vite-plugin-compress-html.mts",
   "src/leika/client/vite.config.mts",
   "src/leika/client/vitest.config.ts",
@@ -136,11 +176,11 @@ exclude = [
   "src/leika/client/node_modules",
   "src/leika/client/build",
 ]
-pythonVersion = "3.8"
+pythonVersion = "3.10"
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py310"
 exclude = [".nodeenv", "node_modules", "src/leika/client/build"]
 
 [tool.ruff.lint]

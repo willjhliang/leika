@@ -199,7 +199,9 @@ def test_a_link_out_of_a_document_carries_no_referrer(
     )
     link = leika_page.get_by_role("link", name="example")
     expect(link).to_be_visible(timeout=15_000)
-    expect(link).to_have_attribute("rel", "noreferrer")
+    rel = link.get_attribute("rel")
+    assert rel is not None
+    assert {"noreferrer", "noopener"} <= set(rel.split())
     assert page_errors == []
 
 

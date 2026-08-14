@@ -7,6 +7,7 @@
  * top lives in the e2e suite, which has a browser to measure it in.
  */
 
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
@@ -15,12 +16,32 @@ import {
   createMarkdownRenderer,
   DOCUMENT_ID_PREFIX,
 } from "./markdown";
+import {
+  AdmittedMarkdownImage,
+  MarkdownImage,
+  MarkdownLink,
+  MarkdownPicture,
+} from "./components/MarkdownMedia";
+import {
+  inspectMarkdownImageSource,
+  MARKDOWN_RESERVED_MAX_DIMENSION,
+  MARKDOWN_RESERVED_MAX_PIXELS,
+} from "./components/markdownMediaSafety";
 
 /** Unstyled, so the assertions read as HTML rather than as Tailwind. */
 const render = createMarkdownRenderer({});
 
 const html = (markdown: string) =>
   renderToStaticMarkup(render(markdown).element);
+const productionMediaRender = createMarkdownRenderer({
+  a: MarkdownLink,
+  img: MarkdownImage,
+  picture: MarkdownPicture,
+});
+const productionMediaHtml = (markdown: string) =>
+  renderToStaticMarkup(productionMediaRender(markdown).element);
+const measuredAsset = (width: number, height: number) =>
+  `/leika-assets/${"a".repeat(64)}-${width}x${height}.png?w=${width}&h=${height}`;
 
 describe("what a document may contain", () => {
   test("braces are characters, not expressions", () => {
@@ -118,6 +139,71 @@ describe("what a document may contain", () => {
     expect(link).not.toContain("<button");
   });
 
+  test("author rel attributes cannot remove safe external-link isolation", () => {
+    const ordinary = productionMediaHtml(
+      '<a href="https://example.com" target="_blank" rel="author">report</a>',
+    );
+    const image = renderToStaticMarkup(
+      createElement(AdmittedMarkdownImage, {
+        alt: "Plot",
+        linkedBy: {
+          href: "https://example.com",
+          rel: "author",
+          target: "_blank",
+        },
+        measured: { width: 8, height: 8 },
+        sourceKind: "asset",
+        src: measuredAsset(8, 8),
+      }),
+    );
+    for (const out of [ordinary, image]) {
+      const rel = /<a\b[^>]*\brel="([^"]+)"/.exec(out)?.[1].split(" ");
+      expect(rel).toEqual(expect.arrayContaining(["noreferrer", "noopener"]));
+      // The sanitizer may discard the author's token; either way it cannot
+      // replace the two isolation tokens forced by the production component.
+      expect(rel).toHaveLength(new Set(rel).size);
+    }
+  });
+
+  test("only sane measured asset dimensions reserve an image box", () => {
+    const validWidth = MARKDOWN_RESERVED_MAX_DIMENSION;
+    const validHeight = MARKDOWN_RESERVED_MAX_PIXELS / validWidth;
+    const validSource = measuredAsset(validWidth, validHeight);
+    expect(inspectMarkdownImageSource(validSource)).toEqual({
+      admission: {
+        ok: true,
+        size: { width: validWidth, height: validHeight },
+      },
+      sourceKind: "asset",
+    });
+    const valid = renderToStaticMarkup(
+      createElement(AdmittedMarkdownImage, {
+        alt: "plot",
+        measured: { width: validWidth, height: validHeight },
+        sourceKind: "asset",
+        src: validSource,
+      }),
+    );
+    expect(valid).toContain(`width="${validWidth}"`);
+    expect(valid).toContain(`height="${validHeight}"`);
+    expect(valid).toContain('loading="lazy"');
+
+    for (const source of [
+      `/leika-assets/${"a".repeat(64)}.png?w=1&h=1`,
+      `/leika-assets/${"a".repeat(64)}-1x1.png?w=2&h=1`,
+      `/leika-assets/${"a".repeat(64)}-${MARKDOWN_RESERVED_MAX_DIMENSION + 1}x1.png?w=${MARKDOWN_RESERVED_MAX_DIMENSION + 1}&h=1`,
+      `/leika-assets/${"a".repeat(64)}-${validWidth}x${validHeight + 1}.png?w=${validWidth}&h=${validHeight + 1}`,
+      `/leika-assets/${"a".repeat(64)}-${"9".repeat(400)}x1.png?w=${"9".repeat(400)}&h=1`,
+    ]) {
+      expect(inspectMarkdownImageSource(source).admission.ok).toBe(false);
+      const out = productionMediaHtml(`![plot](${source})`);
+      expect(out).not.toMatch(/\bwidth=/);
+      expect(out).not.toMatch(/\bheight=/);
+      expect(out).not.toContain('loading="lazy"');
+      expect(out).not.toContain("<img");
+    }
+  });
+
   test("a large inlined image survives whole, and as its own", () => {
     // Long data URLs are lifted out of the source before parsing and put
     // back after -- an inlined image is megabytes the parser would otherwise
@@ -135,6 +221,24 @@ describe("what a document may contain", () => {
     // as writing comes back as the writing it was.
     const url = `data:image/png;base64,${"C".repeat(2000)}`;
     expect(html("```\n" + url + "\n```")).toContain(url);
+  });
+
+  test("embed stand-ins cannot collide with authored text or URLs", () => {
+    const embedded = `data:image/png;base64,${"D".repeat(2000)}`;
+    // This is the first namespace/index the lifter would otherwise choose.
+    // It appears both as prose and in a sanitizer-allowed image source, so a
+    // post-sanitize global restoration must leave both authored values alone.
+    const literal = "data:,leika-embed-0:0";
+    const legacyLiteral = "data:,leika-embed-0";
+    const out = html(
+      `![embedded](${embedded})\n\n\`${literal}\` ${legacyLiteral}\n\n` +
+        `<img alt="literal" src="${literal}">`,
+    );
+
+    expect(out).toContain(`src="${embedded}" alt="embedded"`);
+    expect(out).toContain(`<code>${literal}</code>`);
+    expect(out).toContain(legacyLiteral);
+    expect(out).toContain(`alt="literal" src="${literal}"`);
   });
 
   test("no document fails to render", () => {
@@ -255,6 +359,15 @@ describe("what a document says it contains", () => {
 describe("contentsOf", () => {
   const of = (markdown: string) =>
     contentsOf(render(markdown).headings).map((heading) => heading.text);
+
+  test("handles more headings than JavaScript's call argument limit", () => {
+    const headings = Array.from({ length: 150_000 }, (_, index) => ({
+      fragment: `section-${index}`,
+      level: index === 0 ? 1 : 2,
+      text: `Section ${index}`,
+    }));
+    expect(contentsOf(headings)).toHaveLength(headings.length);
+  });
 
   test("keeps three levels, counted from the shallowest one there is", () => {
     // A file written with `##` at its top level is not a document whose

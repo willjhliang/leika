@@ -10,6 +10,7 @@
 // The one chrome not drawn here is the phone's bottom sheet (ControlPanel).
 
 import React from "react";
+import { emptyRecord } from "../recordUtils";
 import { useViewer, ViewerContextContents } from "../ViewerContext";
 import { DockMetricsContext, useDock } from "../dock/DockContext";
 import { DockManager } from "../dock/DockManager";
@@ -170,7 +171,9 @@ function useGuiTabPanelRegistry(
   guiPanels: PanelRegistry;
   registerTabGroup: (uuid: string) => void;
 } {
-  const [guiPanels, setGuiPanels] = React.useState<PanelRegistry>({});
+  const [guiPanels, setGuiPanels] = React.useState<PanelRegistry>(() =>
+    emptyRecord(),
+  );
   // Per tab group: its config subscription, the panel ids it owns, and a
   // signature of the last-applied tab content (ids/labels/icons).
   const registry = React.useRef(
@@ -201,7 +204,7 @@ function useGuiTabPanelRegistry(
         entry.panelIds = tabConf.props._tabs.map((tab) => tab.container_id);
       }
       setGuiPanels((prev) => {
-        const next: PanelRegistry = {};
+        const next = emptyRecord<PanelRegistry[string]>();
         for (const [pid, spec] of Object.entries(prev)) {
           if (!ownedBefore.has(pid)) next[pid] = spec;
         }

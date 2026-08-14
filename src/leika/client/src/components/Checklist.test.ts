@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { GuiChecklistMessage } from "../WebsocketMessages";
+import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
 import ChecklistComponent from "./Checklist";
 import { renderWithGuiContext } from "./testGuiContext";
 
@@ -121,5 +122,11 @@ describe("ChecklistComponent", () => {
     expect(markup).toContain('aria-label="Preflight entry 2"');
     expect(markup).toContain('aria-label="Reorder entry 1"');
     expect(markup).toContain('aria-label="Remove entry 2"');
+  });
+
+  it("bounds text typed into each retained checklist row", () => {
+    expect(renderChecklist()).toContain(
+      `maxLength="${MAX_GUI_COLLECTION_ITEM_CODE_UNITS}"`,
+    );
   });
 });

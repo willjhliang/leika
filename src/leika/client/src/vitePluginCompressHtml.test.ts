@@ -24,6 +24,13 @@ describe("compressInlineHtml", () => {
     expect(output).not.toContain("<style data-vite>");
     expect(output).not.toContain("<script crossorigin type='module'>");
     expect(output).toContain('new DecompressionStream("gzip")');
+    expect(output).toContain('typeof DecompressionStream!=="function"');
+    expect(output).toContain(".catch(error=>");
+    expect(output).toContain('setAttribute("role","alert")');
+    expect(output).toContain("Leika could not start.");
+    expect(output).toContain("DOMContentLoaded");
+    expect(output).toContain('addEventListener("error"');
+    expect(output).toContain("Application module failed to load");
     expect(output).not.toContain("WebAssembly");
   });
 

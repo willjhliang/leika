@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Literal
 
 import numpy as np
 from typing_extensions import assert_never
 
 from ._assignable_props_api import colors_to_uint8
+from .infra._image_headers import validate_image_pixel_size
+
+
+def _validate_image_encoding_options(
+    format: object,
+    jpeg_quality: object,
+) -> None:
+    """Reject noncanonical or unsupported image encoding settings."""
+    if type(format) is not str or format not in ("auto", "png", "jpeg"):
+        raise ValueError(f"format must be 'auto', 'png', or 'jpeg'; got {format!r}.")
+    if jpeg_quality is not None and (type(jpeg_quality) is not int or not 0 <= jpeg_quality <= 100):
+        raise ValueError("jpeg_quality must be an integer from 0 to 100.")
 
 
 def encode_image_binary(
@@ -21,15 +34,20 @@ def encode_image_binary(
             outside 0..100.
     """
 
-    if jpeg_quality is not None and (
-        isinstance(jpeg_quality, bool)
-        or not isinstance(jpeg_quality, int)
-        or not 0 <= jpeg_quality <= 100
+    _validate_image_encoding_options(format, jpeg_quality)
+    if (
+        not isinstance(image, np.ndarray)
+        or image.ndim != 3
+        or image.shape[0] <= 0
+        or image.shape[1] <= 0
+        or image.shape[2] not in (3, 4)
     ):
-        raise ValueError("jpeg_quality must be an integer from 0 to 100.")
+        shape = getattr(image, "shape", None)
+        raise ValueError(
+            f"Expected a non-empty image with shape (height, width, 3|4), got {shape}."
+        )
+    validate_image_pixel_size(image.shape[1], image.shape[0])
     image = colors_to_uint8(image)
-    if image.ndim != 3 or image.shape[2] not in (3, 4):
-        raise ValueError(f"Expected an image with shape (height, width, 3|4), got {image.shape}.")
     resolved_format: Literal["jpeg", "png"]
     if format == "auto":
         resolved_format = "png" if image.shape[2] == 4 else "jpeg"
@@ -45,26 +63,31 @@ def cv2_imencode_with_fallback(
     image: np.ndarray,
     jpeg_quality: int | None,
 ) -> bytes:
-    """Encode an RGB or RGBA image to bytes, using OpenCV when available
-    (usually faster) and falling back to imageio -- which keeps OpenCV out of
-    the strict dependencies, since it can be annoying to install.
-    """
+    """Encode RGB or RGBA bytes, preferring OpenCV and falling back to Pillow."""
     if jpeg_quality is None:
         jpeg_quality = 85
 
     try:
         import cv2  # type: ignore[import-not-found]
     except ImportError:
-        import imageio.v3 as iio
+        from PIL import Image
 
-        return (
-            iio.imwrite("<bytes>", image, extension=".jpeg", quality=jpeg_quality)
-            if format == "jpeg"
-            else iio.imwrite("<bytes>", image, extension=".png")
-        )
+        output = BytesIO()
+        if format == "jpeg":
+            Image.fromarray(image[..., :3], mode="RGB").save(
+                output,
+                format="JPEG",
+                quality=jpeg_quality,
+            )
+        else:
+            mode = "RGBA" if image.shape[-1] == 4 else "RGB"
+            Image.fromarray(image, mode=mode).save(output, format="PNG")
+        return output.getvalue()
 
-    # OpenCV reads channels as BGR.
-    image = image[:, :, np.array((2, 1, 0, 3) if image.shape[-1] == 4 else (2, 1, 0))]
+    # OpenCV reads channels as BGR. JPEG cannot represent alpha, so both
+    # encoder branches deliberately drop it before channel reordering.
+    channels = (2, 1, 0, 3) if format == "png" and image.shape[-1] == 4 else (2, 1, 0)
+    image = image[:, :, np.array(channels)]
     if format == "png":
         success, encoded_image = cv2.imencode(".png", image)
     elif format == "jpeg":
@@ -77,4 +100,7 @@ def cv2_imencode_with_fallback(
     if not success:
         raise RuntimeError("Failed to encode image.")
 
+    # Drop the channel-reordered raw copy before materializing immutable bytes;
+    # otherwise it needlessly overlaps both encoded representations.
+    del image
     return encoded_image.tobytes()

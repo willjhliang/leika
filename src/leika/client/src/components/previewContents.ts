@@ -17,12 +17,6 @@ export const PREVIEW_CONTENTS_STORAGE_KEY = "leika.preview-contents.v1";
 
 const contents = previewFlag(PREVIEW_CONTENTS_STORAGE_KEY);
 
-export const previewContentsStore = contents.store;
-
-export function setPreviewContents(key: string, next: boolean): void {
-  contents.set(key, next);
-}
-
 /** Whether THIS document is read with its contents beside it, and the way to
  * say otherwise. */
 export function usePreviewContents(

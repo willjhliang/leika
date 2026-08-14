@@ -11,24 +11,38 @@ concurrency:
   group: client-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   client:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    name: Validate browser client
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: src/leika/client/.nvmrc
           cache: npm
           cache-dependency-path: src/leika/client/package-lock.json
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.12.3"
+          cache-dependency-glob: |
+            uv.lock
+            build-constraints.txt
           enable-cache: true
       - name: Install
         working-directory: src/leika/client
         run: npm ci
+      - name: Dependency audits
+        run: |
+          npm audit --prefix src/leika/client --audit-level=moderate
+          npm audit --prefix src/leika/client --omit=dev --audit-level=moderate
       - name: Generated protocol
-        run: uv run --extra dev --python 3.12 python sync_client_server.py --check
+        run: uv run --locked --extra dev --python 3.12 python sync_client_server.py --check
       - name: TypeScript
         working-directory: src/leika/client
         run: npm run typecheck
@@ -48,3 +62,4 @@ jobs:
         run: |
           ! grep -Eq '"(three|@react-three/fiber|@react-three/drei)"' src/leika/client/package.json
           test -f src/leika/client/build/index.html
+          test -s src/leika/client/build/THIRD_PARTY_NOTICES.txt

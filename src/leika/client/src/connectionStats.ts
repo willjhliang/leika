@@ -24,9 +24,6 @@ export interface ConnectionCounters {
   roundTripsMs: number[];
   /** Messages the page tried to send with the socket shut. */
   droppedSends: number;
-  /** Batches that overtook their predecessor because the ordering lock timed
-   * out -- the client's own symptom of a link too slow to keep up. */
-  outOfOrderBatches: number;
 }
 
 export function emptyCounters(atMs: number): ConnectionCounters {
@@ -40,7 +37,6 @@ export function emptyCounters(atMs: number): ConnectionCounters {
     messagesSent: 0,
     roundTripsMs: [],
     droppedSends: 0,
-    outOfOrderBatches: 0,
   };
 }
 
@@ -96,7 +92,6 @@ export interface ConnectionReading {
   connectedForMs: number | null;
   reconnects: number;
   droppedSends: number;
-  outOfOrderBatches: number;
 }
 
 /** Read the connection from the latest counters and the ones before them.
@@ -137,7 +132,6 @@ export function readConnection(
         : Math.max(0, current.atMs - current.connectedSinceMs),
     reconnects: current.reconnects,
     droppedSends: current.droppedSends,
-    outOfOrderBatches: current.outOfOrderBatches,
   };
 }
 

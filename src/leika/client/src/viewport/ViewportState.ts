@@ -15,6 +15,15 @@ import {
   removeViewportPane,
   sameViewportLayout,
 } from "./layoutModel";
+import {
+  isBoundedLayoutId,
+  parseBoundedPersistedJson,
+} from "../persistenceLimits";
+import type { Message } from "../WebsocketMessages";
+import {
+  MAX_LIVE_VIEWPORT_CONTENT_PANES,
+  viewportPanesWithinAggregateLimits,
+} from "./viewportLimits";
 
 export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
@@ -155,6 +164,8 @@ export interface ViewportActions {
   removePane: (paneId: string) => void;
   setPaneSnapshot: (paneIds: readonly string[]) => void;
   commitUserLayout: (layout: ViewportLayout) => void;
+  /** Pure admission for viewport state owned by one original wire frame. */
+  preflightMessageBatch: (messages: readonly Message[]) => string | null;
 }
 
 export interface ViewportLayoutStorage {
@@ -213,6 +224,94 @@ function copyPaneRecord(
   );
 }
 
+function contentPaneFromMessage(message: Message): ViewportContentPane | null {
+  switch (message.type) {
+    case "ViewportImageMessage":
+      return { kind: "image", paneId: message.pane_id, props: message.props };
+    case "ViewportMatplotlibMessage":
+      return {
+        kind: "matplotlib",
+        paneId: message.pane_id,
+        props: message.props,
+      };
+    case "ViewportPlotlyMessage":
+      return { kind: "plotly", paneId: message.pane_id, props: message.props };
+    case "ViewportViserMessage":
+      return { kind: "viser", paneId: message.pane_id, props: message.props };
+    default:
+      return null;
+  }
+}
+
+function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
+  if (
+    typeof pane.props.title !== "string" ||
+    typeof pane.props.visible !== "boolean"
+  )
+    return false;
+  if (pane.kind === "image") {
+    const props = pane.props;
+    return (
+      Object.keys(props).length === 5 &&
+      (props._data === null || props._data instanceof Uint8Array) &&
+      (props._format === "jpeg" || props._format === "png") &&
+      (props.fit === null ||
+        props.fit === "fit" ||
+        props.fit === "fill" ||
+        props.fit === "stretch")
+    );
+  }
+  if (pane.kind === "matplotlib") {
+    const props = pane.props;
+    return Object.keys(props).length === 3 && typeof props._svg === "string";
+  }
+  if (pane.kind === "plotly") {
+    const props = pane.props;
+    return (
+      Object.keys(props).length === 4 &&
+      typeof props._plotly_json_str === "string" &&
+      typeof props._theme_templates === "string"
+    );
+  }
+  const props = pane.props;
+  return (
+    Object.keys(props).length === 4 &&
+    (props._url === null || typeof props._url === "string") &&
+    (props._port === null || Number.isSafeInteger(props._port)) &&
+    (props._url === null) !== (props._port === null)
+  );
+}
+
+function detachViewportPaneBinary(
+  pane: ViewportContentPane,
+): ViewportContentPane {
+  if (pane.kind !== "image" || pane.props._data === null) return pane;
+  return {
+    ...pane,
+    props: { ...pane.props, _data: pane.props._data.slice() },
+  };
+}
+
+function equalizeGroupIsValid(
+  paneId: string,
+  group: readonly string[],
+): boolean {
+  if (group.length > MAX_LIVE_VIEWPORT_CONTENT_PANES) return false;
+  const unique = new Set<string>();
+  for (const id of group) {
+    if (
+      !isBoundedLayoutId(id) ||
+      id === VIEWPORT_ROOT_PANE_ID ||
+      id === paneId ||
+      unique.has(id)
+    ) {
+      return false;
+    }
+    unique.add(id);
+  }
+  return true;
+}
+
 function paneIsVisible(pane: ViewportPane | undefined): boolean {
   return (
     pane === undefined ||
@@ -268,6 +367,7 @@ export function useViewportState(
   const storageKeyRef = React.useRef<string | null>(null);
   const persistenceServerRef = React.useRef<string | null>(null);
   const authoritativePaneIdsRef = React.useRef<Set<string> | null>(null);
+  const contentPaneCountRef = React.useRef(0);
 
   const actions = React.useMemo<ViewportActions>(() => {
     const persistLayout = (layout: ViewportLayout): void => {
@@ -305,11 +405,22 @@ export function useViewportState(
     ): void => {
       const paneId = message.pane_id;
       if (paneId === VIEWPORT_ROOT_PANE_ID || paneId.length === 0) return;
-      authoritativePaneIdsRef.current?.add(paneId);
-
       const state = store.get();
+      const alreadyDeclared = Object.hasOwn(state.panes, paneId);
+      const authoritativePaneIds = authoritativePaneIdsRef.current;
+      if (
+        (!alreadyDeclared &&
+          contentPaneCountRef.current >= MAX_LIVE_VIEWPORT_CONTENT_PANES) ||
+        (authoritativePaneIds !== null &&
+          !authoritativePaneIds.has(paneId) &&
+          authoritativePaneIds.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES)
+      ) {
+        return;
+      }
+      authoritativePaneIds?.add(paneId);
       const panes = copyPaneRecord(state.panes);
-      panes[paneId] = pane;
+      panes[paneId] = detachViewportPaneBinary(pane);
+      if (!alreadyDeclared) contentPaneCountRef.current += 1;
 
       let layout = state.layout;
       if (!pane.props.visible) {
@@ -344,9 +455,131 @@ export function useViewportState(
       else store.set({ panes });
     };
 
+    const preflightMessageBatch = (
+      messages: readonly Message[],
+    ): string | null => {
+      const panes = new Map<string, ViewportContentPane>();
+      for (const pane of Object.values(store.get().panes)) {
+        if (pane.kind !== "root") panes.set(pane.paneId, pane);
+      }
+      let authoritativePaneIds =
+        authoritativePaneIdsRef.current === null
+          ? null
+          : new Set(authoritativePaneIdsRef.current);
+      const reject = (detail: string) =>
+        "Connection frame violates viewport safety limits: " + detail;
+
+      for (const message of messages) {
+        const declaration = contentPaneFromMessage(message);
+        if (declaration !== null) {
+          if (
+            message.type === "ViewportImageMessage" ||
+            message.type === "ViewportMatplotlibMessage" ||
+            message.type === "ViewportPlotlyMessage" ||
+            message.type === "ViewportViserMessage"
+          ) {
+            if (
+              !isBoundedLayoutId(message.relative_to) ||
+              !equalizeGroupIsValid(message.pane_id, message.equalize_group)
+            )
+              return reject("pane placement identifiers are invalid");
+          }
+          if (
+            !isBoundedLayoutId(declaration.paneId) ||
+            declaration.paneId === VIEWPORT_ROOT_PANE_ID ||
+            !panePropsHaveValidShape(declaration)
+          ) {
+            return reject("pane declaration is invalid");
+          }
+          if (
+            !panes.has(declaration.paneId) &&
+            panes.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES
+          ) {
+            return reject("live pane owner limit exceeded");
+          }
+          if (
+            authoritativePaneIds !== null &&
+            !authoritativePaneIds.has(declaration.paneId) &&
+            authoritativePaneIds.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES
+          ) {
+            return reject("authoritative pane owner limit exceeded");
+          }
+          panes.set(declaration.paneId, declaration);
+          authoritativePaneIds?.add(declaration.paneId);
+          if (!viewportPanesWithinAggregateLimits(panes.values())) {
+            return reject("pane source, renderer, or iframe budget exceeded");
+          }
+          continue;
+        }
+        if (message.type === "ViewportPaneUpdateMessage") {
+          if (!isBoundedLayoutId(message.pane_id)) {
+            return reject("pane update identifier is invalid");
+          }
+          const previous = panes.get(message.pane_id);
+          if (previous === undefined) continue;
+          const candidate = {
+            ...previous,
+            props: { ...previous.props, ...message.updates },
+          } as ViewportContentPane;
+          if (
+            !panePropsHaveValidShape(candidate) ||
+            !viewportPanesWithinAggregateLimits(
+              [...panes.values()].map((pane) =>
+                pane.paneId === message.pane_id ? candidate : pane,
+              ),
+            )
+          ) {
+            return reject("pane update violates its schema or budget");
+          }
+          panes.set(message.pane_id, candidate);
+        } else if (message.type === "ViewportPaneRemoveMessage") {
+          if (!isBoundedLayoutId(message.pane_id)) {
+            return reject("pane removal identifier is invalid");
+          }
+          panes.delete(message.pane_id);
+          authoritativePaneIds?.delete(message.pane_id);
+        } else if (message.type === "ViewportPaneSnapshotMessage") {
+          if (message.pane_ids.length > MAX_LIVE_VIEWPORT_CONTENT_PANES) {
+            return reject("pane snapshot owner limit exceeded");
+          }
+          authoritativePaneIds = new Set<string>();
+          for (const paneId of message.pane_ids) {
+            if (
+              !isBoundedLayoutId(paneId) ||
+              paneId === VIEWPORT_ROOT_PANE_ID ||
+              authoritativePaneIds.has(paneId)
+            ) {
+              return reject("pane snapshot identifiers are invalid");
+            }
+            authoritativePaneIds.add(paneId);
+          }
+          for (const paneId of panes.keys()) {
+            if (!authoritativePaneIds.has(paneId)) panes.delete(paneId);
+          }
+        } else if (
+          message.type === "WorkspaceConfigurationMessage" &&
+          !isBoundedLayoutId(message.workspace_id)
+        ) {
+          return reject("workspace identifier is invalid");
+        }
+      }
+      return null;
+    };
+
+    const directMessage = (type: Message["type"], value: object): Message =>
+      ({ type, ...value }) as Message;
+
+    const admitDirect = (message: Message): boolean => {
+      const failure = preflightMessageBatch([message]);
+      if (failure === null) return true;
+      console.error(failure);
+      return false;
+    };
+
     return {
       reset: () => {
         authoritativePaneIdsRef.current = null;
+        contentPaneCountRef.current = 0;
         store.set(
           initialState(initialLayout(), store.get().interactionEpoch + 1),
         );
@@ -354,6 +587,7 @@ export function useViewportState(
 
       resetPanes: () => {
         authoritativePaneIdsRef.current = null;
+        contentPaneCountRef.current = 0;
         store.set((state) => ({
           panes: initialPanes(),
           interactionEpoch: state.interactionEpoch + 1,
@@ -365,6 +599,7 @@ export function useViewportState(
         persistenceServerRef.current = serverUrl;
         storageKeyRef.current = null;
         authoritativePaneIdsRef.current = null;
+        contentPaneCountRef.current = 0;
         store.set(
           initialState(initialLayout(), store.get().interactionEpoch + 1),
         );
@@ -372,11 +607,12 @@ export function useViewportState(
 
       setPersistenceWorkspace: (workspaceId) => {
         const serverUrl = persistenceServerRef.current;
-        if (serverUrl === null) return;
+        if (serverUrl === null || !isBoundedLayoutId(workspaceId)) return;
         const storageKey = viewportLayoutStorageKey(serverUrl, workspaceId);
         if (storageKeyRef.current === storageKey) return;
         storageKeyRef.current = storageKey;
         authoritativePaneIdsRef.current = null;
+        contentPaneCountRef.current = 0;
 
         let layout = initialLayout();
         if (storage !== null) {
@@ -384,7 +620,9 @@ export function useViewportState(
           try {
             const serialized = storage.getItem(storageKey);
             if (serialized !== null) {
-              storedLayout = normalizeViewportLayout(JSON.parse(serialized));
+              storedLayout = normalizeViewportLayout(
+                parseBoundedPersistedJson(serialized),
+              );
             }
           } catch {
             // Malformed or inaccessible storage falls back to the root sentinel.
@@ -402,6 +640,8 @@ export function useViewportState(
       },
 
       addImagePane: (message) => {
+        if (!admitDirect(directMessage("ViewportImageMessage", message)))
+          return;
         addContentPane(message, {
           kind: "image",
           paneId: message.pane_id,
@@ -410,6 +650,8 @@ export function useViewportState(
       },
 
       addMatplotlibPane: (message) => {
+        if (!admitDirect(directMessage("ViewportMatplotlibMessage", message)))
+          return;
         addContentPane(message, {
           kind: "matplotlib",
           paneId: message.pane_id,
@@ -418,6 +660,8 @@ export function useViewportState(
       },
 
       addPlotlyPane: (message) => {
+        if (!admitDirect(directMessage("ViewportPlotlyMessage", message)))
+          return;
         addContentPane(message, {
           kind: "plotly",
           paneId: message.pane_id,
@@ -426,6 +670,8 @@ export function useViewportState(
       },
 
       addViserPane: (message) => {
+        if (!admitDirect(directMessage("ViewportViserMessage", message)))
+          return;
         addContentPane(message, {
           kind: "viser",
           paneId: message.pane_id,
@@ -434,6 +680,15 @@ export function useViewportState(
       },
 
       updatePane: (paneId, updates) => {
+        if (
+          !admitDirect(
+            directMessage("ViewportPaneUpdateMessage", {
+              pane_id: paneId,
+              updates,
+            }),
+          )
+        )
+          return;
         const state = store.get();
         const pane = state.panes[paneId];
         if (pane === undefined) return;
@@ -463,7 +718,7 @@ export function useViewportState(
           ...pane,
           props: { ...pane.props, ...updates },
         } as ViewportContentPane;
-        panes[paneId] = updatedPane;
+        panes[paneId] = detachViewportPaneBinary(updatedPane);
 
         let layout = state.layout;
         if (updatedPane.props.visible !== pane.props.visible) {
@@ -497,6 +752,9 @@ export function useViewportState(
         authoritativePaneIdsRef.current?.delete(paneId);
         const state = store.get();
         const panes = copyPaneRecord(state.panes);
+        if (Object.hasOwn(panes, paneId)) {
+          contentPaneCountRef.current -= 1;
+        }
         delete panes[paneId];
         let layout = removeViewportPane(state.layout, paneId);
         layout = reconcilePaneLayout(
@@ -510,11 +768,22 @@ export function useViewportState(
       },
 
       setPaneSnapshot: (paneIds) => {
-        const authoritativePaneIds = new Set(
-          paneIds.filter(
-            (paneId) => paneId.length > 0 && paneId !== VIEWPORT_ROOT_PANE_ID,
-          ),
-        );
+        // Reject before constructing a Set: the wire schema permits much
+        // larger arrays than the viewport can ever reconcile or render.
+        if (
+          !admitDirect(
+            directMessage("ViewportPaneSnapshotMessage", {
+              pane_ids: paneIds,
+            }),
+          )
+        )
+          return;
+        const authoritativePaneIds = new Set<string>();
+        for (const paneId of paneIds) {
+          if (paneId.length > 0 && paneId !== VIEWPORT_ROOT_PANE_ID) {
+            authoritativePaneIds.add(paneId);
+          }
+        }
         authoritativePaneIdsRef.current = authoritativePaneIds;
 
         const state = store.get();
@@ -527,6 +796,7 @@ export function useViewportState(
             delete panes[paneId];
           }
         });
+        contentPaneCountRef.current = Object.keys(panes).length - 1;
 
         // Retain saved leaves named by the snapshot even if their create has
         // not arrived yet, but do not invent leaves for unhydrated IDs.
@@ -553,6 +823,7 @@ export function useViewportState(
         );
         if (commitLayout(layout, { persist: true })) store.set({ layout });
       },
+      preflightMessageBatch,
     };
   }, [storage, store]);
 

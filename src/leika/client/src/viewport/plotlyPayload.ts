@@ -7,11 +7,25 @@ export interface ParsedPlotlyFigure {
   config: unknown;
 }
 
+/** Bound JSON.parse's derived object graph independently of the much larger
+ * transport metadata ceiling. JavaScript strings are UTF-16, so this also
+ * bounds the serialized input itself to at most 32 MiB of code-unit storage. */
+export const PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS = 16 * 1024 * 1024;
+
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseJson(serialized: string): PlotlyParseResult<unknown> {
+  if (
+    typeof serialized !== "string" ||
+    serialized.length > PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS
+  ) {
+    return {
+      ok: false,
+      error: "Plotly data exceeds the browser parse limit.",
+    };
+  }
   try {
     return { ok: true, value: JSON.parse(serialized) as unknown };
   } catch {

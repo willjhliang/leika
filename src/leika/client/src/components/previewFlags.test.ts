@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { previewFlag, type PreviewFlagStorage } from "./previewFlags";
+import {
+  MAX_PREVIEW_FLAG_ENTRIES,
+  MAX_PREVIEW_FLAG_KEY_CODE_UNITS,
+  previewFlag,
+  type PreviewFlagStorage,
+} from "./previewFlags";
 
 class MemoryStorage implements PreviewFlagStorage {
   readonly values = new Map<string, string>();
@@ -60,6 +65,34 @@ describe("a persisted preview flag", () => {
         previewFlag("preview.flag", storage).store.snapshot("notes.md"),
       ).toBe(false);
     }
+  });
+
+  it("bounds stored and newly added keys", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(
+      "preview.flag",
+      JSON.stringify(
+        Array.from(
+          { length: MAX_PREVIEW_FLAG_ENTRIES + 1 },
+          (_, index) => `file-${index}`,
+        ),
+      ),
+    );
+    expect(previewFlag("preview.flag", storage).store.snapshot("file-0")).toBe(
+      false,
+    );
+
+    const flag = previewFlag("fresh.flag", storage);
+    for (let index = 0; index < MAX_PREVIEW_FLAG_ENTRIES + 1; index += 1) {
+      flag.set(`file-${index}`, true);
+    }
+    expect(flag.store.snapshot(`file-${MAX_PREVIEW_FLAG_ENTRIES - 1}`)).toBe(
+      true,
+    );
+    expect(flag.store.snapshot(`file-${MAX_PREVIEW_FLAG_ENTRIES}`)).toBe(false);
+    const oversized = "x".repeat(MAX_PREVIEW_FLAG_KEY_CODE_UNITS + 1);
+    flag.set(oversized, true);
+    expect(flag.store.snapshot(oversized)).toBe(false);
   });
 
   it("stays usable when storage is absent or inaccessible", () => {

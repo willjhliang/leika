@@ -1,5 +1,3 @@
-import * as React from "react";
-
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiFolderMessage } from "../WebsocketMessages";
 import { GuiSection } from "./GuiSection";

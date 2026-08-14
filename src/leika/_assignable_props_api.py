@@ -1,19 +1,44 @@
 from __future__ import annotations
 
 import abc
+import dataclasses
+import math
+import types
 from functools import cached_property
-from typing import Any, Dict, Generic, Protocol, TypeVar, get_type_hints
+from typing import (
+    Any,
+    ContextManager,
+    Dict,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import numpy as np
 import numpy.typing as npt
+
+from .infra._messages import validated_protocol_value_copy
 
 
 class HasProps(Protocol):
     props: Any  # One of the `*Props` objects in _messages.py.
     removed: bool  # Lifecycle flag; see AssignablePropsBase guard below.
 
+    @property
+    def state_lock(self) -> ContextManager[object]: ...
+
+    """Shared owner lock for props, lifecycle, registries, and wire order."""
+
 
 TImpl = TypeVar("TImpl", bound=HasProps)
+
+_TUPLE_PROPERTY_MAX_ITEMS = 4096
+"""Maximum variadic tuple items materialized by synchronized GUI props."""
 
 
 def colors_to_uint8(colors: np.ndarray) -> npt.NDArray[np.uint8]:
@@ -24,10 +49,23 @@ def colors_to_uint8(colors: np.ndarray) -> npt.NDArray[np.uint8]:
     if np.issubdtype(colors.dtype, np.floating):
         if not np.isfinite(colors).all():
             raise ValueError("Image values must be finite.")
-        return np.clip(colors * 255.0, 0, 255).astype(np.uint8)
+        # Clip before scaling: a large but finite float16 would otherwise
+        # overflow during multiplication and emit a RuntimeWarning even though
+        # the documented result is simple saturation.
+        return (np.clip(colors, 0, 1) * 255.0).astype(np.uint8)
     if np.issubdtype(colors.dtype, np.integer):
         return np.clip(colors, 0, 255).astype(np.uint8)
     raise TypeError("Image values must use an integer or floating dtype.")
+
+
+class _null_transaction:
+    """Allocation-free no-op context manager for ordinary assignable props."""
+
+    def __enter__(self) -> object:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        del exc
 
 
 class AssignablePropsBase(Generic[TImpl]):
@@ -47,26 +85,112 @@ class AssignablePropsBase(Generic[TImpl]):
         self._impl = impl
 
     def _cast_value_recursive(self, hint: Any, value: Any) -> Any:
-        """Recursively cast values to match type hints, handling arrays and tuples.
+        """Validate one public property value against its protocol annotation.
 
-        No prop in the protocol is array-typed today; a new array-typed prop
-        means deciding its transport dtype here.
+        Tuple properties retain the convenient list/tuple input form and are
+        normalized recursively. Primitive and Literal fields are otherwise
+        strict, preventing Python from queuing schema-invalid GUI updates.
         """
+        if hint is Any:
+            return validated_protocol_value_copy(value)
+        if hint is type(None):
+            if value is not None:
+                raise TypeError("property value must be None")
+            return None
+        if hint is bool:
+            if type(value) is not bool:
+                raise TypeError("property value must be a bool")
+            return value
+        if hint is str:
+            if type(value) is not str:
+                raise TypeError("property value must be a string")
+            return value
+        if hint is bytes:
+            if type(value) is not bytes:
+                raise TypeError("property value must be bytes")
+            return value
+        if hint is int:
+            if type(value) is not int:
+                raise TypeError("property value must be an integer")
+            return value
+        if hint is float:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError("property value must be a number")
+            try:
+                converted = float(value)
+            except OverflowError:
+                raise ValueError("property value must be finite") from None
+            if not math.isfinite(converted):
+                raise ValueError("property value must be finite")
+            return converted
+        origin = get_origin(hint)
+        if origin is Union or origin is types.UnionType:
+            errors: list[Exception] = []
+            for option in get_args(hint):
+                try:
+                    return self._cast_value_recursive(option, value)
+                except (TypeError, ValueError) as error:
+                    errors.append(error)
+            for error in errors:
+                if "one-dimensional tuple" in str(error):
+                    raise TypeError(str(error)) from error
+            raise TypeError(f"property value does not match {hint!r}") from errors[-1]
+
+        if origin is Literal:
+            if any(type(value) is type(option) and value == option for option in get_args(hint)):
+                return value
+            raise ValueError(f"property value must be one of {get_args(hint)!r}")
+
+        if origin is tuple:
+            args = get_args(hint)
+            variadic = len(args) == 2 and args[1] is Ellipsis
+            if type(value) is np.ndarray:
+                if value.ndim != 1:
+                    raise TypeError(
+                        "numpy arrays are only accepted for one-dimensional tuple properties"
+                    )
+                item_count = int(value.shape[0])
+                if variadic and item_count > _TUPLE_PROPERTY_MAX_ITEMS:
+                    raise ValueError(
+                        f"property value cannot contain more than {_TUPLE_PROPERTY_MAX_ITEMS} items"
+                    )
+                if not variadic and item_count != len(args):
+                    raise ValueError(
+                        f"property value must contain {len(args)} items, got {item_count}"
+                    )
+                value = value.tolist()
+            elif isinstance(value, np.ndarray):
+                raise TypeError("numpy array subclasses are not accepted for properties")
+            if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+                raise TypeError("property value must be a sequence")
+            if variadic:
+                if len(value) > _TUPLE_PROPERTY_MAX_ITEMS:
+                    raise ValueError(
+                        f"property value cannot contain more than {_TUPLE_PROPERTY_MAX_ITEMS} items"
+                    )
+                item_hints = (args[0],) * len(value)
+            else:
+                if len(value) != len(args):
+                    raise ValueError(
+                        f"property value must contain {len(args)} items, got {len(value)}"
+                    )
+                item_hints = args
+            return tuple(
+                self._cast_value_recursive(item_hint, item)
+                for item_hint, item in zip(item_hints, value)
+            )
+
         if isinstance(value, np.ndarray):
+            raise TypeError("numpy arrays are only accepted for one-dimensional tuple properties")
+
+        if isinstance(hint, type) and dataclasses.is_dataclass(hint):
+            if not isinstance(value, hint):
+                raise TypeError(f"property value must be a {hint.__name__}")
             return value
 
-        # Handle tuple[T, ...] pattern.
-        if (
-            isinstance(value, tuple)
-            and hasattr(hint, "__origin__")
-            and hint.__origin__ is tuple
-            and hasattr(hint, "__args__")
-            and len(hint.__args__) == 2
-            and hint.__args__[1] is ...
-        ):
-            element_type = hint.__args__[0]
-            return tuple(self._cast_value_recursive(element_type, item) for item in value)
-
+        # No protocol property currently uses another runtime shape. Preserve
+        # support for a future explicitly validated property setter rather than
+        # inventing a coercion here.
         return value
 
     @cached_property
@@ -82,12 +206,26 @@ class AssignablePropsBase(Generic[TImpl]):
         Subclasses can override to enforce cross-field invariants (e.g. keeping
         an array's dtype in sync with another field). No-op by default."""
 
+    def _prop_assignment_transaction(self, name: str) -> ContextManager[object]:
+        """Reserve owner resources around a temporary prospective props state."""
+        del name
+        return _null_transaction()
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "_impl":
             return object.__setattr__(self, name, value)
-
         prop = getattr(self.__class__, name, None)
         prop_setter = prop.fset if isinstance(prop, property) and prop.fset is not None else None
+        if prop_setter is not None:
+            # Custom setters own their lock scope so callbacks can run after
+            # state/wire commit without holding the shared GUI lock.
+            prop_setter(self, value)
+            return
+        with self._impl.state_lock:
+            self._setattr_locked(name, value)
+
+    def _setattr_locked(self, name: str, value: Any) -> None:
+        """Assign a protocol prop while the owner's shared lock is held."""
         is_prop_hint = name in self._prop_hints
 
         # Reject property writes after the handle has been removed. This prevents
@@ -96,12 +234,8 @@ class AssignablePropsBase(Generic[TImpl]):
         # entity) because the client blindly processes incoming updates. Guard
         # both the @property.setter path (e.g. `value` on GUI input handles) and
         # the _prop_hints path (generic props forwarded to _queue_update).
-        if (prop_setter is not None or is_prop_hint) and self._impl.removed:
+        if is_prop_hint and self._impl.removed:
             raise RuntimeError(f"Cannot assign to {name!r} on a removed {type(self).__name__}.")
-
-        if prop_setter is not None:
-            prop_setter(self, value)
-            return
 
         # Try to handle as a props field.
         if is_prop_hint:
@@ -116,6 +250,14 @@ class AssignablePropsBase(Generic[TImpl]):
                     return
             except (TypeError, ValueError):
                 pass
+
+            # Snapshot every prop because assignment hooks may update a related
+            # field. On any queue or hook failure, restore the exact pre-call
+            # state rather than leaving Python ahead of the wire.
+            prop_snapshot = {
+                key: (item, item.copy() if isinstance(item, np.ndarray) else item)
+                for key, item in vars(self._impl.props).items()
+            }
 
             # Update the value based on type.
             if isinstance(value, np.ndarray):
@@ -144,11 +286,29 @@ class AssignablePropsBase(Generic[TImpl]):
         else:
             return object.__setattr__(self, name, value)
 
-        self._queue_update(name, queued)
-        self._on_prop_assigned(name)
+        try:
+            # Queue the primary update while the temporary full props state is
+            # visible (notification updates serialize all props), then commit
+            # any purely local derived state in the hook.
+            with self._prop_assignment_transaction(name):
+                self._queue_update(name, queued)
+                self._on_prop_assigned(name)
+        except BaseException:
+            for key, (original, snapshot) in prop_snapshot.items():
+                if isinstance(original, np.ndarray):
+                    original[...] = snapshot
+                    setattr(self._impl.props, key, original)
+                else:
+                    setattr(self._impl.props, key, original)
+            raise
 
     def __getattr__(self, name: str) -> Any:
         if name in self._prop_hints:
-            return getattr(self._impl.props, name)
-        else:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            with self._impl.state_lock:
+                if self._impl.removed:
+                    raise RuntimeError(
+                        f"Cannot read {name!r} from a removed {type(self).__name__}."
+                    )
+                value = getattr(self._impl.props, name)
+                return value.copy() if isinstance(value, np.ndarray) else value
+        raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}.")

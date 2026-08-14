@@ -132,7 +132,10 @@ def tear_out_tab(page: Page, name: str, park: Point = CANVAS) -> Locator:
     expect(grip).to_be_visible()
     start = center(grip)
     # Straight down, past the strip's tear threshold, then out to `park`.
-    drag(page, start, (start[0], start[1] + 90.0), park)
+    # Keep the two deliberate waypoints as individual pointer events: WebKit's
+    # automation driver can discard the tail of one synthetic stepped move when
+    # this gesture replaces the tab drag target with its new floating window.
+    drag(page, start, (start[0], start[1] + 90.0), park, steps=1)
     expect(floating_windows(page)).to_have_count(len(before) + 1, timeout=5_000)
     new_ids = set(window_ids(page)) - before
     assert len(new_ids) == 1, new_ids
@@ -173,12 +176,14 @@ def test_desktop_dock_arrangement_survives_refresh(dock_page: Page, page_errors:
     page = dock_page
     dock_control_panel_left(page)
 
+    # Establish the structural placement before adjusting the region's
+    # independent width; each synthetic WebKit gesture then keeps one DOM target.
+    alpha_window = tear_out_tab(page, "Alpha", CANVAS)
+
     resizer = page.locator("[data-dock-region-resize='left']")
     grip = center(resizer)
     drag(page, grip, (grip[0] + 75.0, grip[1]))
     saved_width = bounds(control_panel(page))["width"]
-
-    alpha_window = tear_out_tab(page, "Alpha", CANVAS)
     saved_alpha = bounds(alpha_window)
     page.mouse.click(*center(control_handle(page)))
     expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
@@ -321,9 +326,11 @@ def test_region_resizer_widens_the_docked_region_and_clamps_at_the_minimum(
     assert widened == pytest.approx(start_width + 80.0, abs=2.0)
     assert canvas_inset(page) == pytest.approx(widened, abs=1.0)
 
-    # Dragging far past the minimum stops at it rather than collapsing.
+    # Dragging far past the minimum stops at it rather than collapsing. One
+    # endpoint event is a valid fast pointer move and avoids WebKit's automation
+    # driver truncating a stepped move after the resizer follows its first substep.
     grip = center(resizer)
-    drag(page, grip, (grip[0] - 400.0, grip[1]))
+    drag(page, grip, (grip[0] - 400.0, grip[1]), steps=1)
     assert bounds(control_panel(page))["width"] == pytest.approx(MIN_PANEL_WIDTH_PX, abs=2.0)
     assert page_errors == []
 
@@ -854,8 +861,9 @@ def test_a_keyboard_dismissal_leaves_the_panel_where_focus_is(dock_page: Page) -
     page.mouse.move(*CANVAS)
     expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
 
-    control_panel(page).locator("[data-dock-peek]").hover()
-    page.locator("[data-leika-settings-trigger]").click()
+    trigger = page.locator("[data-leika-settings-trigger]")
+    trigger.focus()
+    page.keyboard.press("Enter")
     expect(page.locator("[data-leika-settings-popover]")).to_be_visible(timeout=5_000)
     page.mouse.move(*CANVAS)
     page.keyboard.press("Escape")

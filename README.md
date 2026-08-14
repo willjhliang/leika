@@ -25,25 +25,26 @@ import time
 import numpy as np
 import leika
 
-server = leika.Server(workspace_id="quickstart", label="Leika quickstart")
-image = server.panes.add_image(
-    np.zeros((360, 640, 3), dtype=np.uint8),
-    pane_id="camera",
-    title="Live image",
-    fit="fill",
-)
-gain = server.gui.add_slider(
-    "Gain", min=0.0, max=2.0, step=0.01, initial_value=1.0
-)
+with leika.Server(workspace_id="quickstart", label="Leika quickstart") as server:
+    image = server.panes.add_image(
+        np.zeros((360, 640, 3), dtype=np.uint8),
+        pane_id="camera",
+        title="Live image",
+        fit="fill",
+    )
+    gain = server.gui.add_slider("Gain", min=0.0, max=2.0, step=0.01, initial_value=1.0)
 
-phase = 0.0
-while True:
-    x = np.linspace(0.0, 8.0, 640, dtype=np.float32)
-    signal = 127.5 + 127.5 * np.sin(x + phase) * gain.value
-    frame = np.broadcast_to(signal[None, :, None], (360, 640, 3))
-    image.update(np.clip(frame, 0, 255).astype(np.uint8))
-    phase += 0.08
-    time.sleep(1 / 30)
+    phase = 0.0
+    try:
+        while True:
+            x = np.linspace(0.0, 8.0, 640, dtype=np.float32)
+            signal = 127.5 + 127.5 * np.sin(x + phase) * gain.value
+            frame = np.broadcast_to(signal[None, :, None], (360, 640, 3))
+            image.update(np.clip(frame, 0, 255).astype(np.uint8))
+            phase += 0.08
+            time.sleep(1 / 30)
+    except KeyboardInterrupt:
+        pass
 ```
 
 Run the script and open the URL printed in the terminal (by default
@@ -54,6 +55,8 @@ when you want the browser to restore a layout after a Python restart.
 
 - [Documentation](https://willjhliang.github.io/leika/): guides and the full
   API reference.
+- [Changelog](https://github.com/willjhliang/leika/blob/main/CHANGELOG.md):
+  release highlights, compatibility notes, and migration guidance.
 - [Panes](https://willjhliang.github.io/leika/panes.html): the image,
   matplotlib, Plotly, and viser surfaces, and how they are laid out.
 - [Architecture](https://willjhliang.github.io/leika/architecture.html):
@@ -68,6 +71,6 @@ Leika relays visualizations you create; it does not replace libraries such as
 
 ## Acknowledgments
 
-Leika is inspired by [Viser](https://github.com/nerfstudio-project/viser)
+Leika is inspired by [Viser](https://github.com/viser-project/viser)
 (Apache-2.0) and built on its GUI surface and websocket transport. Thanks to
 the Viser authors and contributors.

@@ -228,7 +228,9 @@
    visited; the non-zero fallback keeps a stable scroll runway beforehand.
 
    Headings stay active because the optional contents rail measures them.
-   Media keeps its existing measured geometry and native lazy-loading path. */
+   Width-defining table wrappers stay active so a distant table still informs
+   the document column's intrinsic width. Media keeps its existing measured
+   geometry and native lazy-loading path. */
 [data-slot="file-preview-reading-frame"]
   .typeset
   > :not(
@@ -240,6 +242,7 @@
       h5,
       h6,
       hr,
+      .typeset-scroll,
       img,
       picture,
       video,
@@ -265,17 +268,9 @@
 
 [data-slot="file-preview-reading-frame"]
   .typeset
-  > :is(
-    ul,
-    ol,
-    blockquote,
-    pre,
-    details,
-    figure,
-    .typeset-scroll,
-    section,
-    div
-  ):not(:has(img, picture, video, audio, canvas, svg, iframe, object, embed)) {
+  > :is(ul, ol, blockquote, pre, details, figure, section, div):not(
+    :has(img, picture, video, audio, canvas, svg, iframe, object, embed)
+  ) {
   contain-intrinsic-block-size: auto 16rem;
 }
 

@@ -4,13 +4,17 @@ import {
   type FloatingWindow,
   type TabGroup,
 } from "./types";
+import {
+  isBoundedLayoutId,
+  MAX_LAYOUT_CHILDREN,
+  MAX_LAYOUT_DEPTH,
+  MAX_LAYOUT_ID_CODE_UNITS,
+  MAX_LAYOUT_ITEMS,
+} from "../persistenceLimits";
+import { emptyRecord } from "../recordUtils";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonemptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -32,18 +36,23 @@ function isPositiveNumber(value: unknown): value is number {
 export function normalizeDockLayout(value: unknown): DockLayout | null {
   if (!isRecord(value) || !isRecord(value.groups)) return null;
 
+  const rawGroups = Object.entries(value.groups);
+  if (rawGroups.length > MAX_LAYOUT_ITEMS) return null;
+
   const occupiedIds = new Set<string>();
   const panelIds = new Set<string>();
-  const groups: Record<string, TabGroup> = {};
+  const groups = emptyRecord<TabGroup>();
 
-  for (const [groupId, rawGroup] of Object.entries(value.groups)) {
+  for (const [groupId, rawGroup] of rawGroups) {
     if (
-      !isNonemptyString(groupId) ||
+      !isBoundedLayoutId(groupId) ||
       !isRecord(rawGroup) ||
       rawGroup.id !== groupId ||
       !Array.isArray(rawGroup.panelIds) ||
-      !rawGroup.panelIds.every(isNonemptyString) ||
+      rawGroup.panelIds.length > MAX_LAYOUT_CHILDREN ||
+      !rawGroup.panelIds.every(isBoundedLayoutId) ||
       typeof rawGroup.activeId !== "string" ||
+      rawGroup.activeId.length > MAX_LAYOUT_ID_CODE_UNITS ||
       (rawGroup.collapsed !== undefined &&
         typeof rawGroup.collapsed !== "boolean") ||
       (rawGroup.collapsedByParent !== undefined &&
@@ -61,6 +70,8 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
     ) {
       return null;
     }
+    if (panelIds.size + rawGroup.panelIds.length > MAX_LAYOUT_ITEMS)
+      return null;
     rawGroup.panelIds.forEach((panelId) => panelIds.add(panelId));
     occupiedIds.add(groupId);
     groups[groupId] = {
@@ -79,7 +90,7 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
   const ownedGroups = new Set<string>();
   const claimGroup = (groupId: unknown): groupId is string => {
     if (
-      !isNonemptyString(groupId) ||
+      !isBoundedLayoutId(groupId) ||
       groups[groupId] === undefined ||
       ownedGroups.has(groupId)
     ) {
@@ -89,15 +100,22 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
     return true;
   };
 
-  const readNode = (rawNode: unknown): DockNode | null => {
+  const seenNodes = new WeakSet<object>();
+  let nodeCount = 0;
+  const readNode = (rawNode: unknown, depth: number): DockNode | null => {
     if (
       !isRecord(rawNode) ||
-      !isNonemptyString(rawNode.id) ||
+      depth > MAX_LAYOUT_DEPTH ||
+      nodeCount >= MAX_LAYOUT_ITEMS ||
+      seenNodes.has(rawNode) ||
+      !isBoundedLayoutId(rawNode.id) ||
       occupiedIds.has(rawNode.id) ||
       !isPositiveNumber(rawNode.weight)
     ) {
       return null;
     }
+    seenNodes.add(rawNode);
+    nodeCount += 1;
     occupiedIds.add(rawNode.id);
     if (rawNode.type === "leaf") {
       if (!claimGroup(rawNode.group)) return null;
@@ -112,13 +130,14 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
       rawNode.type !== "split" ||
       (rawNode.dir !== "row" && rawNode.dir !== "column") ||
       !Array.isArray(rawNode.children) ||
-      rawNode.children.length < 2
+      rawNode.children.length < 2 ||
+      rawNode.children.length > MAX_LAYOUT_CHILDREN
     ) {
       return null;
     }
     const children: DockNode[] = [];
     for (const child of rawNode.children) {
-      const parsed = readNode(child);
+      const parsed = readNode(child, depth + 1);
       if (parsed === null) return null;
       children.push(parsed);
     }
@@ -136,25 +155,30 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
   const readEdge = (edge: "left" | "right"): DockNode | null | undefined => {
     const raw = rawDocked[edge];
     if (raw === null) return null;
-    return readNode(raw) ?? undefined;
+    return readNode(raw, 1) ?? undefined;
   };
   const left = readEdge("left");
   const right = readEdge("right");
   if (left === undefined || right === undefined) return null;
 
-  if (!Array.isArray(value.floating)) return null;
+  if (
+    !Array.isArray(value.floating) ||
+    value.floating.length > MAX_LAYOUT_ITEMS
+  )
+    return null;
   const floating: FloatingWindow[] = [];
   for (const rawWindow of value.floating) {
     if (
       !isRecord(rawWindow) ||
-      !isNonemptyString(rawWindow.id) ||
+      !isBoundedLayoutId(rawWindow.id) ||
       occupiedIds.has(rawWindow.id) ||
       !isFiniteNumber(rawWindow.x) ||
       !isFiniteNumber(rawWindow.y) ||
       !isPositiveNumber(rawWindow.width) ||
       (rawWindow.height !== undefined && !isPositiveNumber(rawWindow.height)) ||
       !Array.isArray(rawWindow.stack) ||
-      rawWindow.stack.length === 0
+      rawWindow.stack.length === 0 ||
+      rawWindow.stack.length > MAX_LAYOUT_CHILDREN
     ) {
       return null;
     }
@@ -169,7 +193,7 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
     let stackWeights: Record<string, number> | undefined;
     if (rawWindow.stackWeights !== undefined) {
       if (!isRecord(rawWindow.stackWeights)) return null;
-      stackWeights = {};
+      stackWeights = emptyRecord<number>();
       for (const [groupId, weight] of Object.entries(rawWindow.stackWeights)) {
         if (!stack.includes(groupId) || !isPositiveNumber(weight)) return null;
         stackWeights[groupId] = weight;
@@ -189,13 +213,15 @@ export function normalizeDockLayout(value: unknown): DockLayout | null {
   let areas: DockLayout["areas"];
   const areaGroups = new Set<string>();
   if (value.areas === undefined) {
-    areas = {};
+    areas = emptyRecord();
   } else {
     if (!isRecord(value.areas)) return null;
-    areas = {};
-    for (const [areaId, rawArea] of Object.entries(value.areas)) {
+    areas = emptyRecord();
+    const rawAreas = Object.entries(value.areas);
+    if (rawAreas.length > MAX_LAYOUT_ITEMS) return null;
+    for (const [areaId, rawArea] of rawAreas) {
       if (
-        !isNonemptyString(areaId) ||
+        !isBoundedLayoutId(areaId) ||
         !isRecord(rawArea) ||
         rawArea.id !== areaId ||
         !claimGroup(rawArea.group)

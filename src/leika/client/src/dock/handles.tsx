@@ -1,6 +1,5 @@
-// Shared drag-handle UI primitives, used across the dock's views: the grip
-// pill drawn inside every handle, the hover-highlighted icon button docked in
-// handle bars, and the stack handle bar that drags a whole group stack
+// Shared drag-handle UI primitives: the hover-highlighted icon button docked
+// in handle bars, and the stack handle bar that drags a whole group stack
 // (floating multi-group window header / docked column handle).
 
 import { MinusIcon, PlusIcon } from "lucide-react";
@@ -8,9 +7,8 @@ import React from "react";
 import { Button } from "../components/ui/button";
 import { Separator } from "../components/ui/separator";
 
-/** Centered grip line drawn inside every drag handle (grip bars, stack
- * handles, the vertical minimized strip). */
-export function GripPill({
+/** Centered grip line used by the stack handle in this module. */
+function GripPill({
   width = "2.5em",
   opacity = 0.5,
 }: {

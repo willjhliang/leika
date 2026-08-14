@@ -108,6 +108,7 @@ def test_a_preview_opened_from_a_modal_owns_the_top_layer(
     viewer = leika_page.locator('[data-slot="dialog-content"][data-dialog-presentation="viewer"]')
     expect(viewer).to_be_visible(timeout=5_000)
     assert_stable_viewer(viewer)
+    expect(viewer).to_be_focused(timeout=5_000)
 
     # Escape closes only the topmost viewer and returns to the modal beneath.
     leika_page.keyboard.press("Escape")

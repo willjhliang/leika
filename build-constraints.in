@@ -1,0 +1,2 @@
+# Reviewed Hatchling release used for Leika's Python 3.10+ release builds.
+hatchling==1.27.0

@@ -18,6 +18,7 @@ import {
   closeFilePreview,
   filePreviewStore,
   filePreviewWatchStore,
+  fileTextPreviewAllowed,
   finishFilePreviewScroll,
   formatBytes,
   isMediaKind,
@@ -29,17 +30,33 @@ import {
   type FilePreview,
   type PreviewKind,
 } from "../filePreview";
+import type { ImageAdmission } from "../imageSafety";
 import { contentsOf } from "../markdown";
 import { HintTooltip } from "./common";
-import { renderMarkdown } from "./markdownDocument";
+import { LatestBlobTextReader } from "./latestBlobTextReader";
+import {
+  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  markdownRenderAllowed,
+  renderMarkdown,
+} from "./markdownDocument";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaPreview } from "./MediaPreview";
-import { mediaPreviewWidth, useMediaSize } from "./mediaPreviewSize";
+import { mediaPreviewWidth } from "./mediaPreviewSize";
 import { usePreviewContents } from "./previewContents";
 import {
   previewMediaClassName,
   usePreviewFullscreen,
 } from "./previewFullscreen";
+import { RejectedImageStatus } from "./SafeImage";
+import { useSafeBlobImage } from "./useSafeBlobImage";
+import {
+  IMAGE_DECODE_FAILURE_MESSAGE,
+  useImageDecodeError,
+} from "../imageDecodeError";
+import {
+  RASTER_PIXEL_BUDGET_MESSAGE,
+  useRasterPixelLease,
+} from "../useRasterPixelLease";
 
 /** Read a textual blob without briefly rendering an empty document.
  *
@@ -48,24 +65,40 @@ import {
  * frame around the document has painted rather than before. The dialog is on
  * screen at the click, and the document arrives in it.
  */
-function useBlobText(blob: Blob | null, enabled: boolean): string | null {
-  const [text, setText] = React.useState<string | null>(null);
+function useBlobText(
+  blob: Blob | null,
+  enabled: boolean,
+  continuityKey: string,
+): string | null {
+  const reader = React.useMemo(() => new LatestBlobTextReader(), []);
+  const [read, setRead] = React.useState<{
+    continuityKey: string;
+    text: string;
+  } | null>(null);
   React.useEffect(() => {
-    if (!enabled || blob === null) return;
-    let current = true;
-    blob.text().then(
-      (value) => {
-        if (current) React.startTransition(() => setText(value));
-      },
-      () => {
-        if (current) setText("");
-      },
+    if (!enabled || blob === null || !fileTextPreviewAllowed(blob.size)) {
+      setRead(null);
+      reader.clear();
+      return;
+    }
+    // A different file or viewer cannot borrow this decoded text. A new Blob
+    // for the same document deliberately can: keeping its old text in place
+    // preserves the frame's scroll range until the replacement is decoded.
+    setRead((current) =>
+      current?.continuityKey === continuityKey ? current : null,
     );
-    return () => {
-      current = false;
-    };
-  }, [blob, enabled]);
-  return text;
+    return reader.request(blob, (value) => {
+      React.startTransition(() => setRead({ continuityKey, text: value }));
+    });
+  }, [blob, continuityKey, enabled, reader]);
+  // State retains only decoded text, never the replaced Blob. This gate hides
+  // it synchronously if the same dialog changes file or viewer.
+  return enabled &&
+    blob !== null &&
+    fileTextPreviewAllowed(blob.size) &&
+    read?.continuityKey === continuityKey
+    ? read.text
+    : null;
 }
 
 /** Fallback for file types without an in-browser viewer. */
@@ -272,6 +305,35 @@ function PendingBody() {
   );
 }
 
+export function TextPreviewLimit({ filename }: { filename: string }) {
+  return (
+    <div
+      role="status"
+      className="flex h-full min-h-40 items-center justify-center px-6 text-center"
+    >
+      <p className="text-muted-foreground max-w-sm text-sm">
+        {filename} is over the 16 MiB in-browser text preview limit. Download it
+        with the button above to read the complete file.
+      </p>
+    </div>
+  );
+}
+
+export function MarkdownPreviewLimit({ filename }: { filename: string }) {
+  const limitMiB = MARKDOWN_RENDER_MAX_SOURCE_BYTES / (1024 * 1024);
+  return (
+    <div
+      role="status"
+      className="flex h-full min-h-40 items-center justify-center px-6 text-center"
+    >
+      <p className="text-muted-foreground max-w-sm text-sm">
+        {filename} is over the {limitMiB} MiB in-browser markdown render limit.
+        Download it with the button above to read the complete file.
+      </p>
+    </div>
+  );
+}
+
 /** Render the file, in the frame a document gets and media does not. */
 function PreviewBody({
   kind,
@@ -279,6 +341,7 @@ function PreviewBody({
   contents,
   text,
   showContents,
+  imageAdmission,
 }: {
   kind: PreviewKind;
   preview: FilePreview;
@@ -289,9 +352,15 @@ function PreviewBody({
    * outside the frame the document is drawn in. */
   text: string | null;
   showContents: boolean;
+  imageAdmission: ImageAdmission | null;
 }) {
   const { filename, mimeType, sizeBytes } = preview;
   const { url } = contents;
+  const imageDecodeError = useImageDecodeError(kind === "image" ? url : null);
+  const imagePixels = useRasterPixelLease(
+    kind === "image" ? contents.blob : null,
+    imageAdmission?.ok === true ? imageAdmission.size : null,
+  );
   const [fullscreen] = usePreviewFullscreen(previewMemoryKey(preview));
 
   switch (kind) {
@@ -300,11 +369,20 @@ function PreviewBody({
     // this file -- so each of these fills it, rather than being centered in
     // something wider with a column of empty dialog down either side.
     case "image":
+      if (imageAdmission === null) return <PendingBody />;
+      if (!imageAdmission.ok)
+        return <RejectedImageStatus reason={imageAdmission.reason} />;
+      if (!imagePixels.pending && !imagePixels.admitted)
+        return <RejectedImageStatus reason={RASTER_PIXEL_BUDGET_MESSAGE} />;
+      if (imageDecodeError.failed)
+        return <RejectedImageStatus reason={IMAGE_DECODE_FAILURE_MESSAGE} />;
+      if (!imagePixels.admitted) return <PendingBody />;
       return (
         <img
           src={url}
           alt={filename}
           className={previewMediaClassName(fullscreen)}
+          onError={imageDecodeError.onError}
         />
       );
     case "video":
@@ -348,6 +426,7 @@ function PreviewBody({
         </ReadingColumn>
       );
     case "prose":
+      if (text === null) return <PendingBody />;
       return (
         <ReadingColumn>
           {/* Unrendered writing, so the lines are the author's: monospace,
@@ -361,6 +440,7 @@ function PreviewBody({
         </ReadingColumn>
       );
     case "text":
+      if (text === null) return <PendingBody />;
       return (
         // Preserve data and source lines, scrolling horizontally when needed.
         <pre className="bg-muted/40 min-h-full w-full overflow-x-auto rounded-lg p-4 font-mono text-xs whitespace-pre">
@@ -510,9 +590,11 @@ export function FilePreviewDialog({
   const media = isMediaKind(kind);
   // Only a picture says how big it is. Audio has no size at all, and a
   // video's is not worth a second decode to learn, so both open at the floor.
-  const imageSize = useMediaSize(
-    kind === "image" ? (preview.contents?.url ?? null) : null,
+  const imageAdmission = useSafeBlobImage(
+    kind === "image" ? (preview.contents?.blob ?? null) : null,
+    preview.mimeType,
   );
+  const imageSize = imageAdmission?.ok ? imageAdmission.size : null;
   // Read rather than passed down: the popup owns the toggle, and the document
   // frame is the one thing inside it that has to know.
   const [fullscreen] = usePreviewFullscreen(memoryKey);
@@ -554,7 +636,15 @@ export function FilePreviewDialog({
   // corner offers depends on what the document turns out to hold, and the
   // corner is outside the frame the document is drawn in.
   const textual = kind === "text" || kind === "prose" || kind === "markdown";
-  const text = useBlobText(preview.contents?.blob ?? null, textual);
+  const textBlob = preview.contents?.blob ?? null;
+  const textContinuityKey = `${memoryKey}\0${preview.filename}\0${kind}`;
+  const text = useBlobText(
+    textBlob,
+    textual &&
+      (kind !== "markdown" ||
+        (textBlob !== null && markdownRenderAllowed(textBlob.size))),
+    textContinuityKey,
+  );
   // Whether there is a list to stand up at all, which is what decides the
   // toggle exists. This is the same cached parse the document is drawn from
   // -- see `renderMarkdown` -- so asking costs nothing over showing it.
@@ -588,6 +678,11 @@ export function FilePreviewDialog({
   const body =
     preview.contents === null ? (
       <PendingBody />
+    ) : kind === "markdown" &&
+      !markdownRenderAllowed(preview.contents.blob.size) ? (
+      <MarkdownPreviewLimit filename={preview.filename} />
+    ) : textual && !fileTextPreviewAllowed(preview.contents.blob.size) ? (
+      <TextPreviewLimit filename={preview.filename} />
     ) : (
       <PreviewBody
         kind={kind}
@@ -595,6 +690,7 @@ export function FilePreviewDialog({
         contents={preview.contents}
         text={text}
         showContents={showContents}
+        imageAdmission={imageAdmission}
       />
     );
 

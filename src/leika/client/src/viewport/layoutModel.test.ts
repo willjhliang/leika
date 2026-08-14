@@ -15,6 +15,12 @@ import {
   removeViewportPane,
   setViewportSplitWeights,
 } from "./layoutModel";
+import {
+  MAX_LAYOUT_CHILDREN,
+  MAX_LAYOUT_DEPTH,
+  MAX_LAYOUT_ID_CODE_UNITS,
+  MAX_LAYOUT_ITEMS,
+} from "../persistenceLimits";
 
 const pane = (pane_id: string): ViewportLayoutNode => ({
   type: "pane",
@@ -101,6 +107,56 @@ describe("normalizeViewportLayout", () => {
         weights: [0.5, 0.5],
       },
     });
+  });
+
+  it("falls back safely for deep, broad, cyclic, and oversized input", () => {
+    let deep: unknown = { type: "pane", pane_id: "last" };
+    for (let depth = 0; depth <= MAX_LAYOUT_DEPTH; depth += 1) {
+      deep = {
+        type: "split",
+        direction: "row",
+        children: [deep],
+        weights: [1],
+      };
+    }
+    const broad = {
+      type: "split",
+      direction: "row",
+      children: Array.from({ length: MAX_LAYOUT_CHILDREN + 1 }, (_, index) => ({
+        type: "pane",
+        pane_id: `pane-${index}`,
+      })),
+      weights: [],
+    };
+    const cyclic: { type: string; direction: string; children: unknown[] } = {
+      type: "split",
+      direction: "row",
+      children: [],
+    };
+    cyclic.children.push(cyclic);
+    for (const root of [
+      deep,
+      broad,
+      cyclic,
+      { type: "pane", pane_id: "x".repeat(MAX_LAYOUT_ID_CODE_UNITS + 1) },
+    ]) {
+      expect(
+        collectViewportPaneIds(normalizeViewportLayout({ version: 1, root })),
+      ).toEqual([VIEWPORT_ROOT_PANE_ID]);
+    }
+  });
+
+  it("bounds and deduplicates a hostile public pane list", () => {
+    const paneIds = Array.from(
+      { length: MAX_LAYOUT_ITEMS + 100 },
+      (_, index) => `pane-${index}`,
+    );
+    const output = reconcileViewportLayout(null, [
+      ...paneIds,
+      ...paneIds,
+      "x".repeat(MAX_LAYOUT_ID_CODE_UNITS + 1),
+    ]);
+    expect(collectViewportPaneIds(output)).toHaveLength(MAX_LAYOUT_ITEMS);
   });
 });
 

@@ -39,6 +39,7 @@ function takeAndCompress(
 function makeLoaderScript(): string {
   return `
 (async()=>{
+  if(typeof DecompressionStream!=="function")throw new Error("DecompressionStream is unavailable");
   const d=document.currentScript.dataset;
   const dec=async(b64)=>{
     const b=atob(b64);const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
@@ -48,10 +49,25 @@ function makeLoaderScript(): string {
   const [css,code]=await Promise.all([d.s?dec(d.s):null,d.c?dec(d.c):null]);
   if(css!==null){const e=document.createElement("style");e.textContent=css;document.head.appendChild(e);}
   if(code!==null){
-    const run=()=>{const e=document.createElement("script");e.type="module";e.textContent=code;document.head.appendChild(e);};
-    if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",run);}else{run();}
+    await new Promise((resolve,reject)=>{
+      const run=()=>{
+        const e=document.createElement("script");e.type="module";e.textContent=code;
+        e.addEventListener("load",resolve,{once:true});
+        e.addEventListener("error",()=>reject(new Error("Application module failed to load")),{once:true});
+        document.head.appendChild(e);
+      };
+      if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",run,{once:true});}else{run();}
+    });
   }
-})();
+})().catch(error=>{
+  const show=()=>{
+    const status=document.createElement("pre");status.setAttribute("role","alert");
+    status.textContent="Leika could not start. Reload the page or use a supported browser.";
+    (document.body||document.documentElement).replaceChildren(status);
+  };
+  if(document.body)show();else document.addEventListener("DOMContentLoaded",show,{once:true});
+  console.error("Leika startup failed:",error);
+});
 `
     .trim()
     .replace(/\n/g, "");

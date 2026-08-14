@@ -4,15 +4,19 @@ import http.client
 import re
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from websockets import Headers
 from websockets.exceptions import InvalidStatus
+from websockets.http11 import Request
 from websockets.sync.client import connect
 from websockets.typing import Subprotocol
 
 import leika
 import leika._messages
+import leika.infra._auth as auth_impl
 from leika import infra
 from leika.infra._auth import (
     AUTH_PATH,
@@ -20,6 +24,7 @@ from leika.infra._auth import (
     FONT_PATH,
     PASSWORD_HEADER,
     WORDMARK_FONT_PATH,
+    HttpPasswordGuard,
 )
 
 PASSWORD = "open sesame"
@@ -56,6 +61,21 @@ def _login_cookie(port: int, encoded_password: str) -> str:
     return match.group(1)
 
 
+def test_login_fonts_are_preloaded_before_concurrent_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_open(*_: object, **__: object) -> object:
+        raise AssertionError("font response performed request-time disk I/O")
+
+    monkeypatch.setattr(Path, "open", unexpected_open)
+    paths = (FONT_PATH, WORDMARK_FONT_PATH) * 16
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = tuple(executor.map(auth_impl._font_response, paths))
+
+    assert all(response.status_code == 200 for response in responses)
+    assert all(response.body.startswith(b"wOF2") for response in responses)
+
+
 def test_password_gates_static_files(tmp_path: Path) -> None:
     served = tmp_path / "served"
     served.mkdir()
@@ -78,6 +98,7 @@ def test_password_gates_static_files(tmp_path: Path) -> None:
             assert status == 401
             assert b"password" in body
             assert headers["cache-control"] == "no-store"
+            assert headers["cross-origin-resource-policy"] == "same-origin"
 
         # A wrong (or absent) password is turned away without a cookie.
         for login_headers in ({}, {PASSWORD_HEADER: "wrong"}):
@@ -103,14 +124,27 @@ def test_password_gates_static_files(tmp_path: Path) -> None:
             status, headers, body = _get(server._port, font_path)
             assert status == 200
             assert headers["content-type"] == "font/woff2"
+            assert headers["cross-origin-resource-policy"] == "same-origin"
             assert body[:4] == b"wOF2"
 
-        # Behind an HTTPS-terminating tunnel the cookie is marked Secure;
-        # over plain localhost HTTP it must not be, or the browser drops it.
-        status, headers, _ = _get(
+        # Forwarding headers are rejected unless the exact tunnel hostname was
+        # registered. The trusted tunnel path marks its cookie Secure; plain
+        # localhost HTTP must not, or the browser drops it.
+        status, _, _ = _get(
             server._port,
             AUTH_PATH,
             {PASSWORD_HEADER: PASSWORD_ENCODED, "X-Forwarded-Proto": "https"},
+        )
+        assert status == 403
+        server.trust_proxy_host("fake.trycloudflare.com")
+        status, headers, _ = _get(
+            server._port,
+            AUTH_PATH,
+            {
+                "Host": "fake.trycloudflare.com",
+                PASSWORD_HEADER: PASSWORD_ENCODED,
+                "X-Forwarded-Proto": "https",
+            },
         )
         assert status == 204
         assert "Secure" in headers["set-cookie"]
@@ -190,3 +224,27 @@ def test_repeated_wrong_passwords_are_throttled(
         assert _get(server._port, "/", {PASSWORD_HEADER: PASSWORD_ENCODED})[0] == 200
     finally:
         server.stop()
+
+
+def test_duplicate_password_headers_and_malformed_cookies_are_cleanly_rejected() -> None:
+    guard = HttpPasswordGuard(PASSWORD)
+    duplicate = Request(
+        AUTH_PATH,
+        Headers(
+            [
+                (PASSWORD_HEADER, PASSWORD_ENCODED),
+                (PASSWORD_HEADER, PASSWORD_ENCODED),
+            ]
+        ),
+    )
+    response = guard.process(duplicate)
+    assert response is not None
+    assert response.status_code == 403
+
+    malformed = Request(
+        "/",
+        Headers([("Cookie", 'leika_session="unterminated')]),
+    )
+    response = guard.process(malformed)
+    assert response is not None
+    assert response.status_code == 401

@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { GuiTextMessage } from "../WebsocketMessages";
+import { MAX_GUI_TEXT_VALUE_CODE_UNITS } from "../guiLimits";
 import TextInputComponent from "./TextInput";
 import { renderWithGuiContext } from "./testGuiContext";
 
@@ -46,6 +47,14 @@ function renderText({
 }
 
 describe("TextInputComponent", () => {
+  it("bounds editable single- and multi-line values", () => {
+    expect(renderText({ editable: true, multiline: false })).toContain(
+      `maxLength="${MAX_GUI_TEXT_VALUE_CODE_UNITS}"`,
+    );
+    expect(renderText({ editable: true, multiline: true })).toContain(
+      `maxLength="${MAX_GUI_TEXT_VALUE_CODE_UNITS}"`,
+    );
+  });
   describe("editable", () => {
     it("is one line by default, and a box of lines when asked", () => {
       expect(renderText()).toContain("<input");

@@ -12,10 +12,13 @@ import io
 import struct
 import threading
 import time
+import warnings
 import zlib
 from collections import deque
+from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 import plotly.graph_objects as go
@@ -60,11 +63,45 @@ cloud, a Plotly chart and a 3D surface.
 Every viewer opens the same window: writing is set in a column like this
 one, data runs the full width, and pictures sit in the middle of it.
 
-A preview holds the whole file in the tab, so anything past **64 MiB** is
-declined with a notification rather than opened.
+The Python preview transfer declines source files past **64 MiB**. For a
+transferred file, the browser renders plain/prose/source text through **16 MiB**
+and Markdown through **1 MiB** to bound parse and DOM expansion. It keeps the
+received Blob available to download when inline rendering is declined.
 """
 
 CLOUD_SHAPES = ("Gaussian", "Shell", "Spiral")
+
+
+class _Stoppable(Protocol):
+    def stop(self) -> object: ...
+
+
+TStoppable = TypeVar("TStoppable", bound=_Stoppable)
+
+
+def _stop_safely(label: str, stop: Callable[[], object]) -> None:
+    """Stop one owned service without replacing an active application error."""
+
+    try:
+        stop()
+    except Exception as error:
+        warnings.warn(f"Failed to stop {label}: {error}", RuntimeWarning, stacklevel=2)
+
+
+class _ShowcaseLifetime:
+    """Own every background service created during partial or complete setup."""
+
+    def __init__(self) -> None:
+        self.stopping = threading.Event()
+        self._stack = ExitStack()
+
+    def own(self, label: str, resource: TStoppable) -> TStoppable:
+        self._stack.callback(_stop_safely, label, resource.stop)
+        return resource
+
+    def close(self) -> None:
+        self.stopping.set()
+        self._stack.close()
 
 
 HEIGHT = 300
@@ -216,8 +253,11 @@ def draw_distribution(figure: Figure, values: list[float]) -> None:
         axes.axvline(float(np.mean(values)), color=FIGURE_INK, linewidth=1.0, linestyle="--")
 
 
-def main() -> None:
-    server = leika.Server(workspace_id="showcase-v1", label="Leika showcase")
+def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
+    server = lifetime.own(
+        "Leika server",
+        leika.Server(workspace_id="showcase-v1", label="Leika showcase"),
+    )
     server.gui.configure_theme(control_layout="floating")
 
     initial = render_field(0.0, 1.2, "Ocean", (0.0, 0.0), (20, 90, 210, 45))
@@ -232,7 +272,10 @@ def main() -> None:
     )
     # Released viser does not report its chosen port for port=0, so use a
     # concrete starting port; viser probes upward when it is occupied.
-    viser_server = viser.ViserServer(port=8081, verbose=False)
+    viser_server = lifetime.own(
+        "Viser server",
+        viser.ViserServer(port=8081, verbose=False),
+    )
     grid.add_viser(viser_server, pane_id="scene", title="Live viser scene")
     plot_figure = make_plot()
     plot_pane = grid.add_plotly(
@@ -574,7 +617,7 @@ def main() -> None:
     # ever touches the figure. A thread does not make it free, since the SVG
     # backend holds the GIL throughout; once a second is what keeps the loop
     # at 30 fps. A matplotlib pane is a picture, not a live chart.
-    stopping = threading.Event()
+    stopping = lifetime.stopping
 
     def refresh_distribution() -> None:
         while not stopping.is_set():
@@ -641,9 +684,17 @@ def main() -> None:
             else:
                 next_frame = time.monotonic()
     except KeyboardInterrupt:
-        stopping.set()
-        server.stop()
-        viser_server.stop()
+        pass
+
+
+def main() -> None:
+    lifetime = _ShowcaseLifetime()
+    try:
+        _run_showcase(lifetime)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        lifetime.close()
 
 
 if __name__ == "__main__":

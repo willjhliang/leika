@@ -9,13 +9,7 @@ import {
   CommandShortcut,
 } from "./components/ui/command";
 import Fuse, { FuseResult, IFuseOptions } from "fuse.js";
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useViewer } from "./ViewerContext";
 import {
   commandPalette,

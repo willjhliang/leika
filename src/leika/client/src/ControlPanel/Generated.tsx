@@ -6,7 +6,6 @@ import {
 import { GuiComponentContext } from "./GuiComponentContext";
 import { shallowObjectKeysEqual } from "../utils/shallowObjectKeysEqual";
 
-import React from "react";
 import ButtonComponent from "../components/Button";
 import SliderComponent from "../components/Slider";
 import NumberInputComponent from "../components/NumberInput";

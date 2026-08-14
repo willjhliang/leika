@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { MAX_GUI_COLLECTION_ITEMS } from "../guiLimits";
 import { prefersReducedMotion } from "../utils/motion";
 import { EntryRow } from "./entryStackStyles";
 
@@ -76,7 +77,8 @@ function geometryOf(rows: HTMLElement[]) {
 /** Move one entry to another place, as a new array. */
 function moved<T>(entries: T[], from: number, to: number): T[] {
   const next = [...entries];
-  next.splice(to, 0, ...next.splice(from, 1));
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
   return next;
 }
 
@@ -160,6 +162,7 @@ export function EntryStack<T>({
     commit(items.filter((_, other) => other !== place));
   };
   const append = () => {
+    if (items.length >= MAX_GUI_COLLECTION_ITEMS) return;
     follow((order) => [...order, mint()]);
     commit([...items, blank()]);
   };
@@ -419,7 +422,7 @@ export function EntryStack<T>({
           type="button"
           variant="outline"
           className="w-full"
-          disabled={disabled}
+          disabled={disabled || items.length >= MAX_GUI_COLLECTION_ITEMS}
           onClick={append}
           data-leika-button
           data-leika-button-color="default"

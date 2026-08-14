@@ -4,6 +4,28 @@ By default, a leika server binds to `0.0.0.0:8080`, so it is reachable through
 the machine's network interfaces even though its printed convenience URL uses
 `localhost`. Use `Server(host="127.0.0.1")` when it should be local only.
 
+Wildcard binds accept localhost spellings and IP-literal URLs by default. A
+DNS, mDNS, or Tailscale name must be explicitly allowed:
+
+```python
+server = leika.Server(
+    host="0.0.0.0",
+    allowed_hosts=["camera.local", "demo.tailnet-name.ts.net"],
+)
+```
+
+Allowlist entries are hostnames or IP literals only -- no schemes, ports,
+paths, or wildcards. An explicit DNS bind automatically accepts its own name.
+This is a DNS-rebinding defense: a hostile page must not be able to point a
+name it controls at a Leika server and use a browser as a local-network proxy.
+The browser `Origin`, when present, must also match the effective scheme,
+hostname, and port.
+
+Embedding is denied by default with `Content-Security-Policy: frame-ancestors
+'none'`. Opt in for a trusted parent page with
+`Server(allow_embedding=True)`. Notebook `show()` also requires that opt-in.
+This permits framing; it does not bypass Host, Origin, or password checks.
+
 For a server on another machine, the usual path is port forwarding
 (`ssh -L 8080:localhost:8080 ...`). When forwarding is unavailable, a password
 gate, share tunnel, or mesh VPN can provide controlled remote access.
@@ -26,8 +48,8 @@ header:
 curl -H "x-leika-password: hunter2" http://localhost:8080/
 ```
 
-The password check runs before anything else, including the websocket
-handshake, so a URL alone -- leaked, guessed, or scanned -- gets nothing.
+The password check runs before workspace/client content is served or a
+websocket is accepted. An anonymous URL gets only the minimal login surface.
 
 ## Share tunnels
 
@@ -36,7 +58,7 @@ server = leika.Server(host="127.0.0.1", share=True)
 ```
 
 `share=True` opens a [Cloudflare quick
-tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)
+tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
 and prints a public URL:
 
 ```
@@ -67,36 +89,56 @@ take a few seconds after printing before Cloudflare's edge starts serving it
 before reloading.
 
 Quick tunnels are Cloudflare's free, anonymous tier and come with no uptime
-promise. For a stable address, a named tunnel on a Cloudflare account maps
-your own domain to the same `cloudflared` process -- configuration on their
-side, no leika changes -- and leika's password gate keeps working behind it.
+promise. Leika's built-in proxy trust is deliberately limited to the exact
+quick-tunnel hostname created by `share=True`. An independently launched or
+named Cloudflare tunnel is therefore not a drop-in replacement: its forwarded
+headers are rejected unless Leika gains an explicit trusted-proxy
+configuration for that deployment.
 
 ## Mesh VPNs
 
 When every viewing machine is one you control, a mesh VPN such as
 [Tailscale](https://tailscale.com) beats a tunnel: traffic stays end-to-end
 encrypted between your own devices, nothing is published to the internet,
-and leika needs no options at all -- the network does the reaching.
+and the network does the reaching. Tell Leika which tailnet name the browser
+will use:
+
+```python
+server = leika.Server(
+    host="0.0.0.0",
+    allowed_hosts=["machine-name.tailnet-name.ts.net"],
+)
+```
 
 Install Tailscale on both machines and log in to the same account, then open
-`http://<machine-name>:8080` from anywhere on the tailnet. On a machine
+that allowed URL from anywhere on the tailnet. On a machine
 where you have no root (a cluster node, say), the static binaries run
 entirely from `$HOME`:
 
 ```bash
 mkdir -p ~/tailscale ~/.tailscale && cd ~/tailscale
-curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.98.10_amd64.tgz \
-  | tar xz --strip-components=1
+TAILSCALE_VERSION=1.102.2  # Recheck https://pkgs.tailscale.com/stable/
+TAILSCALE_SHA256=ad2cde12f8de95f7b93a1e0401e652291c603d42b9d60a33fb1741eb38ab04d8
+TAILSCALE_ARCHIVE="tailscale_${TAILSCALE_VERSION}_amd64.tgz"
+curl -fsSLo "$TAILSCALE_ARCHIVE" \
+  "https://pkgs.tailscale.com/stable/$TAILSCALE_ARCHIVE"
+printf '%s  %s\n' "$TAILSCALE_SHA256" "$TAILSCALE_ARCHIVE" | sha256sum -c -
+tar xzf "$TAILSCALE_ARCHIVE" --strip-components=1
 nohup ./tailscaled --tun=userspace-networking \
   --statedir="$HOME/.tailscale" --socket="$HOME/.tailscale/tailscaled.sock" \
   > "$HOME/.tailscale/tailscaled.log" 2>&1 &
 ./tailscale --socket="$HOME/.tailscale/tailscaled.sock" up  # prints a login URL
 ```
 
-In this userspace mode, inbound tailnet connections are proxied to
-localhost, so `Server(host="127.0.0.1")` is exactly right -- no `share=True`
-involved. A password is still worth setting: it is what separates the
-dashboard from everything else that can reach the tailnet.
+In this userspace mode, inbound tailnet connections are proxied to localhost.
+Bind to `127.0.0.1`, then allow the hostname that appears in the browser:
+
+```python
+server = leika.Server(host="127.0.0.1", allowed_hosts=["machine-name.tailnet-name.ts.net"])
+```
+
+No `share=True` is involved. A password is still worth setting: it separates
+the dashboard from everything else that can reach the tailnet.
 
 One caution: on employer-managed machines, a personal VPN may be a policy
 conversation before it is a technical one. Have it first.
@@ -105,18 +147,23 @@ conversation before it is a technical one. Have it first.
 
 What the gate guarantees, none of it depending on the code being secret:
 
-- Every request authenticates before anything is served: static files, the
-  websocket handshake, everything. The one pre-auth surface is the login
-  page itself and the two fonts it renders in.
+- When a password is configured, every request authenticates before
+  workspace/client content or a websocket is served. The only pre-auth
+  surface is the login page itself and the two fonts it renders in.
 - Password and session-token comparisons are constant-time, and the session
   token is 256 random bits minted per process -- a restart signs everyone
   out.
-- Wrong guesses are throttled globally (ten per minute, across every door a
-  password fits in), so an online brute-force cannot outrun even a modest
-  password. Established sessions ride through a lockout untouched.
-- The session cookie is `HttpOnly` and `SameSite=Lax` (which also blocks
-  cross-site websocket hijacking), and marked `Secure` when it traveled
-  over TLS.
+- With a password configured, wrong guesses are throttled globally (ten per
+  minute, across every door a password fits in), so an online brute-force
+  cannot outrun even a modest password. Established sessions ride through a
+  lockout untouched.
+- Every HTTP and websocket request passes Host validation, and browser
+  requests with an `Origin` must match the normalized effective origin. This
+  is what blocks DNS rebinding and cross-site websocket hijacking; the
+  `HttpOnly`, `SameSite=Lax` session cookie is additional defense and is
+  marked `Secure` over TLS.
+- Responses prevent MIME sniffing and suppress referrer leakage. Framing is
+  denied unless `allow_embedding=True` was explicit.
 
 What the gate cannot promise:
 

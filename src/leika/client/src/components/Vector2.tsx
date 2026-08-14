@@ -1,4 +1,3 @@
-import * as React from "react";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiVector2Message } from "../WebsocketMessages";
 import { VectorInput, GuiInputRow } from "./common";

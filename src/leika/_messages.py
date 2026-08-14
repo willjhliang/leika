@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
-import uuid
+import hashlib
 from typing import Any, ClassVar, Dict, Optional, Tuple, Union, cast
 
 from typing_extensions import Literal, TypeAlias, override
@@ -188,8 +188,8 @@ class Message(infra.Message):
     _tags: ClassVar[Tuple[TagLiteral, ...]] = tuple()
 
     @override
-    def redundancy_key(self) -> str:
-        """Returns a unique key for this message, used for detecting redundant
+    def redundancy_key(self) -> str | None:
+        """Returns a coalescing key for this message, used for detecting redundant
         messages.
 
         For entity messages, this is derived from the entity markers:
@@ -216,7 +216,7 @@ class Message(infra.Message):
             elif self.lifecycle_phase == "update_dict":
                 # Delta updates coalesce per prop-set, so independent prop
                 # changes don't clobber each other.
-                updates: Dict[str, Any] = self.updates  # type: ignore[attr-defined]
+                updates = cast(Dict[str, Any], getattr(self, "updates"))
                 prop_suffix = ",".join(sorted(updates.keys()))
                 key = f"{self.entity_type}:{entity_id}:update:{prop_suffix}"
             else:
@@ -268,9 +268,19 @@ class GuiRemoveMessage(
     Message,
     entity=EntityLifecycle("gui", "remove", "uuid"),
 ):
-    """Sent server->client to remove a GUI element."""
+    """Remove one GUI element, its tabs, and named descendants atomically."""
 
     uuid: str
+    removed_uuids: Tuple[str, ...] = ()
+    removed_tab_uuids: Tuple[str, ...] = ()
+
+    @override
+    def purge_entities(self) -> tuple[tuple[str, object], ...]:
+        return (
+            ("gui", self.uuid),
+            *(("gui", uuid) for uuid in self.removed_uuids),
+            *(("gui", uuid) for uuid in self.removed_tab_uuids),
+        )
 
 
 @dataclasses.dataclass
@@ -280,14 +290,17 @@ class RunJavascriptMessage(Message):
     code."""
 
     source: str
+    redundancy_key_is_identity: ClassVar[bool] = True
 
     @override
     def redundancy_key(self) -> str:
-        # Each script is independent, but its key must remain stable while the
-        # buffer tracks and later removes this message.
+        # The only producer is the Plotly bootstrap. Content identity avoids
+        # retaining duplicate runtime sources while keeping genuinely distinct
+        # scripts independent if this internal message is reused later.
         key = self.__dict__.get("_cached_redundancy_key")
         if key is None:
-            key = f"{type(self).__name__}-{uuid.uuid4()}"
+            digest = hashlib.sha256(self.source.encode("utf-8")).hexdigest()
+            key = f"{type(self).__name__}:{digest}"
             object.__setattr__(self, "_cached_redundancy_key", key)
         return key
 
@@ -510,8 +523,9 @@ class GuiImageMessage(_CreateGuiComponentMessage):
 @dataclasses.dataclass
 class GuiTabGroupProps:
     _tabs: Tuple[GuiTab, ...]
-    """(Private) One record per tab. A single field, so any change to the tabs
-    is one atomic update: a label can never arrive without its container."""
+    """(Private) Server/client-local descriptor projection. The group create
+    carries an empty tuple; flat ``GuiTabMessage`` lifecycle records declare,
+    update, and remove tabs before their child components."""
     order: float
     """Order value for arranging GUI elements. """
     visible: bool
@@ -522,6 +536,32 @@ class GuiTabGroupProps:
 class GuiTabGroupMessage(_CreateGuiComponentMessage):
     container_uuid: str
     props: GuiTabGroupProps
+
+
+@dataclasses.dataclass
+class GuiTabMessage(
+    Message,
+    entity=EntityLifecycle("gui", "create", "uuid"),
+):
+    """Declare one stable tab container before any of its child components."""
+
+    uuid: str
+    group_uuid: str
+    label: str
+    icon_html: Optional[str]
+
+
+@dataclasses.dataclass
+class GuiTabUpdateMessage(
+    Message,
+    entity=EntityLifecycle("gui", "update_simple", "uuid"),
+):
+    """Update presentation metadata for an already-declared tab container."""
+
+    uuid: str
+    group_uuid: str
+    label: str
+    icon_html: Optional[str]
 
 
 @dataclasses.dataclass
@@ -540,6 +580,16 @@ class GuiCloseModalMessage(
     entity=EntityLifecycle("modal", "remove", "uuid"),
 ):
     uuid: str
+    removed_uuids: Tuple[str, ...] = ()
+    removed_tab_uuids: Tuple[str, ...] = ()
+
+    @override
+    def purge_entities(self) -> tuple[tuple[str, object], ...]:
+        return (
+            ("modal", self.uuid),
+            *(("gui", uuid) for uuid in self.removed_uuids),
+            *(("gui", uuid) for uuid in self.removed_tab_uuids),
+        )
 
 
 @dataclasses.dataclass
@@ -1093,8 +1143,8 @@ class FileTransferStartUpload(Message):
     size_bytes: int
 
     @override
-    def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + self.transfer_uuid
+    def redundancy_key(self) -> None:
+        return None
 
 
 @dataclasses.dataclass
@@ -1122,8 +1172,8 @@ class FileTransferStartDownload(Message):
     reader (bytes in hand, or a function that has to be run to find out)."""
 
     @override
-    def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + self.transfer_uuid
+    def redundancy_key(self) -> None:
+        return None
 
 
 @dataclasses.dataclass
@@ -1136,20 +1186,20 @@ class FileTransferPart(Message):
     content: bytes
 
     @override
-    def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + self.transfer_uuid + "-" + str(self.part_index)
+    def redundancy_key(self) -> None:
+        return None
 
 
 @dataclasses.dataclass
 class FileTransferAbort(Message):
-    """Tell a client that a started download cannot finish."""
+    """Cancel a file transfer in either direction with a short reason."""
 
     transfer_uuid: str
     reason: str
 
     @override
-    def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + self.transfer_uuid
+    def redundancy_key(self) -> None:
+        return None
 
 
 @dataclasses.dataclass
@@ -1162,8 +1212,8 @@ class FileTransferPartAck(Message):
     total_bytes: int
 
     @override
-    def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + self.transfer_uuid + "-" + str(self.transferred_bytes)
+    def redundancy_key(self) -> None:
+        return None
 
 
 @dataclasses.dataclass
@@ -1194,7 +1244,9 @@ class ServerPongMessage(Message):
 
     @override
     def redundancy_key(self) -> str:
-        return type(self).__name__ + "-" + str(self.sent_ms)
+        # When a peer is slower than a ping flood, only the latest pending
+        # latency sample is useful; keeping every stamp would be unbounded.
+        return type(self).__name__
 
 
 @dataclasses.dataclass

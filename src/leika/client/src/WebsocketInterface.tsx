@@ -1,13 +1,19 @@
 import React from "react";
 
 import { connectionStats } from "./ConnectionStatsController";
+import { resetMarkdownDocumentCache } from "./components/markdownDocument";
+import { resetNotifications } from "./notifications";
 import { useViewer, warnDisconnectedSend } from "./ViewerContext";
 import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
 import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
 import { syncSearchParamServer } from "./SearchParamsUtils";
 import { installConnectionBoundSender } from "./connectionSender";
 import { resetFilePreviewState } from "./filePreview";
+import { resetFileTransferFailureToast } from "./fileDownloadHandler";
+import { retainedDownloads } from "./retainedDownloadBudget";
 import { WorkerEventGate } from "./workerFailure";
+import { plotlyBootstrap } from "./plotlyBootstrap";
+import { resetMountedRasterPixels } from "./rasterPixelBudget";
 
 /** Live binary websocket producer with focus-aware reconnect behavior. */
 export function WebsocketMessageProducer() {
@@ -67,8 +73,20 @@ export function WebsocketMessageProducer() {
 
     const resetConnectionResources = () => {
       viewer.mutable.current.downloads.reset();
+      viewer.mutable.current.uploads.reset(
+        "The connection changed during the upload.",
+      );
       resetFilePreviewState();
-      viewer.mutable.current.messageQueue.length = 0;
+      // Preview/warm owners release themselves above. This also closes file
+      // link toasts from the old server; protected save navigations alone stay
+      // alive until their one-second cross-browser grace timer completes.
+      retainedDownloads.evictAll();
+      resetMarkdownDocumentCache();
+      resetNotifications();
+      resetFileTransferFailureToast();
+      plotlyBootstrap.reset();
+      resetMountedRasterPixels();
+      viewer.mutable.current.messageQueue.reset();
     };
 
     const markDisconnected = ({
@@ -98,6 +116,7 @@ export function WebsocketMessageProducer() {
           : reason + ". Reload the page to reconnect.",
       });
     };
+    viewer.mutable.current.failConnection = failWorker;
 
     // The worker measures only while something is watching, so it is told when
     // that changes -- and only then, since the counters it reports arrive
@@ -152,7 +171,25 @@ export function WebsocketMessageProducer() {
       // The worker's rate smoothing can deliver a batch after the close; a
       // batch from a dead connection must not replay over the reset GUI.
       if (isConnected) {
-        viewer.mutable.current.messageQueue.push(...data.messages);
+        if (
+          !viewer.mutable.current.messageQueue.enqueue(
+            data.messages,
+            data.frameBytes,
+            data.metadataBytes,
+          )
+        ) {
+          failWorker(
+            "Connection message queue exceeded its browser safety limit",
+          );
+          return;
+        }
+        // Only now does the worker release this transferred frame from its
+        // connection-generation budget and permit the next ordered batch.
+        postToWorker({
+          type: "batch_received",
+          connectionId: data.connectionId,
+          batchId: data.batchId,
+        });
         viewer.mutable.current.notifyMessageQueue();
       }
     };
@@ -172,6 +209,10 @@ export function WebsocketMessageProducer() {
     updateWatching();
     return () => {
       active = false;
+      if (viewer.mutable.current.failConnection === failWorker) {
+        viewer.mutable.current.failConnection = (reason) =>
+          console.error("Cannot fail an inactive connection:", reason);
+      }
       workerEvents.close();
       worker.onmessage = null;
       worker.onerror = null;

@@ -21,6 +21,10 @@
 // overwriting the other owner's newer answer.
 
 import * as React from "react";
+import { MAX_PERSISTED_JSON_CODE_UNITS } from "../persistenceLimits";
+
+export const MAX_PREVIEW_FLAG_ENTRIES = 512;
+export const MAX_PREVIEW_FLAG_KEY_CODE_UNITS = 1_024;
 
 /** One remembered flag: where to read it, and how to set it. */
 export interface PreviewFlag {
@@ -55,10 +59,17 @@ function readPreviewFlag(
   try {
     const raw = storage.getItem(storageKey);
     if (raw === null) return new Set();
+    if (raw.length > MAX_PERSISTED_JSON_CODE_UNITS) return new Set();
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
+    if (!Array.isArray(parsed) || parsed.length > MAX_PREVIEW_FLAG_ENTRIES)
+      return new Set();
     return new Set(
-      parsed.filter((key): key is string => typeof key === "string"),
+      parsed.filter(
+        (key): key is string =>
+          typeof key === "string" &&
+          key.length > 0 &&
+          key.length <= MAX_PREVIEW_FLAG_KEY_CODE_UNITS,
+      ),
     );
   } catch {
     // Storage can be inaccessible, or an older/hand-edited value can be
@@ -87,11 +98,15 @@ export function previewFlag(
       },
     },
     set(key, next) {
+      if (key.length === 0 || key.length > MAX_PREVIEW_FLAG_KEY_CODE_UNITS)
+        return;
       // Previews mount and unmount constantly, and each one asks. Only a
       // real change is worth waking every reader for.
       if (next === on.has(key)) return;
-      if (next) on.add(key);
-      else on.delete(key);
+      if (next) {
+        if (on.size >= MAX_PREVIEW_FLAG_ENTRIES) return;
+        on.add(key);
+      } else on.delete(key);
       if (storage !== null) {
         try {
           storage.setItem(storageKey, JSON.stringify([...on]));

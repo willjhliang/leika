@@ -2,23 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Message } from "./WebsocketMessages";
 import { ViewerContextContents } from "./ViewerContext";
-import { makeThrottledMessageSender } from "./WebsocketUtils";
+import {
+  makeThrottledMessageSender,
+  THROTTLED_MESSAGE_OVERFLOW_REASON,
+} from "./WebsocketUtils";
 import { installConnectionBoundSender } from "./connectionSender";
 
 const WINDOW_MS = 50;
 
-function makeSender() {
+function makeSender(limits?: {
+  maxPendingMessages: number;
+  maxPendingEvents: number;
+}) {
   const sent: Message[] = [];
+  const failConnection = vi.fn();
   const viewer = {
     mutable: {
       current: {
         sendMessage: (message: Message) => {
           sent.push(message);
         },
+        failConnection,
       },
     },
   } as unknown as ViewerContextContents;
-  return { sent, viewer, ...makeThrottledMessageSender(viewer, WINDOW_MS) };
+  return {
+    sent,
+    viewer,
+    failConnection,
+    ...makeThrottledMessageSender(viewer, WINDOW_MS, limits),
+  };
 }
 
 const value = (uuid: string, text: string) =>
@@ -49,6 +62,21 @@ describe("makeThrottledMessageSender", () => {
     const { send, sent } = makeSender();
     send(value("a", "one"));
     expect(sent).toHaveLength(1);
+  });
+
+  it("keys hostile high-cardinality updates without argument spreading", () => {
+    const { send, sent } = makeSender();
+    const updates: Record<string, string> = {};
+    for (let index = 0; index < 150_000; index += 1) {
+      updates[`field-${index}`] = "value";
+    }
+    const message = {
+      type: "GuiUpdateMessage",
+      uuid: "large-update",
+      updates,
+    } as unknown as Message;
+    expect(() => send(message)).not.toThrow();
+    expect(sent).toEqual([message]);
   });
 
   it("keeps the newest reading of one control and drops the rest", () => {
@@ -151,5 +179,58 @@ describe("makeThrottledMessageSender", () => {
     expect(replacementConnection).toEqual([]);
     send(value("a", "three"));
     expect(replacementConnection).toEqual([value("a", "three")]);
+  });
+
+  it("fails the affected connection instead of dropping an event overflow", () => {
+    const { viewer, send, sent, failConnection } = makeSender({
+      maxPendingMessages: 3,
+      maxPendingEvents: 2,
+    });
+    send(value("opener", "one"));
+    send(submit("first"), { coalesce: false });
+    send(submit("second"), { coalesce: false });
+    send(submit("overflow"), { coalesce: false });
+
+    expect(failConnection).toHaveBeenCalledWith(
+      THROTTLED_MESSAGE_OVERFLOW_REASON,
+    );
+    vi.runAllTimers();
+    expect(sent).toEqual([value("opener", "one")]);
+
+    // More work from the failed transport is contained, while replacing the
+    // connection identity makes the stable hook-owned sender usable again.
+    send(submit("same-connection"), { coalesce: false });
+    expect(sent).toHaveLength(1);
+    const replacement: Message[] = [];
+    installConnectionBoundSender(viewer.mutable.current, (message) =>
+      replacement.push(message),
+    );
+    send(submit("replacement"), { coalesce: false });
+    expect(replacement).toEqual([submit("replacement")]);
+  });
+
+  it("bounds coalesced slots but permits replacement at the exact limit", () => {
+    const { send, sent, failConnection } = makeSender({
+      maxPendingMessages: 2,
+      maxPendingEvents: 2,
+    });
+    send(value("opener", "one"));
+    send(value("a", "first"));
+    send(value("b", "second"));
+    send(value("a", "replacement"));
+    expect(failConnection).not.toHaveBeenCalled();
+
+    send(value("c", "overflow"));
+    expect(failConnection).toHaveBeenCalledWith(
+      THROTTLED_MESSAGE_OVERFLOW_REASON,
+    );
+    vi.runAllTimers();
+    expect(sent).toEqual([value("opener", "one")]);
+  });
+
+  it("validates queue limits instead of creating an incoherent bound", () => {
+    expect(() =>
+      makeSender({ maxPendingMessages: 1, maxPendingEvents: 2 }),
+    ).toThrow("Invalid throttled-message queue limits");
   });
 });

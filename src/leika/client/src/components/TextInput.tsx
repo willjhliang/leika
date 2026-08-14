@@ -1,10 +1,10 @@
-import * as React from "react";
 import { ErrorBoundary } from "react-error-boundary";
 
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
+import { MAX_GUI_TEXT_VALUE_CODE_UNITS } from "../guiLimits";
 import { GuiTextMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -116,7 +116,13 @@ export default function TextInputComponent({
         <Textarea
           id={uuid}
           value={value}
-          onChange={(event) => setValue(uuid, event.currentTarget.value)}
+          maxLength={MAX_GUI_TEXT_VALUE_CODE_UNITS}
+          onChange={(event) => {
+            if (
+              event.currentTarget.value.length <= MAX_GUI_TEXT_VALUE_CODE_UNITS
+            )
+              setValue(uuid, event.currentTarget.value);
+          }}
           disabled={disabled}
           rows={rows ?? EDITABLE_ROWS}
           // The stock textarea sizes itself to its content, which overrides
@@ -127,7 +133,13 @@ export default function TextInputComponent({
         <Input
           id={uuid}
           value={value}
-          onChange={(event) => setValue(uuid, event.currentTarget.value)}
+          maxLength={MAX_GUI_TEXT_VALUE_CODE_UNITS}
+          onChange={(event) => {
+            if (
+              event.currentTarget.value.length <= MAX_GUI_TEXT_VALUE_CODE_UNITS
+            )
+              setValue(uuid, event.currentTarget.value);
+          }}
           disabled={disabled}
         />
       )}

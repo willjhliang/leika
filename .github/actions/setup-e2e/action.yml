@@ -1,7 +1,11 @@
 name: Set up Leika browser tests
-description: Install Python dependencies and Playwright Chromium
+description: Install Python dependencies and a Playwright browser
 
 inputs:
+  browser:
+    description: Playwright browser name
+    required: false
+    default: chromium
   python-version:
     description: Python version
     required: false
@@ -10,20 +14,29 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: ${{ inputs.python-version }}
-    - uses: astral-sh/setup-uv@v5
+    - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
+        version: "0.12.3"
         enable-cache: true
+        cache-dependency-glob: |
+          uv.lock
+          build-constraints.txt
     - name: Install project
       shell: bash
-      run: uv sync --extra dev
+      run: uv sync --locked --extra dev --python "$LEIKA_PYTHON_VERSION"
+      env:
+        LEIKA_PYTHON_VERSION: ${{ inputs.python-version }}
     - name: Cache browser
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/ms-playwright
-        key: chromium-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-    - name: Install Chromium
+        key: playwright-${{ inputs.browser }}-py${{ inputs.python-version }}-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+    - name: Install browser
       shell: bash
-      run: uv run playwright install chromium --with-deps
+      run: uv run --locked --extra dev --python "$LEIKA_PYTHON_VERSION" playwright install "$PLAYWRIGHT_BROWSER" --with-deps
+      env:
+        PLAYWRIGHT_BROWSER: ${{ inputs.browser }}
+        LEIKA_PYTHON_VERSION: ${{ inputs.python-version }}

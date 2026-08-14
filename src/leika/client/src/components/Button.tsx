@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/button";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
+import { boundedHoldCallbackFrequencies } from "../guiLimits";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
+import { startPreviewWarmObservation } from "./previewWarmObserver";
 
 export default function ButtonComponent({
   uuid,
@@ -27,23 +29,17 @@ export default function ButtonComponent({
   // is held rather than shown). Asked once per time on screen: the observer
   // disconnects after firing, and only a remount asks again.
   useEffect(() => {
-    if (!prefetch) return;
     const node = document.getElementById(uuid);
-    if (node === null) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      observer.disconnect();
-      messageSender({ type: "GuiPreviewWarmMessage", uuid });
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [prefetch, uuid, messageSender]);
+    return startPreviewWarmObservation(
+      prefetch && !disabled,
+      node,
+      uuid,
+      messageSender,
+    );
+  }, [disabled, prefetch, uuid, messageSender]);
   const holdIntervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
   const holdFrequencies = React.useMemo(
-    () =>
-      holdCallbackFreqs.filter(
-        (frequency) => Number.isFinite(frequency) && frequency > 0,
-      ),
+    () => boundedHoldCallbackFrequencies(holdCallbackFreqs),
     [holdCallbackFreqs],
   );
 

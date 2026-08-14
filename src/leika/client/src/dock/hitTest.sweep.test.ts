@@ -143,11 +143,7 @@ function nodeExists(
   return walk(layout.docked[edge]);
 }
 
-function validateResult(
-  layout: DockLayout,
-  targets: DropTargets,
-  result: DropResult,
-): string[] {
+function validateResult(layout: DockLayout, result: DropResult): string[] {
   const errs: string[] = [];
   switch (result.kind) {
     case "edge":
@@ -379,7 +375,7 @@ describe("hitTest pointer sweep invariants", () => {
             res.result.kind,
             (zoneTally.get(res.result.kind) ?? 0) + 1,
           );
-          const rErrs = validateResult(layout, targets, res.result);
+          const rErrs = validateResult(layout, res.result);
           const hErrs = validateHint(res.hint);
           for (const e of [...rErrs, ...hErrs]) {
             // Dedup to keep output readable: report each distinct error once

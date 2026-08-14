@@ -90,8 +90,8 @@ const schema = {
  * inlined (`add_preview_button` inlines them on the way here, `image_root`
  * before that). None of that reading can change anything -- base64 has no
  * markup in it -- so each long URL is swapped for a short numbered stand-in
- * (`data:,leika-embed-3`) on the way in and swapped back on the way out, and
- * the parser only ever sees the document's actual writing.
+ * (`data:,leika-embed-0:3`) on the way in and swapped back on the way out,
+ * and the parser only ever sees the document's actual writing.
  *
  * The swap is a pure inversion, not an image feature: it is undone wherever
  * the stand-in comes to rest, so a long URL an author put in a code block
@@ -100,8 +100,22 @@ const schema = {
  */
 const EMBED_MIN_LENGTH = 1024;
 
-const EMBED_URL_PREFIX = "data:,leika-embed-";
-const EMBED_STAND_IN = new RegExp(`${EMBED_URL_PREFIX}(\\d+)`, "g");
+const EMBED_URL_NAMESPACE_PREFIX = "data:,leika-embed-";
+const EMBED_URL_NAMESPACE = /data:,leika-embed-(\d+):/g;
+
+/** Choose a namespace that occurs nowhere in the authored source.
+ *
+ * Collecting all numeric namespaces in one pass avoids an attacker-controlled
+ * series of whole-source `includes()` scans. If the chosen prefix occurred,
+ * its number would necessarily be in `used`, so the search is collision-free
+ * rather than merely improbable. */
+function unusedEmbedPrefix(source: string): string {
+  const used = new Set<string>();
+  for (const match of source.matchAll(EMBED_URL_NAMESPACE)) used.add(match[1]);
+  let namespace = 0;
+  while (used.has(String(namespace))) namespace += 1;
+  return `${EMBED_URL_NAMESPACE_PREFIX}${namespace}:`;
+}
 
 /** Swap every long `data:` URL for a numbered stand-in, keeping the originals.
  *
@@ -110,16 +124,21 @@ const EMBED_STAND_IN = new RegExp(`${EMBED_URL_PREFIX}(\\d+)`, "g");
  * `>`, a code span's backtick. Everything between is carried whole, so the
  * inverse is a straight substitution.
  */
-function liftEmbeds(source: string): { lifted: string; embeds: string[] } {
+function liftEmbeds(source: string): {
+  lifted: string;
+  embeds: string[];
+  embedPrefix: string;
+} {
   const embeds: string[] = [];
+  const embedPrefix = unusedEmbedPrefix(source);
   const lifted = source.replace(
     new RegExp(`data:[^\\s)"'\`<>]{${EMBED_MIN_LENGTH},}`, "g"),
     (url) => {
       embeds.push(url);
-      return `${EMBED_URL_PREFIX}${embeds.length - 1}`;
+      return `${embedPrefix}${embeds.length - 1}`;
     },
   );
-  return { lifted, embeds };
+  return { lifted, embeds, embedPrefix };
 }
 
 /** Put the lifted URLs back, wherever their stand-ins ended up.
@@ -130,20 +149,25 @@ function liftEmbeds(source: string): { lifted: string; embeds: string[] } {
  * and there is nothing left to restore.
  */
 function rehypeRestoreEmbeds() {
-  return (tree: Root, file: { data: { embeds?: string[] } }) => {
+  return (
+    tree: Root,
+    file: { data: { embeds?: string[]; embedPrefix?: string } },
+  ) => {
     const embeds = file.data.embeds ?? [];
-    if (embeds.length === 0) return;
+    const embedPrefix = file.data.embedPrefix;
+    if (embeds.length === 0 || embedPrefix === undefined) return;
+    const standInPattern = new RegExp(`${embedPrefix}(\\d+)`, "g");
     const restore = (value: string): string =>
-      value.replace(EMBED_STAND_IN, (standIn, index) => {
+      value.replace(standInPattern, (standIn, index) => {
         return embeds[Number(index)] ?? standIn;
       });
     const visit = (node: Nodes): void => {
-      if (node.type === "text" && node.value.includes(EMBED_URL_PREFIX)) {
+      if (node.type === "text" && node.value.includes(embedPrefix)) {
         node.value = restore(node.value);
       }
       if (node.type === "element") {
         for (const [name, value] of Object.entries(node.properties)) {
-          if (typeof value === "string" && value.includes(EMBED_URL_PREFIX)) {
+          if (typeof value === "string" && value.includes(embedPrefix)) {
             node.properties[name] = restore(value);
           }
         }
@@ -236,7 +260,10 @@ const CONTENTS_DEPTH = 2;
  */
 export function contentsOf(headings: DocumentHeading[]): DocumentHeading[] {
   if (headings.length === 0) return [];
-  const shallowest = Math.min(...headings.map((heading) => heading.level));
+  let shallowest = Number.POSITIVE_INFINITY;
+  for (const heading of headings) {
+    shallowest = Math.min(shallowest, heading.level);
+  }
   const listed = headings.filter(
     (heading) => heading.level <= shallowest + CONTENTS_DEPTH,
   );
@@ -291,8 +318,11 @@ export function createMarkdownRenderer(components: MarkdownComponents) {
     } as RehypeReactOptions);
 
   return (markdown: string): RenderedDocument => {
-    const { lifted, embeds } = liftEmbeds(markdown);
-    const file = processor.processSync({ value: lifted, data: { embeds } });
+    const { lifted, embeds, embedPrefix } = liftEmbeds(markdown);
+    const file = processor.processSync({
+      value: lifted,
+      data: { embeds, embedPrefix },
+    });
     return {
       element: file.result,
       headings: (file.data as { headings?: DocumentHeading[] }).headings ?? [],

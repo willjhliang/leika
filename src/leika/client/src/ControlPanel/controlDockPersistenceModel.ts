@@ -1,6 +1,7 @@
 import * as ops from "../dock/layoutOps";
 import { normalizeDockLayout } from "../dock/persistedLayout";
 import { type DockLayout, type PanelRegistry } from "../dock/types";
+import { parseBoundedPersistedJson } from "../persistenceLimits";
 
 export interface ControlDockLayoutStorage {
   getItem(key: string): string | null;
@@ -35,7 +36,7 @@ export function readControlDockLayout(
     const serialized = storage.getItem(storageKey);
     return serialized === null
       ? null
-      : normalizeDockLayout(JSON.parse(serialized));
+      : normalizeDockLayout(parseBoundedPersistedJson(serialized));
   } catch {
     return null;
   }

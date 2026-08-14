@@ -6,6 +6,13 @@
  * React.
  */
 
+import {
+  isBoundedLayoutId,
+  MAX_LAYOUT_CHILDREN,
+  MAX_LAYOUT_DEPTH,
+  MAX_LAYOUT_ITEMS,
+} from "../persistenceLimits";
+
 export type ViewportSplitDirection = "row" | "column";
 
 export const VIEWPORT_ROOT_PANE_ID = "__leika_root__";
@@ -155,22 +162,29 @@ interface ParseContext {
   readonly allowedPaneIds: ReadonlySet<string> | null;
   readonly seenPaneIds: Set<string>;
   readonly seenObjects: WeakSet<object>;
+  visitedNodes: number;
 }
 
 /** Parse a serialized value, discarding invalid, unknown, or duplicate leaves. */
 function parseLayout(
   value: unknown,
   context: ParseContext,
+  depth = 1,
 ): ViewportLayoutNode | null {
-  if (!isRecord(value)) return null;
+  if (
+    !isRecord(value) ||
+    depth > MAX_LAYOUT_DEPTH ||
+    context.visitedNodes >= MAX_LAYOUT_ITEMS
+  )
+    return null;
   if (context.seenObjects.has(value)) return null;
   context.seenObjects.add(value);
+  context.visitedNodes += 1;
 
   if (value.type === "pane") {
     const paneId = value.pane_id;
     if (
-      typeof paneId !== "string" ||
-      paneId.length === 0 ||
+      !isBoundedLayoutId(paneId) ||
       (context.allowedPaneIds !== null &&
         !context.allowedPaneIds.has(paneId)) ||
       context.seenPaneIds.has(paneId)
@@ -184,16 +198,20 @@ function parseLayout(
   if (
     value.type !== "split" ||
     (value.direction !== "row" && value.direction !== "column") ||
-    !Array.isArray(value.children)
+    !Array.isArray(value.children) ||
+    value.children.length > MAX_LAYOUT_CHILDREN
   ) {
     return null;
   }
 
-  const rawWeights = Array.isArray(value.weights) ? value.weights : [];
+  const rawWeights =
+    Array.isArray(value.weights) && value.weights.length <= MAX_LAYOUT_CHILDREN
+      ? value.weights
+      : [];
   const children: ViewportLayoutNode[] = [];
   const weights: unknown[] = [];
   value.children.forEach((rawChild, index) => {
-    const parsedChild = parseLayout(rawChild, context);
+    const parsedChild = parseLayout(rawChild, context, depth + 1);
     if (parsedChild === null) return;
     children.push(parsedChild);
     weights.push(rawWeights[index]);
@@ -223,6 +241,7 @@ export function normalizeViewportLayout(value: unknown): ViewportLayout {
     allowedPaneIds: null,
     seenPaneIds,
     seenObjects: new WeakSet<object>(),
+    visitedNodes: 0,
   });
 
   if (!seenPaneIds.has(VIEWPORT_ROOT_PANE_ID)) {
@@ -249,9 +268,20 @@ export function reconcileViewportLayout(
   rootPaneId = VIEWPORT_ROOT_PANE_ID,
   rootVisible = true,
 ): ViewportLayout {
-  const contentPaneIds = visiblePaneIds
-    .filter((paneId) => paneId !== rootPaneId)
-    .filter((paneId, index, paneIds) => paneIds.indexOf(paneId) === index);
+  if (!isBoundedLayoutId(rootPaneId)) rootPaneId = VIEWPORT_ROOT_PANE_ID;
+  const contentPaneIds: string[] = [];
+  const uniquePaneIds = new Set<string>();
+  for (const paneId of visiblePaneIds) {
+    if (
+      contentPaneIds.length >= MAX_LAYOUT_ITEMS - 1 ||
+      paneId === rootPaneId ||
+      !isBoundedLayoutId(paneId) ||
+      uniquePaneIds.has(paneId)
+    )
+      continue;
+    uniquePaneIds.add(paneId);
+    contentPaneIds.push(paneId);
+  }
   const orderedPaneIds = [
     ...(rootVisible || contentPaneIds.length === 0 ? [rootPaneId] : []),
     ...contentPaneIds,
@@ -264,6 +294,7 @@ export function reconcileViewportLayout(
     allowedPaneIds,
     seenPaneIds,
     seenObjects: new WeakSet<object>(),
+    visitedNodes: 0,
   });
 
   const firstPaneId = orderedPaneIds[0]!;

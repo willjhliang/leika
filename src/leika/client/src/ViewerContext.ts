@@ -4,15 +4,21 @@ import { useClientSettings } from "./ClientSettings";
 import { UseGui } from "./ControlPanel/GuiState";
 import { Message } from "./WebsocketMessages";
 import type { MessageSender } from "./connectionSender";
+import type { BoundedMessageQueue } from "./boundedMessageQueue";
 import type { FileDownloadAssembler } from "./fileDownloadAssembler";
+import type { FileUploadAckBroker } from "./fileUploadAckBroker";
 import { useViewportState } from "./viewport/ViewportState";
 
 /** Mutable transport state for the live websocket producer. */
 export type ViewerMutable = {
   sendMessage: MessageSender;
-  messageQueue: Message[];
+  messageQueue: BoundedMessageQueue;
   notifyMessageQueue: () => void;
   downloads: FileDownloadAssembler;
+  uploads: FileUploadAckBroker;
+  /** Terminate/reset the current transport on a semantic trust-boundary
+   * violation discovered before a wire frame applies side effects. */
+  failConnection: (reason: string) => void;
 };
 
 export function warnDisconnectedSend(message: Message): void {

@@ -1,5 +1,3 @@
-import * as React from "react";
-
 import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";

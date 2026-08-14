@@ -452,13 +452,15 @@ export interface GuiButtonGroupMessage {
     _merge: boolean[];
   };
 }
-/** Sent server->client to remove a GUI element.
+/** Remove one GUI element, its tabs, and named descendants atomically.
  *
  * (automatically generated)
  */
 export interface GuiRemoveMessage {
   type: "GuiRemoveMessage";
   uuid: string;
+  removed_uuids: string[];
+  removed_tab_uuids: string[];
 }
 /** Message for running some arbitrary Javascript on the client.
  * We use this to set up the Plotly.js package, via the plotly.min.js source
@@ -527,6 +529,28 @@ export interface GuiFormSubmitMessage {
   type: "GuiFormSubmitMessage";
   uuid: string;
 }
+/** Declare one stable tab container before any of its child components.
+ *
+ * (automatically generated)
+ */
+export interface GuiTabMessage {
+  type: "GuiTabMessage";
+  uuid: string;
+  group_uuid: string;
+  label: string;
+  icon_html: string | null;
+}
+/** Update presentation metadata for an already-declared tab container.
+ *
+ * (automatically generated)
+ */
+export interface GuiTabUpdateMessage {
+  type: "GuiTabUpdateMessage";
+  uuid: string;
+  group_uuid: string;
+  label: string;
+  icon_html: string | null;
+}
 /** GuiModalMessage(order: 'float', uuid: 'str', title: 'str')
  *
  * (automatically generated)
@@ -537,13 +561,15 @@ export interface GuiModalMessage {
   uuid: string;
   title: string;
 }
-/** GuiCloseModalMessage(uuid: 'str')
+/** GuiCloseModalMessage(uuid: 'str', removed_uuids: 'Tuple[str, ...]' = (), removed_tab_uuids: 'Tuple[str, ...]' = ())
  *
  * (automatically generated)
  */
 export interface GuiCloseModalMessage {
   type: "GuiCloseModalMessage";
   uuid: string;
+  removed_uuids: string[];
+  removed_tab_uuids: string[];
 }
 /** Message sent from client->server when a button is being held.
  *
@@ -763,7 +789,7 @@ export interface FileTransferPart {
   part_index: number;
   content: Uint8Array<ArrayBuffer>;
 }
-/** Tell a client that a started download cannot finish.
+/** Cancel a file transfer in either direction with a short reason.
  *
  * (automatically generated)
  */
@@ -944,6 +970,8 @@ export type Message =
   | NotificationUpdateMessage
   | RemoveNotificationMessage
   | GuiFormSubmitMessage
+  | GuiTabMessage
+  | GuiTabUpdateMessage
   | GuiModalMessage
   | GuiCloseModalMessage
   | GuiButtonHoldMessage
@@ -1030,3 +1058,2022 @@ export function isGuiComponentMessage(
 ): message is GuiComponentMessage {
   return typeSetGuiComponentMessage.has(message.type);
 }
+
+const PROTOCOL_VALIDATION_MAX_VALUES = 500_000;
+
+function isProtocolRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+const PROTOCOL_IDENTIFIER_MAX_CODE_UNITS = 1024;
+function isProtocolIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= PROTOCOL_IDENTIFIER_MAX_CODE_UNITS &&
+    value !== "__proto__" &&
+    value !== "prototype" &&
+    value !== "constructor" &&
+    !/[\uD800-\uDFFF]/.test(value)
+  );
+}
+
+function isProtocolTypedArray(value: unknown): boolean {
+  return (
+    value instanceof Uint8Array ||
+    value instanceof Uint16Array ||
+    value instanceof Uint32Array ||
+    value instanceof Int8Array ||
+    value instanceof Int16Array ||
+    value instanceof Int32Array ||
+    value instanceof Float32Array ||
+    value instanceof Float64Array
+  );
+}
+
+function isProtocolValue(value: unknown): boolean {
+  // The hybrid decoder has already bounded the complete graph's depth
+  // and node count. This second iterative pass rejects values that Any
+  // cannot safely expose without risking call-stack/argument expansion.
+  const pending: unknown[] = [value];
+  let visited = 0;
+  while (pending.length > 0) {
+    const item = pending.pop();
+    visited += 1;
+    if (visited > PROTOCOL_VALIDATION_MAX_VALUES) return false;
+    if (item === null || typeof item === "string" || typeof item === "boolean")
+      continue;
+    if (typeof item === "number") {
+      if (!Number.isFinite(item)) return false;
+      continue;
+    }
+    if (isProtocolTypedArray(item)) continue;
+    if (Array.isArray(item)) {
+      for (let index = item.length - 1; index >= 0; index -= 1) {
+        pending.push(item[index]);
+      }
+      continue;
+    }
+    if (!isProtocolRecord(item)) return false;
+    for (const key in item) {
+      if (Object.hasOwn(item, key)) pending.push(item[key]);
+    }
+  }
+  return true;
+}
+
+function isProtocolArray(
+  value: unknown,
+  validateItem: (item: unknown) => boolean,
+): value is unknown[] {
+  if (!Array.isArray(value)) return false;
+  for (const item of value) if (!validateItem(item)) return false;
+  return true;
+}
+
+function isProtocolMapping(
+  value: unknown,
+  validateItem: (item: unknown) => boolean,
+): value is Record<string, unknown> {
+  if (!isProtocolRecord(value)) return false;
+  for (const key in value) {
+    if (Object.hasOwn(value, key) && !validateItem(value[key])) return false;
+  }
+  return true;
+}
+
+function isProtocolStruct0(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 4 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "expand_by_default") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["expand_by_default"] === "boolean"
+  );
+}
+
+function isProtocolStruct1(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 4 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "mini") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["mini"] === "boolean"
+  );
+}
+
+function isProtocolStruct2(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "content") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["content"] === "string" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct3(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 2 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct4(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "animated") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["animated"] === "boolean" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct5(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 4 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "_plotly_json_str") &&
+    Object.hasOwn(value, "aspect") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["_plotly_json_str"] === "string" &&
+    typeof value["aspect"] === "number" &&
+    Number.isFinite(value["aspect"]) &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct6(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "_data") &&
+    Object.hasOwn(value, "_format") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    value["_data"] instanceof Uint8Array &&
+    (value["_format"] === "jpeg" || value["_format"] === "png") &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct7(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "_tabs") &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "visible") &&
+    isProtocolArray(value["_tabs"], (item) => isProtocolStruct31(item)) &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct8(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 10 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "text") &&
+    Object.hasOwn(value, "color") &&
+    Object.hasOwn(value, "_icon_html") &&
+    Object.hasOwn(value, "_hold_callback_freqs") &&
+    Object.hasOwn(value, "_prefetch") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["text"] === "string" &&
+    (value["color"] === "default" || value["color"] === "inverse") &&
+    (typeof value["_icon_html"] === "string" || value["_icon_html"] === null) &&
+    isProtocolArray(
+      value["_hold_callback_freqs"],
+      (item) => typeof item === "number" && Number.isFinite(item),
+    ) &&
+    typeof value["_prefetch"] === "boolean"
+  );
+}
+
+function isProtocolStruct9(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 9 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "text") &&
+    Object.hasOwn(value, "color") &&
+    Object.hasOwn(value, "_icon_html") &&
+    Object.hasOwn(value, "mime_type") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["text"] === "string" &&
+    (value["color"] === "default" || value["color"] === "inverse") &&
+    (typeof value["_icon_html"] === "string" || value["_icon_html"] === null) &&
+    typeof value["mime_type"] === "string"
+  );
+}
+
+function isProtocolStruct10(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 11 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "min") &&
+    Object.hasOwn(value, "max") &&
+    Object.hasOwn(value, "step") &&
+    Object.hasOwn(value, "precision") &&
+    Object.hasOwn(value, "show_value") &&
+    Object.hasOwn(value, "_marks") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["min"] === "number" &&
+    Number.isFinite(value["min"]) &&
+    typeof value["max"] === "number" &&
+    Number.isFinite(value["max"]) &&
+    typeof value["step"] === "number" &&
+    Number.isFinite(value["step"]) &&
+    Number.isSafeInteger(value["precision"]) &&
+    typeof value["show_value"] === "boolean" &&
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct32(item)) ||
+      value["_marks"] === null)
+  );
+}
+
+function isProtocolStruct11(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 12 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "min") &&
+    Object.hasOwn(value, "max") &&
+    Object.hasOwn(value, "step") &&
+    Object.hasOwn(value, "min_range") &&
+    Object.hasOwn(value, "precision") &&
+    Object.hasOwn(value, "fixed_endpoints") &&
+    Object.hasOwn(value, "_marks") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["min"] === "number" &&
+    Number.isFinite(value["min"]) &&
+    typeof value["max"] === "number" &&
+    Number.isFinite(value["max"]) &&
+    typeof value["step"] === "number" &&
+    Number.isFinite(value["step"]) &&
+    ((typeof value["min_range"] === "number" &&
+      Number.isFinite(value["min_range"])) ||
+      value["min_range"] === null) &&
+    Number.isSafeInteger(value["precision"]) &&
+    typeof value["fixed_endpoints"] === "boolean" &&
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct32(item)) ||
+      value["_marks"] === null)
+  );
+}
+
+function isProtocolStruct12(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 9 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "precision") &&
+    Object.hasOwn(value, "step") &&
+    Object.hasOwn(value, "min") &&
+    Object.hasOwn(value, "max") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    Number.isSafeInteger(value["precision"]) &&
+    typeof value["step"] === "number" &&
+    Number.isFinite(value["step"]) &&
+    ((typeof value["min"] === "number" && Number.isFinite(value["min"])) ||
+      value["min"] === null) &&
+    ((typeof value["max"] === "number" && Number.isFinite(value["max"])) ||
+      value["max"] === null)
+  );
+}
+
+function isProtocolStruct13(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean"
+  );
+}
+
+function isProtocolStruct14(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean"
+  );
+}
+
+function isProtocolStruct15(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 8 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "text") &&
+    Object.hasOwn(value, "color") &&
+    Object.hasOwn(value, "_icon_html") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["text"] === "string" &&
+    (value["color"] === "default" || value["color"] === "inverse") &&
+    (typeof value["_icon_html"] === "string" || value["_icon_html"] === null)
+  );
+}
+
+function isProtocolStruct16(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 10 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "color") &&
+    Object.hasOwn(value, "options") &&
+    Object.hasOwn(value, "multiple") &&
+    Object.hasOwn(value, "required") &&
+    Object.hasOwn(value, "_merge") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    isProtocolArray(
+      value["color"],
+      (item) => item === "default" || item === "inverse",
+    ) &&
+    isProtocolArray(value["options"], (item) => typeof item === "string") &&
+    typeof value["multiple"] === "boolean" &&
+    typeof value["required"] === "boolean" &&
+    isProtocolArray(value["_merge"], (item) => typeof item === "boolean")
+  );
+}
+
+function isProtocolStruct17(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean"
+  );
+}
+
+function isProtocolStruct18(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 9 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "min") &&
+    Object.hasOwn(value, "max") &&
+    Object.hasOwn(value, "step") &&
+    Object.hasOwn(value, "precision") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    ((Array.isArray(value["min"]) &&
+      value["min"].length === 2 &&
+      typeof value["min"][0] === "number" &&
+      Number.isFinite(value["min"][0]) &&
+      typeof value["min"][1] === "number" &&
+      Number.isFinite(value["min"][1])) ||
+      value["min"] === null) &&
+    ((Array.isArray(value["max"]) &&
+      value["max"].length === 2 &&
+      typeof value["max"][0] === "number" &&
+      Number.isFinite(value["max"][0]) &&
+      typeof value["max"][1] === "number" &&
+      Number.isFinite(value["max"][1])) ||
+      value["max"] === null) &&
+    typeof value["step"] === "number" &&
+    Number.isFinite(value["step"]) &&
+    Number.isSafeInteger(value["precision"])
+  );
+}
+
+function isProtocolStruct19(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 9 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "min") &&
+    Object.hasOwn(value, "max") &&
+    Object.hasOwn(value, "step") &&
+    Object.hasOwn(value, "precision") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    ((Array.isArray(value["min"]) &&
+      value["min"].length === 3 &&
+      typeof value["min"][0] === "number" &&
+      Number.isFinite(value["min"][0]) &&
+      typeof value["min"][1] === "number" &&
+      Number.isFinite(value["min"][1]) &&
+      typeof value["min"][2] === "number" &&
+      Number.isFinite(value["min"][2])) ||
+      value["min"] === null) &&
+    ((Array.isArray(value["max"]) &&
+      value["max"].length === 3 &&
+      typeof value["max"][0] === "number" &&
+      Number.isFinite(value["max"][0]) &&
+      typeof value["max"][1] === "number" &&
+      Number.isFinite(value["max"][1]) &&
+      typeof value["max"][2] === "number" &&
+      Number.isFinite(value["max"][2])) ||
+      value["max"] === null) &&
+    typeof value["step"] === "number" &&
+    Number.isFinite(value["step"]) &&
+    Number.isSafeInteger(value["precision"])
+  );
+}
+
+function isProtocolStruct20(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 10 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "multiline") &&
+    Object.hasOwn(value, "rows") &&
+    Object.hasOwn(value, "editable") &&
+    Object.hasOwn(value, "markdown") &&
+    Object.hasOwn(value, "_source") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["multiline"] === "boolean" &&
+    (Number.isSafeInteger(value["rows"]) || value["rows"] === null) &&
+    typeof value["editable"] === "boolean" &&
+    typeof value["markdown"] === "boolean" &&
+    typeof value["_source"] === "string"
+  );
+}
+
+function isProtocolStruct21(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 6 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "frozen") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["frozen"] === "boolean"
+  );
+}
+
+function isProtocolStruct22(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 6 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "frozen") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["frozen"] === "boolean"
+  );
+}
+
+function isProtocolStruct23(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 7 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "options") &&
+    Object.hasOwn(value, "searchable") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    isProtocolArray(value["options"], (item) => typeof item === "string") &&
+    typeof value["searchable"] === "boolean"
+  );
+}
+
+function isProtocolStruct24(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 8 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "color") &&
+    Object.hasOwn(value, "options") &&
+    Object.hasOwn(value, "_merge") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    isProtocolArray(
+      value["color"],
+      (item) => item === "default" || item === "inverse",
+    ) &&
+    isProtocolArray(value["options"], (item) => typeof item === "string") &&
+    isProtocolArray(value["_merge"], (item) => typeof item === "boolean")
+  );
+}
+
+function isProtocolStruct25(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "body") &&
+    Object.hasOwn(value, "loading") &&
+    Object.hasOwn(value, "with_close_button") &&
+    Object.hasOwn(value, "auto_close_seconds") &&
+    typeof value["title"] === "string" &&
+    typeof value["body"] === "string" &&
+    typeof value["loading"] === "boolean" &&
+    typeof value["with_close_button"] === "boolean" &&
+    ((typeof value["auto_close_seconds"] === "number" &&
+      Number.isFinite(value["auto_close_seconds"])) ||
+      value["auto_close_seconds"] === null)
+  );
+}
+
+function isProtocolStruct26(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "_data") &&
+    Object.hasOwn(value, "_format") &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "fit") &&
+    value["_data"] instanceof Uint8Array &&
+    (value["_format"] === "jpeg" || value["_format"] === "png") &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean" &&
+    (value["fit"] === "fit" ||
+      value["fit"] === "fill" ||
+      value["fit"] === "stretch" ||
+      value["fit"] === null)
+  );
+}
+
+function isProtocolStruct27(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "_svg") &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["_svg"] === "string" &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct28(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 4 &&
+    Object.hasOwn(value, "_plotly_json_str") &&
+    Object.hasOwn(value, "_theme_templates") &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["_plotly_json_str"] === "string" &&
+    typeof value["_theme_templates"] === "string" &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct29(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 4 &&
+    Object.hasOwn(value, "_url") &&
+    Object.hasOwn(value, "_port") &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    (typeof value["_url"] === "string" || value["_url"] === null) &&
+    (Number.isSafeInteger(value["_port"]) || value["_port"] === null) &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct30(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 6 &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "description") &&
+    Object.hasOwn(value, "hotkey") &&
+    Object.hasOwn(value, "modifier") &&
+    Object.hasOwn(value, "_icon_html") &&
+    Object.hasOwn(value, "disabled") &&
+    typeof value["label"] === "string" &&
+    (typeof value["description"] === "string" ||
+      value["description"] === null) &&
+    (value["hotkey"] === "A" ||
+      value["hotkey"] === "B" ||
+      value["hotkey"] === "C" ||
+      value["hotkey"] === "D" ||
+      value["hotkey"] === "E" ||
+      value["hotkey"] === "F" ||
+      value["hotkey"] === "G" ||
+      value["hotkey"] === "H" ||
+      value["hotkey"] === "I" ||
+      value["hotkey"] === "J" ||
+      value["hotkey"] === "K" ||
+      value["hotkey"] === "L" ||
+      value["hotkey"] === "M" ||
+      value["hotkey"] === "N" ||
+      value["hotkey"] === "O" ||
+      value["hotkey"] === "P" ||
+      value["hotkey"] === "Q" ||
+      value["hotkey"] === "R" ||
+      value["hotkey"] === "S" ||
+      value["hotkey"] === "T" ||
+      value["hotkey"] === "U" ||
+      value["hotkey"] === "V" ||
+      value["hotkey"] === "W" ||
+      value["hotkey"] === "X" ||
+      value["hotkey"] === "Y" ||
+      value["hotkey"] === "Z" ||
+      value["hotkey"] === "0" ||
+      value["hotkey"] === "1" ||
+      value["hotkey"] === "2" ||
+      value["hotkey"] === "3" ||
+      value["hotkey"] === "4" ||
+      value["hotkey"] === "5" ||
+      value["hotkey"] === "6" ||
+      value["hotkey"] === "7" ||
+      value["hotkey"] === "8" ||
+      value["hotkey"] === "9" ||
+      value["hotkey"] === "space" ||
+      value["hotkey"] === "enter" ||
+      value["hotkey"] === "escape" ||
+      value["hotkey"] === "tab" ||
+      value["hotkey"] === "backspace" ||
+      value["hotkey"] === "delete" ||
+      value["hotkey"] === "insert" ||
+      value["hotkey"] === "home" ||
+      value["hotkey"] === "end" ||
+      value["hotkey"] === "pageup" ||
+      value["hotkey"] === "pagedown" ||
+      value["hotkey"] === "arrowup" ||
+      value["hotkey"] === "arrowdown" ||
+      value["hotkey"] === "arrowleft" ||
+      value["hotkey"] === "arrowright" ||
+      value["hotkey"] === null) &&
+    (value["modifier"] === "cmd/ctrl" ||
+      value["modifier"] === "alt" ||
+      value["modifier"] === "shift" ||
+      value["modifier"] === "cmd/ctrl+alt" ||
+      value["modifier"] === "cmd/ctrl+shift" ||
+      value["modifier"] === "alt+shift" ||
+      value["modifier"] === "cmd/ctrl+alt+shift" ||
+      value["modifier"] === null) &&
+    (typeof value["_icon_html"] === "string" || value["_icon_html"] === null) &&
+    typeof value["disabled"] === "boolean"
+  );
+}
+
+function isProtocolStruct31(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "icon_html") &&
+    Object.hasOwn(value, "container_id") &&
+    typeof value["label"] === "string" &&
+    (typeof value["icon_html"] === "string" || value["icon_html"] === null) &&
+    typeof value["container_id"] === "string" &&
+    (typeof value["container_id"] !== "string" ||
+      isProtocolIdentifier(value["container_id"]))
+  );
+}
+
+function isProtocolStruct32(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 2 &&
+    Object.hasOwn(value, "value") &&
+    Object.hasOwn(value, "label") &&
+    typeof value["value"] === "number" &&
+    Number.isFinite(value["value"]) &&
+    (typeof value["label"] === "string" || value["label"] === null)
+  );
+}
+
+const messageValidators = new Map<
+  string,
+  (message: Record<string, unknown>) => boolean
+>([
+  [
+    "GuiFolderMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiFolderMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct0(message["props"]),
+  ],
+  [
+    "GuiFormMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiFormMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct1(message["props"]),
+  ],
+  [
+    "GuiHtmlMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiHtmlMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct2(message["props"]),
+  ],
+  [
+    "GuiDividerMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiDividerMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct3(message["props"]),
+  ],
+  [
+    "GuiProgressBarMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiProgressBarMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "number" &&
+      Number.isFinite(message["value"]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct4(message["props"]),
+  ],
+  [
+    "GuiPlotlyMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiPlotlyMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct5(message["props"]),
+  ],
+  [
+    "GuiImageMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiImageMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct6(message["props"]),
+  ],
+  [
+    "GuiTabGroupMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiTabGroupMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct7(message["props"]),
+  ],
+  [
+    "GuiButtonMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiButtonMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "boolean" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct8(message["props"]),
+  ],
+  [
+    "GuiUploadButtonMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiUploadButtonMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct9(message["props"]),
+  ],
+  [
+    "GuiSliderMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiSliderMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "number" &&
+      Number.isFinite(message["value"]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct10(message["props"]),
+  ],
+  [
+    "GuiMultiSliderMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiMultiSliderMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(
+        message["value"],
+        (item) => typeof item === "number" && Number.isFinite(item),
+      ) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct11(message["props"]),
+  ],
+  [
+    "GuiNumberMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiNumberMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "number" &&
+      Number.isFinite(message["value"]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct12(message["props"]),
+  ],
+  [
+    "GuiRgbMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiRgbMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      Array.isArray(message["value"]) &&
+      message["value"].length === 3 &&
+      Number.isSafeInteger(message["value"][0]) &&
+      Number.isSafeInteger(message["value"][1]) &&
+      Number.isSafeInteger(message["value"][2]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct13(message["props"]),
+  ],
+  [
+    "GuiRgbaMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiRgbaMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      Array.isArray(message["value"]) &&
+      message["value"].length === 4 &&
+      Number.isSafeInteger(message["value"][0]) &&
+      Number.isSafeInteger(message["value"][1]) &&
+      Number.isSafeInteger(message["value"][2]) &&
+      Number.isSafeInteger(message["value"][3]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct14(message["props"]),
+  ],
+  [
+    "GuiToggleMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiToggleMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "boolean" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct15(message["props"]),
+  ],
+  [
+    "GuiToggleGroupMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiToggleGroupMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(message["value"], (item) => typeof item === "string") &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct16(message["props"]),
+  ],
+  [
+    "GuiCheckboxMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiCheckboxMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "boolean" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct17(message["props"]),
+  ],
+  [
+    "GuiVector2Message",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiVector2Message" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      Array.isArray(message["value"]) &&
+      message["value"].length === 2 &&
+      typeof message["value"][0] === "number" &&
+      Number.isFinite(message["value"][0]) &&
+      typeof message["value"][1] === "number" &&
+      Number.isFinite(message["value"][1]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct18(message["props"]),
+  ],
+  [
+    "GuiVector3Message",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiVector3Message" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      Array.isArray(message["value"]) &&
+      message["value"].length === 3 &&
+      typeof message["value"][0] === "number" &&
+      Number.isFinite(message["value"][0]) &&
+      typeof message["value"][1] === "number" &&
+      Number.isFinite(message["value"][1]) &&
+      typeof message["value"][2] === "number" &&
+      Number.isFinite(message["value"][2]) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct19(message["props"]),
+  ],
+  [
+    "GuiTextMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiTextMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "string" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct20(message["props"]),
+  ],
+  [
+    "GuiListMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiListMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(message["value"], (item) => typeof item === "string") &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct21(message["props"]),
+  ],
+  [
+    "GuiChecklistMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiChecklistMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(
+        message["value"],
+        (item) =>
+          Array.isArray(item) &&
+          item.length === 2 &&
+          typeof item[0] === "string" &&
+          typeof item[1] === "boolean",
+      ) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct22(message["props"]),
+  ],
+  [
+    "GuiDropdownMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiDropdownMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "string" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct23(message["props"]),
+  ],
+  [
+    "GuiButtonGroupMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiButtonGroupMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["value"] === "string" &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct24(message["props"]),
+  ],
+  [
+    "GuiRemoveMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "removed_uuids") &&
+      Object.hasOwn(message, "removed_tab_uuids") &&
+      message["type"] === "GuiRemoveMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(
+        message["removed_uuids"],
+        (item) => typeof item === "string",
+      ) &&
+      isProtocolArray(
+        message["removed_tab_uuids"],
+        (item) => typeof item === "string",
+      ),
+  ],
+  [
+    "RunJavascriptMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "source") &&
+      message["type"] === "RunJavascriptMessage" &&
+      typeof message["source"] === "string",
+  ],
+  [
+    "NotificationShowMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "NotificationShowMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolStruct25(message["props"]),
+  ],
+  [
+    "NotificationUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "NotificationUpdateMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolStruct25(message["props"]),
+  ],
+  [
+    "RemoveNotificationMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "RemoveNotificationMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
+    "GuiFormSubmitMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "GuiFormSubmitMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
+    "GuiTabMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "group_uuid") &&
+      Object.hasOwn(message, "label") &&
+      Object.hasOwn(message, "icon_html") &&
+      message["type"] === "GuiTabMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["group_uuid"] === "string" &&
+      typeof message["label"] === "string" &&
+      (typeof message["icon_html"] === "string" ||
+        message["icon_html"] === null),
+  ],
+  [
+    "GuiTabUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "group_uuid") &&
+      Object.hasOwn(message, "label") &&
+      Object.hasOwn(message, "icon_html") &&
+      message["type"] === "GuiTabUpdateMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["group_uuid"] === "string" &&
+      typeof message["label"] === "string" &&
+      (typeof message["icon_html"] === "string" ||
+        message["icon_html"] === null),
+  ],
+  [
+    "GuiModalMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "order") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "title") &&
+      message["type"] === "GuiModalMessage" &&
+      typeof message["order"] === "number" &&
+      Number.isFinite(message["order"]) &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["title"] === "string",
+  ],
+  [
+    "GuiCloseModalMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "removed_uuids") &&
+      Object.hasOwn(message, "removed_tab_uuids") &&
+      message["type"] === "GuiCloseModalMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(
+        message["removed_uuids"],
+        (item) => typeof item === "string",
+      ) &&
+      isProtocolArray(
+        message["removed_tab_uuids"],
+        (item) => typeof item === "string",
+      ),
+  ],
+  [
+    "GuiButtonHoldMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "frequency") &&
+      message["type"] === "GuiButtonHoldMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["frequency"] === "number" &&
+      Number.isFinite(message["frequency"]),
+  ],
+  [
+    "GuiPreviewWarmMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "GuiPreviewWarmMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
+    "GuiPreviewReloadMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "GuiPreviewReloadMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
+    "GuiPreviewWatchMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "version") &&
+      message["type"] === "GuiPreviewWatchMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      (typeof message["version"] === "string" || message["version"] === null),
+  ],
+  [
+    "GuiUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "updates") &&
+      message["type"] === "GuiUpdateMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolMapping(message["updates"], (item) => isProtocolValue(item)),
+  ],
+  [
+    "ViewportImageMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 6 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportImageMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct26(message["props"]),
+  ],
+  [
+    "ViewportMatplotlibMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 6 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportMatplotlibMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct27(message["props"]),
+  ],
+  [
+    "ViewportPlotlyMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 6 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportPlotlyMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct28(message["props"]),
+  ],
+  [
+    "ViewportViserMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 6 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportViserMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct29(message["props"]),
+  ],
+  [
+    "ViewportPaneUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "updates") &&
+      message["type"] === "ViewportPaneUpdateMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      isProtocolMapping(message["updates"], (item) => isProtocolValue(item)),
+  ],
+  [
+    "ViewportPaneRemoveMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_id") &&
+      message["type"] === "ViewportPaneRemoveMessage" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])),
+  ],
+  [
+    "ViewportPaneSnapshotMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "pane_ids") &&
+      message["type"] === "ViewportPaneSnapshotMessage" &&
+      isProtocolArray(
+        message["pane_ids"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["pane_ids"]) ||
+        message["pane_ids"].every(isProtocolIdentifier)),
+  ],
+  [
+    "WorkspaceConfigurationMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "workspace_id") &&
+      message["type"] === "WorkspaceConfigurationMessage" &&
+      typeof message["workspace_id"] === "string" &&
+      (typeof message["workspace_id"] !== "string" ||
+        isProtocolIdentifier(message["workspace_id"])),
+  ],
+  [
+    "ThemeConfigurationMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "control_layout") &&
+      Object.hasOwn(message, "dark_mode") &&
+      message["type"] === "ThemeConfigurationMessage" &&
+      (message["control_layout"] === "floating" ||
+        message["control_layout"] === "left" ||
+        message["control_layout"] === "right") &&
+      (typeof message["dark_mode"] === "boolean" ||
+        message["dark_mode"] === "auto"),
+  ],
+  [
+    "FileTransferStartUpload",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 7 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "source_component_uuid") &&
+      Object.hasOwn(message, "transfer_uuid") &&
+      Object.hasOwn(message, "filename") &&
+      Object.hasOwn(message, "mime_type") &&
+      Object.hasOwn(message, "part_count") &&
+      Object.hasOwn(message, "size_bytes") &&
+      message["type"] === "FileTransferStartUpload" &&
+      typeof message["source_component_uuid"] === "string" &&
+      (typeof message["source_component_uuid"] !== "string" ||
+        isProtocolIdentifier(message["source_component_uuid"])) &&
+      typeof message["transfer_uuid"] === "string" &&
+      (typeof message["transfer_uuid"] !== "string" ||
+        isProtocolIdentifier(message["transfer_uuid"])) &&
+      typeof message["filename"] === "string" &&
+      typeof message["mime_type"] === "string" &&
+      Number.isSafeInteger(message["part_count"]) &&
+      Number.isSafeInteger(message["size_bytes"]),
+  ],
+  [
+    "FileTransferStartDownload",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 9 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "disposition") &&
+      Object.hasOwn(message, "transfer_uuid") &&
+      Object.hasOwn(message, "filename") &&
+      Object.hasOwn(message, "mime_type") &&
+      Object.hasOwn(message, "part_count") &&
+      Object.hasOwn(message, "size_bytes") &&
+      Object.hasOwn(message, "source_uuid") &&
+      Object.hasOwn(message, "source_version") &&
+      message["type"] === "FileTransferStartDownload" &&
+      (message["disposition"] === "save" ||
+        message["disposition"] === "link" ||
+        message["disposition"] === "preview" ||
+        message["disposition"] === "warm" ||
+        message["disposition"] === "reload") &&
+      typeof message["transfer_uuid"] === "string" &&
+      (typeof message["transfer_uuid"] !== "string" ||
+        isProtocolIdentifier(message["transfer_uuid"])) &&
+      typeof message["filename"] === "string" &&
+      typeof message["mime_type"] === "string" &&
+      Number.isSafeInteger(message["part_count"]) &&
+      Number.isSafeInteger(message["size_bytes"]) &&
+      (typeof message["source_uuid"] === "string" ||
+        message["source_uuid"] === null) &&
+      (typeof message["source_uuid"] !== "string" ||
+        isProtocolIdentifier(message["source_uuid"])) &&
+      (typeof message["source_version"] === "string" ||
+        message["source_version"] === null),
+  ],
+  [
+    "FileTransferPart",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "source_component_uuid") &&
+      Object.hasOwn(message, "transfer_uuid") &&
+      Object.hasOwn(message, "part_index") &&
+      Object.hasOwn(message, "content") &&
+      message["type"] === "FileTransferPart" &&
+      (typeof message["source_component_uuid"] === "string" ||
+        message["source_component_uuid"] === null) &&
+      (typeof message["source_component_uuid"] !== "string" ||
+        isProtocolIdentifier(message["source_component_uuid"])) &&
+      typeof message["transfer_uuid"] === "string" &&
+      (typeof message["transfer_uuid"] !== "string" ||
+        isProtocolIdentifier(message["transfer_uuid"])) &&
+      Number.isSafeInteger(message["part_index"]) &&
+      message["content"] instanceof Uint8Array,
+  ],
+  [
+    "FileTransferAbort",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "transfer_uuid") &&
+      Object.hasOwn(message, "reason") &&
+      message["type"] === "FileTransferAbort" &&
+      typeof message["transfer_uuid"] === "string" &&
+      (typeof message["transfer_uuid"] !== "string" ||
+        isProtocolIdentifier(message["transfer_uuid"])) &&
+      typeof message["reason"] === "string",
+  ],
+  [
+    "FileTransferPartAck",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "source_component_uuid") &&
+      Object.hasOwn(message, "transfer_uuid") &&
+      Object.hasOwn(message, "transferred_bytes") &&
+      Object.hasOwn(message, "total_bytes") &&
+      message["type"] === "FileTransferPartAck" &&
+      (typeof message["source_component_uuid"] === "string" ||
+        message["source_component_uuid"] === null) &&
+      (typeof message["source_component_uuid"] !== "string" ||
+        isProtocolIdentifier(message["source_component_uuid"])) &&
+      typeof message["transfer_uuid"] === "string" &&
+      (typeof message["transfer_uuid"] !== "string" ||
+        isProtocolIdentifier(message["transfer_uuid"])) &&
+      Number.isSafeInteger(message["transferred_bytes"]) &&
+      Number.isSafeInteger(message["total_bytes"]),
+  ],
+  [
+    "ClientPingMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "sent_ms") &&
+      message["type"] === "ClientPingMessage" &&
+      typeof message["sent_ms"] === "number" &&
+      Number.isFinite(message["sent_ms"]),
+  ],
+  [
+    "ServerPongMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "sent_ms") &&
+      message["type"] === "ServerPongMessage" &&
+      typeof message["sent_ms"] === "number" &&
+      Number.isFinite(message["sent_ms"]),
+  ],
+  [
+    "SetGuiPanelLabelMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "label") &&
+      message["type"] === "SetGuiPanelLabelMessage" &&
+      (typeof message["label"] === "string" || message["label"] === null),
+  ],
+  [
+    "RegisterCommandMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "RegisterCommandMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolStruct30(message["props"]),
+  ],
+  [
+    "CommandUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "updates") &&
+      message["type"] === "CommandUpdateMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolMapping(message["updates"], (item) => isProtocolValue(item)),
+  ],
+  [
+    "RemoveCommandMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "RemoveCommandMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
+    "CommandTriggerMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "CommandTriggerMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+]);
+
+/** Fail closed before a decoded batch reaches any stateful handler. */
+export function validateMessage(message: unknown): asserts message is Message {
+  if (!isProtocolRecord(message) || typeof message.type !== "string") {
+    throw new Error("decoded payload contains an invalid message envelope");
+  }
+  const validator = messageValidators.get(message.type);
+  if (validator === undefined) {
+    throw new Error("decoded payload contains an unsupported message type");
+  }
+  if (!validator(message)) {
+    throw new Error(
+      `decoded ${message.type} does not match its protocol schema`,
+    );
+  }
+}
+
+/** Hash of the message schema this bundle was built against. Sent with
+ * the version at connect, so a server running different code is turned
+ * away with a reason instead of feeding the page fields it cannot read. */
+export const LEIKA_PROTOCOL = "3a4d8737ffd7";

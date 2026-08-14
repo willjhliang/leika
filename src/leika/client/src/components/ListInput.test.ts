@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { GuiListMessage } from "../WebsocketMessages";
+import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
 import ListInputComponent from "./ListInput";
 import { renderWithGuiContext } from "./testGuiContext";
 
@@ -111,5 +112,11 @@ describe("ListInputComponent", () => {
     expect(markup).toContain('aria-label="Tags entry 2"');
     expect(markup).toContain('aria-label="Reorder entry 1"');
     expect(markup).toContain('aria-label="Remove entry 2"');
+  });
+
+  it("bounds text typed into each retained entry", () => {
+    expect(renderList({ value: ["entry"] })).toContain(
+      `maxLength="${MAX_GUI_COLLECTION_ITEM_CODE_UNITS}"`,
+    );
   });
 });

@@ -14,7 +14,10 @@ import {
 import { useGuiState } from "./ControlPanel/GuiState";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
+import { BoundedMessageQueue } from "./boundedMessageQueue";
 import { FileDownloadAssembler } from "./fileDownloadAssembler";
+import { FileUploadAckBroker } from "./fileUploadAckBroker";
+import { retainedDownloads } from "./retainedDownloadBudget";
 import { LeikaModal } from "./Modal";
 import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
 import {
@@ -42,9 +45,12 @@ export function Root() {
 
   const mutable = React.useRef<ViewerMutable>({
     sendMessage: warnDisconnectedSend,
-    messageQueue: [],
+    messageQueue: new BoundedMessageQueue(),
     notifyMessageQueue: () => undefined,
-    downloads: new FileDownloadAssembler(),
+    downloads: new FileDownloadAssembler(retainedDownloads),
+    uploads: new FileUploadAckBroker(),
+    failConnection: (reason) =>
+      console.error("Cannot fail an inactive connection:", reason),
   });
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();

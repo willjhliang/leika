@@ -50,11 +50,6 @@ export const connectionStats = {
   },
 };
 
-/** Whether anything is currently asking to be measured. */
-export function useConnectionWatched(): boolean {
-  return store((state) => state.watchers > 0);
-}
-
 /** The connection as it stands, or null before the first snapshot lands. */
 export function useConnectionReading(): ConnectionReading | null {
   const latest = store((state) => state.latest);

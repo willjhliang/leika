@@ -10,6 +10,7 @@ import pytest
 from playwright.sync_api import Locator, Page, expect
 
 import leika
+from leika import _messages
 
 from .utils import assert_stable_viewer, find_gui_input, find_gui_row, wait_until
 
@@ -94,6 +95,34 @@ def test_button_and_upload_hints_and_visibility(
     file_input = leika_page.locator('input[type="file"][accept="image/png"]')
     expect(file_input).to_have_count(1)
     expect(file_input).to_be_hidden()
+    assert page_errors == []
+
+
+def test_a_multi_part_upload_completes_through_the_acknowledged_wire_path(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    upload = leika_server.gui.add_upload_button(
+        "Import recording", mime_type="application/octet-stream"
+    )
+    # One byte into a second client chunk exercises ACK0 authorization, the
+    # first cumulative ACK, and the final ACK over the real worker/socket.
+    contents = bytes(range(256)) * 2048 + b"!"
+    file_input = leika_page.locator('input[type="file"][accept="application/octet-stream"]')
+    expect(file_input).to_have_count(1, timeout=5_000)
+    file_input.set_input_files(
+        {
+            "name": "recording.bin",
+            "mimeType": "application/octet-stream",
+            "buffer": contents,
+        }
+    )
+
+    wait_until(lambda: upload.value.name == "recording.bin" and upload.value.content == contents)
+    expect(leika_page.get_by_role("button", name="Import recording")).to_be_enabled()
+    expect(leika_page.locator("[data-leika-upload-error]")).to_have_count(0)
+    expect(leika_page.locator('[data-slot="progress"]')).to_have_count(0)
     assert page_errors == []
 
 
@@ -629,7 +658,12 @@ def test_controls_use_semantic_tokens_and_compact_density(
 
     for field_text in (field_label, action, text_input, dropdown_trigger, color_trigger):
         assert field_text["fontWeight"] == body_font_weight
+    for field_text in (field_label, action, dropdown_trigger, color_trigger):
         assert abs(field_text["lineHeight"] - field_text["fontSize"]) <= 0.25
+    # Firefox deliberately uses the native input control's internal leading,
+    # which CSS cannot override. Its compact contract is the same font size and
+    # the uniform row height asserted above.
+    assert text_input["fontSize"] == field_label["fontSize"]
 
     # Resolve the live CSS variables instead of pinning the test to a palette.
     # This checks semantic wiring in both stock light and dark themes.
@@ -769,6 +803,150 @@ def test_charts_read_aspect_as_width_over_height(
         return bounds["width"] / bounds["height"]
 
     assert ratio(plotly_plot) == pytest.approx(2.0, rel=0.15)
+    assert page_errors == []
+
+
+@pytest.mark.plotly
+def test_plotly_invalid_payload_is_visible_and_recovers(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """One malformed figure must not unmount the whole generated panel."""
+    go = pytest.importorskip("plotly.graph_objects")
+    handle = leika_server.gui.add_plotly(
+        go.Figure(go.Scatter(y=[1, 2, 1])), config={"staticPlot": True}
+    )
+    plot = leika_page.locator(".js-plotly-plot")
+    expect(plot).to_be_visible(timeout=15_000)
+
+    # Exercise explicit test-only wire injection: public/private property
+    # assignment cannot bypass the figure serializer, while the browser still
+    # has to contain a stale or corrupted payload rather than throwing from
+    # React render.
+    leika_server.gui._websock_interface.queue_message_or_raise(
+        _messages.GuiUpdateMessage(handle.id, {"_plotly_json_str": "{"})
+    )
+    error = leika_page.get_by_role("status")
+    expect(error).to_have_text("Plotly data contains invalid JSON.", timeout=5_000)
+    expect(error).to_be_visible()
+    expect(plot).to_have_count(0)
+
+    handle.figure = go.Figure(go.Bar(y=[3, 1, 2]))
+    expect(error).to_have_count(0, timeout=5_000)
+    expect(plot).to_be_visible(timeout=10_000)
+    assert page_errors == []
+
+
+@pytest.mark.plotly
+def test_plotly_rejection_recovers_and_does_not_outlive_unmount(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    go = pytest.importorskip("plotly.graph_objects")
+    handle = leika_server.gui.add_plotly(
+        go.Figure(go.Scatter(y=[1, 2, 1])), config={"staticPlot": True}
+    )
+    plot = leika_page.locator(".js-plotly-plot")
+    expect(plot).to_be_visible(timeout=15_000)
+
+    leika_page.evaluate(
+        """() => {
+          window.__leikaPlotlyOriginalReact = window.Plotly.react;
+          window.Plotly.react = () => Promise.reject(
+            new Error("expected Plotly test rejection")
+          );
+        }"""
+    )
+    handle.figure = go.Figure(go.Bar(y=[2, 3, 1]))
+    render_error = leika_page.get_by_role("status")
+    expect(render_error).to_have_text("Plotly failed to render.", timeout=5_000)
+    expect(render_error).to_be_visible()
+
+    leika_page.evaluate(
+        """() => {
+          window.Plotly.react = window.__leikaPlotlyOriginalReact;
+        }"""
+    )
+    handle.figure = go.Figure(go.Scatter(y=[3, 1, 2]))
+    expect(render_error).to_have_count(0, timeout=5_000)
+    expect(plot).to_be_visible(timeout=10_000)
+
+    # Superseding a still-pending render revokes its ownership of status. Its
+    # eventual rejection is handled, but cannot cover the newer valid figure.
+    leika_page.evaluate(
+        """() => {
+          const plotly = window.Plotly;
+          window.__leikaPlotlyOriginalReact = plotly.react;
+          plotly.react = () => new Promise((_resolve, reject) => {
+            window.__leikaPlotlyStaleReject = reject;
+          });
+        }"""
+    )
+    handle.figure = go.Figure(go.Bar(y=[2, 1, 3]))
+    leika_page.wait_for_function(
+        "() => typeof window.__leikaPlotlyStaleReject === 'function'",
+        timeout=5_000,
+    )
+    leika_page.evaluate(
+        """() => {
+          const plotly = window.Plotly;
+          const original = window.__leikaPlotlyOriginalReact;
+          window.__leikaPlotlyNewerCalls = 0;
+          plotly.react = (...args) => {
+            window.__leikaPlotlyNewerCalls += 1;
+            return original.apply(plotly, args);
+          };
+        }"""
+    )
+    handle.figure = go.Figure(go.Scatter(y=[1, 3, 2]))
+    leika_page.wait_for_function("() => window.__leikaPlotlyNewerCalls > 0", timeout=5_000)
+    leika_page.evaluate(
+        """() => {
+          window.__leikaPlotlyStaleReject(
+            new Error("superseded Plotly test rejection")
+          );
+        }"""
+    )
+    leika_page.wait_for_timeout(50)
+    expect(render_error).to_have_count(0)
+    expect(plot).to_be_visible()
+    leika_page.evaluate("() => { window.Plotly.react = window.__leikaPlotlyOriginalReact; }")
+
+    # Leave a render promise pending, then remove the component before it
+    # rejects. The rejection remains handled, cannot set state after unmount,
+    # and the imperative Plotly host is purged exactly through cleanup.
+    leika_page.evaluate(
+        """() => {
+          const plotly = window.Plotly;
+          window.__leikaPlotlyOriginalReact = plotly.react;
+          window.__leikaPlotlyOriginalPurge = plotly.purge;
+          window.__leikaPlotlyPurgeCount = 0;
+          plotly.react = () => new Promise((_resolve, reject) => {
+            window.__leikaPlotlyReject = reject;
+          });
+          plotly.purge = (node) => {
+            window.__leikaPlotlyPurgeCount += 1;
+            return window.__leikaPlotlyOriginalPurge.call(plotly, node);
+          };
+        }"""
+    )
+    handle.figure = go.Figure(go.Bar(y=[1, 3, 2]))
+    leika_page.wait_for_function(
+        "() => typeof window.__leikaPlotlyReject === 'function'", timeout=5_000
+    )
+    handle.remove()
+    expect(leika_page.get_by_role("button", name="Expand plot")).to_have_count(0, timeout=5_000)
+    leika_page.wait_for_function("() => window.__leikaPlotlyPurgeCount > 0", timeout=5_000)
+    leika_page.evaluate(
+        """() => {
+          window.Plotly.react = window.__leikaPlotlyOriginalReact;
+          window.Plotly.purge = window.__leikaPlotlyOriginalPurge;
+          window.__leikaPlotlyReject(new Error("late Plotly test rejection"));
+        }"""
+    )
+    leika_page.wait_for_timeout(50)
     assert page_errors == []
 
 
@@ -1151,10 +1329,11 @@ def test_merging_joins_neighbouring_buttons_and_splitting_parts_them(
     # Joined neighbours share an edge -- they overlap by the one pixel of
     # border between them -- and parted ones stand the panel's own 4px apart.
     joined, parted, mixed = gaps("Joined"), gaps("Parted"), gaps("Mixed")
-    assert joined == [-1.0, -1.0], joined
-    assert parted == [4.0, 4.0], parted
-    assert mixed == [-1.0, 4.0], mixed
-    assert gaps("Toggles", "toggle") == mixed, (gaps("Toggles", "toggle"), mixed)
+    assert joined == pytest.approx([-1.0, -1.0], abs=0.01), joined
+    assert parted == pytest.approx([4.0, 4.0], abs=0.01), parted
+    assert mixed == pytest.approx([-1.0, 4.0], abs=0.01), mixed
+    toggle_gaps = gaps("Toggles", "toggle")
+    assert toggle_gaps == pytest.approx(mixed, abs=0.01), (toggle_gaps, mixed)
 
     # Joined, and one half outlined: the hairline that divides two filled
     # neighbours would be drawn over that half's own border, so it is not.

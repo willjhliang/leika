@@ -64,6 +64,8 @@ export interface ClientSettingsStorage {
  * from filling the pane into stretching it, so the whole key is retired
  * instead -- the other three preferences are cheap to set again. */
 export const CLIENT_SETTINGS_STORAGE_KEY = "leika.settings.v2";
+export const MAX_CLIENT_SETTINGS_JSON_CODE_UNITS = 4_096;
+export const MAX_ACCENT_COLOR_CODE_UNITS = 128;
 
 export function defaultClientSettings(): ClientSettings {
   // Fitting shows the whole image, which is the safe default for data: it
@@ -100,6 +102,7 @@ export function readClientSettings(
   try {
     const raw = storage.getItem(CLIENT_SETTINGS_STORAGE_KEY);
     if (raw === null) return defaults;
+    if (raw.length > MAX_CLIENT_SETTINGS_JSON_CODE_UNITS) return defaults;
     parsed = JSON.parse(raw);
   } catch {
     return defaults;
@@ -120,6 +123,7 @@ export function readClientSettings(
     // and blank out every control that uses it, so it is dropped here.
     accentColor:
       typeof stored.accentColor === "string" &&
+      stored.accentColor.length <= MAX_ACCENT_COLOR_CODE_UNITS &&
       parseToRgb(stored.accentColor) !== null
         ? stored.accentColor
         : defaults.accentColor,

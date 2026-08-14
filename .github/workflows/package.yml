@@ -8,25 +8,41 @@ on:
     types: [published]
   workflow_dispatch:
 
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
   wheel:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    name: Build and validate distributions
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/build-client
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: src/leika/client/.nvmrc
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: false
+      - name: Check release tag matches the source version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python scripts/check_release_tag.py "$RELEASE_TAG"
       - name: Build distributions
-        run: uv build
+        run: make package
       - name: Check release tag matches the packaged version
         if: github.event_name == 'release'
-        run: python scripts/check_release_tag.py "${{ github.event.release.tag_name }}" dist/*.whl
-      - name: Check wheel contents and size
-        run: python scripts/check_wheel.py dist/*.whl
-      - name: Check source distribution contents
-        run: python scripts/check_sdist.py dist/*.tar.gz
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python scripts/check_release_tag.py "$RELEASE_TAG" dist/*.whl
       - name: Base-install smoke test
         run: |
           python -m venv /tmp/leika-wheel-smoke
@@ -42,45 +58,51 @@ jobs:
           python -m venv /tmp/leika-sdist-smoke
           /tmp/leika-sdist-smoke/bin/pip install dist/*.tar.gz
           /tmp/leika-sdist-smoke/bin/python -c "import leika; print('installed sdist leika', leika.__version__)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: distributions
           path: dist/
+          if-no-files-found: error
 
   release-python:
     if: github.event_name == 'release'
+    name: Release Python suite
     uses: ./.github/workflows/python.yml
 
   release-client:
     if: github.event_name == 'release'
+    name: Release browser-client suite
     uses: ./.github/workflows/client.yml
 
   release-docs:
     if: github.event_name == 'release'
+    name: Release documentation suite
     # A called workflow may not request more than its caller grants, and this
     # file grants `contents: read`. docs.yml's deploy job asks for Pages, so
     # without these the whole workflow is rejected before any job starts. The
     # deploy itself still skips on a tag ref; only its declaration is checked.
     permissions:
       contents: read
-      pages: write
-      id-token: write
+      pages: write # Required by the called documentation workflow's deploy job.
+      id-token: write # Required by the called documentation workflow's OIDC.
     uses: ./.github/workflows/docs.yml
 
   release-e2e:
     if: github.event_name == 'release'
+    name: Release browser suite
     uses: ./.github/workflows/e2e.yml
 
   publish:
     if: github.event_name == 'release'
+    name: Publish to PyPI
     needs: [wheel, release-python, release-client, release-docs, release-e2e]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
-      id-token: write
+      id-token: write # Required for PyPI Trusted Publishing through OIDC.
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: distributions
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

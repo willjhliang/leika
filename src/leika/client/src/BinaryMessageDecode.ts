@@ -19,6 +19,7 @@ const DTYPE_CONSTRUCTORS: {
     bytes: number;
   };
 } = {
+  "|b1": { ctor: Uint8Array, bytes: 1 },
   "<f2": { ctor: Uint16Array, bytes: 2 }, // float16: stored as Uint16 (no native Float16Array)
   "<f4": { ctor: Float32Array, bytes: 4 },
   "<f8": { ctor: Float64Array, bytes: 8 },
@@ -30,6 +31,18 @@ const DTYPE_CONSTRUCTORS: {
   "<i4": { ctor: Int32Array, bytes: 4 },
 };
 
+export const MAX_BINARY_PLACEHOLDER_DEPTH = 128;
+export const MAX_BINARY_PLACEHOLDER_NODES = 500_000;
+
+export function isPlainRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 /**
  * Replace tagged placeholder objects in a decoded message with typed array
  * views into the binary section of an ArrayBuffer.
@@ -40,52 +53,120 @@ const DTYPE_CONSTRUCTORS: {
  * @param bufferLengths - Byte length of each binary buffer.
  */
 export function replaceBinaryPlaceholders(
-  obj: any,
+  obj: unknown,
   buffer: ArrayBuffer,
-  binaryOffsets: number[],
-  bufferLengths: number[],
-): any {
-  if (obj === null || obj === undefined) return obj;
-  if (Array.isArray(obj)) {
-    for (let i = 0; i < obj.length; i++) {
-      obj[i] = replaceBinaryPlaceholders(
-        obj[i],
-        buffer,
-        binaryOffsets,
-        bufferLengths,
-      );
-    }
-    return obj;
-  }
-  if (typeof obj === "object" && !ArrayBuffer.isView(obj)) {
-    // Check for binary placeholder tag.
-    if ("__binary_index" in obj && "dtype" in obj) {
-      const idx: number = obj.__binary_index;
-      const dtype: string = obj.dtype;
-      const offset = binaryOffsets[idx];
-      const byteLength = bufferLengths[idx];
+  binaryOffsets: readonly number[],
+  bufferLengths: readonly number[],
+  usedIndices: Set<number>,
+): unknown {
+  const root: Record<string, unknown> = { value: obj };
+  type WorkItem = {
+    container: Record<string, unknown> | unknown[];
+    key: string | number;
+    depth: number;
+  };
+  const stack: WorkItem[] = [{ container: root, key: "value", depth: 0 }];
+  let visited = 0;
 
+  const getValue = (item: WorkItem): unknown =>
+    Array.isArray(item.container)
+      ? item.container[item.key as number]
+      : item.container[item.key as string];
+  const setValue = (item: WorkItem, value: unknown): void => {
+    if (Array.isArray(item.container)) {
+      item.container[item.key as number] = value;
+    } else {
+      Object.defineProperty(item.container, item.key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+      });
+    }
+  };
+
+  while (stack.length > 0) {
+    const item = stack.pop()!;
+    visited += 1;
+    if (visited > MAX_BINARY_PLACEHOLDER_NODES)
+      throw new Error("decoded message contains too many values");
+    if (item.depth > MAX_BINARY_PLACEHOLDER_DEPTH)
+      throw new Error("decoded message nesting is too deep");
+
+    const value = getValue(item);
+    if (value === null) continue;
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index -= 1) {
+        stack.push({ container: value, key: index, depth: item.depth + 1 });
+      }
+      continue;
+    }
+    if (ArrayBuffer.isView(value)) continue;
+    if (typeof value === "bigint") {
+      if (
+        value < BigInt(Number.MIN_SAFE_INTEGER) ||
+        value > BigInt(Number.MAX_SAFE_INTEGER)
+      )
+        throw new Error("decoded message contains an unsafe 64-bit integer");
+      setValue(item, Number(value));
+      continue;
+    }
+    if (typeof value !== "object") {
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      )
+        continue;
+      throw new Error("decoded message contains an unsupported value");
+    }
+    if (!isPlainRecord(value))
+      throw new Error("decoded message contains an unsupported object");
+
+    const hasIndex = Object.hasOwn(value, "__binary_index");
+    const hasDtype = Object.hasOwn(value, "dtype");
+    if (hasIndex) {
+      if (!hasDtype || Object.keys(value).length !== 2)
+        throw new Error("binary placeholder is malformed");
+      const index = value.__binary_index;
+      const dtype = value.dtype;
+      if (
+        !Number.isSafeInteger(index) ||
+        (index as number) < 0 ||
+        (index as number) >= bufferLengths.length
+      )
+        throw new Error("binary placeholder index is out of range");
+      if (typeof dtype !== "string" || dtype.length === 0 || dtype.length > 64)
+        throw new Error("binary placeholder dtype is invalid");
+      if (usedIndices.has(index as number))
+        throw new Error("binary buffer is referenced more than once");
+      usedIndices.add(index as number);
+
+      const offset = binaryOffsets[index as number];
+      const byteLength = bufferLengths[index as number];
       const dtypeInfo = DTYPE_CONSTRUCTORS[dtype];
-      if (dtypeInfo) {
-        return new dtypeInfo.ctor(buffer, offset, byteLength / dtypeInfo.bytes);
-      }
-      // Fallback: return raw Uint8Array view.
-      return new Uint8Array(buffer, offset, byteLength);
+      if (dtypeInfo === undefined)
+        throw new Error("binary placeholder dtype is unsupported");
+      if (byteLength % dtypeInfo.bytes !== 0 || offset % dtypeInfo.bytes !== 0)
+        throw new Error("binary buffer does not match its dtype");
+      setValue(
+        item,
+        new dtypeInfo.ctor(buffer, offset, byteLength / dtypeInfo.bytes),
+      );
+      continue;
     }
 
-    for (const key in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        obj[key] = replaceBinaryPlaceholders(
-          obj[key],
-          buffer,
-          binaryOffsets,
-          bufferLengths,
-        );
-      }
+    const keys = Object.keys(value);
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      stack.push({
+        container: value,
+        key: keys[index],
+        depth: item.depth + 1,
+      });
     }
-    return obj;
   }
-  return obj;
+
+  return root.value;
 }
 
 /**
@@ -93,16 +174,33 @@ export function replaceBinaryPlaceholders(
  * respecting 8-byte alignment.
  */
 export function computeBinaryOffsets(
-  bufferLengths: number[],
+  bufferLengths: readonly number[],
   baseOffset: number,
+  frameByteLength: number,
 ): number[] {
+  if (
+    !Number.isSafeInteger(baseOffset) ||
+    baseOffset < 0 ||
+    !Number.isSafeInteger(frameByteLength) ||
+    frameByteLength < baseOffset
+  )
+    throw new Error("binary section bounds are invalid");
+
   const offsets: number[] = [];
   let offset = baseOffset;
   for (const length of bufferLengths) {
+    if (!Number.isSafeInteger(length) || length < 0)
+      throw new Error("binary buffer length is invalid");
     const padding = (8 - (offset % 8)) % 8;
+    if (padding > frameByteLength - offset)
+      throw new Error("binary alignment exceeds the frame");
     offset += padding;
     offsets.push(offset);
+    if (length > frameByteLength - offset)
+      throw new Error("binary buffer exceeds the frame");
     offset += length;
   }
+  if (offset !== frameByteLength)
+    throw new Error("binary section does not consume the complete frame");
   return offsets;
 }

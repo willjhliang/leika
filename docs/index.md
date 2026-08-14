@@ -9,6 +9,7 @@
 :hidden:
 
 Home <self>
+changelog
 examples
 panes
 gallery

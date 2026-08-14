@@ -143,15 +143,26 @@ def _settled(locator: Locator, prop: str) -> str:
     Both controls fade between fills over 150ms, so a style read straight after
     a click is a frame of the animation -- and comparing two of those compares
     where each happened to be, not what either settles at.
+
+    WebKit can expose two identical pre-transition frames before serializing an
+    interpolated color in another color space, so repeated-value polling is not
+    proof that the transition has finished. Wait on the browser's animation.
     """
-    previous = _style(locator, prop)
-    for _ in range(40):
-        locator.page.wait_for_timeout(50)
-        current = _style(locator, prop)
-        if current == previous:
-            return current
-        previous = current
-    raise AssertionError(f"{prop} never settled")
+    return locator.evaluate(
+        """async (element, property) => {
+          const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+          getComputedStyle(element)[property];
+          await frame();
+          await frame();
+          await Promise.all(
+            element.getAnimations().map(animation =>
+              animation.finished.catch(() => undefined),
+            ),
+          );
+          return getComputedStyle(element)[property];
+        }""",
+        prop,
+    )
 
 
 def test_the_badge_wears_the_same_states_as_the_gear(

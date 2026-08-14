@@ -34,6 +34,8 @@ function GeneratedModal({ conf }: { conf: GuiModalMessage }) {
         viewer.mutable.current.sendMessage({
           type: "GuiCloseModalMessage",
           uuid: conf.uuid,
+          removed_uuids: [],
+          removed_tab_uuids: [],
         });
       }}
     >

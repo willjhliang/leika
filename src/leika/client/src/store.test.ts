@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { createKeyedStore } from "./store";
+import { createKeyedStore, createStore } from "./store";
 
 type Pair = { left: string; right: string };
 
@@ -10,6 +10,43 @@ const selectLeft = (pair: Pair | undefined) => pair?.left ?? "missing";
 const selectRight = (pair: Pair | undefined) => pair?.right ?? "missing";
 
 describe("createKeyedStore", () => {
+  it("reclaims deleted key versions after the final observer leaves", () => {
+    const store = createKeyedStore({ item: 1 });
+    const listener = () => undefined;
+    const unsubscribe = store.subscribe("item", listener);
+
+    store.set({ item: undefined });
+    expect(store.size()).toBe(0);
+    expect(store.retainedVersionCount()).toBe(1);
+
+    unsubscribe();
+    expect(store.retainedVersionCount()).toBe(0);
+
+    // Re-adding and observing the same key starts a fresh lifecycle without
+    // losing notifications or confusing a new subscriber with the old one.
+    let notifications = 0;
+    const unsubscribeAgain = store.subscribe("item", () => {
+      notifications += 1;
+    });
+    store.set({ item: 2 });
+    store.set({ item: undefined });
+    expect(notifications).toBe(2);
+    expect(store.retainedVersionCount()).toBe(1);
+    unsubscribeAgain();
+    expect(store.retainedVersionCount()).toBe(0);
+  });
+
+  it("reclaims absent unobserved versions after set and replacement reset", () => {
+    const store = createKeyedStore({ first: 1, second: 2 });
+
+    store.set({ first: undefined });
+    expect(store.retainedVersionCount()).toBe(0);
+    store.setAll({}, true);
+
+    expect(store.size()).toBe(0);
+    expect(store.retainedVersionCount()).toBe(0);
+  });
+
   it("re-evaluates a changed selector when the key and version are unchanged", () => {
     const store = createKeyedStore<Pair>({
       item: { left: "left", right: "right" },
@@ -68,4 +105,17 @@ describe("createKeyedStore", () => {
     expect(selectedValues.length).toBeGreaterThanOrEqual(2);
     expect(selectedValues.at(-1)).toBe(selectedValues[0]);
   });
+});
+
+it("merges an own __proto__ state key without mutating the prototype", () => {
+  const store = createStore({ value: 1 });
+  const partial = JSON.parse('{"__proto__":{"polluted":true},"value":2}');
+  store.set(partial);
+  const state = store.get() as { value: number } & Record<string, unknown>;
+  expect(state.value).toBe(2);
+  expect(Object.getPrototypeOf(state)).toBe(Object.prototype);
+  expect(Object.hasOwn(state, "__proto__")).toBe(true);
+  expect(
+    (Object.getPrototypeOf(state) as Record<string, unknown>).polluted,
+  ).toBeUndefined();
 });

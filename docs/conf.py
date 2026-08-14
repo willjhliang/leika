@@ -64,6 +64,33 @@ autodoc_mock_imports = ["plotly"]
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 
+nitpicky = True
+# Autodoc exposes inherited generic implementation types in otherwise-public
+# signatures. They are intentionally not documentation targets; their public
+# concrete subclasses and aliases are. Keep these ignores confined to private
+# Leika modules, unqualified internal TypeVars, and the mocked Plotly type.
+nitpick_ignore_regex = [
+    ("py:class", r"leika\._.*"),
+    ("py:obj", r"leika\._.*"),
+    ("py:class", r"_.*"),
+    (
+        "py:class",
+        r"(?:GuiEvent\[Any\]|IntOrFloat|NoneOrCoroutine|Placement|StringType|TGuiHandle|go\.Figure)",
+    ),
+]
+# These two references are real APIs, but Sphinx's Python inventory names them
+# differently from the annotations/docstring shorthand that autodoc renders.
+nitpick_ignore = [
+    ("py:attr", "Server.gui"),
+    ("py:class", "asyncio.events.AbstractEventLoop"),
+]
+# This README link points at the CHANGELOG added by the same change, so it is a
+# transient 404 until that change reaches the repository's main branch. Sphinx
+# separately parses the local file as the changelog page.
+linkcheck_ignore = [
+    r"https://github\.com/willjhliang/leika/blob/main/CHANGELOG\.md",
+]
+
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable", None),

@@ -48,11 +48,7 @@ export default defineConfig(
     rules: { "react-refresh/only-export-components": "off" },
   },
   {
-    files: [
-      "vite-plugin-compress-html.mts",
-      "vite.config.mts",
-      "vitest.config.ts",
-    ],
+    files: ["*.{ts,mts}"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
       ecmaVersion: "latest",

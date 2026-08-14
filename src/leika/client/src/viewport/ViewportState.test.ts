@@ -3,10 +3,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_LIVE_VIEWPORT_CONTENT_PANES,
+  MAX_LIVE_VIEWPORT_VISER_PANES,
+  MAX_VIEWPORT_SOURCE_CODE_UNITS,
+} from "./viewportLimits";
+import {
   VIEWPORT_ROOT_PANE_ID,
   collectViewportPaneIds,
   dropViewportPane,
 } from "./layoutModel";
+import { MAX_LAYOUT_ID_CODE_UNITS } from "../persistenceLimits";
 import {
   ViewportActions,
   ViewportImageDeclaration,
@@ -138,6 +144,30 @@ describe("useViewportState hidden root lifecycle", () => {
     expect(getState().layout).toBe(layout);
   });
 
+  it("detaches retained image bytes from the websocket frame backing store", () => {
+    const { actions, getState } = createViewportHarness();
+    const frame = new ArrayBuffer(1024 * 1024);
+    const oneByte = new Uint8Array(frame, 128, 1) as Uint8Array<ArrayBuffer>;
+    actions.addImagePane(
+      imageDeclaration("image", {
+        props: {
+          _data: oneByte,
+          _format: "png",
+          title: "image",
+          visible: false,
+          fit: "fit",
+        },
+      }),
+    );
+
+    const pane = getState().panes.image;
+    expect(pane?.kind).toBe("image");
+    if (pane?.kind !== "image" || pane.props._data === null) return;
+    expect(pane.props._data).not.toBe(oneByte);
+    expect(pane.props._data.byteLength).toBe(1);
+    expect(pane.props._data.buffer.byteLength).toBe(1);
+  });
+
   it("re-points a viser pane between port and URL targets", () => {
     const { actions, getState } = createViewportHarness();
     actions.addViserPane(viserDeclaration("viser"));
@@ -156,6 +186,25 @@ describe("useViewportState hidden root lifecycle", () => {
     actions.addImagePane(imageDeclaration(""));
     actions.addImagePane(imageDeclaration(VIEWPORT_ROOT_PANE_ID));
     actions.removePane(VIEWPORT_ROOT_PANE_ID);
+    expect(Object.keys(getState().panes)).toEqual([VIEWPORT_ROOT_PANE_ID]);
+  });
+
+  it("rejects malformed placement and equalization identifiers", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addImagePane(
+      imageDeclaration("bad-relative", { relative_to: "__proto__" }),
+    );
+    actions.addImagePane(
+      imageDeclaration("bad-group", { equalize_group: ["same", "same"] }),
+    );
+    actions.addImagePane(
+      imageDeclaration("self-group", { equalize_group: ["self-group"] }),
+    );
+    actions.addImagePane(
+      imageDeclaration("huge-group", {
+        equalize_group: ["x".repeat(MAX_LAYOUT_ID_CODE_UNITS + 1)],
+      }),
+    );
     expect(Object.keys(getState().panes)).toEqual([VIEWPORT_ROOT_PANE_ID]);
   });
 });
@@ -209,6 +258,23 @@ describe("useViewportState persistence", () => {
     ]);
   });
 
+  it("rejects malformed workspace IDs before constructing storage keys", () => {
+    const storage = new MemoryStorage();
+    const { actions } = createViewportHarness(storage);
+    actions.setPersistenceServer("ws://server");
+    actions.setPersistenceWorkspace("x".repeat(MAX_LAYOUT_ID_CODE_UNITS + 1));
+    actions.setPersistenceWorkspace("__proto__");
+    expect(storage.values.size).toBe(0);
+    expect(
+      actions.preflightMessageBatch([
+        {
+          type: "WorkspaceConfigurationMessage",
+          workspace_id: "",
+        },
+      ]),
+    ).toContain("workspace identifier");
+  });
+
   it("restores a readable layout even when normalization cannot be written back", () => {
     const storage = new ReadOnlyStorage(
       JSON.stringify({
@@ -246,5 +312,95 @@ describe("useViewportState snapshot reconciliation", () => {
     ]);
     actions.addImagePane(imageDeclaration("future"));
     expect(collectViewportPaneIds(getState().layout)).toEqual(["future"]);
+  });
+
+  it("rejects duplicate, root, reserved, and oversized snapshot IDs", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addImagePane(imageDeclaration("keep"));
+    for (const paneIds of [
+      ["keep", "keep"],
+      [VIEWPORT_ROOT_PANE_ID],
+      ["constructor"],
+      ["x".repeat(MAX_LAYOUT_ID_CODE_UNITS + 1)],
+    ]) {
+      actions.setPaneSnapshot(paneIds);
+      expect(getState().panes.keep?.kind).toBe("image");
+    }
+  });
+
+  it("bounds authoritative and declared pane owners and releases capacity", () => {
+    const { actions, getState } = createViewportHarness();
+    const paneIds = Array.from(
+      { length: MAX_LIVE_VIEWPORT_CONTENT_PANES },
+      (_, index) => `pane-${index}`,
+    );
+    actions.setPaneSnapshot(paneIds);
+
+    const overflow = imageDeclaration("overflow");
+    overflow.props.visible = false;
+    actions.addImagePane(overflow);
+    expect(getState().panes.overflow).toBeUndefined();
+
+    // An oversized replacement snapshot is rejected atomically and cannot
+    // make its extra ID admissible.
+    actions.setPaneSnapshot([...paneIds, "overflow"]);
+    actions.addImagePane(overflow);
+    expect(getState().panes.overflow).toBeUndefined();
+
+    actions.removePane(paneIds[0]);
+    actions.addImagePane(overflow);
+    expect(getState().panes.overflow?.kind).toBe("image");
+  });
+
+  it("counts hidden panes and releases live owner capacity on reset", () => {
+    const { actions, getState } = createViewportHarness();
+    for (let index = 0; index < MAX_LIVE_VIEWPORT_CONTENT_PANES; index += 1) {
+      const declaration = imageDeclaration("hidden-" + index);
+      declaration.props.visible = false;
+      actions.addImagePane(declaration);
+    }
+    actions.addImagePane(imageDeclaration("overflow"));
+    expect(getState().panes.overflow).toBeUndefined();
+
+    actions.resetPanes();
+    actions.addImagePane(imageDeclaration("reconnected"));
+    expect(getState().panes.reconnected?.kind).toBe("image");
+  });
+
+  it("bounds retained Viser iframe owners independently", () => {
+    const { actions, getState } = createViewportHarness();
+    for (let index = 0; index < MAX_LIVE_VIEWPORT_VISER_PANES; index += 1) {
+      actions.addViserPane(viserDeclaration("viser-" + index));
+    }
+    actions.addViserPane(viserDeclaration("viser-overflow"));
+    expect(getState().panes["viser-overflow"]).toBeUndefined();
+    expect(
+      Object.values(getState().panes).filter((pane) => pane.kind === "viser"),
+    ).toHaveLength(MAX_LIVE_VIEWPORT_VISER_PANES);
+  });
+
+  it("reserves replacement source delta before committing pane updates", () => {
+    const { actions, getState } = createViewportHarness();
+    const source = "x".repeat(MAX_VIEWPORT_SOURCE_CODE_UNITS / 2 - 1);
+    const declaration = (paneId: string) => ({
+      pane_id: paneId,
+      placement: "right" as const,
+      relative_to: VIEWPORT_ROOT_PANE_ID,
+      equalize_group: [],
+      props: {
+        _plotly_json_str: source,
+        _theme_templates: "",
+        title: "x",
+        visible: false,
+      },
+    });
+    actions.addPlotlyPane(declaration("first"));
+    actions.addPlotlyPane(declaration("second"));
+    actions.updatePane("second", { title: "xx" });
+
+    const second = getState().panes.second;
+    expect(second?.kind === "plotly" ? second.props.title : undefined).toBe(
+      "x",
+    );
   });
 });

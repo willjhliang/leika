@@ -33,7 +33,9 @@ export function createStore<T extends object>(initialState: T): Store<T> {
     // Skip notify if nothing changed.
     const keys = Object.keys(partial) as (keyof T)[];
     if (keys.every((k) => Object.is(state[k], (partial as T)[k]))) return;
-    state = Object.assign({}, state, partial);
+    // Object spread defines own data properties; Object.assign into `{}`
+    // would invoke the legacy `__proto__` setter for an own hostile key.
+    state = { ...state, ...partial };
     listeners.forEach((l) => l());
   }
 
@@ -113,6 +115,13 @@ export interface KeyedStore<V> {
   setAll: (newState: Record<string, V>, replace?: boolean) => void;
   /** Subscribe to changes for a specific key. Returns unsubscribe. */
   subscribe: (key: string, listener: Listener) => () => void;
+  /** Number of values currently owned by this store. */
+  size: () => number;
+  /** Stable copy of all current values for bounded whole-frame preflight. */
+  values: () => readonly V[];
+  /** Internal lifecycle diagnostic: absent, unobserved keys must not leave
+   * version bookkeeping behind forever. */
+  retainedVersionCount: () => number;
 }
 
 export function createKeyedStore<V>(
@@ -132,6 +141,10 @@ export function createKeyedStore<V>(
 
   function bumpVersion(key: string): void {
     keyVersions.set(key, getVersion(key) + 1);
+  }
+
+  function reclaimVersion(key: string): void {
+    if (!map.has(key) && !keyListeners.has(key)) keyVersions.delete(key);
   }
 
   function notifyKey(key: string): void {
@@ -167,6 +180,7 @@ export function createKeyedStore<V>(
     // Notify only affected keys.
     for (const key of changedKeys) {
       notifyKey(key);
+      reclaimVersion(key);
     }
   }
 
@@ -198,6 +212,7 @@ export function createKeyedStore<V>(
 
     for (const key of affectedKeys) {
       notifyKey(key);
+      reclaimVersion(key);
     }
   }
 
@@ -210,7 +225,10 @@ export function createKeyedStore<V>(
       const s = keyListeners.get(key);
       if (s) {
         s.delete(listener);
-        if (s.size === 0) keyListeners.delete(key);
+        if (s.size === 0) {
+          keyListeners.delete(key);
+          reclaimVersion(key);
+        }
       }
     };
   }
@@ -294,6 +312,9 @@ export function createKeyedStore<V>(
   useKeyedStore.set = set;
   useKeyedStore.setAll = setAll;
   useKeyedStore.subscribe = subscribeToKey;
+  useKeyedStore.size = () => map.size;
+  useKeyedStore.values = () => [...map.values()];
+  useKeyedStore.retainedVersionCount = () => keyVersions.size;
 
   return useKeyedStore as KeyedStore<V>;
 }

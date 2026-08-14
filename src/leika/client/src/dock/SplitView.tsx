@@ -3,6 +3,7 @@
 // that redistribute flex weight between adjacent children.
 
 import React from "react";
+import { emptyRecord } from "../recordUtils";
 import { Card } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
 import { useDock } from "./DockContext";
@@ -255,7 +256,7 @@ function SplitNode({
                   if (next === null) return;
                   // Write new weights by node id (px values; total is conserved).
                   // Collapsed cells keep their preserved weight (excluded).
-                  const byId: Record<string, number> = {};
+                  const byId = emptyRecord<number>();
                   node.children.forEach((c, i) => {
                     if (!collapsed[i]) byId[c.id] = next[i];
                   });
@@ -265,7 +266,7 @@ function SplitNode({
                   // This closure is the one captured at drag start, so
                   // node.children still holds the PRE-DRAG weights: writing them
                   // back reverts every per-frame resize.
-                  const byId: Record<string, number> = {};
+                  const byId = emptyRecord<number>();
                   node.children.forEach((c) => {
                     byId[c.id] = c.weight;
                   });

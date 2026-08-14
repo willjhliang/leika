@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import builtins
+import contextlib
 import contextvars
 import dataclasses
 import inspect
+import os
 import threading
 import time
 import warnings
 from asyncio import AbstractEventLoop
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    ContextManager,
+    Iterable,
     Protocol,
     Sequence,
     TypeVar,
     cast,
+    get_args,
     overload,
 )
 
@@ -33,11 +38,22 @@ from typing_extensions import (
 
 from . import _messages
 from ._async_errors import (
-    await_async_errors,
     print_async_errors,
     print_async_exception,
 )
+from ._file_transfer import validate_file_display_name
 from ._gui_handles import (
+    _GUI_AGGREGATE_COLLECTION_MAX,
+    _GUI_AGGREGATE_PAYLOAD_MAX_BYTES,
+    _GUI_AGGREGATE_PIXELS_MAX,
+    _GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS,
+    _GUI_COMMAND_MAX,
+    _GUI_FORM_ACTION_ORDER,
+    _GUI_MODAL_MAX,
+    _GUI_NOTIFICATION_MAX,
+    _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX,
+    _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES,
+    _GUI_TEXT_MAX_UTF16_CODE_UNITS,
     PREVIEW_MAX_BYTES,
     CommandEvent,
     CommandHandle,
@@ -77,24 +93,49 @@ from ._gui_handles import (
     PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
+    _bounded_tuple,
     _cast_vector,
     _checklist_items,
     _colors_to_int_tuple,
     _CommandHandleState,
+    _discard_gui_subtree,
+    _gui_descendant_tab_uuids,
+    _gui_descendant_uuids,
+    _gui_resource_cost,
+    _gui_text_source,
+    _GuiFileButtonHandle,
+    _GuiHandle,
     _GuiHandleState,
     _GuiInputHandle,
+    _GuiResourceCost,
     _make_uuid,
-    _plotly_json_with_config,
-    _schedule_coroutine,
+    _ndarray_snapshot_spec,
+    _plotly_json_and_config,
+    _private_ndarray_snapshot,
+    _retire_gui_handle_without_queue_locked,
     _string_options,
+    _tab_subtree_uuids,
+    _validate_collection_string,
+    _validate_gui_html_content,
+    _validate_slider_marks,
+    _validate_unicode_string,
     install_container_add_methods,
     not_container_scoped,
 )
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
-from ._image_encoding import encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, encode_image_binary
 from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
-from ._notification_handle import NotificationHandle, _NotificationHandleState
+from ._notification_handle import (
+    NotificationHandle,
+    _NotificationHandleState,
+    validate_auto_close_seconds,
+)
+from ._validation import (
+    utf16_code_unit_length,
+    utf16_code_unit_length_exceeds,
+    validate_renderer_string,
+)
 from ._validation import (
     validate_finite_number as _validate_number,
 )
@@ -119,6 +160,37 @@ T = TypeVar("T")
 
 _PreviewWorkKind = Literal["warm", "preview", "reload", "watch"]
 
+_FILE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
+"""Maximum contents retained for one upload-backed ``UploadedFile``."""
+
+_FILE_UPLOAD_PART_BYTES = 512 * 1024
+"""Exact upload part size, except for the final part."""
+
+_PROTOCOL_IDENTIFIER_MAX_CHARS = 128
+_MIME_TYPE_MAX_CHARS = 255
+_PREVIEW_PENDING_PER_SOURCE_MAX = 32
+
+
+def _freeze_upload_content(content: bytearray) -> bytes:
+    """Convert a completed bounded upload builder to its immutable value."""
+    return bytes(content)
+
+
+def _valid_protocol_identifier(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= _PROTOCOL_IDENTIFIER_MAX_CHARS
+        and all(32 <= ord(character) < 127 for character in value)
+    )
+
+
+def _valid_mime_type(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= _MIME_TYPE_MAX_CHARS
+        and all(ord(character) >= 32 and ord(character) != 127 for character in value)
+    )
+
 
 @dataclasses.dataclass(frozen=True)
 class _PreviewWorkItem:
@@ -140,7 +212,7 @@ class _PreviewWorkState:
     worker: Future[Any] | None = None
 
 
-def _compute_step(x: float | None) -> float:  # type: ignore
+def _compute_step(x: float | None) -> float:
     """For number inputs: compute an increment size from some number.
 
     Example inputs/outputs:
@@ -150,37 +222,46 @@ def _compute_step(x: float | None) -> float:  # type: ignore
         12.02 => 0.01
         0.004 => 0.001
     """
-    return 1 if x is None else 10 ** (-_compute_precision_digits(x))
+    return 1.0 if x is None else 10.0 ** (-_compute_precision_digits(x))
 
 
-def _validate_button_color(color: str) -> None:
+def _validate_button_color(color: object) -> ButtonColor:
     """Reject anything but the two button roles at runtime, where the
     ``Literal`` annotation alone would let ``"blue"`` through and quietly draw
     the default. Shared by ``add_button`` and ``add_upload_button``."""
-    if color not in ("default", "inverse"):
+    if type(color) is not str or color not in ("default", "inverse"):
         raise ValueError(
             f"Button color must be 'default' or 'inverse', not {color!r}. Buttons take"
             " a role rather than a color; the accent itself is a viewer setting."
         )
+    return cast(ButtonColor, color)
 
 
-def _validate_file_content(content: object, filename: str | None, factory: str) -> None:
-    """Reject the two ways a file button can be asked for at creation.
-
-    What is left -- a function that turns out to return unnamed bytes -- can
-    only be caught once it has run, and is raised from the handle.
-    """
-    if isinstance(content, str):
+def _validate_file_content(content: object, filename: str | None, factory: str) -> DownloadContent:
+    """Validate and detach a bounded synchronous source before publication."""
+    if filename is not None:
+        validate_file_display_name(filename)
+    if type(content) is bytes:
+        normalized: object = content
+    elif isinstance(content, Path):
+        normalized = Path(os.fspath(content))
+    elif callable(content):
+        call = getattr(content, "__call__", None)
+        if inspect.iscoroutinefunction(content) or inspect.iscoroutinefunction(call):
+            raise TypeError(
+                "content providers must be synchronous callables; async providers are not supported"
+            )
+        normalized = content
+    else:
         raise TypeError(
-            "content= must be bytes, a Path, or a function returning one of"
-            " those; a str is neither a file's contents (encode it) nor a"
-            " path we would guess at (wrap it in Path)."
+            "content= must be bytes, a Path, or a synchronous callable returning one of those"
         )
-    if filename is None and isinstance(content, bytes):
+    if filename is None and type(normalized) is bytes:
         raise ValueError(
             f"filename= is required when the contents are bytes, which carry"
             f" no name of their own. Passed to {factory}."
         )
+    return cast(DownloadContent, normalized)
 
 
 def _initial_toggles(
@@ -205,8 +286,14 @@ def _initial_toggles(
             "A row of toggles starts on the options named, so initial_value= is"
             f" an option or a sequence of them; got {initial_value!r}."
         )
-    wanted = (initial_value,) if isinstance(initial_value, str) else tuple(initial_value)
+    wanted = (
+        (initial_value,)
+        if isinstance(initial_value, str)
+        else _bounded_tuple(initial_value, "initial toggle value")
+    )
     unknown = [option for option in wanted if option not in options]
+    if len(set(wanted)) != len(wanted):
+        raise ValueError("initial_value cannot repeat a toggle option.")
     if len(unknown) > 0:
         raise ValueError(f"initial_value={unknown!r} is not among the options {options!r}.")
     if not multiple and len(wanted) > 1:
@@ -233,19 +320,16 @@ def _button_colors(
     """One colorway per BUTTON, the way ``_merge_flags`` gives one per gap: a
     single role answers for the whole row, a sequence one button at a time
     (a main action with something quieter beside it)."""
-    if isinstance(color, str):
-        _validate_button_color(color)
-        return (color,) * count
-    colors = tuple(color)
+    if type(color) is str:
+        return (_validate_button_color(color),) * count
+    colors = _bounded_tuple(color, f"{noun} colors")
     if len(colors) != count:
         raise ValueError(
             f"color= takes one role per {noun}: {count} for this row, but got"
             f" {len(colors)}. Pass a single role to answer for every button at"
             " once."
         )
-    for one in colors:
-        _validate_button_color(one)
-    return colors
+    return tuple(_validate_button_color(one) for one in colors)
 
 
 def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
@@ -260,7 +344,9 @@ def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
     gaps = max(0, count - 1)
     if isinstance(merge, bool):
         return (merge,) * gaps
-    flags = tuple(bool(flag) for flag in merge)
+    flags = _bounded_tuple(merge, "merge flags")
+    if any(type(flag) is not bool for flag in flags):
+        raise TypeError("merge= sequence entries must be bools.")
     if len(flags) != gaps:
         raise ValueError(
             f"merge= takes one flag per gap between buttons: {gaps} for {count}"
@@ -271,18 +357,26 @@ def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
 
 
 def _build_slider_marks(
-    marks: tuple[float | tuple[float, str], ...] | None,
+    marks: Iterable[float | tuple[float, str]] | None,
 ) -> tuple[GuiSliderMark, ...] | None:
-    """Normalize a slider's ``marks`` argument into ``GuiSliderMark`` tuples.
-    Shared by add_slider and add_multi_slider so the two can't diverge."""
+    """Normalize and bound public slider marks before message construction."""
     if marks is None:
         return None
-    return tuple(
-        GuiSliderMark(value=float(x[0]), label=x[1])
-        if isinstance(x, tuple)
-        else GuiSliderMark(value=x, label=None)
-        for x in marks
-    )
+    materialized = _bounded_tuple(marks, "slider marks")
+    normalized: list[GuiSliderMark] = []
+    for item in materialized:
+        if isinstance(item, tuple):
+            if len(item) != 2:
+                raise ValueError("slider mark tuples must contain a value and label")
+            raw_value, label = item
+            if type(label) is not str:
+                raise TypeError("slider mark labels must be strings")
+            _validate_collection_string(label, "slider mark labels")
+        else:
+            raw_value, label = item, None
+        value = _validate_number(raw_value, "slider mark value")
+        normalized.append(GuiSliderMark(value=float(value), label=label))
+    return _validate_slider_marks(tuple(normalized))
 
 
 def _infer_vector_step(
@@ -326,14 +420,20 @@ class _RootGuiContainer:
     _children: dict[str, SupportsRemoveProtocol]
 
 
+class _UploadAckRejected(Exception):
+    """Internal rollback signal when a final flow-control ACK cannot queue."""
+
+
 class _FileUploadState(TypedDict):
     client_id: ClientId
     source_component_uuid: str
     filename: str
     part_count: int
-    parts: dict[int, bytes]
+    content: bytearray
+    next_part_index: int
     total_bytes: int
     transferred_bytes: int
+    reserved_bytes: int
 
 
 class GuiApi(GuiContainer):
@@ -359,6 +459,8 @@ class GuiApi(GuiContainer):
 
         self._owner = owner
         """Entity that owns this API."""
+        self._lock = threading.RLock()
+        """Linearizes registries, handle state, lifecycle, and wire order."""
         self._container_stack = contextvars.ContextVar(
             f"leika_gui_container_stack_{id(self)}",
             default=(),
@@ -375,6 +477,17 @@ class GuiApi(GuiContainer):
         )
         """Interface for sending and listening to messages."""
 
+        self._terminal = False
+        self._live_component_count = 0
+        self._resource_from_gui_uuid: dict[str, _GuiResourceCost] = {}
+        self._retained_extra_bytes_from_gui_uuid: dict[str, int] = {}
+        self._reset_baseline_resource_from_gui_uuid: dict[str, _GuiResourceCost] = {}
+        self._resource_total = _GuiResourceCost()
+        self._container_depth_from_uuid: dict[str, int] = {"root": 0}
+        self._notification_handle_from_uuid: dict[str, NotificationHandle] = {}
+        self._notification_text_units_from_uuid: dict[str, int] = {}
+        self._notification_text_units = 0
+        self._is_server_scope = isinstance(owner, Server)
         self._gui_input_handle_from_uuid: dict[str, _GuiInputHandle[Any]] = {}
         self._container_handle_from_uuid: dict[str, GuiContainerProtocol] = {
             "root": _RootGuiContainer({})
@@ -382,9 +495,18 @@ class GuiApi(GuiContainer):
         self._modal_handle_from_uuid: dict[str, GuiModalHandle] = {}
         self._command_handle_from_uuid: dict[str, CommandHandle] = {}
         self._current_file_upload_states: dict[tuple[ClientId, str], _FileUploadState] = {}
-        self._file_upload_lock = threading.RLock()
+        self._retained_file_upload_bytes: dict[str, int] = {}
+        # Upload handlers read handle registries and commit values/resources, so
+        # this must remain the canonical GUI lock rather than an independent lock.
+        self._file_upload_lock = self._lock
         self._preview_work_from_key: dict[tuple[ClientId, str], _PreviewWorkState] = {}
         self._preview_work_lock = threading.RLock()
+        self._programmatic_callback_lock = threading.Lock()
+        self._programmatic_callback_queue: deque[
+            tuple[tuple[Callable[[Any], object], ...], object, int]
+        ] = deque()
+        self._programmatic_callback_retained_bytes = 0
+        self._programmatic_callback_scheduled = False
 
         self._websock_interface.register_handler(
             _messages.GuiUpdateMessage, self._handle_gui_updates
@@ -412,11 +534,204 @@ class GuiApi(GuiContainer):
             self._handle_file_transfer_part,
         )
         self._websock_interface.register_handler(
+            _messages.FileTransferAbort,
+            self._handle_file_transfer_abort,
+        )
+        self._websock_interface.register_handler(
             _messages.CommandTriggerMessage, self._handle_command_trigger
         )
         self._websock_interface.register_handler(
             _messages.GuiCloseModalMessage, self._handle_gui_close_modal
         )
+
+    def _check_active_locked(self) -> None:
+        if self._terminal:
+            raise RuntimeError("This client-local GUI is no longer active.")
+
+    def _set_gui_resource_locked(
+        self,
+        uuid: str,
+        cost: _GuiResourceCost,
+    ) -> _GuiResourceCost:
+        old = self._resource_from_gui_uuid.get(uuid, _GuiResourceCost())
+        prospective = self._resource_total - old + cost
+        if prospective.collection_items > _GUI_AGGREGATE_COLLECTION_MAX:
+            raise RuntimeError(
+                f"A GUI scope cannot retain more than "
+                f"{_GUI_AGGREGATE_COLLECTION_MAX} collection items."
+            )
+        if prospective.text_units > _GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS:
+            raise RuntimeError("A GUI scope exceeded its 16 Mi UTF-16 text budget.")
+        if prospective.payload_bytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
+            raise RuntimeError("A GUI scope exceeded its 128 MiB retained payload budget.")
+        if prospective.decoded_pixels > _GUI_AGGREGATE_PIXELS_MAX:
+            raise RuntimeError("A GUI scope exceeded its 64 Mi-pixel decoded raster budget.")
+        self._server._replace_gui_resource_cost(
+            old,
+            cost,
+            page_global=self._is_server_scope,
+        )
+        self._resource_total = prospective
+        if cost == _GuiResourceCost():
+            self._resource_from_gui_uuid.pop(uuid, None)
+        else:
+            self._resource_from_gui_uuid[uuid] = cost
+        return old
+
+    @contextlib.contextmanager
+    def _gui_resource_transaction_locked(
+        self,
+        uuid: str,
+        value: object,
+        props: object,
+        *,
+        decoded_pixels: int | None = None,
+        retained_extra_bytes: int | None = None,
+    ) -> Any:
+        self._check_active_locked()
+        if decoded_pixels is None:
+            decoded_pixels = self._resource_from_gui_uuid.get(
+                uuid, _GuiResourceCost()
+            ).decoded_pixels
+        if retained_extra_bytes is None:
+            retained_extra_bytes = self._retained_extra_bytes_from_gui_uuid.get(uuid, 0)
+        cost = _gui_resource_cost(
+            value,
+            props,
+            decoded_pixels=decoded_pixels,
+            retained_extra_bytes=retained_extra_bytes,
+        )
+        cost += self._reset_baseline_resource_from_gui_uuid.get(uuid, _GuiResourceCost())
+        old_extra = self._retained_extra_bytes_from_gui_uuid.get(uuid, 0)
+        old = self._set_gui_resource_locked(uuid, cost)
+        if retained_extra_bytes:
+            self._retained_extra_bytes_from_gui_uuid[uuid] = retained_extra_bytes
+        else:
+            self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
+        try:
+            yield
+        except BaseException:
+            self._set_gui_resource_locked(uuid, old)
+            if old_extra:
+                self._retained_extra_bytes_from_gui_uuid[uuid] = old_extra
+            else:
+                self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
+            raise
+
+    def _release_gui_resource_locked(self, uuid: str) -> None:
+        self._set_gui_resource_locked(uuid, _GuiResourceCost())
+        self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
+        self._reset_baseline_resource_from_gui_uuid.pop(uuid, None)
+
+    def _container_depth_locked(self, container_uuid: str) -> int:
+        try:
+            return self._container_depth_from_uuid[container_uuid]
+        except KeyError as error:
+            raise RuntimeError("GUI parent container is no longer active") from error
+
+    @contextlib.contextmanager
+    def _notification_resource_transaction_locked(
+        self,
+        uuid: str,
+        props: _messages.NotificationProps,
+    ) -> Any:
+        old_units = self._notification_text_units_from_uuid.get(uuid, 0)
+        new_units = utf16_code_unit_length(props.title) + utf16_code_unit_length(props.body)
+        prospective = self._notification_text_units - old_units + new_units
+        if prospective > 2 * 1024 * 1024:
+            raise RuntimeError("A GUI scope exceeded its 2 Mi UTF-16 notification text budget.")
+        with self._gui_resource_transaction_locked(f"notification:{uuid}", None, props):
+            self._notification_text_units = prospective
+            self._notification_text_units_from_uuid[uuid] = new_units
+            try:
+                yield
+            except BaseException:
+                self._notification_text_units = (
+                    self._notification_text_units - new_units + old_units
+                )
+                if old_units:
+                    self._notification_text_units_from_uuid[uuid] = old_units
+                else:
+                    self._notification_text_units_from_uuid.pop(uuid, None)
+                raise
+
+    def _release_notification_resource_locked(self, uuid: str) -> None:
+        units = self._notification_text_units_from_uuid.pop(uuid, 0)
+        self._notification_text_units -= units
+        self._release_gui_resource_locked(f"notification:{uuid}")
+
+    def _schedule_programmatic_callbacks(
+        self,
+        callbacks: tuple[Callable[[Any], object], ...],
+        event: object,
+    ) -> None:
+        """Queue a bounded callback snapshot without changing commit outcome."""
+        if not callbacks:
+            return
+        event_value = getattr(event, "value", None)
+        cost = _gui_resource_cost(event_value, None)
+        retained_bytes = 256 + cost.text_units * 2 + cost.payload_bytes + cost.collection_items * 64
+        with self._programmatic_callback_lock:
+            if (
+                len(self._programmatic_callback_queue) >= _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX
+                or self._programmatic_callback_retained_bytes + retained_bytes
+                > _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES
+            ):
+                # State and wire publication already committed before callback
+                # dispatch. Report overload without making a successful assignment
+                # appear to have rolled back or retaining unbounded snapshots.
+                print_async_exception(
+                    RuntimeError("The programmatic GUI callback queue exceeded its safety limit.")
+                )
+                return
+            self._programmatic_callback_queue.append((callbacks, event, retained_bytes))
+            self._programmatic_callback_retained_bytes += retained_bytes
+            if self._programmatic_callback_scheduled:
+                return
+            self._programmatic_callback_scheduled = True
+
+        def clear_queued_locked() -> None:
+            released = sum(item[2] for item in self._programmatic_callback_queue)
+            self._programmatic_callback_queue.clear()
+            self._programmatic_callback_retained_bytes -= released
+            if self._programmatic_callback_retained_bytes < 0:
+                raise RuntimeError("programmatic callback accounting underflow")
+
+        def start() -> None:
+            task = self._event_loop.create_task(self._drain_programmatic_callbacks())
+            task.add_done_callback(print_async_errors)
+
+        try:
+            self._event_loop.call_soon_threadsafe(start)
+        except Exception as error:
+            with self._programmatic_callback_lock:
+                clear_queued_locked()
+                self._programmatic_callback_scheduled = False
+            print_async_exception(error)
+
+    async def _drain_programmatic_callbacks(self) -> None:
+        try:
+            while True:
+                with self._programmatic_callback_lock:
+                    if not self._programmatic_callback_queue:
+                        self._programmatic_callback_scheduled = False
+                        return
+                    callbacks, event, retained_bytes = self._programmatic_callback_queue.popleft()
+                try:
+                    for callback in callbacks:
+                        await self._server._await_user_callback(callback, event)
+                finally:
+                    with self._programmatic_callback_lock:
+                        self._programmatic_callback_retained_bytes -= retained_bytes
+                        if self._programmatic_callback_retained_bytes < 0:
+                            raise RuntimeError("programmatic callback accounting underflow")
+        except BaseException:
+            with self._programmatic_callback_lock:
+                released = sum(item[2] for item in self._programmatic_callback_queue)
+                self._programmatic_callback_queue.clear()
+                self._programmatic_callback_retained_bytes -= released
+                self._programmatic_callback_scheduled = False
+            raise
 
     @property
     def _child_gui_api(self) -> GuiApi:
@@ -427,8 +742,10 @@ class GuiApi(GuiContainer):
         return "root"
 
     def _apply_default_order(self, order: float | None) -> float:
-        """Return an explicit order, or the next order owned by this server."""
-        return self._next_order() if order is None else order
+        """Return a finite explicit order, or the next owner order."""
+        if order is None:
+            return self._next_order()
+        return float(_validate_number(order, "order"))
 
     def _resolve_client(self, client_id: ClientId) -> ClientHandle | None:
         """Resolve the ClientHandle for a given client_id. Returns None when
@@ -451,90 +768,92 @@ class GuiApi(GuiContainer):
     async def _handle_gui_updates(
         self, client_id: ClientId, message: _messages.GuiUpdateMessage
     ) -> None:
-        """Callback for handling GUI messages."""
-        handle = self._gui_input_handle_from_uuid.get(message.uuid, None)
-        if handle is None or handle._impl.removed:
-            return
-        handle_state = handle._impl
-
-        # `value` is the one property a client is allowed to write. Anything
-        # else in the message is client-controlled data with no business on
-        # `_GuiHandleState`, whose other attributes include the callbacks.
-        if set(message.updates.keys()) != {"value"}:
-            return
-        prop_value = message.updates["value"]
-
-        # Cast to the shape the handle holds, which is the handle's own to know.
-        try:
-            prop_value = handle._coerce_client_value(prop_value)
-        except (TypeError, ValueError, OverflowError):
-            return
-
-        has_changed = handle_state.value != prop_value
-        if has_changed:
-            handle_state.value = prop_value
-        updates_cast = {"value": prop_value}
-
-        # Only call update when value has actually changed.
-        if not handle_state.is_button and not has_changed:
-            return
-
-        # GUI element has been updated!
-        handle_state.update_timestamp = time.time()
+        """Handle one browser value update as a linearized state transition."""
         client = self._resolve_client(client_id)
-        if client is None:
+        if client is None or set(message.updates.keys()) != {"value"}:
             return
+        raw_value = message.updates["value"]
 
-        # Synchronize the validated value before entering user code: a raising
-        # async callback must not leave the other clients with stale state.
-        if handle_state.sync_cb is not None:
-            handle_state.sync_cb(client_id, updates_cast)
+        with self._lock:
+            handle = self._gui_input_handle_from_uuid.get(message.uuid)
+            if handle is None or handle._impl.removed:
+                return
+            props = handle._impl.props
+            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
+                return
+            handle_state = handle._impl
+            try:
+                prop_value = handle._coerce_client_value(raw_value)
+            except (TypeError, ValueError, OverflowError):
+                return
 
-        event = GuiEvent(client, client_id, handle)
-        if isinstance(handle, GuiPreviewButtonHandle):
-            self._queue_preview_work(
-                "preview",
-                client_id,
-                client,
-                handle,
-                lambda: handle._send(event),
-            )
+            try:
+                has_changed = handle_state.value != prop_value
+            except (TypeError, ValueError):
+                has_changed = True
+            if not handle_state.is_button and not has_changed:
+                return
 
-        for cb in tuple(handle_state.update_cb):
-            if inspect.iscoroutinefunction(cb):
-                await await_async_errors(cb(event))
-            else:
-                self._thread_executor.submit(cb, event).add_done_callback(print_async_errors)
+            # Synchronize before publishing local state. A stopped/overloaded
+            # destination leaves state unchanged and no callback observes a
+            # value peers never received.
+            with self._gui_resource_transaction_locked(
+                handle_state.uuid, prop_value, handle_state.props
+            ):
+                if handle_state.sync_cb is not None:
+                    handle_state.sync_cb(client_id, {"value": prop_value})
+                if has_changed:
+                    handle_state.value = prop_value
+                handle_state.update_timestamp = time.time()
+            event = GuiEvent(client, client_id, handle)
+            callbacks = tuple(handle_state.update_cb)
+            is_preview = isinstance(handle, GuiPreviewButtonHandle)
+            is_file_button = isinstance(handle, _GuiFileButtonHandle)
+            if is_file_button and not handle._begin_file_press_locked():
+                return
+
+        if is_preview:
+            try:
+                accepted = self._queue_preview_work(
+                    "preview",
+                    client_id,
+                    client,
+                    handle,
+                    lambda: handle._send(event),
+                )
+            except BaseException:
+                handle._finish_file_press()
+                raise
+            if not accepted:
+                handle._finish_file_press()
+        # User code never runs under the registry/state lock.
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
     async def _handle_gui_button_hold(
         self, client_id: ClientId, message: _messages.GuiButtonHoldMessage
     ) -> None:
         """Callback for handling button hold messages."""
-        handle = self._gui_input_handle_from_uuid.get(message.uuid, None)
-        if handle is None or handle._impl.removed:
-            return
-
-        # Ensure this is a button handle with hold callbacks.
-        if not isinstance(handle, GuiButtonHandle):
-            return
-
-        # Get callbacks registered for this frequency.
-        callbacks = handle._hold_cbs_from_freq.get(message.frequency, [])
-        if not callbacks:
-            return
-
         client = self._resolve_client(client_id)
         if client is None:
             return
+        with self._lock:
+            handle = self._gui_input_handle_from_uuid.get(message.uuid)
+            if not isinstance(handle, GuiButtonHandle) or handle._impl.removed:
+                return
+            props = handle._impl.props
+            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
+                return
+            callbacks = cast(
+                tuple[Callable[[GuiEvent[Any]], object], ...],
+                tuple(handle._hold_cbs_from_freq.get(message.frequency, ())),
+            )
+            if not callbacks:
+                return
+            event = GuiEvent(client, client_id, handle)
 
-        # Call all callbacks for this frequency.
-        for cb in tuple(callbacks):
-            if inspect.iscoroutinefunction(cb):
-                await await_async_errors(cb(GuiEvent(client, client_id, handle)))
-            else:
-                self._thread_executor.submit(
-                    cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_async_errors)
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
     def _preview_button_for(
         self, uuid: str, client_id: ClientId
@@ -548,15 +867,14 @@ class GuiApi(GuiContainer):
         none of them is a press that a caller is waiting on, so there is
         nobody an error would reach.
         """
-        handle = self._gui_input_handle_from_uuid.get(uuid, None)
-        if handle is None or handle._impl.removed:
-            return None
-        if not isinstance(handle, GuiPreviewButtonHandle):
-            return None
         client = self._resolve_client(client_id)
         if client is None:
             return None
-        return handle, client
+        with self._lock:
+            handle = self._gui_input_handle_from_uuid.get(uuid)
+            if not isinstance(handle, GuiPreviewButtonHandle) or handle._impl.removed:
+                return None
+            return handle, client
 
     def _queue_preview_work(
         self,
@@ -565,8 +883,8 @@ class GuiApi(GuiContainer):
         client: ClientHandle,
         handle: GuiPreviewButtonHandle,
         run: Callable[[], None],
-    ) -> None:
-        """Run preview work in arrival order for one browser and source.
+    ) -> bool:
+        """Admit preview work, returning whether it was queued.
 
         File resolution and transfer happen in the callback pool, but a shared
         pool alone does not preserve submission order. A slow warm or reload
@@ -589,16 +907,18 @@ class GuiApi(GuiContainer):
 
             has_work = state.active_kind is not None or bool(state.pending)
             if kind in ("warm", "watch") and has_work:
-                return
+                return False
 
             if kind in ("preview", "reload"):
                 state.pending = deque(
                     queued for queued in state.pending if queued.kind not in ("warm", "watch")
                 )
+            if len(state.pending) >= _PREVIEW_PENDING_PER_SOURCE_MAX:
+                return False
             state.pending.append(item)
 
             if state.worker is not None:
-                return
+                return True
             try:
                 state.worker = self._thread_executor.submit(
                     self._run_preview_work,
@@ -609,6 +929,7 @@ class GuiApi(GuiContainer):
                 self._preview_work_from_key.pop(key, None)
                 raise
             state.worker.add_done_callback(print_async_errors)
+            return True
 
     def _run_preview_work(
         self,
@@ -641,6 +962,8 @@ class GuiApi(GuiContainer):
                 # Preserve that isolation inside the serialized worker.
                 print_async_exception(error)
             finally:
+                if item.kind == "preview":
+                    item.handle._finish_file_press()
                 with self._preview_work_lock:
                     if self._preview_work_from_key.get(key) is state:
                         state.active_kind = None
@@ -684,6 +1007,9 @@ class GuiApi(GuiContainer):
         if found is None:
             return
         handle, client = found
+        props = handle._impl.props
+        if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
+            return
         self._queue_preview_work(
             "warm",
             client_id,
@@ -739,190 +1065,347 @@ class GuiApi(GuiContainer):
     async def _handle_gui_form_submit(
         self, client_id: ClientId, message: _messages.GuiFormSubmitMessage
     ) -> None:
-        """Callback for client-initiated form submits.
-
-        Fires the form's on_submit callbacks and broadcasts the submit back so
-        every client closes the form's popout -- including the one that sent
-        it, which waits to be told rather than closing on its own, so that all
-        the ways of submitting end the same way.
-        """
-        handle = self._container_handle_from_uuid.get(message.uuid, None)
-        if not isinstance(handle, GuiFormHandle):
-            return
-
+        """Publish a browser form submit, then run a stable callback snapshot."""
         client = self._resolve_client(client_id)
         if client is None:
             return
+        with self._lock:
+            handle = self._container_handle_from_uuid.get(message.uuid)
+            if not isinstance(handle, GuiFormHandle) or handle._impl.removed:
+                return
+            # Broadcast before entering user code so every client closes the
+            # form even if an async submit callback raises.
+            self._websock_interface.queue_message_or_raise(
+                _messages.GuiFormSubmitMessage(uuid=message.uuid)
+            )
+            callbacks = tuple(handle._submit_cb)
+            event = GuiEvent(client, client_id, handle)
 
-        # Broadcast before entering user code so every client closes the form
-        # even if an async submit callback raises.
-        self._websock_interface.queue_message(_messages.GuiFormSubmitMessage(uuid=message.uuid))
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
-        for cb in tuple(handle._submit_cb):
-            if inspect.iscoroutinefunction(cb):
-                await await_async_errors(cb(GuiEvent(client, client_id, handle)))
-            else:
-                self._thread_executor.submit(
-                    cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_async_errors)
-
-    def _queue_upload_ack(
-        self,
-        client_id: ClientId,
-        message: FileTransferPartAck,
-    ) -> None:
-        """Acknowledge an upload only to the browser that is sending it."""
+    def _queue_upload_message(self, client_id: ClientId, message: _messages.Message) -> bool:
+        """Send upload flow control only to its originating browser."""
         client = self._resolve_client(client_id)
-        if client is not None:
-            client._websock_connection.queue_message(message)
+        return client is not None and client._websock_connection.queue_message(message) is not False
+
+    def _drop_file_upload_locked(self, key: tuple[ClientId, str]) -> _FileUploadState | None:
+        """Drop one transfer and release its exact aggregate reservation."""
+        state = self._current_file_upload_states.pop(key, None)
+        if state is not None:
+            self._server._release_file_upload(state["reserved_bytes"])
+        return state
+
+    def _queue_upload_abort(self, client_id: ClientId, transfer_uuid: str, reason: str) -> None:
+        self._queue_upload_message(
+            client_id,
+            _messages.FileTransferAbort(
+                transfer_uuid=transfer_uuid,
+                reason=reason[:160],
+            ),
+        )
 
     def _handle_file_transfer_start(
         self, client_id: ClientId, message: _messages.FileTransferStartUpload
-    ) -> None:
-        if (
-            not message.transfer_uuid
-            or message.part_count < 0
-            or message.size_bytes < 0
-            or (message.part_count == 0) != (message.size_bytes == 0)
-            or (message.size_bytes > 0 and message.part_count > message.size_bytes)
-        ):
+    ) -> Coroutine[Any, Any, None] | None:
+        transfer_uuid = message.transfer_uuid
+        if not _valid_protocol_identifier(transfer_uuid):
+            # There is no safe identifier with which to correlate an abort.
+            return
+        source_component_uuid = message.source_component_uuid
+        if not _valid_protocol_identifier(source_component_uuid):
+            self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload metadata.")
             return
 
-        key = (client_id, message.transfer_uuid)
+        metadata_valid = (
+            type(message.part_count) is int
+            and type(message.size_bytes) is int
+            and message.part_count >= 0
+            and message.size_bytes >= 0
+            and message.part_count
+            == (message.size_bytes + _FILE_UPLOAD_PART_BYTES - 1) // _FILE_UPLOAD_PART_BYTES
+            and _valid_mime_type(message.mime_type)
+        )
+        try:
+            validate_file_display_name(message.filename)
+        except (TypeError, ValueError):
+            metadata_valid = False
+        if not metadata_valid:
+            self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload metadata.")
+            return
+
+        key = (client_id, transfer_uuid)
         completion = None
         with self._file_upload_lock:
-            handle = self._gui_input_handle_from_uuid.get(message.source_component_uuid)
-            if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
+            handle = self._gui_input_handle_from_uuid.get(source_component_uuid)
+            # Incoming messages are dispatched to both global and client-local
+            # GUI APIs. Only the API that owns this component may respond.
+            if not isinstance(handle, GuiUploadButtonHandle):
+                return
+            if handle._impl.removed:
+                self._queue_upload_abort(client_id, transfer_uuid, "Upload target removed.")
+                return
+            props = handle._impl.props
+            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
+                self._queue_upload_abort(client_id, transfer_uuid, "Upload target unavailable.")
+                return
+            if any(
+                state["client_id"] == client_id
+                and state["source_component_uuid"] == source_component_uuid
+                for state in self._current_file_upload_states.values()
+            ):
+                self._queue_upload_abort(
+                    client_id, transfer_uuid, "An upload is already active for this control."
+                )
                 return
             if key in self._current_file_upload_states:
+                self._queue_upload_abort(client_id, transfer_uuid, "Duplicate upload transfer.")
                 return
+            if message.size_bytes > _FILE_UPLOAD_MAX_BYTES:
+                self._queue_upload_abort(
+                    client_id, transfer_uuid, "Upload exceeds the 64 MiB limit."
+                )
+                return
+            if not self._server._reserve_file_upload(message.size_bytes):
+                self._queue_upload_abort(
+                    client_id, transfer_uuid, "Server upload capacity is full."
+                )
+                return
+
             self._current_file_upload_states[key] = {
                 "client_id": client_id,
-                "source_component_uuid": message.source_component_uuid,
+                "source_component_uuid": source_component_uuid,
                 "filename": message.filename,
                 "part_count": message.part_count,
-                "parts": {},
+                "content": bytearray(),
+                "next_part_index": 0,
                 "total_bytes": message.size_bytes,
                 "transferred_bytes": 0,
+                "reserved_bytes": message.size_bytes,
             }
-
-            # Empty uploads have no part message to drive completion.
+            prepared_completion = None
             if message.part_count == 0:
-                self._queue_upload_ack(
-                    client_id,
-                    FileTransferPartAck(
-                        source_component_uuid=message.source_component_uuid,
-                        transfer_uuid=message.transfer_uuid,
-                        transferred_bytes=0,
-                        total_bytes=0,
-                    ),
-                )
-                completion = self._complete_file_upload_locked(key)
+                try:
+                    prepared_completion = self._prepare_file_upload_completion_locked(key)
+                except MemoryError:
+                    self._drop_file_upload_locked(key)
+                    self._queue_upload_abort(
+                        client_id, transfer_uuid, "Server could not store upload."
+                    )
+                    return
+            completion = self._admit_upload_ack_locked(
+                key,
+                FileTransferPartAck(
+                    source_component_uuid=source_component_uuid,
+                    transfer_uuid=transfer_uuid,
+                    transferred_bytes=0,
+                    total_bytes=message.size_bytes,
+                ),
+                prepared_completion,
+            )
 
-        if completion is not None:
-            self._dispatch_file_upload_completion(completion)
+        if completion is not None and completion[3]:
+            return self._dispatch_file_upload_completion(completion)
+        return None
 
-    def _complete_file_upload_locked(
+    def _prepare_file_upload_completion_locked(
         self,
         key: tuple[ClientId, str],
     ) -> (
         tuple[
-            ClientId,
             GuiUploadButtonHandle,
+            UploadedFile,
             tuple[Callable[..., Any], ...],
         ]
         | None
     ):
-        """Consume a completed upload while ``_file_upload_lock`` is held."""
-        state = self._current_file_upload_states.pop(key, None)
+        """Freeze a completed upload without committing any owner state."""
+        state = self._current_file_upload_states.get(key)
         if state is None:
             return None
-
         handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
         if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
+            self._drop_file_upload_locked(key)
             return None
-        handle_state = handle._impl
+        content = _freeze_upload_content(state["content"])
+        value = UploadedFile(name=state["filename"], content=content)
+        return handle, value, tuple(handle._impl.update_cb)
 
-        value = UploadedFile(
-            name=state["filename"],
-            content=b"".join(state["parts"][i] for i in range(state["part_count"])),
-        )
+    def _commit_file_upload_completion_locked(
+        self,
+        key: tuple[ClientId, str],
+        prepared: tuple[
+            GuiUploadButtonHandle,
+            UploadedFile,
+            tuple[Callable[..., Any], ...],
+        ],
+    ) -> tuple[
+        ClientId,
+        GuiUploadButtonHandle,
+        UploadedFile,
+        tuple[Callable[..., Any], ...],
+    ]:
+        """Commit a prepared upload only after its final ACK is admitted."""
+        state = self._current_file_upload_states[key]
+        handle, value, callbacks = prepared
+        source_uuid = state["source_component_uuid"]
+        replaced_bytes = self._retained_file_upload_bytes.get(source_uuid, 0)
+        self._server._complete_file_upload(state["reserved_bytes"], replaced_bytes)
+        self._current_file_upload_states.pop(key)
+        self._retained_file_upload_bytes[source_uuid] = len(value.content)
+        handle._impl.value = value
+        handle._impl.update_timestamp = time.time()
+        return state["client_id"], handle, value, callbacks
 
-        # Update state.
-        handle_state.value = value
-        handle_state.update_timestamp = time.time()
-        return state["client_id"], handle, tuple(handle_state.update_cb)
+    def _admit_upload_ack_locked(
+        self,
+        key: tuple[ClientId, str],
+        ack: FileTransferPartAck,
+        prepared: tuple[
+            GuiUploadButtonHandle,
+            UploadedFile,
+            tuple[Callable[..., Any], ...],
+        ]
+        | None,
+    ) -> (
+        tuple[
+            ClientId,
+            GuiUploadButtonHandle,
+            UploadedFile,
+            tuple[Callable[..., Any], ...],
+        ]
+        | None
+    ):
+        """Reserve final owner state before ACK, then commit without a gap."""
+        if prepared is None:
+            if not self._queue_upload_message(key[0], ack):
+                self._drop_file_upload_locked(key)
+            return None
+        handle, value, _ = prepared
+        try:
+            with self._gui_resource_transaction_locked(
+                handle._impl.uuid, value, handle._impl.props
+            ):
+                if not self._queue_upload_message(key[0], ack):
+                    raise _UploadAckRejected
+                return self._commit_file_upload_completion_locked(key, prepared)
+        except _UploadAckRejected:
+            self._drop_file_upload_locked(key)
+            return None
+        except (ValueError, RuntimeError):
+            self._drop_file_upload_locked(key)
+            self._queue_upload_abort(key[0], key[1], "Server upload storage capacity is full.")
+            return None
 
-    def _dispatch_file_upload_completion(
+    async def _dispatch_file_upload_completion(
         self,
         completion: tuple[
             ClientId,
             GuiUploadButtonHandle,
+            UploadedFile,
             tuple[Callable[..., Any], ...],
         ],
     ) -> None:
         """Run completion callbacks without holding the upload-state lock."""
-        client_id, handle, callbacks = completion
+        client_id, handle, value, callbacks = completion
         client = self._resolve_client(client_id)
         if client is None:
             return
         for cb in callbacks:
-            if inspect.iscoroutinefunction(cb):
-                _schedule_coroutine(
-                    self._event_loop,
-                    cb(GuiEvent(client, client_id, handle)),
-                )
-            else:
-                self._thread_executor.submit(
-                    cb, GuiEvent(client, client_id, handle)
-                ).add_done_callback(print_async_errors)
+            await self._server._await_user_callback(cb, GuiEvent(client, client_id, handle, value))
 
     def _handle_file_transfer_part(
         self, client_id: ClientId, message: _messages.FileTransferPart
-    ) -> None:
-        key = (client_id, message.transfer_uuid)
+    ) -> Coroutine[Any, Any, None] | None:
+        transfer_uuid = message.transfer_uuid
+        if not _valid_protocol_identifier(transfer_uuid):
+            return
+        key = (client_id, transfer_uuid)
         completion = None
         with self._file_upload_lock:
             state = self._current_file_upload_states.get(key)
             if state is None:
                 return
-            if message.source_component_uuid != state["source_component_uuid"]:
+
+            content = message.content
+            envelope_valid = (
+                _valid_protocol_identifier(message.source_component_uuid)
+                and type(message.part_index) is int
+                and isinstance(content, bytes)
+            )
+            if not envelope_valid:
+                self._drop_file_upload_locked(key)
+                self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload part.")
                 return
+            content = cast(bytes, content)
+
             handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
-            if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
-                self._current_file_upload_states.pop(key, None)
-                return
-            if not 0 <= message.part_index < state["part_count"]:
-                return
-            if message.part_index in state["parts"]:
-                return
-            transferred_bytes = state["transferred_bytes"] + len(message.content)
-            if transferred_bytes > state["total_bytes"]:
-                self._current_file_upload_states.pop(key, None)
+            expected_size = min(
+                _FILE_UPLOAD_PART_BYTES,
+                state["total_bytes"] - state["transferred_bytes"],
+            )
+            valid_part = (
+                message.source_component_uuid == state["source_component_uuid"]
+                and isinstance(handle, GuiUploadButtonHandle)
+                and not handle._impl.removed
+                and message.part_index == state["next_part_index"]
+                and len(content) == expected_size
+                and expected_size > 0
+            )
+            transferred_bytes = state["transferred_bytes"] + len(content)
+            next_part_index = state["next_part_index"] + 1
+            parts_remaining = state["part_count"] - next_part_index
+            valid_part = (
+                valid_part
+                and parts_remaining >= 0
+                and (parts_remaining == 0) == (transferred_bytes == state["total_bytes"])
+            )
+            if not valid_part:
+                self._drop_file_upload_locked(key)
+                self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload part.")
                 return
 
-            state["parts"][message.part_index] = message.content
+            try:
+                state["content"].extend(content)
+            except MemoryError:
+                self._drop_file_upload_locked(key)
+                self._queue_upload_abort(client_id, transfer_uuid, "Server could not store upload.")
+                return
             state["transferred_bytes"] = transferred_bytes
-            total_bytes = state["total_bytes"]
-            self._queue_upload_ack(
-                client_id,
+            state["next_part_index"] = next_part_index
+            prepared_completion = None
+            if parts_remaining == 0:
+                try:
+                    prepared_completion = self._prepare_file_upload_completion_locked(key)
+                except MemoryError:
+                    self._drop_file_upload_locked(key)
+                    self._queue_upload_abort(
+                        client_id, transfer_uuid, "Server could not store upload."
+                    )
+                    return
+            completion = self._admit_upload_ack_locked(
+                key,
                 FileTransferPartAck(
                     source_component_uuid=state["source_component_uuid"],
-                    transfer_uuid=message.transfer_uuid,
+                    transfer_uuid=transfer_uuid,
                     transferred_bytes=transferred_bytes,
-                    total_bytes=total_bytes,
+                    total_bytes=state["total_bytes"],
                 ),
+                prepared_completion,
             )
 
-            if len(state["parts"]) < state["part_count"]:
-                return
-            if transferred_bytes != total_bytes:
-                self._current_file_upload_states.pop(key, None)
-                return
-            completion = self._complete_file_upload_locked(key)
+        if completion is not None and completion[3]:
+            return self._dispatch_file_upload_completion(completion)
+        return None
 
-        if completion is not None:
-            self._dispatch_file_upload_completion(completion)
+    def _handle_file_transfer_abort(
+        self, client_id: ClientId, message: _messages.FileTransferAbort
+    ) -> None:
+        """Release a browser-cancelled or timed-out upload."""
+        if not _valid_protocol_identifier(message.transfer_uuid):
+            return
+        with self._file_upload_lock:
+            self._drop_file_upload_locked((client_id, message.transfer_uuid))
 
     def _discard_file_uploads(
         self,
@@ -942,35 +1425,80 @@ class GuiApi(GuiContainer):
                 )
             ]
             for key in stale:
-                self._current_file_upload_states.pop(key, None)
+                self._drop_file_upload_locked(key)
+            if source_component_uuid is not None:
+                retained = self._retained_file_upload_bytes.pop(source_component_uuid, 0)
+                if retained:
+                    self._server._release_retained_file_upload(retained)
 
-    def _discard_client_work(self, client_id: ClientId) -> None:
+    def _retire_scope_without_queue(self) -> None:
+        """Terminally retire every owner after disconnect or server shutdown."""
+        with self._lock:
+            if self._terminal:
+                return
+            self._terminal = True
+            root = self._container_handle_from_uuid.get("root")
+            if isinstance(root, _RootGuiContainer):
+                _discard_gui_subtree(root, self)
+            for modal in tuple(self._modal_handle_from_uuid.values()):
+                _discard_gui_subtree(modal)
+                modal.closed = True
+                modal._create_message = None
+            for command in tuple(self._command_handle_from_uuid.values()):
+                command._retire_without_queue_locked()
+            for notification in tuple(self._notification_handle_from_uuid.values()):
+                notification._retire_without_queue()
+            self._modal_handle_from_uuid.clear()
+            self._command_handle_from_uuid.clear()
+            self._notification_handle_from_uuid.clear()
+            self._notification_text_units_from_uuid.clear()
+            self._notification_text_units = 0
+            self._gui_input_handle_from_uuid.clear()
+            self._container_handle_from_uuid = {"root": _RootGuiContainer({})}
+            self._container_depth_from_uuid = {"root": 0}
+            # Defensive release for any record not reachable from a corrupted tree.
+            for uuid in tuple(self._resource_from_gui_uuid):
+                self._release_gui_resource_locked(uuid)
+            self._live_component_count = 0
+        with self._programmatic_callback_lock:
+            released = sum(item[2] for item in self._programmatic_callback_queue)
+            self._programmatic_callback_queue.clear()
+            self._programmatic_callback_retained_bytes -= released
+            self._programmatic_callback_scheduled = False
+
+    def _discard_client_work(
+        self, client_id: ClientId, *, release_retained_uploads: bool = False
+    ) -> None:
         """Discard connection-owned work that must not outlive its browser."""
         self._discard_file_uploads(client_id=client_id)
+        if release_retained_uploads:
+            with self._file_upload_lock:
+                for source_uuid, size_bytes in tuple(self._retained_file_upload_bytes.items()):
+                    handle = self._gui_input_handle_from_uuid.get(source_uuid)
+                    if isinstance(handle, GuiUploadButtonHandle):
+                        handle._impl.value = UploadedFile("", b"")
+                    self._server._release_retained_file_upload(size_bytes)
+                self._retained_file_upload_bytes.clear()
         self._discard_preview_work(client_id=client_id)
+        if release_retained_uploads:
+            self._retire_scope_without_queue()
 
     async def _handle_command_trigger(
         self, client_id: ClientId, message: _messages.CommandTriggerMessage
     ) -> None:
-        """Callback for handling command trigger messages from the command palette."""
-        handle = self._command_handle_from_uuid.get(message.uuid, None)
-        if handle is None or handle._impl.removed:
-            return
-        handle_state = handle._impl
-        if handle_state.props.disabled:
-            return
-
+        """Handle one command trigger using an immutable callback snapshot."""
         client = self._resolve_client(client_id)
         if client is None:
             return
+        with self._lock:
+            handle = self._command_handle_from_uuid.get(message.uuid)
+            if handle is None or handle._impl.removed or handle._impl.props.disabled:
+                return
+            callbacks = tuple(handle._impl.trigger_cb)
+            event = CommandEvent(client, client_id, handle)
 
-        for cb in tuple(handle_state.trigger_cb):
-            if inspect.iscoroutinefunction(cb):
-                await await_async_errors(cb(CommandEvent(client, client_id, handle)))
-            else:
-                self._thread_executor.submit(
-                    cb, CommandEvent(client, client_id, handle)
-                ).add_done_callback(print_async_errors)
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
     async def _handle_gui_close_modal(
         self, client_id: ClientId, message: _messages.GuiCloseModalMessage
@@ -986,10 +1514,11 @@ class GuiApi(GuiContainer):
         del client_id
         # Absent when the server closed the modal first, or when a second client
         # dismissed it in the same instant. Either way it is already gone.
-        handle = self._modal_handle_from_uuid.get(message.uuid, None)
-        if handle is None:
-            return
-        handle.close()
+        with self._lock:
+            handle = self._modal_handle_from_uuid.get(message.uuid)
+            if handle is None:
+                return
+            handle.close()
 
     def _get_container_uuid(self) -> str:
         """Container that new GUI elements in this execution context belong to."""
@@ -1008,14 +1537,63 @@ class GuiApi(GuiContainer):
         self._container_stack.set(stack[:-1])
 
     def reset(self) -> None:
-        """Reset the GUI."""
-        root_container = self._container_handle_from_uuid["root"]
-        while root_container._children:
-            next(iter(root_container._children.values())).remove()
-        while self._modal_handle_from_uuid:
-            next(iter(self._modal_handle_from_uuid.values())).close()
-        while self._command_handle_from_uuid:
-            next(iter(self._command_handle_from_uuid.values())).remove()
+        """Atomically remove every GUI-owned entity in this scope."""
+        with self._lock:
+            self._check_active_locked()
+            root_container = self._container_handle_from_uuid["root"]
+            children = tuple(root_container._children.values())
+            modals = tuple(self._modal_handle_from_uuid.values())
+            commands = tuple(self._command_handle_from_uuid.values())
+            notifications = tuple(self._notification_handle_from_uuid.values())
+            messages: list[_messages.Message] = []
+            for child in children:
+                if not isinstance(child, _GuiHandle):
+                    raise RuntimeError("root GUI registry contains an invalid owner")
+                if isinstance(child, GuiTabGroupHandle):
+                    descendants = tuple(
+                        uuid for tab in child._tab_handles for uuid in _gui_descendant_uuids(tab)
+                    )
+                    removed_tabs = tuple(
+                        uuid for tab in child._tab_handles for uuid in _tab_subtree_uuids(tab)
+                    )
+                elif isinstance(child, GuiContainer):
+                    descendants = _gui_descendant_uuids(child)
+                    removed_tabs = _gui_descendant_tab_uuids(child)
+                else:
+                    descendants = ()
+                    removed_tabs = ()
+                messages.append(_messages.GuiRemoveMessage(child.id, descendants, removed_tabs))
+            messages.extend(
+                _messages.GuiCloseModalMessage(
+                    modal.id,
+                    _gui_descendant_uuids(modal),
+                    _gui_descendant_tab_uuids(modal),
+                )
+                for modal in modals
+            )
+            messages.extend(_messages.RemoveCommandMessage(command.id) for command in commands)
+            messages.extend(
+                _messages.RemoveNotificationMessage(notification.id)
+                for notification in notifications
+            )
+            if messages:
+                self._websock_interface.queue_messages_or_raise(messages)
+
+            for child in children:
+                _retire_gui_handle_without_queue_locked(cast(_GuiHandle[Any], child))
+            root_container._children.clear()
+            for modal in modals:
+                _discard_gui_subtree(modal)
+                modal.closed = True
+                modal._create_message = None
+                self._container_handle_from_uuid.pop(modal.id, None)
+                self._container_depth_from_uuid.pop(modal.id, None)
+                self._modal_handle_from_uuid.pop(modal.id, None)
+                self._release_gui_resource_locked(f"modal:{modal.id}")
+            for command in commands:
+                command._retire_without_queue_locked()
+            for notification in notifications:
+                notification._retire_without_queue()
 
     def set_panel_label(self, label: str | None) -> None:
         """Set the main label that appears in the GUI panel.
@@ -1023,7 +1601,13 @@ class GuiApi(GuiContainer):
         Args:
             label: The new label.
         """
-        self._websock_interface.queue_message(_messages.SetGuiPanelLabelMessage(label))
+        label = cast(str | None, validate_renderer_string(label, "panel label", optional=True))
+        with self._lock:
+            self._check_active_locked()
+            with self._gui_resource_transaction_locked("panel", None, label):
+                self._websock_interface.queue_message_or_raise(
+                    _messages.SetGuiPanelLabelMessage(label)
+                )
 
     def configure_theme(
         self,
@@ -1048,16 +1632,20 @@ class GuiApi(GuiContainer):
                        changes their OS setting mid-session.
         """
 
-        if control_layout not in ("floating", "left", "right"):
+        if type(control_layout) is not str or control_layout not in (
+            "floating",
+            "left",
+            "right",
+        ):
             raise ValueError(
                 "control_layout must be 'floating', 'left', or 'right'. The"
                 " 'collapsible' and 'fixed' sidebar layouts were removed; use"
                 " 'left' or 'right' to start the panel docked to that edge."
             )
-        if dark_mode != "auto" and type(dark_mode) is not bool:
+        if not (type(dark_mode) is bool or (type(dark_mode) is str and dark_mode == "auto")):
             raise ValueError("dark_mode must be True, False, or 'auto'.")
 
-        self._websock_interface.queue_message(
+        self._websock_interface.queue_message_or_raise(
             _messages.ThemeConfigurationMessage(
                 control_layout=control_layout,
                 dark_mode=dark_mode,
@@ -1082,42 +1670,61 @@ class GuiApi(GuiContainer):
             loading: Whether the notification shows a loading icon.
             with_close_button: Whether the notification can be manually closed.
             auto_close_seconds: Time before the notification closes on its own;
-                ``None`` keeps it up until it is closed or removed.
+                ``None`` or ``0`` keeps it up until dismissed, removed, or updated to a positive timeout.
         """
-        if auto_close_seconds is not None:
-            _validate_number(auto_close_seconds, "auto_close_seconds")
-            if auto_close_seconds < 0:
-                raise ValueError("auto_close_seconds must be non-negative or None.")
-        handle = NotificationHandle(
-            _NotificationHandleState(
-                websock_interface=self._websock_interface,
-                uuid=_make_uuid(),
-                props=_messages.NotificationProps(
-                    title=title,
-                    body=body,
-                    loading=loading,
-                    with_close_button=with_close_button,
-                    auto_close_seconds=auto_close_seconds,
-                ),
-            )
-        )
-        handle._show()
+        title = cast(str, validate_renderer_string(title, "notification title"))
+        body = cast(str, validate_renderer_string(body, "notification body"))
+        if type(loading) is not bool:
+            raise TypeError("loading must be a bool")
+        if type(with_close_button) is not bool:
+            raise TypeError("with_close_button must be a bool")
+        auto_close_seconds = validate_auto_close_seconds(auto_close_seconds)
+        with self._lock:
+            self._check_active_locked()
+            if len(self._notification_handle_from_uuid) >= _GUI_NOTIFICATION_MAX:
+                raise RuntimeError(
+                    f"A GUI scope cannot own more than {_GUI_NOTIFICATION_MAX} notifications."
+                )
+            notification_uuid = _make_uuid()
 
-        if auto_close_seconds is not None:
-            # Auto-close happens in each client, so nothing server-side would
-            # ever retire the notification: without this, every auto-closed
-            # toast is replayed to each newly connecting client, forever. The
-            # tombstone replaces the show message in the broadcast buffer; the
-            # handle is left usable, so this is not a `remove()`.
-            def _expire() -> None:
-                if not handle._impl.removed:
-                    self._websock_interface.queue_message(
-                        _messages.RemoveNotificationMessage(handle._impl.uuid)
-                    )
+            def retire(uuid: str) -> None:
+                with self._lock:
+                    self._notification_handle_from_uuid.pop(uuid, None)
+                    self._release_notification_resource_locked(uuid)
 
-            self._event_loop.call_soon_threadsafe(
-                self._event_loop.call_later, auto_close_seconds, _expire
+            def notification_resources(
+                props: _messages.NotificationProps,
+            ) -> ContextManager[object]:
+                return self._notification_resource_transaction_locked(notification_uuid, props)
+
+            handle = NotificationHandle(
+                _NotificationHandleState(
+                    websock_interface=self._websock_interface,
+                    event_loop=self._event_loop,
+                    uuid=notification_uuid,
+                    state_lock=self._lock,
+                    on_terminal=retire,
+                    resource_transaction=notification_resources,
+                    props=_messages.NotificationProps(
+                        title=title,
+                        body=body,
+                        loading=loading,
+                        with_close_button=with_close_button,
+                        auto_close_seconds=auto_close_seconds,
+                    ),
+                )
             )
+            self._notification_handle_from_uuid[notification_uuid] = handle
+            try:
+                with self._notification_resource_transaction_locked(
+                    notification_uuid, handle._impl.props
+                ):
+                    handle._show()
+            except BaseException:
+                self._notification_handle_from_uuid.pop(notification_uuid, None)
+                handle._retire_without_queue()
+                raise
+
         return handle
 
     @not_container_scoped
@@ -1166,6 +1773,18 @@ class GuiApi(GuiContainer):
             :meth:`CommandHandle.on_trigger`, update properties, or remove the
             command.
         """
+        label = cast(str, validate_renderer_string(label, "command label"))
+        description = cast(
+            str | None,
+            validate_renderer_string(description, "command description", optional=True),
+        )
+        if callback is not None and not callable(callback):
+            raise TypeError("callback must be callable or None")
+        if type(disabled) is not bool:
+            raise TypeError("disabled must be a bool")
+        valid_hotkeys = get_args(_messages.HotkeyKey)
+        if hotkey is not None and (type(hotkey) is not str or hotkey not in valid_hotkeys):
+            raise ValueError(f"hotkey must be one of {valid_hotkeys!r} or None")
         if hotkey is None and modifier is not None:
             raise ValueError("add_command(modifier=...) requires hotkey= to also be set.")
         # Validate + canonicalize the modifier string. Raises on bad input.
@@ -1179,8 +1798,6 @@ class GuiApi(GuiContainer):
             disabled=disabled,
             _icon_html=None if icon is None else svg_from_icon(icon),
         )
-        # Register in the local map before publishing, so an immediate
-        # trigger from the client can be resolved here.
         handle_state = _CommandHandleState(
             uuid=command_uuid,
             gui_api=self,
@@ -1188,28 +1805,32 @@ class GuiApi(GuiContainer):
             icon=icon,
         )
         handle = CommandHandle(handle_state)
-        self._command_handle_from_uuid[command_uuid] = handle
-        self._websock_interface.queue_message(
-            _messages.RegisterCommandMessage(
-                uuid=command_uuid,
-                props=props,
-            )
-        )
         if callback is not None:
-            # The shorthand callback takes no arguments; adapt it to the
-            # event-taking signature that on_trigger expects.
-            if inspect.iscoroutinefunction(callback):
+            # Install the shorthand before publishing: a client can trigger
+            # the command as soon as its registration reaches the browser.
+            def trigger(_: CommandEvent) -> Any:
+                return callback()
 
-                async def trigger_async(_: CommandEvent) -> None:
-                    await callback()
+            handle_state.trigger_cb.append(trigger)
 
-                handle.on_trigger(trigger_async)
-            else:
-
-                def trigger_sync(_: CommandEvent) -> None:
-                    callback()
-
-                handle.on_trigger(trigger_sync)
+        # Register in the local map before publishing, so an immediate
+        # trigger from the client can be resolved here.
+        with self._lock:
+            self._check_active_locked()
+            if len(self._command_handle_from_uuid) >= _GUI_COMMAND_MAX:
+                raise RuntimeError(f"A GUI scope cannot own more than {_GUI_COMMAND_MAX} commands.")
+            self._command_handle_from_uuid[command_uuid] = handle
+            try:
+                with self._gui_resource_transaction_locked(f"command:{command_uuid}", None, props):
+                    self._websock_interface.queue_message_or_raise(
+                        _messages.RegisterCommandMessage(
+                            uuid=command_uuid,
+                            props=props,
+                        )
+                    )
+            except BaseException:
+                self._command_handle_from_uuid.pop(command_uuid, None)
+                raise
         return handle
 
     def add_folder(
@@ -1242,12 +1863,10 @@ class GuiApi(GuiContainer):
             expand_by_default=expand_by_default,
             visible=visible,
         )
-        self._websock_interface.queue_message(
-            _messages.GuiFolderMessage(
-                uuid=folder_container_id,
-                container_uuid=self._get_container_uuid(),
-                props=props,
-            )
+        message = _messages.GuiFolderMessage(
+            uuid=folder_container_id,
+            container_uuid=self._get_container_uuid(),
+            props=props,
         )
         return GuiFolderHandle(
             _GuiHandleState(
@@ -1255,7 +1874,8 @@ class GuiApi(GuiContainer):
                 self,
                 None,
                 props=props,
-                parent_container_id=self._get_container_uuid(),
+                parent_container_id=message.container_uuid,
+                create_message=message,
             )
         )
 
@@ -1284,8 +1904,16 @@ class GuiApi(GuiContainer):
         # Reset parted from Submit -- they are opposite moves, and joining
         # them would invite the wrong one -- with the accent behind Submit alone.
         with handle:
-            handle.actions = self.add_button(
-                ("Reset", "Submit"), color=("default", "inverse"), merge=False
+            handle.actions = self._add_button_group(
+                ("Reset", "Submit"),
+                label=None,
+                color=("default", "inverse"),
+                merge=False,
+                disabled=False,
+                visible=True,
+                hint=None,
+                order=_GUI_FORM_ACTION_ORDER,
+                _is_form_actions=True,
             )
 
         def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
@@ -1309,9 +1937,11 @@ class GuiApi(GuiContainer):
         no popout and no row of its own, just the field's own row with a send
         button on the end of it. One field is not worth a door.
 
-        Exactly one field goes inside -- a second raises :class:`ValueError`
-        when the form's context closes. Sending is the button, or Enter in a
-        single-line text input, and both fire :meth:`GuiFormHandle.on_submit`.
+        Exactly one direct, editable field goes inside. A sibling row, nested
+        container, or second field raises :class:`ValueError` before it is
+        published.
+        Sending is the button, or Enter in a single-line text input, and both
+        fire :meth:`GuiFormHandle.on_submit`.
         There is no Reset: with one field, undoing is retyping.
 
         Args:
@@ -1372,12 +2002,10 @@ class GuiApi(GuiContainer):
             visible=visible,
             mini=mini,
         )
-        self._websock_interface.queue_message(
-            _messages.GuiFormMessage(
-                uuid=form_container_id,
-                container_uuid=self._get_container_uuid(),
-                props=props,
-            )
+        message = _messages.GuiFormMessage(
+            uuid=form_container_id,
+            container_uuid=self._get_container_uuid(),
+            props=props,
         )
         handle = GuiFormHandle(
             _GuiHandleState(
@@ -1385,7 +2013,8 @@ class GuiApi(GuiContainer):
                 self,
                 None,
                 props=props,
-                parent_container_id=self._get_container_uuid(),
+                parent_container_id=message.container_uuid,
+                create_message=message,
             )
         )
         return handle
@@ -1407,18 +2036,22 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used as a context to populate the modal.
         """
+        title = cast(str, validate_renderer_string(title, "modal title"))
+        with self._lock:
+            self._check_active_locked()
+            if len(self._modal_handle_from_uuid) >= _GUI_MODAL_MAX:
+                raise RuntimeError(f"A GUI scope cannot own more than {_GUI_MODAL_MAX} modals.")
         modal_container_id = _make_uuid()
         order = self._apply_default_order(order)
-        self._websock_interface.queue_message(
-            _messages.GuiModalMessage(
-                order=order,
-                uuid=modal_container_id,
-                title=title,
-            )
+        message = _messages.GuiModalMessage(
+            order=order,
+            uuid=modal_container_id,
+            title=title,
         )
         return GuiModalHandle(
             _gui_api=self,
             _uuid=modal_container_id,
+            _create_message=message,
         )
 
     def add_tab_group(
@@ -1448,7 +2081,6 @@ class GuiApi(GuiContainer):
                 visible=visible,
             ),
         )
-        self._websock_interface.queue_message(message)
         return GuiTabGroupHandle(
             _GuiHandleState(
                 message.uuid,
@@ -1456,6 +2088,7 @@ class GuiApi(GuiContainer):
                 value=None,
                 props=message.props,
                 parent_container_id=message.container_uuid,
+                create_message=message,
             )
         )
 
@@ -1466,16 +2099,23 @@ class GuiApi(GuiContainer):
         order: float | None = None,
         visible: bool = True,
     ) -> GuiHtmlHandle:
-        """Add HTML to the GUI.
+        """Add trusted, server-authored raw HTML to the GUI.
+
+        The browser injects this content without sanitizing it. HTML event
+        attributes, resource loads, and similar active content can act with the
+        page's authority. Never pass untrusted user input unless the caller has
+        sanitized it for this exact use.
 
         Args:
-            content: HTML content to display.
+            content: Trusted raw HTML to display. The bundled browser accepts
+                at most 1,048,576 UTF-16 code units per element.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
         Returns:
             A handle that can be used to interact with the GUI element.
         """
+        content = _validate_gui_html_content(content)
         message = _messages.GuiHtmlMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
@@ -1485,8 +2125,6 @@ class GuiApi(GuiContainer):
                 visible=visible,
             ),
         )
-        self._websock_interface.queue_message(message)
-
         handle = GuiHtmlHandle(
             _GuiHandleState(
                 message.uuid,
@@ -1494,6 +2132,7 @@ class GuiApi(GuiContainer):
                 None,
                 props=message.props,
                 parent_container_id=message.container_uuid,
+                create_message=message,
             ),
         )
         return handle
@@ -1521,8 +2160,6 @@ class GuiApi(GuiContainer):
                 visible=visible,
             ),
         )
-        self._websock_interface.queue_message(message)
-
         handle = GuiDividerHandle(
             _GuiHandleState(
                 message.uuid,
@@ -1530,6 +2167,7 @@ class GuiApi(GuiContainer):
                 None,
                 props=message.props,
                 parent_container_id=message.container_uuid,
+                create_message=message,
             ),
         )
         return handle
@@ -1557,38 +2195,57 @@ class GuiApi(GuiContainer):
         Returns:
             Handle for manipulating the image element.
         """
-        image_array = np.asarray(image)
-        if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
-            warnings.warn(
-                "Encoding an RGBA image as JPEG discards its alpha channel.",
-                stacklevel=2,
+        if label is not None and not isinstance(label, str):
+            raise TypeError("label must be a string or None")
+        if type(visible) is not bool:
+            raise TypeError("visible must be a bool")
+        if order is not None:
+            _validate_number(order, "order")
+        _validate_image_encoding_options(format, jpeg_quality)
+        if type(image) is not np.ndarray:
+            raise TypeError("image must be a base numpy.ndarray")
+        image_array = image
+        spec = _ndarray_snapshot_spec(image_array)
+        if spec[2] > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
+            raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
+        container_uuid = self._get_container_uuid()
+        resolved_order = self._apply_default_order(order)
+        with self._server._reserve_image_preparation(spec[2]):
+            image_array = _private_ndarray_snapshot(image_array, spec)
+            if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
+                warnings.warn(
+                    "Encoding an RGBA image as JPEG discards its alpha channel.",
+                    stacklevel=2,
+                )
+            resolved_format, data = encode_image_binary(
+                image_array, format, jpeg_quality=jpeg_quality
             )
-        resolved_format, data = encode_image_binary(image_array, format, jpeg_quality=jpeg_quality)
-        message = _messages.GuiImageMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiImageProps(
-                _data=data,
-                label=label,
-                _format=resolved_format,
-                order=self._apply_default_order(order),
-                visible=visible,
-            ),
-        )
-        self._websock_interface.queue_message(message)
-
-        return GuiImageHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-            ),
-            _image=image_array,
-            _jpeg_quality=jpeg_quality,
-            _user_format=format,
-        )
+            message = _messages.GuiImageMessage(
+                uuid=_make_uuid(),
+                container_uuid=container_uuid,
+                props=_messages.GuiImageProps(
+                    _data=data,
+                    label=label,
+                    _format=resolved_format,
+                    order=resolved_order,
+                    visible=visible,
+                ),
+            )
+            return GuiImageHandle(
+                _GuiHandleState(
+                    message.uuid,
+                    self,
+                    None,
+                    props=message.props,
+                    parent_container_id=message.container_uuid,
+                    create_message=message,
+                    decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
+                    retained_extra_bytes=int(image_array.nbytes),
+                ),
+                _image=image_array,
+                _jpeg_quality=jpeg_quality,
+                _user_format=format,
+            )
 
     def _ensure_plotly_js_sent(self) -> None:
         """Ensure every recipient of this API can render Plotly figures."""
@@ -1607,7 +2264,10 @@ class GuiApi(GuiContainer):
         installed.
 
         Args:
-            figure: Plotly figure to display.
+            figure: Plotly figure to snapshot and display. The handle does
+                not retain this mutable object; its ``figure`` getter rebuilds
+                an independent copy from bounded JSON. The final JSON must fit
+                the bundled browser's 16,777,216 UTF-16-code-unit render limit.
             config: Plotly config dict merged into the figure JSON. Controls
                 display options like ``{"displayModeBar": False}``. Values
                 must be JSON-serializable. See
@@ -1622,23 +2282,26 @@ class GuiApi(GuiContainer):
         """
 
         _validate_positive_number(aspect, "aspect")
+        if type(visible) is not bool:
+            raise TypeError("visible must be a bool")
+        if order is not None:
+            _validate_number(order, "order")
+        with self._server._reserve_renderer_preparation():
+            plotly_json, _ = _plotly_json_and_config(figure, config)
 
-        # Plotly must be available before the figure creation message.
+        # Plotly must be available before the valid figure creation message.
         self._ensure_plotly_js_sent()
 
-        # After plotly.min.js has been sent, we can send the plotly figure.
         message = _messages.GuiPlotlyMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiPlotlyProps(
                 order=self._apply_default_order(order),
-                _plotly_json_str=_plotly_json_with_config(figure, config),
+                _plotly_json_str=plotly_json,
                 aspect=aspect,
                 visible=visible,
             ),
         )
-        self._websock_interface.queue_message(message)
-
         return GuiPlotlyHandle(
             _GuiHandleState(
                 message.uuid,
@@ -1646,9 +2309,8 @@ class GuiApi(GuiContainer):
                 value=None,
                 props=message.props,
                 parent_container_id=message.container_uuid,
-            ),
-            _figure=figure,
-            _config=config,
+                create_message=message,
+            )
         )
 
     @overload
@@ -1762,12 +2424,12 @@ class GuiApi(GuiContainer):
             raise ValueError(
                 "merge= is about the gaps between buttons in a row; a single button has none."
             )
-        if not isinstance(color, str):
+        if type(color) is not str:
             raise ValueError(
                 "color= takes one role per button, and a single button is one button;"
                 " pass the role itself rather than a sequence."
             )
-        _validate_button_color(color)
+        color = _validate_button_color(color)
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
@@ -1826,7 +2488,7 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        _validate_button_color(color)
+        color = _validate_button_color(color)
 
         # Re-wrap the GUI handle with a button interface.
         uuid = _make_uuid()
@@ -1884,10 +2546,10 @@ class GuiApi(GuiContainer):
                 :class:`~pathlib.Path` is read when the button is pressed and
                 streamed a chunk at a time, so the file may change, or outgrow
                 memory, after the button is made. A function is called on each
-                press with the click event and returns either -- run in a
-                thread pool if defined with ``def``, on the event loop if
-                defined with ``async def``. Note that a `str` is neither: text
-                has to be encoded, and a path has to be a Path.
+                press with the click event and returns either. Providers must
+                be synchronous callables; they run in the callback thread
+                pool. Note that a `str` is neither: text has to be encoded,
+                and a path has to be a Path.
             filename: Name the file is saved under. Optional only when the
                 contents come from a path, whose own name is then used.
             label: Optional label for the row; see :meth:`add_button`.
@@ -1904,8 +2566,11 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        _validate_button_color(color)
-        _validate_file_content(content, filename, "add_download_button()")
+        color = _validate_button_color(color)
+        content = cast(
+            DownloadContent,
+            _validate_file_content(content, filename, "add_download_button()"),
+        )
 
         uuid = _make_uuid()
         order = self._apply_default_order(order)
@@ -1928,8 +2593,10 @@ class GuiApi(GuiContainer):
             props=props,
         )
 
+        state = self._create_gui_input(False, message, is_button=True)
+        state.retained_extra_bytes = len(cast(bytes, content)) if type(content) is bytes else 0
         handle = GuiDownloadButtonHandle(
-            self._create_gui_input(False, message, is_button=True),
+            state,
             _icon=icon,
             _content=content,
             _filename=filename,
@@ -1987,7 +2654,7 @@ class GuiApi(GuiContainer):
             text: Text on the button's face.
             content: What to show, as in :meth:`add_download_button`: bytes, a
                 :class:`~pathlib.Path` read when the button is pressed, or a
-                function of the click event returning either.
+                synchronous function of the click event returning either.
             filename: Name the file is shown under. Optional only when the
                 contents come from a path, whose own name is then used.
             label: Optional label for the row; see :meth:`add_button`.
@@ -2012,8 +2679,11 @@ class GuiApi(GuiContainer):
             A handle that can be used to interact with the GUI element.
         """
 
-        _validate_button_color(color)
-        _validate_file_content(content, filename, "add_preview_button()")
+        color = _validate_button_color(color)
+        content = cast(
+            PreviewContent,
+            _validate_file_content(content, filename, "add_preview_button()"),
+        )
         _validate_nonnegative_integer(max_bytes, "max_bytes")
 
         uuid = _make_uuid()
@@ -2036,8 +2706,10 @@ class GuiApi(GuiContainer):
             ),
         )
 
+        state = self._create_gui_input(False, message, is_button=True)
+        state.retained_extra_bytes = len(cast(bytes, content)) if type(content) is bytes else 0
         handle = GuiPreviewButtonHandle(
-            self._create_gui_input(False, message, is_button=True),
+            state,
             _icon=icon,
             _content=content,
             _filename=filename,
@@ -2056,6 +2728,7 @@ class GuiApi(GuiContainer):
         visible: bool,
         hint: str | None,
         order: float | None,
+        _is_form_actions: bool = False,
     ) -> GuiButtonGroupHandle:
         """The many-faced half of :meth:`add_button`."""
         options = _string_options(options, "add_button()")
@@ -2081,6 +2754,7 @@ class GuiApi(GuiContainer):
                     ),
                 ),
                 is_button=True,
+                is_form_actions=_is_form_actions,
             ),
         )
 
@@ -2180,12 +2854,12 @@ class GuiApi(GuiContainer):
                 raise ValueError(
                     "merge= is about the gaps between toggles in a row; a single toggle has none."
                 )
-            if not isinstance(color, str):
+            if type(color) is not str:
                 raise ValueError(
                     "color= takes one role per toggle, and a single toggle is one"
                     " toggle; pass the role itself rather than a sequence."
                 )
-            _validate_button_color(color)
+            color = _validate_button_color(color)
             if multiple or required is not None:
                 raise ValueError(
                     "multiple= and required= are about how many options in a ROW may be"
@@ -2366,14 +3040,32 @@ class GuiApi(GuiContainer):
         value = initial_value
         if not isinstance(value, str):
             raise ValueError(f"initial_value must be a string, not {type(value).__name__}.")
+        value = _validate_unicode_string(value, "text input value")
+        if utf16_code_unit_length_exceeds(value, _GUI_TEXT_MAX_UTF16_CODE_UNITS):
+            raise ValueError("Text exceeds the 1 Mi-character browser render limit.")
         if rows is not None:
-            if isinstance(rows, bool) or not isinstance(rows, int) or rows < 1:
+            if type(rows) is not int or rows < 1:
                 raise ValueError(
                     f"rows= is a height in lines and must be a positive integer; got {rows!r}."
                 )
+        if type(editable) is not bool or type(markdown) is not bool or type(multiline) is not bool:
+            raise TypeError("editable, markdown, and multiline must be bools.")
+        if markdown and editable:
+            raise ValueError("markdown text must be read-only (editable=False).")
+        if image_root is not None:
+            if not isinstance(image_root, Path):
+                raise TypeError("image_root must be a pathlib.Path or None.")
+            image_root = Path(os.fspath(image_root))
+        source = _gui_text_source(
+            value,
+            markdown=markdown,
+            editable=editable,
+            image_root=image_root,
+            server=self._server,
+        )
         uuid = _make_uuid()
         order = self._apply_default_order(order)
-        handle = GuiTextHandle(
+        return GuiTextHandle(
             self._create_gui_input(
                 value,
                 message=_messages.GuiTextMessage(
@@ -2390,17 +3082,12 @@ class GuiApi(GuiContainer):
                         markdown=markdown,
                         multiline=multiline,
                         rows=rows,
-                        _source=value,
+                        _source=source,
                     ),
                 ),
             ),
             _image_root=image_root,
         )
-        # Resolving the image paths needs the root, so it cannot be done above:
-        # the handle is what holds it. Nothing is sent twice -- the create
-        # message is still queued, and this updates it before it goes out.
-        handle._refresh_source()
-        return handle
 
     def add_list(
         self,
@@ -2441,13 +3128,14 @@ class GuiApi(GuiContainer):
         """
         if isinstance(initial_value, str):
             raise ValueError("add_list() initial_value must be a sequence, not one string.")
-        entries = tuple(initial_value)
+        entries = _bounded_tuple(initial_value, "list")
         for entry in entries:
             if not isinstance(entry, str):
                 raise ValueError(
                     "add_list() holds text entries, so initial_value= is a sequence of"
                     f" strings; got {entry!r}. Pass str(...) for anything else."
                 )
+            _validate_collection_string(entry, "list")
         uuid = _make_uuid()
         order = self._apply_default_order(order)
         return GuiListHandle(
@@ -2594,21 +3282,25 @@ class GuiApi(GuiContainer):
         # Incoming client edits are cast to the type of the stored value, so an
         # int value with float bounds would truncate every edit. Promote it.
         if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
-            value = float(value)  # type: ignore
+            value = cast(IntOrFloat, float(value))
 
         if step is None:
             # It's ok that `step` is always a float, even if the value is an integer,
             # because things all become `number` types after serialization.
-            step = float(
-                np.min(
-                    [
-                        _compute_step(value),
-                        _compute_step(min),
-                        _compute_step(max),
-                    ]
-                )
-            )  # type: ignore[assignment]
-        assert step is not None  # Narrowing for the type checker.
+            step = cast(
+                IntOrFloat,
+                float(
+                    np.min(
+                        [
+                            _compute_step(value),
+                            _compute_step(min),
+                            _compute_step(max),
+                        ]
+                    )
+                ),
+            )
+        if step is None:
+            raise RuntimeError("number input step computation did not produce a value")
 
         uuid = _make_uuid()
         order = self._apply_default_order(order)
@@ -2839,10 +3531,12 @@ class GuiApi(GuiContainer):
         value = initial_value
         if value is None:
             value = options_tuple[0]
-        elif value not in options_tuple:
-            raise ValueError(
-                f"Dropdown initial_value {value!r} is not one of the options {options_tuple!r}."
-            )
+        else:
+            value = next((option for option in options_tuple if option == value), None)
+            if value is None:
+                raise ValueError(
+                    f"Dropdown initial_value is not one of the options {options_tuple!r}."
+                )
         uuid = _make_uuid()
         order = self._apply_default_order(order)
         return GuiDropdownHandle(
@@ -2899,7 +3593,6 @@ class GuiApi(GuiContainer):
                 visible=visible,
             ),
         )
-        self._websock_interface.queue_message(message)
         handle = GuiProgressBarHandle(
             _GuiHandleState(
                 message.uuid,
@@ -2907,6 +3600,7 @@ class GuiApi(GuiContainer):
                 value=initial_value,
                 props=message.props,
                 parent_container_id=message.container_uuid,
+                create_message=message,
             ),
         )
         return handle
@@ -2955,14 +3649,15 @@ class GuiApi(GuiContainer):
         _validate_positive_number(step, "step")
         if max < min:
             raise ValueError(f"max= must be at least min=; got {min} > {max}.")
-        step = builtins.min(step, max - min)
+        if max > min:
+            step = builtins.min(step, max - min)
         if not (min <= value <= max):
             raise ValueError(f"initial_value {value} is outside [{min}, {max}].")
 
         # Incoming client edits are cast to the type of the stored value, so an
         # int value with float bounds would truncate every edit. Promote it.
         if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
-            value = float(value)  # type: ignore
+            value = cast(IntOrFloat, float(value))
 
         uuid = _make_uuid()
         order = self._apply_default_order(order)
@@ -3033,7 +3728,7 @@ class GuiApi(GuiContainer):
         _validate_positive_number(step, "step")
         if max < min:
             raise ValueError(f"max= must be at least min=; got {min} > {max}.")
-        initial_value = tuple(initial_value)
+        initial_value = _bounded_tuple(initial_value, "multi-slider values")
         if not initial_value:
             raise ValueError("initial_value must contain at least one slider value.")
         for value in initial_value:
@@ -3062,7 +3757,7 @@ class GuiApi(GuiContainer):
             or type(step) is float
             or type(min_range) is float
         ):
-            initial_value = tuple(float(x) for x in initial_value)  # type: ignore
+            initial_value = cast(tuple[IntOrFloat, ...], tuple(float(x) for x in initial_value))
 
         uuid = _make_uuid()
         order = self._apply_default_order(order)
@@ -3196,14 +3891,16 @@ class GuiApi(GuiContainer):
         value: T,
         message: _GuiMessage,
         is_button: bool = False,
+        is_form_actions: bool = False,
     ) -> _GuiHandleState[T]:
         """Private helper for adding a simple GUI element."""
 
-        # Send add GUI input message.
-        assert isinstance(message, _messages.Message)
-        self._websock_interface.queue_message(message)
+        if not isinstance(message, _messages.Message):
+            raise TypeError("GUI input messages must derive from Message")
 
-        # Construct handle.
+        # Construct state first. The concrete handle registers itself and only
+        # then publishes this deferred creation message, so an event-loop
+        # consumer can never answer an element Python has not registered yet.
         handle_state = _GuiHandleState(
             props=message.props,
             gui_api=self,
@@ -3212,8 +3909,10 @@ class GuiApi(GuiContainer):
             parent_container_id=self._get_container_uuid(),
             update_cb=[],
             is_button=is_button,
+            is_form_actions=is_form_actions,
             sync_cb=None,
             uuid=message.uuid,
+            create_message=message,
         )
 
         # For broadcasted GUI handles, we should synchronize all clients.
@@ -3223,7 +3922,7 @@ class GuiApi(GuiContainer):
             def sync_other_clients(client_id: ClientId, updates: dict[str, Any]) -> None:
                 message = _messages.GuiUpdateMessage(handle_state.uuid, updates)
                 message.excluded_self_client = client_id
-                self._websock_interface.queue_message(message)
+                self._websock_interface.queue_message_or_raise(message)
 
             handle_state.sync_cb = sync_other_clients
 

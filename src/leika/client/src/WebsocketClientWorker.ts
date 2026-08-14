@@ -2,21 +2,27 @@ import * as msgpack from "@msgpack/msgpack";
 import AwaitLock from "await-lock";
 import { ZSTDDecoder } from "zstddec";
 
-import {
-  computeBinaryOffsets,
-  replaceBinaryPlaceholders,
-} from "./BinaryMessageDecode";
 import { ConnectionCounters, emptyCounters } from "./connectionStats";
+import { decodeHybridMessage } from "./hybridMessageDecode";
 import { newPacingState, paceBatch } from "./pacing";
+import { PendingRawFrameBudget } from "./pendingFrameBudget";
 import { shouldRetryWebsocket } from "./utils/shouldRetryWebsocket";
-import { LEIKA_PROTOCOL, LEIKA_VERSION } from "./VersionInfo";
-import { Message } from "./WebsocketMessages";
+import { LEIKA_VERSION } from "./VersionInfo";
+import { LEIKA_PROTOCOL, Message } from "./WebsocketMessages";
+import {
+  acquireConnectionMessageOrder,
+  ConnectionBatchTasks,
+  runWithDeferredRelease,
+} from "./websocketBatchOrdering";
 import { FatalWorkerEvent, WorkerFailureController } from "./workerFailure";
+import { WorkerBatchReceiptGate } from "./workerBatchReceipt";
+import { sendWithWebsocketBudget } from "./websocketSendBudget";
 
 export type WsWorkerIncoming =
   | { type: "send"; message: Message }
   | { type: "set_server"; server: string }
   | { type: "retry" }
+  | { type: "batch_received"; connectionId: number; batchId: number }
   | { type: "watch_stats"; watching: boolean };
 
 export type WsWorkerOutgoing =
@@ -26,7 +32,14 @@ export type WsWorkerOutgoing =
       versionMismatch: boolean;
       closeReason: string;
     }
-  | { type: "message_batch"; messages: Message[] }
+  | {
+      type: "message_batch";
+      messages: Message[];
+      connectionId: number;
+      batchId: number;
+      frameBytes: number;
+      metadataBytes: number;
+    }
   | { type: "stats"; counters: ConnectionCounters }
   | FatalWorkerEvent;
 
@@ -36,64 +49,6 @@ type WorkerScope = {
 };
 
 const workerScope = self as unknown as WorkerScope;
-
-type SerializedStruct = {
-  messages: Message[];
-  timestampSec: number;
-  binaryBufferLengths?: number[];
-};
-
-/**
- * Decode a hybrid wire format message: zstd-compressed msgpack metadata,
- * followed by raw (uncompressed) aligned binary buffers.
- *
- * Wire format:
- *   [8 bytes] decompressed size of msgpack (little-endian uint64)
- *   [8 bytes] compressed size of msgpack (little-endian uint64)
- *   [N bytes] zstd-compressed msgpack payload
- *   [P bytes] padding to 8-byte alignment
- *   [M bytes] concatenated binary buffers (each 8-byte aligned)
- *
- * Binary arrays in the msgpack are replaced with tagged placeholder objects.
- * These are reconstructed as typed array views directly into the WebSocket's
- * ArrayBuffer -- zero-copy for the binary array data.
- */
-function decodeHybridMessage(
-  buffer: ArrayBuffer,
-  zstdDecoder: { decode: (data: Uint8Array, size: number) => Uint8Array },
-): SerializedStruct & { buffer: ArrayBuffer } {
-  const headerView = new DataView(buffer);
-  const decompressedSize = Number(headerView.getBigUint64(0, true));
-  const compressedSize = Number(headerView.getBigUint64(8, true));
-
-  // Decompress msgpack portion only. Binary data is raw/uncompressed.
-  const compressedData = new Uint8Array(buffer, 16, compressedSize);
-  const decompressed = zstdDecoder.decode(compressedData, decompressedSize);
-  const data = msgpack.decode(decompressed) as SerializedStruct;
-
-  // Attach the raw buffer for postMessage transfer semantics.
-  // Mutate instead of spreading ({ ...data, buffer }) to avoid an extra
-  // object allocation on every incoming message.
-  const result = data as SerializedStruct & { buffer: ArrayBuffer };
-  result.buffer = buffer;
-
-  // If no binary buffers, return as-is. Message had no arrays.
-  const bufferLengths = data.binaryBufferLengths;
-  if (!bufferLengths || bufferLengths.length === 0) {
-    return result;
-  }
-
-  // Compute binary section offsets and replace placeholders with typed array views.
-  const binaryOffsets = computeBinaryOffsets(
-    bufferLengths,
-    16 + compressedSize,
-  );
-  for (const message of data.messages) {
-    replaceBinaryPlaceholders(message, buffer, binaryOffsets, bufferLengths);
-  }
-
-  return result;
-}
 
 {
   let server: string | null = null;
@@ -114,7 +69,11 @@ function decodeHybridMessage(
   const counters = emptyCounters(performance.now());
   let connectionsOpened = 0;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
-  const cancelPendingOrderedSends = new Set<() => void>();
+  let connectionBatchTasks: ConnectionBatchTasks | null = null;
+  let connectionFrameBudget: PendingRawFrameBudget | null = null;
+  let connectionReceiptGate: WorkerBatchReceiptGate | null = null;
+  let rejectCurrentSendQueue: ((reason: string) => void) | null = null;
+  let nextConnectionId = 0;
 
   const surfaceWorkerError = (error: unknown) => {
     const surfaced =
@@ -129,7 +88,13 @@ function decodeHybridMessage(
       server = null;
       if (statsTimer !== null) clearInterval(statsTimer);
       statsTimer = null;
-      for (const cancel of [...cancelPendingOrderedSends]) cancel();
+      connectionBatchTasks?.cancelAll();
+      connectionBatchTasks = null;
+      connectionReceiptGate?.reset();
+      connectionReceiptGate = null;
+      rejectCurrentSendQueue = null;
+      connectionFrameBudget?.reset();
+      connectionFrameBudget = null;
 
       const failedSocket = ws;
       ws = null;
@@ -180,7 +145,18 @@ function decodeHybridMessage(
     }
     try {
       const encoded = msgpack.encode(message);
-      ws.send(encoded);
+      const rejection = sendWithWebsocketBudget(ws, encoded);
+      if (rejection !== null) {
+        counters.droppedSends += 1;
+        const reject = rejectCurrentSendQueue;
+        if (reject === null) {
+          failure.fail(
+            "Connection worker lost its send-queue owner",
+            new Error(rejection),
+          );
+        } else reject(rejection);
+        return;
+      }
       counters.bytesSent += encoded.byteLength;
       counters.messagesSent += 1;
     } catch (error) {
@@ -233,6 +209,13 @@ function decodeHybridMessage(
   const tryConnect = () => {
     const targetServer = server;
     if (failure.hasFailed || targetServer === null) return;
+    connectionBatchTasks?.cancelAll();
+    connectionBatchTasks = null;
+    connectionReceiptGate?.reset();
+    connectionReceiptGate = null;
+    rejectCurrentSendQueue = null;
+    connectionFrameBudget?.reset();
+    connectionFrameBudget = null;
     const previousSocket = ws;
     ws = null;
     try {
@@ -263,6 +246,13 @@ function decodeHybridMessage(
       return;
     }
     const orderLock = new AwaitLock();
+    const batchTasks = new ConnectionBatchTasks();
+    const frameBudget = new PendingRawFrameBudget();
+    const connectionId = nextConnectionId;
+    nextConnectionId += 1;
+    let nextBatchId = 0;
+    connectionBatchTasks = batchTasks;
+    connectionFrameBudget = frameBudget;
     ws = socket;
     socket.binaryType = "arraybuffer";
 
@@ -278,6 +268,43 @@ function decodeHybridMessage(
         );
       }
     }, 5000);
+
+    function closeCurrentConnection(reason: string) {
+      if (failure.hasFailed || ws !== socket) return;
+      clearTimeout(retryTimeout);
+      ws = null;
+      if (rejectCurrentSendQueue === closeCurrentConnection) {
+        rejectCurrentSendQueue = null;
+      }
+      counters.connectedSinceMs = null;
+      batchTasks.cancelAll();
+      receiptGate.reset();
+      frameBudget.reset();
+      if (connectionBatchTasks === batchTasks) connectionBatchTasks = null;
+      if (connectionReceiptGate === receiptGate) connectionReceiptGate = null;
+      if (connectionFrameBudget === frameBudget) connectionFrameBudget = null;
+      try {
+        socket.close(1011, reason);
+      } catch (error) {
+        failure.fail(
+          "Connection worker could not close a rejected connection",
+          error,
+        );
+        return;
+      }
+      postOutgoing({
+        type: "closed",
+        versionMismatch: false,
+        closeReason: reason,
+      });
+    }
+    rejectCurrentSendQueue = closeCurrentConnection;
+    const receiptGate = new WorkerBatchReceiptGate(connectionId, () => {
+      closeCurrentConnection(
+        "Main thread did not admit a connection batch in time",
+      );
+    });
+    connectionReceiptGate = receiptGate;
 
     socket.onopen = () => {
       clearTimeout(retryTimeout);
@@ -295,6 +322,15 @@ function decodeHybridMessage(
       clearTimeout(retryTimeout);
       if (failure.hasFailed || ws !== socket) return;
       ws = null;
+      if (rejectCurrentSendQueue === closeCurrentConnection) {
+        rejectCurrentSendQueue = null;
+      }
+      batchTasks.cancelAll();
+      receiptGate.reset();
+      frameBudget.reset();
+      if (connectionBatchTasks === batchTasks) connectionBatchTasks = null;
+      if (connectionReceiptGate === receiptGate) connectionReceiptGate = null;
+      if (connectionFrameBudget === frameBudget) connectionFrameBudget = null;
       // Code 1002 is the server's protocol/version rejection.
       const versionMismatch = event.code === 1002;
 
@@ -323,28 +359,22 @@ function decodeHybridMessage(
         return;
       }
 
-      // Weighed here, before the buffer is handed to the main thread: posting
-      // it transfers ownership away and leaves `byteLength` at zero.
       const buffer = event.data;
-      counters.bytesReceived += buffer.byteLength;
-      const dataPromise = (async () => {
-        if (zstdReady === null || zstdDecoder === null) {
-          throw new Error("decoder is unavailable");
-        }
-        await zstdReady;
-        return decodeHybridMessage(buffer, zstdDecoder);
-      })().then(
-        (data) => ({ ok: true as const, data }),
-        (error: unknown) => {
-          // Attach this rejection handler immediately. Otherwise a decode that
-          // fails while waiting for the ordering lock becomes an unhandled
-          // rejection until that wait completes.
-          failure.fail("Connection worker could not decode a message", error);
-          return { ok: false as const };
-        },
-      );
+      // Admit the raw ArrayBuffer synchronously, before an await or zstd
+      // allocation. A paced predecessor can make WebSocket events burst; both
+      // bytes and frame objects are bounded for the whole socket generation.
+      const frameLease = frameBudget.admit(buffer.byteLength);
+      if (frameLease === null) {
+        closeCurrentConnection(
+          "Connection receive queue exceeded its browser safety limit",
+        );
+        return;
+      }
+      counters.bytesReceived += frameLease.sizeBytes;
 
-      // Preserve arrival order unless an earlier batch stalls for ten seconds.
+      // Lifecycle and component messages are order-sensitive. A stalled
+      // predecessor invalidates this connection; later batches never overtake
+      // and are not decoded ahead of it.
       const jsReceivedMs = performance.now();
       let acquiredLock = false;
       const releaseOrderLock = () => {
@@ -359,66 +389,92 @@ function decodeHybridMessage(
           );
         }
       };
+      const releaseFrame = () => {
+        frameLease.release();
+        releaseOrderLock();
+      };
 
-      try {
-        await orderLock.acquireAsync({ timeout: 10000 });
-        acquiredLock = true;
-      } catch {
-        if (failure.hasFailed) return;
-        // Timed out waiting for the in-order slot. Proceed without the lock
-        // (out of order) rather than calling release() on a lock we never
-        // acquired -- that would release another waiter's hold and corrupt the
-        // ordering state.
-        counters.outOfOrderBatches += 1;
-        console.warn("Order lock timed out; processing message out of order.");
-      }
-
-      let releaseDeferred = false;
-      try {
-        const decoded = await dataPromise;
-        if (!decoded.ok || failure.hasFailed || ws !== socket) return;
-        const data = decoded.data;
-
-        counters.messagesReceived += data.messages.length;
-        const messages = takePongs(data.messages, jsReceivedMs);
-        // All typed array views point into the original WebSocket ArrayBuffer.
-        // Transfer just that buffer instead of walking the entire message tree.
-        const sendBatch = () => {
-          try {
-            if (!failure.hasFailed && ws === socket) {
-              postOutgoing({ type: "message_batch", messages }, [data.buffer]);
-            }
-          } finally {
-            releaseOrderLock();
-          }
-        };
-
-        const delayMs = paceBatch(
-          pacing,
-          jsReceivedMs,
-          performance.now(),
-          data.timestampSec * 1000,
-        );
-        if (delayMs > 0) {
-          const cancel = () => {
-            cancelPendingOrderedSends.delete(cancel);
-            clearTimeout(timer);
-            releaseOrderLock();
-          };
-          const timer = setTimeout(() => {
-            cancelPendingOrderedSends.delete(cancel);
-            sendBatch();
-          }, delayMs);
-          cancelPendingOrderedSends.add(cancel);
-          releaseDeferred = true;
-        } else {
-          sendBatch();
+      await runWithDeferredRelease(releaseFrame, async (deferRelease) => {
+        try {
+          const acquired = await acquireConnectionMessageOrder(
+            orderLock,
+            batchTasks,
+          );
+          if (!acquired) return;
+          acquiredLock = true;
+        } catch (error) {
+          if (failure.hasFailed || ws !== socket || batchTasks.isClosed) return;
+          console.error("Connection message ordering failed:", error);
+          closeCurrentConnection("Message ordering timed out");
+          return;
         }
-      } catch (error) {
-        failure.fail("Connection worker could not process a message", error);
-      } finally {
-        if (!releaseDeferred) releaseOrderLock();
-      }
+
+        try {
+          if (failure.hasFailed || ws !== socket || batchTasks.isClosed) return;
+          if (zstdReady === null || zstdDecoder === null) {
+            throw new Error("decoder is unavailable");
+          }
+          await zstdReady;
+          if (failure.hasFailed || ws !== socket || batchTasks.isClosed) return;
+          const data = decodeHybridMessage(buffer, zstdDecoder);
+
+          counters.messagesReceived += data.messages.length;
+          const messages = takePongs(data.messages, jsReceivedMs);
+          // All typed array views point into the original WebSocket
+          // ArrayBuffer. Transfer just that buffer instead of walking the
+          // entire message tree.
+          const handOffBatch = () => {
+            if (failure.hasFailed || ws !== socket) return false;
+            const batchId = nextBatchId;
+            nextBatchId += 1;
+            return receiptGate.post(batchId, releaseFrame, () =>
+              postOutgoing(
+                {
+                  type: "message_batch",
+                  messages,
+                  connectionId,
+                  batchId,
+                  frameBytes: frameLease.sizeBytes,
+                  metadataBytes: data.metadataBytes,
+                },
+                [data.buffer],
+              ),
+            );
+          };
+
+          const delayMs = paceBatch(
+            pacing,
+            jsReceivedMs,
+            performance.now(),
+            data.timestampSec * 1000,
+          );
+          if (delayMs > 0) {
+            let unregister: () => void = () => undefined;
+            const cancel = () => {
+              unregister();
+              clearTimeout(timer);
+              releaseFrame();
+            };
+            const timer = setTimeout(() => {
+              unregister();
+              // A successful handoff transfers release ownership to the
+              // receipt gate. Failed/stale sends still release locally.
+              if (!handOffBatch()) releaseFrame();
+            }, delayMs);
+            unregister = batchTasks.add(cancel);
+            // The timer/cancellation callback now owns both the raw frame and
+            // ordering lock. Mark this only after task registration, since a
+            // closed generation can synchronously run `cancel` from `add`.
+            deferRelease();
+          } else {
+            if (handOffBatch()) deferRelease();
+          }
+        } catch (error) {
+          if (!failure.hasFailed && ws === socket && !batchTasks.isClosed) {
+            failure.fail("Connection worker could not decode a message", error);
+          }
+        }
+      });
     };
   };
 
@@ -442,6 +498,8 @@ function decodeHybridMessage(
       if (server !== null && shouldRetryWebsocket(ws?.readyState ?? null)) {
         tryConnect();
       }
+    } else if (data.type === "batch_received") {
+      connectionReceiptGate?.acknowledge(data.connectionId, data.batchId);
     }
   };
 }

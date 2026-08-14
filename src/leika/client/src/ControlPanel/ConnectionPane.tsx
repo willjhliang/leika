@@ -4,7 +4,7 @@ import {
   connectionStats,
   useConnectionReading,
 } from "../ConnectionStatsController";
-import { LEIKA_PROTOCOL } from "../VersionInfo";
+import { LEIKA_PROTOCOL } from "../WebsocketMessages";
 import { useViewer } from "../ViewerContext";
 import { usePeekHold } from "../dock/DockContext";
 import {
@@ -156,12 +156,6 @@ function ConnectionRows() {
         <StatRow
           label="Dropped"
           value={`${reading.droppedSends} sent while down`}
-        />
-      )}
-      {reading !== null && reading.outOfOrderBatches > 0 && (
-        <StatRow
-          label="Out of order"
-          value={`${reading.outOfOrderBatches} batches`}
         />
       )}
       {/* What a bug report would be asked for, next to the numbers that

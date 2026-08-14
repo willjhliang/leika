@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  RETAINED_DOWNLOAD_PRIORITY,
+  retainedDownloads,
+} from "./retainedDownloadBudget";
+import {
   abortFilePreviewTransfer,
   beginFilePreviewScroll,
   closeFilePreview,
   filePreviewStore,
   filePreviewWatchStore,
+  FILE_TEXT_PREVIEW_MAX_BYTES,
+  fileTextPreviewAllowed,
   finishFilePreviewScroll,
   formatBytes,
   isMediaKind,
@@ -20,6 +26,7 @@ import {
   resolveFilePreview,
   warmedContents,
   warmFilePreview,
+  type FileContents,
 } from "./filePreview";
 
 describe("previewKindFor", () => {
@@ -133,6 +140,13 @@ describe("formatBytes", () => {
   });
 });
 
+describe("text preview admission", () => {
+  it("accepts exactly 16 MiB and declines the next byte", () => {
+    expect(fileTextPreviewAllowed(FILE_TEXT_PREVIEW_MAX_BYTES)).toBe(true);
+    expect(fileTextPreviewAllowed(FILE_TEXT_PREVIEW_MAX_BYTES + 1)).toBe(false);
+  });
+});
+
 describe("the preview store", () => {
   const metadata = (id: string, sourceUuid: string | null = "button") => ({
     id,
@@ -143,7 +157,7 @@ describe("the preview store", () => {
     sourceUuid,
     sourceVersion: "1:4",
   });
-  const contents = () => ({
+  const contents = (): FileContents => ({
     url: `blob:${crypto.randomUUID()}`,
     blob: new Blob(["# hi"]),
   });
@@ -191,6 +205,7 @@ describe("the preview store", () => {
     expect(reloadIsOnItsWay("button")).toBe(false);
     expect(warmedContents("button", "warm.md", "1")).toBeNull();
     expect(revoke).toHaveBeenCalledWith(arrived.url);
+    expect(retainedDownloads.sizeBytes).toBe(0);
   });
 
   it("unwinds failed preview and reload transfers without losing good contents", () => {
@@ -251,8 +266,9 @@ describe("the preview store", () => {
     resolveFilePreview("a", fresh);
     expect(revoke).toHaveBeenCalledWith(early!.url);
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
-    // The warmed blob itself is still held for the next press.
-    expect(warmedContents("button", "notes.md", "1:4")).not.toBeNull();
+    // Opening consumes the warmed owner; it cannot duplicate the Blob behind
+    // the visible preview outside aggregate retained-byte accounting.
+    expect(warmedContents("button", "notes.md", "1:4")).toBeNull();
   });
 
   it("keeps warmed contents stable until an active scroll gesture ends", () => {
@@ -276,6 +292,18 @@ describe("the preview store", () => {
   it("has nothing warmed for a file nobody warmed", () => {
     expect(warmedContents("never", "never.md", "1")).toBeNull();
     expect(warmedContents(null, "never.md", "1")).toBeNull();
+  });
+
+  it("never stores a warm entry whose Blob lease is already inactive", () => {
+    const retained = retainedDownloads.retain(new Blob(["stale"]), {
+      priority: RETAINED_DOWNLOAD_PRIORITY.warm,
+    });
+    expect(retained).not.toBeNull();
+    retained!.release();
+
+    warmFilePreview("button", "stale.md", "1", retained!);
+    expect(warmedContents("button", "stale.md", "1")).toBeNull();
+    expect(retainedDownloads.sizeBytes).toBe(0);
   });
 
   it("never shares warmed bytes across sources or revisions", () => {
@@ -342,6 +370,32 @@ describe("the preview store", () => {
     finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(second);
     expect(revoke).toHaveBeenCalledWith(first.url);
+  });
+
+  it("watches from the visible version when a held reload is evicted", () => {
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    openFilePreview(metadata("a"));
+    const first = contents();
+    resolveFilePreview("a", first);
+    beginFilePreviewScroll("a");
+
+    const second = contents();
+    reload(second, { sourceVersion: "2:9" });
+    expect(filePreviewWatchStore.snapshot()?.sourceVersion).toBe("2:9");
+    expect(second.retained).toBeDefined();
+
+    second.retained!.evict();
+
+    expect(filePreviewStore.snapshot()?.contents).toBe(first);
+    expect(filePreviewWatchStore.snapshot()).toEqual({
+      sourceUuid: "button",
+      sourceVersion: "1:4",
+    });
+    expect(revoke).toHaveBeenCalledWith(second.url);
+    finishFilePreviewScroll("a");
+    expect(filePreviewStore.snapshot()?.contents).toBe(first);
   });
 
   it("keeps only the newest reload completed during one scroll gesture", () => {

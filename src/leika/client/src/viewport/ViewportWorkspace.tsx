@@ -7,8 +7,26 @@ import { cn } from "../lib/utils";
 
 import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
 import { guiLabelClassName } from "../components/guiLabelStyles";
-import { getPlotly, plotlyReady, PlotlyGlobal } from "../plotlyReady";
+import { RejectedImageStatus } from "../components/SafeImage";
+import {
+  createOwnedImageObjectUrl,
+  inspectEncodedImage,
+  matchingImageObjectUrl,
+  matchingImagePreparationFailure,
+  type OwnedImageObjectUrl,
+  type OwnedImagePreparationFailure,
+} from "../imageSafety";
+import {
+  IMAGE_DECODE_FAILURE_MESSAGE,
+  releaseFailedObjectUrl,
+  useImageDecodeError,
+} from "../imageDecodeError";
+import { usePlotlyRenderer } from "../hooks/usePlotlyRenderer";
 import { useViewer } from "../ViewerContext";
+import {
+  RASTER_PIXEL_BUDGET_MESSAGE,
+  useRasterPixelLease,
+} from "../useRasterPixelLease";
 import { motionExceedsThreshold } from "../dragUtils";
 import { prefersReducedMotion } from "../utils/motion";
 import { useColorScheme } from "../hooks/useColorScheme";
@@ -22,6 +40,7 @@ import {
   sameViewportLayout,
 } from "./layoutModel";
 import { parsePlotlyFigure, parsePlotlyThemeTemplates } from "./plotlyPayload";
+import ViewportMatplotlibRenderer from "./ViewportMatplotlibRenderer";
 import {
   GRID_EPSILON,
   DividerGeometry,
@@ -40,7 +59,6 @@ import {
 import { Spinner } from "../components/ui/spinner";
 import {
   ViewportImagePane,
-  ViewportMatplotlibPane,
   ViewportPane,
   ViewportPlotlyPane,
   ViewportViserPane,
@@ -1110,52 +1128,6 @@ function ViewportPaneRenderer({ pane }: { pane: ViewportPane }) {
   }
 }
 
-/** Static matplotlib figure, relayed as SVG.
- *
- * Rendered through an `img` rather than inlined into the document: SVG can
- * carry script, and an image context cannot run it. Vector scales for free,
- * so a pane resize needs no redraw in Python. */
-function ViewportMatplotlibRenderer({
-  pane,
-}: {
-  pane: ViewportMatplotlibPane;
-}) {
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    const url = URL.createObjectURL(
-      new Blob([pane.props._svg], { type: "image/svg+xml" }),
-    );
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [pane.props._svg]);
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        overflow: "hidden",
-        background: "var(--background)",
-      }}
-    >
-      {objectUrl === null ? null : (
-        <img
-          src={objectUrl}
-          alt={pane.props.title}
-          draggable={false}
-          style={{
-            display: "block",
-            width: "100%",
-            height: "100%",
-            // The figure keeps the proportions it was composed with.
-            objectFit: "contain",
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
 /** Interactive Plotly renderer that always fills its pane, tracking pane
  * resizes via ResizeObserver. */
 function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
@@ -1163,10 +1135,6 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
   // Figures without an explicit template follow Leika theme, which can
   // change at runtime (server-configured, URL-forced, or auto-detected).
   const colorScheme = useColorScheme();
-  // Used to imperatively call ``Plotly.react``, matching the control-panel
-  // Plotly component (see components/PlotlyComponent.tsx).
-  const plotRef = React.useRef<HTMLDivElement>(null);
-
   const themeParseResult = React.useMemo(
     () => parsePlotlyThemeTemplates(pane.props._theme_templates),
     [pane.props._theme_templates],
@@ -1190,65 +1158,28 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
       ? undefined
       : (themeTemplates[colorScheme] ?? themeTemplates.light));
 
-  const [plotlyMissing, setPlotlyMissing] = React.useState(false);
-  React.useEffect(() => {
-    if (parseError !== null || plotJson === null || width === 0 || height === 0)
-      return;
-    // Plotly is loaded globally by a RunJavascriptMessage that the server
-    // queues before any Plotly pane; a render that races it waits on the
-    // ready promise. If it never arrives (blocked or failed eval), show a
-    // fallback rather than a blank pane.
-    let cancelled = false;
-    const render = (plotly: PlotlyGlobal) => {
-      if (cancelled || plotRef.current === null) return;
-      setPlotlyMissing(false);
-      // A malformed figure must not take down the workspace; Plotly.react
-      // reports errors both synchronously and as a rejected promise.
-      try {
-        Promise.resolve(
-          plotly.react(
-            plotRef.current,
-            plotJson.data,
-            {
+  const request = React.useMemo(
+    () =>
+      plotJson === null
+        ? null
+        : {
+            figure: plotJson,
+            layout: {
               ...plotJson.layout,
               template: layoutTemplate,
               width,
               height,
               autosize: false,
             },
-            plotJson.config,
-          ),
-        ).catch((error) => console.error("Plotly render failed:", error));
-      } catch (error) {
-        console.error("Plotly render failed:", error);
-      }
-    };
-    plotlyReady.then((plotly) => {
-      if (!cancelled) render(plotly);
-    });
-    const fallback = window.setTimeout(() => {
-      if (!cancelled && getPlotly() === undefined) setPlotlyMissing(true);
-    }, 10_000);
-    return () => {
-      cancelled = true;
-      clearTimeout(fallback);
-    };
-  }, [plotJson, parseError, layoutTemplate, width, height]);
+          },
+    [plotJson, layoutTemplate, width, height],
+  );
+  const { plotRef, message: plotlyMessage } = usePlotlyRenderer({
+    request,
+    inputError: parseError,
+    ready: width > 0 && height > 0,
+  });
 
-  // Purge the Plotly instance on unmount so event listeners and (for gl
-  // traces) WebGL contexts don't leak each time a pane is removed.
-  React.useEffect(() => {
-    const node = plotRef.current;
-    return () => {
-      const plotly = getPlotly();
-      if (node !== null && plotly !== undefined) {
-        plotly.purge(node);
-      }
-    };
-  }, []);
-
-  const plotlyMessage =
-    parseError ?? (plotlyMissing ? "Plotly failed to load." : null);
   return (
     <div
       ref={ref}
@@ -1262,6 +1193,7 @@ function ViewportPlotlyRenderer({ pane }: { pane: ViewportPlotlyPane }) {
       <div ref={plotRef} />
       {plotlyMessage === null ? null : (
         <div
+          role="status"
           style={{
             position: "absolute",
             inset: 0,
@@ -1325,7 +1257,13 @@ function ViewportViserRenderer({ pane }: { pane: ViewportViserPane }) {
   );
 }
 
-function ViewportViserFrame({ src, title }: { src: string; title: string }) {
+export function ViewportViserFrame({
+  src,
+  title,
+}: {
+  src: string;
+  title: string;
+}) {
   const [loaded, setLoaded] = React.useState(false);
   return (
     <>
@@ -1336,7 +1274,7 @@ function ViewportViserFrame({ src, title }: { src: string; title: string }) {
       <iframe
         src={src}
         title={title}
-        referrerPolicy="strict-origin-when-cross-origin"
+        referrerPolicy="no-referrer"
         allow="fullscreen; clipboard-write"
         onLoad={() => setLoaded(true)}
         style={{
@@ -1377,20 +1315,72 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
   // whoever is looking at the image.
   const preferredFit = viewer.useSettings((state) => state.imageFit);
   const fit = IMAGE_FIT_OBJECT_FIT[pane.props.fit ?? preferredFit];
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
+  const mimeType = `image/${pane.props._format}`;
+  const admission = React.useMemo(
+    () =>
+      pane.props._data === null
+        ? null
+        : inspectEncodedImage(pane.props._data, mimeType),
+    [mimeType, pane.props._data],
+  );
+  const [ownedUrl, setOwnedUrl] = React.useState<OwnedImageObjectUrl | null>(
+    null,
+  );
+  const [urlFailure, setUrlFailure] =
+    React.useState<OwnedImagePreparationFailure | null>(null);
   React.useEffect(() => {
-    if (pane.props._data === null) {
-      setObjectUrl(null);
+    setOwnedUrl(null);
+    setUrlFailure(null);
+    if (pane.props._data === null || admission?.ok !== true) return;
+    const result = createOwnedImageObjectUrl(pane.props._data, mimeType);
+    if ("ok" in result) {
+      setUrlFailure({ data: pane.props._data, mimeType, failure: result });
       return;
     }
-    const url = URL.createObjectURL(
-      new Blob([pane.props._data], { type: "image/" + pane.props._format }),
-    );
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [pane.props._data, pane.props._format]);
+    setOwnedUrl(result);
+    return () => URL.revokeObjectURL(result.url);
+  }, [admission?.ok, mimeType, pane.props._data]);
 
-  if (objectUrl === null) {
+  const objectUrl = matchingImageObjectUrl(
+    ownedUrl,
+    pane.props._data,
+    mimeType,
+  );
+  const currentUrlFailure = matchingImagePreparationFailure(
+    urlFailure,
+    pane.props._data,
+    mimeType,
+  );
+  const decodeError = useImageDecodeError(objectUrl);
+  const pixels = useRasterPixelLease(
+    pane.props._data,
+    admission?.ok === true ? admission.size : null,
+  );
+  React.useEffect(
+    () => releaseFailedObjectUrl(objectUrl, decodeError.failed),
+    [decodeError.failed, objectUrl],
+  );
+
+  const rejection =
+    admission?.ok === false
+      ? admission
+      : !pixels.pending && !pixels.admitted
+        ? { ok: false as const, reason: RASTER_PIXEL_BUDGET_MESSAGE }
+        : decodeError.failed
+          ? { ok: false as const, reason: IMAGE_DECODE_FAILURE_MESSAGE }
+          : currentUrlFailure;
+  if (rejection !== null && pane.props._data !== null) {
+    return (
+      <RejectedImageStatus
+        data={pane.props._data}
+        filename={`leika-image.${pane.props._format}`}
+        mimeType={mimeType}
+        reason={rejection.reason}
+      />
+    );
+  }
+
+  if (objectUrl === null || !pixels.admitted) {
     return (
       <span
         style={{
@@ -1414,6 +1404,7 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
       src={objectUrl}
       alt={pane.props.title}
       draggable={false}
+      onError={decodeError.onError}
       style={{
         display: "block",
         width: "100%",
