@@ -1328,20 +1328,11 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
   );
   const [urlFailure, setUrlFailure] =
     React.useState<OwnedImagePreparationFailure | null>(null);
-  React.useEffect(() => {
-    setOwnedUrl(null);
-    setUrlFailure(null);
-    if (pane.props._data === null || admission?.ok !== true) return;
-    const result = createOwnedImageObjectUrl(pane.props._data, mimeType);
-    if ("ok" in result) {
-      setUrlFailure({ data: pane.props._data, mimeType, failure: result });
-      return;
-    }
-    setOwnedUrl(result);
-    return () => URL.revokeObjectURL(result.url);
-  }, [admission?.ok, mimeType, pane.props._data]);
 
-  const objectUrl = matchingImageObjectUrl(
+  // Display ownership may lag the target while its replacement is prepared.
+  // Exact target matching attributes failures; it does not discard good pixels.
+  const ownedObjectUrl = ownedUrl?.url ?? null;
+  const targetObjectUrl = matchingImageObjectUrl(
     ownedUrl,
     pane.props._data,
     mimeType,
@@ -1351,24 +1342,48 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
     pane.props._data,
     mimeType,
   );
-  const decodeError = useImageDecodeError(objectUrl);
+  const decodeError = useImageDecodeError(ownedObjectUrl);
+  const targetDecodeFailed = targetObjectUrl !== null && decodeError.failed;
+  const displayObjectUrl = decodeError.failed ? null : ownedObjectUrl;
   const pixels = useRasterPixelLease(
     pane.props._data,
     admission?.ok === true ? admission.size : null,
+    currentUrlFailure === null && !targetDecodeFailed,
   );
+
+  // A valid update changes the source of one persistent image. Retain the
+  // displayed URL until its successor is prepared, so replacement never
+  // introduces an empty generation.
+  React.useEffect(() => {
+    setUrlFailure(null);
+    if (pane.props._data === null || admission?.ok !== true) {
+      setOwnedUrl(null);
+      return;
+    }
+    const result = createOwnedImageObjectUrl(pane.props._data, mimeType);
+    if ("ok" in result) {
+      setOwnedUrl(null);
+      setUrlFailure({ data: pane.props._data, mimeType, failure: result });
+      return;
+    }
+    setOwnedUrl(result);
+    return () => URL.revokeObjectURL(result.url);
+  }, [admission?.ok, mimeType, pane.props._data]);
+
   React.useEffect(
-    () => releaseFailedObjectUrl(objectUrl, decodeError.failed),
-    [decodeError.failed, objectUrl],
+    () => releaseFailedObjectUrl(ownedObjectUrl, decodeError.failed),
+    [decodeError.failed, ownedObjectUrl],
   );
 
   const rejection =
     admission?.ok === false
       ? admission
-      : !pixels.pending && !pixels.admitted
-        ? { ok: false as const, reason: RASTER_PIXEL_BUDGET_MESSAGE }
-        : decodeError.failed
-          ? { ok: false as const, reason: IMAGE_DECODE_FAILURE_MESSAGE }
-          : currentUrlFailure;
+      : targetDecodeFailed
+        ? { ok: false as const, reason: IMAGE_DECODE_FAILURE_MESSAGE }
+        : (currentUrlFailure ??
+          (!pixels.pending && !pixels.admitted
+            ? { ok: false as const, reason: RASTER_PIXEL_BUDGET_MESSAGE }
+            : null));
   if (rejection !== null && pane.props._data !== null) {
     return (
       <RejectedImageStatus
@@ -1380,7 +1395,7 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
     );
   }
 
-  if (objectUrl === null || !pixels.admitted) {
+  if (pane.props._data === null || displayObjectUrl === null) {
     return (
       <span
         style={{
@@ -1401,7 +1416,7 @@ function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
 
   return (
     <img
-      src={objectUrl}
+      src={displayObjectUrl}
       alt={pane.props.title}
       draggable={false}
       onError={decodeError.onError}

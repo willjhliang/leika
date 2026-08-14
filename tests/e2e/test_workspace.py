@@ -35,12 +35,15 @@ def test_image_panes_tile_resize_persist_and_update(
     expect(image).to_have_attribute("src", re.compile(r"^blob:"))
     expect(leika_page.locator('[data-viewport-pane-content="left"] > img')).to_have_count(1)
     old_source = image.get_attribute("src")
+    image.evaluate("element => { element.dataset.leikaImageIdentity = 'kept'; }")
     left.title = "Updated left"
     left.fit = "fill"
     left.update(np.full((24, 32, 3), 127, dtype=np.uint8))
     expect(leika_page.locator('[data-viewport-pane-title="left"]')).to_have_text("Updated left")
     expect(image).to_have_css("object-fit", "cover")
     expect(image).not_to_have_attribute("src", old_source or "")
+    expect(leika_page.locator('[data-viewport-pane-content="left"] > img')).to_have_count(1)
+    expect(image).to_have_attribute("data-leika-image-identity", "kept")
 
     divider = leika_page.locator('[data-viewport-divider-direction="row"]').first
     divider_bounds = divider.bounding_box()
