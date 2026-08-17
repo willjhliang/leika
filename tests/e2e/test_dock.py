@@ -865,12 +865,12 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
         )
 
 
-def test_page_selection_waits_for_a_real_header_leave_before_fading(
+def test_page_selector_uses_the_ordinary_header_leave_grace(
     leika_server: leika.Server,
     dock_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Leaving through the page menu is not leaving the header for good."""
+    """An open page menu does not exempt its header from the leave timer."""
     page = dock_page
     leika_server.pages.add("Analysis", page_id="analysis")
     selector = page.locator("[data-leika-page-selector]")
@@ -878,33 +878,13 @@ def test_page_selection_waits_for_a_real_header_leave_before_fading(
     page.mouse.click(*center(control_handle(page)))
     expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
     selector.click()
-    page.get_by_role("option", name="Analysis", exact=True).click()
-    expect(selector).to_have_attribute("aria-label", "Page: Analysis")
-    expect(selector).to_have_attribute("aria-expanded", "false")
-
-    # The item lived in a portal, so closing it leaves the pointer off the
-    # header. That portal leave must not make the owning header disappear.
-    page.mouse.move(*CANVAS)
-    page.wait_for_timeout(400)
-    expect(control_panel(page)).not_to_have_attribute("data-dock-peeking", "true")
-    kept = _peek_state(page)
-    assert _draws_a_shadow(kept["shadow"]), kept
-    assert kept["gear"] == "1", kept
-
-    # A subsequent physical return to the header arms the ordinary leave.
-    selector.hover()
-    page.mouse.move(*CANVAS)
-    assert control_panel(page).get_attribute("data-dock-peeking") is None
-    expect(control_panel(page)).to_have_attribute("data-dock-peeking", "true", timeout=5_000)
-
-    # Keyboard selection has focus-visible to keep it readable; it has no
-    # physical pointer return to await and must not acquire the deferred hold.
-    selector.focus()
-    page.keyboard.press("Enter")
     expect(selector).to_have_attribute("aria-expanded", "true")
-    page.keyboard.press("Home")
-    page.keyboard.press("Enter")
-    expect(selector).to_have_attribute("aria-label", "Page: Main")
+
+    # The menu lives in a portal, so moving to it (or anywhere else off the
+    # header) starts the same one-second grace as an ordinary header leave.
+    page.mouse.move(*CANVAS)
+    page.wait_for_timeout(PEEK_LEAVE_GRACE_MS // 4)
+    expect(control_panel(page)).not_to_have_attribute("data-dock-peeking", "true")
     expect(control_panel(page)).to_have_attribute("data-dock-peeking", "true", timeout=5_000)
     assert page_errors == []
 

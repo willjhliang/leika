@@ -2,7 +2,6 @@ import GeneratedGuiContainer from "./Generated";
 import { useViewer } from "../ViewerContext";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
-import { usePeekHold } from "../dock/DockContext";
 
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import {
@@ -58,11 +57,7 @@ export function PageSelector() {
     samePageSelectorItems,
   );
   const [open, setOpen] = React.useState(false);
-  const pointerItemPressRef = React.useRef(false);
 
-  // The popup is portaled out of a floating window. Reaching for it must not
-  // make a collapsed window fade away from the trigger that owns it.
-  const releasePeekAfterPointerReturn = usePeekHold(items.length > 1 && open);
   React.useEffect(() => {
     if (items.length <= 1) setOpen(false);
   }, [items.length]);
@@ -99,17 +94,7 @@ export function PageSelector() {
         items={items}
         value={activePageId}
         open={open}
-        onOpenChange={(next, details) => {
-          const releaseAfterPointerReturn =
-            !next &&
-            details.reason === "item-press" &&
-            pointerItemPressRef.current;
-          pointerItemPressRef.current = false;
-          if (releaseAfterPointerReturn) {
-            releasePeekAfterPointerReturn();
-          }
-          setOpen(next);
-        }}
+        onOpenChange={setOpen}
         onValueChange={(next) => {
           if (next !== null && next !== activePageId) {
             viewer.viewportActions.setActivePage(next);
@@ -133,19 +118,7 @@ export function PageSelector() {
         <SelectContent align="start" alignItemWithTrigger={false}>
           <SelectGroup>
             {items.map((item) => (
-              <SelectItem
-                key={item.value}
-                value={item.value}
-                onPointerDownCapture={(event) => {
-                  pointerItemPressRef.current = event.pointerType !== "touch";
-                }}
-                onPointerCancelCapture={() => {
-                  pointerItemPressRef.current = false;
-                }}
-                onKeyDownCapture={() => {
-                  pointerItemPressRef.current = false;
-                }}
-              >
+              <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
             ))}

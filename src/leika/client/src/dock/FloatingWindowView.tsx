@@ -196,36 +196,22 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   // popout hung off its header -- holds the window here while it is up. See
   // `usePeekHold`.
   const [peekHolds, setPeekHolds] = React.useState(0);
-  const peekRef = React.useRef(peek);
-  peekRef.current = peek;
-  const deferredPeekReleasesRef = React.useRef(new Set<() => void>());
-  const deferredPeekReleaseArmedRef = React.useRef(false);
   const holdPeek = React.useCallback<PeekHold>(() => {
     setPeekHolds((held) => held + 1);
     let held = true;
-    const releaseNow = () => {
+    return () => {
       if (!held) return;
       held = false;
-      deferredPeekReleasesRef.current.delete(releaseNow);
       setPeekHolds((count) => Math.max(0, count - 1));
-    };
-    return (release = "immediate") => {
-      if (!held) return;
-      if (release === "after-pointer-return" && peekRef.current) {
-        deferredPeekReleasesRef.current.add(releaseNow);
-        return;
-      }
-      releaseNow();
     };
   }, []);
   React.useEffect(() => {
-    if (peek) return;
-    cancelLeaveGrace();
-    deferredPeekReleaseArmedRef.current = false;
-    for (const release of Array.from(deferredPeekReleasesRef.current)) {
-      release();
-    }
+    if (!peek) cancelLeaveGrace();
   }, [cancelLeaveGrace, peek]);
+  const markPointerInside = React.useCallback(() => {
+    cancelLeaveGrace();
+    setPointerInside(true);
+  }, [cancelLeaveGrace]);
   const markPhysicalPointerReturn = React.useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       // React events from an owned portal bubble through this component too.
@@ -237,38 +223,32 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
       ) {
         return;
       }
+      markPointerInside();
+    },
+    [markPointerInside],
+  );
+  const markPointerOutside = React.useCallback(() => {
+    setPointerInside(false);
+    if (peek) {
+      startLeaveGrace();
+    } else {
       cancelLeaveGrace();
-      setPointerInside(true);
-      if (deferredPeekReleasesRef.current.size > 0) {
-        deferredPeekReleaseArmedRef.current = true;
-      }
-    },
-    [cancelLeaveGrace],
-  );
-  const markPointerOutside = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (
-        !(event.target instanceof Node) ||
-        !event.currentTarget.contains(event.target)
-      ) {
-        return;
-      }
-      setPointerInside(false);
-      if (peekRef.current) {
-        startLeaveGrace();
-      } else {
-        cancelLeaveGrace();
-      }
-      if (!deferredPeekReleaseArmedRef.current) {
-        return;
-      }
-      deferredPeekReleaseArmedRef.current = false;
-      for (const release of Array.from(deferredPeekReleasesRef.current)) {
-        release();
-      }
-    },
-    [cancelLeaveGrace, startLeaveGrace],
-  );
+    }
+  }, [cancelLeaveGrace, peek, startLeaveGrace]);
+  React.useEffect(() => {
+    const paper = paperRef.current;
+    if (paper === null) return;
+
+    // React's synthetic boundary events follow portals through the component
+    // tree. Native listeners on the card keep "inside" physical: a portaled
+    // menu is off the header, just like any other point on the page.
+    paper.addEventListener("pointerenter", markPointerInside);
+    paper.addEventListener("pointerleave", markPointerOutside);
+    return () => {
+      paper.removeEventListener("pointerenter", markPointerInside);
+      paper.removeEventListener("pointerleave", markPointerOutside);
+    };
+  }, [markPointerInside, markPointerOutside]);
   const faded = peek && !pointerInside && !leaveGraceActive && peekHolds === 0;
   const fixedHeight = win.height !== undefined && !collapsed;
   const [autoBodyMaxHeight, setAutoBodyMaxHeight] = React.useState<
@@ -646,10 +626,6 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           // or not an enter ever fired (see onPointerMove).
           markPhysicalPointerReturn(event);
         }}
-        // Enter fires for the peek element too: entering a descendant from
-        // outside is entering the card. That is the way back in once the card
-        // itself has stopped taking the pointer.
-        onPointerEnter={markPhysicalPointerReturn}
         // A window BORN under the cursor -- dragged out of the dock, the
         // pointer captured to it from its first frame -- may never receive
         // that enter: boundary events chase crossings, and this pointer never
@@ -658,7 +634,6 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
         // traffic inside the card says what the missing enter would have (a
         // same-value set is a no-op re-render-wise).
         onPointerMove={markPhysicalPointerReturn}
-        onPointerLeave={markPointerOutside}
         style={{
           position: "absolute",
           ...horizontalPosition,
