@@ -47,6 +47,7 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_multi_slider": (("Multi", (0.2, 0.8)), {"min": 0.0, "max": 1.0, "step": 0.1}),
     "add_number": (("Number", 1.0), {}),
     "add_plotly": ((), {}),  # Filled in below; needs the optional dependency.
+    "add_popup": (("Popup",), {}),
     "add_preview_button": (("Preview", b"contents"), {"filename": "file.txt"}),
     "add_progress_bar": ((50.0,), {}),
     "add_rgb": (("Rgb", (10, 20, 30)), {}),

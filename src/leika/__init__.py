@@ -22,6 +22,7 @@ from ._gui_handles import GuiModalHandle as GuiModalHandle
 from ._gui_handles import GuiMultiSliderHandle as GuiMultiSliderHandle
 from ._gui_handles import GuiNumberHandle as GuiNumberHandle
 from ._gui_handles import GuiPlotlyHandle as GuiPlotlyHandle
+from ._gui_handles import GuiPopupHandle as GuiPopupHandle
 from ._gui_handles import GuiPreviewButtonHandle as GuiPreviewButtonHandle
 from ._gui_handles import GuiProgressBarHandle as GuiProgressBarHandle
 from ._gui_handles import GuiRgbaHandle as GuiRgbaHandle

@@ -215,6 +215,56 @@ def test_a_form_opens_from_one_row_into_a_popout(
     assert page_errors == []
 
 
+def test_a_popup_opens_folder_like_contents_from_a_labelled_row(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    with leika_server.gui.add_popup("Render options") as popup:
+        axes = leika_server.gui.add_checkbox("Show axes", initial_value=True)
+        with leika_server.gui.add_folder("Advanced"):
+            leika_server.gui.add_number("Line width", initial_value=2.0)
+
+    row = find_gui_row(leika_page, "Render options")
+    expect(row).to_be_visible(timeout=5_000)
+    trigger = row.locator("[data-leika-popup-trigger]")
+    expect(trigger).to_have_text("Open popup")
+    expect(trigger.locator("svg")).to_have_class(re.compile("lucide-panel-top-open"))
+    expect(leika_page.get_by_role("checkbox", name="Show axes")).to_have_count(0)
+
+    trigger.click()
+    popout = leika_page.locator("[data-leika-popup-popover]")
+    expect(popout).to_be_visible(timeout=5_000)
+    checkbox = popout.get_by_role("checkbox", name="Show axes")
+    expect(checkbox).to_be_checked()
+    expect(popout.get_by_text("Advanced", exact=True)).to_be_visible()
+    checkbox.click()
+    wait_until(lambda: axes.value is False)
+
+    popup.label = "Updated options"
+    expect(find_gui_row(leika_page, "Updated options")).to_be_visible(timeout=5_000)
+    expect(popout).to_be_visible()
+    leika_page.keyboard.press("Escape")
+    expect(popout).to_have_count(0)
+
+    empty = leika_server.gui.add_popup("Empty popup")
+    empty_trigger = find_gui_row(leika_page, "Empty popup").locator("[data-leika-popup-trigger]")
+    expect(empty_trigger).to_be_disabled(timeout=5_000)
+    late = empty.add_text("Late field", initial_value="")
+    expect(empty_trigger).to_be_enabled(timeout=5_000)
+    empty_trigger.click()
+    late_field = leika_page.get_by_role("textbox", name="Late field")
+    expect(late_field).to_be_visible(timeout=5_000)
+    late.remove()
+    expect(late_field).to_have_count(0)
+    expect(empty_trigger).to_have_attribute("aria-expanded", "false")
+
+    popup.visible = False
+    expect(leika_page.locator("[data-leika-popup-popover]")).to_have_count(0)
+    expect(leika_page.get_by_role("button", name="Open popup")).to_have_count(1)
+    assert page_errors == []
+
+
 def test_a_mini_form_sends_from_the_end_of_its_field_row(
     leika_server: leika.Server,
     leika_page: Page,

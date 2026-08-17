@@ -77,6 +77,7 @@ from ._gui_handles import (
     GuiMultiSliderHandle,
     GuiNumberHandle,
     GuiPlotlyHandle,
+    GuiPopupHandle,
     GuiPreviewButtonHandle,
     GuiProgressBarHandle,
     GuiRgbaHandle,
@@ -1908,6 +1909,50 @@ class GuiApi(GuiContainer):
             )
         )
 
+    def add_popup(
+        self,
+        label: str,
+        *,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiPopupHandle:
+        """Add a popup, and return a handle that can be used to populate it.
+
+        A popup has the same container behavior as a folder, but keeps its
+        children out of the panel until the viewer presses Open popup.
+
+        Args:
+            label: Label shown beside the popup's open button.
+            order: Optional ordering, smallest values will be displayed first.
+            visible: Whether the component is visible.
+
+        Returns:
+            A handle that can be used as a context to populate the popup.
+        """
+        label = cast(str, validate_renderer_string(label, "popup label"))
+        popup_container_id = _make_uuid()
+        order = self._apply_default_order(order)
+        props = _messages.GuiPopupProps(
+            order=order,
+            label=label,
+            visible=visible,
+        )
+        message = _messages.GuiPopupMessage(
+            uuid=popup_container_id,
+            container_uuid=self._get_container_uuid(),
+            props=props,
+        )
+        return GuiPopupHandle(
+            _GuiHandleState(
+                popup_container_id,
+                self,
+                None,
+                props=props,
+                parent_container_id=message.container_uuid,
+                create_message=message,
+            )
+        )
+
     def add_form(
         self,
         *,
@@ -2018,7 +2063,7 @@ class GuiApi(GuiContainer):
                 break
             if isinstance(parent, GuiTabHandle):
                 container = parent._parent._impl.parent_container_id
-            elif isinstance(parent, (GuiFolderHandle, GuiTabGroupHandle)):
+            elif isinstance(parent, (GuiFolderHandle, GuiPopupHandle, GuiTabGroupHandle)):
                 container = parent._impl.parent_container_id
             else:
                 break

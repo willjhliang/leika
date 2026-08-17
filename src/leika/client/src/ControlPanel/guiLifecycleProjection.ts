@@ -418,7 +418,8 @@ export function guiContainerGraphIsValid(
         if (directParent !== undefined) {
           if (
             directParent.type !== "GuiFolderMessage" &&
-            directParent.type !== "GuiFormMessage"
+            directParent.type !== "GuiFormMessage" &&
+            directParent.type !== "GuiPopupMessage"
           ) {
             return false;
           }

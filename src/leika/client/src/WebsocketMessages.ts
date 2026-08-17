@@ -15,6 +15,16 @@ export interface GuiFolderMessage {
     expand_by_default: boolean;
   };
 }
+/** A folder-like container whose children open in a popout.
+ *
+ * (automatically generated)
+ */
+export interface GuiPopupMessage {
+  type: "GuiPopupMessage";
+  uuid: string;
+  container_uuid: string;
+  props: { order: number; label: string; visible: boolean };
+}
 /** A form is a container whose children's values are committed together.
  *
  * Its own props rather than a folder's: a form is drawn as one row that
@@ -993,6 +1003,7 @@ export interface CommandTriggerMessage {
 
 export type Message =
   | GuiFolderMessage
+  | GuiPopupMessage
   | GuiFormMessage
   | GuiHtmlMessage
   | GuiDividerMessage
@@ -1060,6 +1071,7 @@ export type Message =
   | CommandTriggerMessage;
 export type GuiComponentMessage =
   | GuiFolderMessage
+  | GuiPopupMessage
   | GuiFormMessage
   | GuiHtmlMessage
   | GuiDividerMessage
@@ -1086,6 +1098,7 @@ export type GuiComponentMessage =
   | GuiButtonGroupMessage;
 const typeSetGuiComponentMessage = new Set([
   "GuiFolderMessage",
+  "GuiPopupMessage",
   "GuiFormMessage",
   "GuiHtmlMessage",
   "GuiDividerMessage",
@@ -1222,6 +1235,20 @@ function isProtocolStruct0(value: unknown): boolean {
 function isProtocolStruct1(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "visible") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    typeof value["label"] === "string" &&
+    typeof value["visible"] === "boolean"
+  );
+}
+
+function isProtocolStruct2(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "label") &&
@@ -1235,7 +1262,7 @@ function isProtocolStruct1(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct2(value: unknown): boolean {
+function isProtocolStruct3(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -1249,7 +1276,7 @@ function isProtocolStruct2(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct3(value: unknown): boolean {
+function isProtocolStruct4(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 2 &&
@@ -1261,7 +1288,7 @@ function isProtocolStruct3(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct4(value: unknown): boolean {
+function isProtocolStruct5(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -1275,7 +1302,7 @@ function isProtocolStruct4(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct5(value: unknown): boolean {
+function isProtocolStruct6(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
@@ -1292,7 +1319,7 @@ function isProtocolStruct5(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct6(value: unknown): boolean {
+function isProtocolStruct7(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -1310,21 +1337,21 @@ function isProtocolStruct6(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct7(value: unknown): boolean {
+function isProtocolStruct8(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
     Object.hasOwn(value, "_tabs") &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "visible") &&
-    isProtocolArray(value["_tabs"], (item) => isProtocolStruct31(item)) &&
+    isProtocolArray(value["_tabs"], (item) => isProtocolStruct32(item)) &&
     typeof value["order"] === "number" &&
     Number.isFinite(value["order"]) &&
     typeof value["visible"] === "boolean"
   );
 }
 
-function isProtocolStruct8(value: unknown): boolean {
+function isProtocolStruct9(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 10 &&
@@ -1355,7 +1382,7 @@ function isProtocolStruct8(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct9(value: unknown): boolean {
+function isProtocolStruct10(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 9 &&
@@ -1381,7 +1408,7 @@ function isProtocolStruct9(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct10(value: unknown): boolean {
+function isProtocolStruct11(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 11 &&
@@ -1410,12 +1437,12 @@ function isProtocolStruct10(value: unknown): boolean {
     Number.isFinite(value["step"]) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["show_value"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct32(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct33(item)) ||
       value["_marks"] === null)
   );
 }
 
-function isProtocolStruct11(value: unknown): boolean {
+function isProtocolStruct12(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 12 &&
@@ -1448,12 +1475,12 @@ function isProtocolStruct11(value: unknown): boolean {
       value["min_range"] === null) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["fixed_endpoints"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct32(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct33(item)) ||
       value["_marks"] === null)
   );
 }
 
-function isProtocolStruct12(value: unknown): boolean {
+function isProtocolStruct13(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 9 &&
@@ -1482,24 +1509,6 @@ function isProtocolStruct12(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct13(value: unknown): boolean {
-  return (
-    isProtocolRecord(value) &&
-    Object.keys(value).length === 5 &&
-    Object.hasOwn(value, "order") &&
-    Object.hasOwn(value, "label") &&
-    Object.hasOwn(value, "hint") &&
-    Object.hasOwn(value, "visible") &&
-    Object.hasOwn(value, "disabled") &&
-    typeof value["order"] === "number" &&
-    Number.isFinite(value["order"]) &&
-    (typeof value["label"] === "string" || value["label"] === null) &&
-    (typeof value["hint"] === "string" || value["hint"] === null) &&
-    typeof value["visible"] === "boolean" &&
-    typeof value["disabled"] === "boolean"
-  );
-}
-
 function isProtocolStruct14(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
@@ -1519,6 +1528,24 @@ function isProtocolStruct14(value: unknown): boolean {
 }
 
 function isProtocolStruct15(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean"
+  );
+}
+
+function isProtocolStruct16(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 8 &&
@@ -1542,7 +1569,7 @@ function isProtocolStruct15(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct16(value: unknown): boolean {
+function isProtocolStruct17(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 10 &&
@@ -1573,7 +1600,7 @@ function isProtocolStruct16(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct17(value: unknown): boolean {
+function isProtocolStruct18(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -1591,7 +1618,7 @@ function isProtocolStruct17(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct18(value: unknown): boolean {
+function isProtocolStruct19(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 9 &&
@@ -1630,7 +1657,7 @@ function isProtocolStruct18(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct19(value: unknown): boolean {
+function isProtocolStruct20(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 9 &&
@@ -1673,7 +1700,7 @@ function isProtocolStruct19(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct20(value: unknown): boolean {
+function isProtocolStruct21(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 10 &&
@@ -1701,26 +1728,6 @@ function isProtocolStruct20(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct21(value: unknown): boolean {
-  return (
-    isProtocolRecord(value) &&
-    Object.keys(value).length === 6 &&
-    Object.hasOwn(value, "order") &&
-    Object.hasOwn(value, "label") &&
-    Object.hasOwn(value, "hint") &&
-    Object.hasOwn(value, "visible") &&
-    Object.hasOwn(value, "disabled") &&
-    Object.hasOwn(value, "frozen") &&
-    typeof value["order"] === "number" &&
-    Number.isFinite(value["order"]) &&
-    (typeof value["label"] === "string" || value["label"] === null) &&
-    (typeof value["hint"] === "string" || value["hint"] === null) &&
-    typeof value["visible"] === "boolean" &&
-    typeof value["disabled"] === "boolean" &&
-    typeof value["frozen"] === "boolean"
-  );
-}
-
 function isProtocolStruct22(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
@@ -1744,6 +1751,26 @@ function isProtocolStruct22(value: unknown): boolean {
 function isProtocolStruct23(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
+    Object.keys(value).length === 6 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "frozen") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["frozen"] === "boolean"
+  );
+}
+
+function isProtocolStruct24(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
     Object.keys(value).length === 7 &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "label") &&
@@ -1763,7 +1790,7 @@ function isProtocolStruct23(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct24(value: unknown): boolean {
+function isProtocolStruct25(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 8 &&
@@ -1790,7 +1817,7 @@ function isProtocolStruct24(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct25(value: unknown): boolean {
+function isProtocolStruct26(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -1809,7 +1836,7 @@ function isProtocolStruct25(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct26(value: unknown): boolean {
+function isProtocolStruct27(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -1829,7 +1856,7 @@ function isProtocolStruct26(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct27(value: unknown): boolean {
+function isProtocolStruct28(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -1842,7 +1869,7 @@ function isProtocolStruct27(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct28(value: unknown): boolean {
+function isProtocolStruct29(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
@@ -1857,7 +1884,7 @@ function isProtocolStruct28(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct29(value: unknown): boolean {
+function isProtocolStruct30(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
@@ -1872,7 +1899,7 @@ function isProtocolStruct29(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct30(value: unknown): boolean {
+function isProtocolStruct31(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 6 &&
@@ -1950,7 +1977,7 @@ function isProtocolStruct30(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct31(value: unknown): boolean {
+function isProtocolStruct32(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -1965,7 +1992,7 @@ function isProtocolStruct31(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct32(value: unknown): boolean {
+function isProtocolStruct33(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 2 &&
@@ -2000,6 +2027,24 @@ const messageValidators = new Map<
       isProtocolStruct0(message["props"]),
   ],
   [
+    "GuiPopupMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiPopupMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct1(message["props"]),
+  ],
+  [
     "GuiFormMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -2015,7 +2060,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct1(message["props"]),
+      isProtocolStruct2(message["props"]),
   ],
   [
     "GuiHtmlMessage",
@@ -2033,7 +2078,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct2(message["props"]),
+      isProtocolStruct3(message["props"]),
   ],
   [
     "GuiDividerMessage",
@@ -2051,7 +2096,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct3(message["props"]),
+      isProtocolStruct4(message["props"]),
   ],
   [
     "GuiProgressBarMessage",
@@ -2072,7 +2117,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct4(message["props"]),
+      isProtocolStruct5(message["props"]),
   ],
   [
     "GuiPlotlyMessage",
@@ -2090,7 +2135,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct5(message["props"]),
+      isProtocolStruct6(message["props"]),
   ],
   [
     "GuiImageMessage",
@@ -2108,7 +2153,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct6(message["props"]),
+      isProtocolStruct7(message["props"]),
   ],
   [
     "GuiTabGroupMessage",
@@ -2126,7 +2171,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct7(message["props"]),
+      isProtocolStruct8(message["props"]),
   ],
   [
     "GuiButtonMessage",
@@ -2146,7 +2191,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct8(message["props"]),
+      isProtocolStruct9(message["props"]),
   ],
   [
     "GuiUploadButtonMessage",
@@ -2164,7 +2209,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct9(message["props"]),
+      isProtocolStruct10(message["props"]),
   ],
   [
     "GuiSliderMessage",
@@ -2185,7 +2230,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct10(message["props"]),
+      isProtocolStruct11(message["props"]),
   ],
   [
     "GuiMultiSliderMessage",
@@ -2208,7 +2253,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct11(message["props"]),
+      isProtocolStruct12(message["props"]),
   ],
   [
     "GuiNumberMessage",
@@ -2229,7 +2274,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct12(message["props"]),
+      isProtocolStruct13(message["props"]),
   ],
   [
     "GuiRgbMessage",
@@ -2253,7 +2298,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct13(message["props"]),
+      isProtocolStruct14(message["props"]),
   ],
   [
     "GuiRgbaMessage",
@@ -2278,7 +2323,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct14(message["props"]),
+      isProtocolStruct15(message["props"]),
   ],
   [
     "GuiToggleMessage",
@@ -2298,7 +2343,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct15(message["props"]),
+      isProtocolStruct16(message["props"]),
   ],
   [
     "GuiToggleGroupMessage",
@@ -2318,7 +2363,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct16(message["props"]),
+      isProtocolStruct17(message["props"]),
   ],
   [
     "GuiCheckboxMessage",
@@ -2338,7 +2383,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct17(message["props"]),
+      isProtocolStruct18(message["props"]),
   ],
   [
     "GuiVector2Message",
@@ -2363,7 +2408,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct18(message["props"]),
+      isProtocolStruct19(message["props"]),
   ],
   [
     "GuiVector3Message",
@@ -2390,7 +2435,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct19(message["props"]),
+      isProtocolStruct20(message["props"]),
   ],
   [
     "GuiTextMessage",
@@ -2410,7 +2455,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct20(message["props"]),
+      isProtocolStruct21(message["props"]),
   ],
   [
     "GuiListMessage",
@@ -2430,7 +2475,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct21(message["props"]),
+      isProtocolStruct22(message["props"]),
   ],
   [
     "GuiChecklistMessage",
@@ -2457,7 +2502,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct22(message["props"]),
+      isProtocolStruct23(message["props"]),
   ],
   [
     "GuiDropdownMessage",
@@ -2477,7 +2522,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct23(message["props"]),
+      isProtocolStruct24(message["props"]),
   ],
   [
     "GuiButtonGroupMessage",
@@ -2497,7 +2542,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct24(message["props"]),
+      isProtocolStruct25(message["props"]),
   ],
   [
     "GuiRemoveMessage",
@@ -2543,7 +2588,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct25(message["props"]),
+      isProtocolStruct26(message["props"]),
   ],
   [
     "NotificationUpdateMessage",
@@ -2557,7 +2602,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct25(message["props"]),
+      isProtocolStruct26(message["props"]),
   ],
   [
     "RemoveNotificationMessage",
@@ -2757,7 +2802,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct26(message["props"]),
+      isProtocolStruct27(message["props"]),
   ],
   [
     "ViewportMatplotlibMessage",
@@ -2789,7 +2834,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct27(message["props"]),
+      isProtocolStruct28(message["props"]),
   ],
   [
     "ViewportPlotlyMessage",
@@ -2821,7 +2866,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct28(message["props"]),
+      isProtocolStruct29(message["props"]),
   ],
   [
     "ViewportViserMessage",
@@ -2853,7 +2898,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct29(message["props"]),
+      isProtocolStruct30(message["props"]),
   ],
   [
     "ViewportPaneUpdateMessage",
@@ -3149,7 +3194,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct30(message["props"]),
+      isProtocolStruct31(message["props"]),
   ],
   [
     "CommandUpdateMessage",
@@ -3210,4 +3255,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "699295a8fc97";
+export const LEIKA_PROTOCOL = "15fca17f59a4";

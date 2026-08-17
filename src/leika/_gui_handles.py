@@ -76,6 +76,7 @@ from ._messages import (
     GuiMultiSliderProps,
     GuiNumberProps,
     GuiPlotlyProps,
+    GuiPopupProps,
     GuiProgressBarProps,
     GuiRemoveMessage,
     GuiRgbaProps,
@@ -3080,10 +3081,11 @@ class GuiTabHandle(GuiContainer):
             gui_api._container_depth_from_uuid.pop(self._id, None)
 
 
-class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
-    """Use as a context to place GUI elements into a folder."""
+class _GuiNestedContainerHandle(_GuiHandle[None], GuiContainer):
+    """Shared lifecycle and child placement for in-panel tree containers."""
 
     _children: dict[str, SupportsRemoveProtocol]
+    _container_kind = "container"
 
     def __init__(self, _impl: _GuiHandleState[None]) -> None:
         gui_api = _impl.gui_api
@@ -3106,11 +3108,10 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
 
     def _check_container_active(self) -> None:
         if self._impl.removed:
-            raise RuntimeError("Cannot add GUI components to a removed folder.")
+            raise RuntimeError(f"Cannot add GUI components to a removed {self._container_kind}.")
 
     def remove(self) -> None:
-        """Permanently remove this folder and all contained GUI elements from the
-        visualizer."""
+        """Permanently remove this container and all its GUI elements."""
         gui_api = self._impl.gui_api
         with gui_api._lock:
             if self._impl.removed:
@@ -3125,6 +3126,25 @@ class GuiFolderHandle(_GuiHandle[None], GuiFolderProps, GuiContainer):
                 GuiRemoveMessage(self._impl.uuid, removed_uuids, removed_tab_uuids)
             )
             _retire_gui_handle_without_queue_locked(self)
+
+
+class GuiFolderHandle(_GuiNestedContainerHandle, GuiFolderProps):
+    """Use as a context to place GUI elements into a folder."""
+
+    _container_kind = "folder"
+
+
+class GuiPopupHandle(_GuiNestedContainerHandle, GuiPopupProps):
+    """Use as a context to place GUI elements into a popup.
+
+    A popup behaves like a folder as a container: it supports context-manager
+    construction, direct add-child calls, nested containers, synchronized
+    label / visible / order properties, and recursive removal. Its presentation
+    is different: it occupies one normally labelled panel row, and its children
+    appear in a popout opened from that row.
+    """
+
+    _container_kind = "popup"
 
 
 def _fields_within(container: Any) -> Iterable[_GuiInputHandle]:
@@ -3190,6 +3210,8 @@ class GuiFormHandle(GuiFolderHandle):
         def _(event):
             print(name.value, age.value)
     """
+
+    _container_kind = "form"
 
     def __init__(self, _impl: _GuiHandleState[None]) -> None:
         object.__setattr__(self, "_submit_cb", [])

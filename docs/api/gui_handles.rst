@@ -90,6 +90,9 @@ Containers
 .. autoclass:: GuiFolderHandle
    :members:
 
+.. autoclass:: GuiPopupHandle
+   :members:
+
 .. autoclass:: GuiFormHandle
    :members:
 

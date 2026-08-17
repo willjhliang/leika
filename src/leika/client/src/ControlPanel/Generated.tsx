@@ -25,6 +25,7 @@ import PlotlyComponent from "../components/PlotlyComponent";
 import TabGroupComponent from "../components/TabGroup";
 import FolderComponent from "../components/Folder";
 import FormComponent from "../components/Form";
+import PopupComponent from "../components/Popup";
 import MultiSliderComponent from "../components/MultiSlider";
 import UploadButtonComponent from "../components/UploadButton";
 import ProgressBarComponent from "../components/ProgressBar";
@@ -111,6 +112,8 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <FolderComponent {...conf} />;
     case "GuiFormMessage":
       return <FormComponent {...conf} />;
+    case "GuiPopupMessage":
+      return <PopupComponent {...conf} />;
     case "GuiTabGroupMessage":
       return <TabGroupComponent {...conf} />;
     case "GuiHtmlMessage":

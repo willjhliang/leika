@@ -622,6 +622,35 @@ def test_handle_values_preserve_constructor_invariants(server: leika.Server) -> 
         slider.value = 2.0
 
 
+def test_popup_is_a_folder_compatible_container(server: leika.Server) -> None:
+    with server.gui.add_popup("Display details", order=7.0) as popup:
+        enabled = server.gui.add_checkbox("Enabled", initial_value=True)
+        with server.gui.add_folder("Advanced") as folder:
+            gain = server.gui.add_number("Gain", initial_value=1.0)
+
+    assert isinstance(popup, leika.GuiPopupHandle)
+    assert popup.label == "Display details"
+    assert popup.order == 7.0
+    assert enabled._impl.parent_container_id == popup.id
+    assert folder._impl.parent_container_id == popup.id
+    assert gain._impl.parent_container_id == folder.id
+    assert any(
+        isinstance(message, _messages.GuiPopupMessage) and message.uuid == popup.id
+        for message in server._websock_server.get_message_buffer().message_from_id.values()
+    )
+
+    popup.update(label="Rendering", visible=False, order=8.0)
+    assert (popup.label, popup.visible, popup.order) == ("Rendering", False, 8.0)
+
+    popup.remove()
+    assert popup._impl.removed
+    assert enabled._impl.removed
+    assert folder._impl.removed
+    assert gain._impl.removed
+    with pytest.raises(RuntimeError, match="removed popup"):
+        popup.add_text("Rejected", initial_value="")
+
+
 def test_form_compatibility_and_submission(server: leika.Server) -> None:
     with server.gui.add_form(label="Profile") as form:
         name = server.gui.add_text("Name", initial_value="Ada")

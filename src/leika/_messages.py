@@ -391,6 +391,24 @@ class GuiFolderMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiPopupProps:
+    order: float
+    """Order value for arranging GUI elements."""
+    label: str
+    """Label for the popup's row."""
+    visible: bool
+    """Visibility state of the GUI popup."""
+
+
+@dataclasses.dataclass
+class GuiPopupMessage(_CreateGuiComponentMessage):
+    """A folder-like container whose children open in a popout."""
+
+    container_uuid: str
+    props: GuiPopupProps
+
+
+@dataclasses.dataclass
 class GuiFormProps:
     order: float
     """Order value for arranging GUI elements. """

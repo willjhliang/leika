@@ -385,6 +385,24 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
             icon=leika.Icon.UPLOAD,
         )
 
+        with server.gui.add_popup("Popup example"):
+            server.gui.add_text(
+                None,
+                "A popup is a folder-like container that keeps its controls behind one row.",
+                editable=False,
+                markdown=True,
+                multiline=True,
+            )
+            server.gui.add_checkbox("Show guides", initial_value=True)
+            with server.gui.add_folder("Nested group", expand_by_default=False):
+                server.gui.add_slider(
+                    "Guide opacity",
+                    min=0.0,
+                    max=1.0,
+                    step=0.05,
+                    initial_value=0.7,
+                )
+
         def signal_csv(event: leika.GuiEvent[Any]) -> bytes:
             buffer = io.StringIO()
             buffer.write("time,signal\n")

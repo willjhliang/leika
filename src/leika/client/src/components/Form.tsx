@@ -2,20 +2,10 @@ import { ClipboardPen, SendIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { useViewer } from "../ViewerContext";
 import { GuiFormMessage } from "../WebsocketMessages";
-import { useContainerIsEmpty } from "./useContainerIsEmpty";
-import { GuiInputRow } from "./common";
-import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
+import { GuiPopout } from "./GuiPopout";
 
 /** A form: values committed together rather than reported as they are typed.
  *
@@ -95,78 +85,37 @@ function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
     state.lastFormSubmit?.uuid === uuid ? state.lastFormSubmit.count : 0,
   );
   React.useEffect(() => setOpen(false), [submitCount]);
-  // An empty form has nothing to open. The trigger stays put rather than
-  // disappearing: a Python-built panel fills its containers in its own time,
-  // and a row that came and went would be worse than one briefly dimmed.
-  const isEmpty = useContainerIsEmpty(uuid);
-
-  const trigger = (
-    <PopoverTrigger
-      render={
-        <Button
-          id={uuid}
-          // The panel's outlined role, as the secondary GUI buttons wear it:
-          // the way into a form is not the accent-carrying thing in a row.
-          variant="outline"
-          className="w-full"
-          disabled={isEmpty}
-          data-leika-button
-          data-leika-button-color="default"
-          data-leika-form-trigger
-        />
-      }
-    >
-      <ClipboardPen data-icon="inline-start" />
-      Open form
-    </PopoverTrigger>
-  );
-
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {/* Labelled, the trigger is an ordinary control in the right-hand
-          column. Unlabelled it takes the row, the same rule every button in
-          the panel follows. */}
-      {label === null ? (
-        trigger
-      ) : (
-        <GuiInputRow uuid={uuid} label={label} associateLabel={false}>
-          {trigger}
-        </GuiInputRow>
-      )}
-      <PopoverContent
-        align="end"
-        className={POPOUT_WIDTH_CLASS}
-        data-leika-form-popover
+    <GuiPopout
+      uuid={uuid}
+      label={label}
+      kind="form"
+      triggerText="Open form"
+      icon={<ClipboardPen data-icon="inline-start" />}
+      description="Fill in the fields, then submit them together."
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <form
+        // The actions sit a step further down than the fields sit from each
+        // other: they are what to do with the answer rather than another
+        // part of it, and the panel's own row gap reads as neither. The
+        // server keeps them last (see GuiFormHandle.__exit__), so the last
+        // child is who they are.
+        className="flex w-full min-w-0 flex-col gap-2 [&>:last-child]:mt-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          guiContext.messageSender(
+            { type: "GuiFormSubmitMessage", uuid },
+            { coalesce: false },
+          );
+        }}
       >
-        {/* The row already says the name out loud; this is for the popup's own
-            accessible name, which the row is not attached to. */}
-        <PopoverHeader className="sr-only">
-          <PopoverTitle>{label ?? "Form"}</PopoverTitle>
-          <PopoverDescription>
-            Fill in the fields, then submit them together.
-          </PopoverDescription>
-        </PopoverHeader>
-        <form
-          // The actions sit a step further down than the fields sit from each
-          // other: they are what to do with the answer rather than another
-          // part of it, and the panel's own row gap reads as neither. The
-          // server keeps them last (see GuiFormHandle.__exit__), so the last
-          // child is who they are.
-          className="flex w-full min-w-0 flex-col gap-2 [&>:last-child]:mt-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            guiContext.messageSender(
-              { type: "GuiFormSubmitMessage", uuid },
-              { coalesce: false },
-            );
-          }}
-        >
-          {/* What makes Enter in a single-line text input submit the form:
+        {/* What makes Enter in a single-line text input submit the form:
               implicit submission needs a submit button to activate. */}
-          <button type="submit" hidden tabIndex={-1} />
-          <guiContext.GuiContainer containerUuid={uuid} unwrapped />
-        </form>
-      </PopoverContent>
-    </Popover>
+        <button type="submit" hidden tabIndex={-1} />
+        <guiContext.GuiContainer containerUuid={uuid} unwrapped />
+      </form>
+    </GuiPopout>
   );
 }
