@@ -1,6 +1,7 @@
 .PHONY: help install install-docs test test-e2e lint typecheck client-test build-client docs gallery docs-serve package
 UV_DEV = uv run --locked --extra dev
 UV_DOCS = uv run --locked --extra docs
+E2E_WORKERS ?= 4
 
 
 help: ## Show available development commands
@@ -17,7 +18,7 @@ test: ## Run Python unit tests
 	$(UV_DEV) pytest --ignore=tests/e2e
 
 test-e2e: ## Run Playwright browser tests
-	$(UV_DEV) pytest tests/e2e -n auto
+	$(UV_DEV) pytest tests/e2e -n $(E2E_WORKERS)
 
 lint: ## Check Python formatting and lint rules
 	$(UV_DEV) ruff check src tests examples scripts hatch_build.py sync_client_server.py
