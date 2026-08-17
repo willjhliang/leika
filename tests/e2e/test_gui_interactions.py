@@ -830,6 +830,123 @@ def test_visibility_toggles_uniformly_across_element_kinds(
     assert page_errors == []
 
 
+def test_live_image_keeps_last_frame_mounted_during_replacements(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """A live image keeps showing its last good frame while preparing the next one."""
+    image = leika_server.gui.add_image(
+        np.zeros((18, 24, 3), dtype=np.uint8),
+        label="Live preview",
+        format="png",
+    )
+    inline_image = leika_page.locator('[data-leika-gui-container] img[alt="Live preview"]')
+    expect(inline_image).to_be_visible(timeout=15_000)
+    leika_page.get_by_role("button", name="Expand image").click()
+    viewer = leika_page.get_by_role("dialog", name="Live preview", exact=True)
+    expanded_image = viewer.get_by_role("img", name="Live preview", exact=True)
+    expect(expanded_image).to_be_visible(timeout=5_000)
+
+    inline_image.evaluate("element => { element.dataset.leikaImageIdentity = 'inline'; }")
+    expanded_image.evaluate("element => { element.dataset.leikaImageIdentity = 'expanded'; }")
+
+    update_errors: list[BaseException] = []
+
+    def publish_frames() -> None:
+        try:
+            time.sleep(0.15)
+            for index in range(24):
+                image.image = np.full(
+                    (18, 24, 3),
+                    (index * 11) % 256,
+                    dtype=np.uint8,
+                )
+                time.sleep(0.025)
+        except BaseException as error:
+            update_errors.append(error)
+
+    producer = threading.Thread(target=publish_frames, daemon=True)
+    producer.start()
+    continuity = leika_page.evaluate(
+        """label => new Promise(resolve => {
+            const findCopies = () => {
+                const images = Array.from(document.querySelectorAll("img"))
+                    .filter(image => image.getAttribute("alt") === label);
+                return {
+                    inline: images.find(image => image.closest('[role="dialog"]') === null),
+                    expanded: images.find(image => image.closest('[role="dialog"]') !== null),
+                };
+            };
+            const initial = findCopies();
+            const copies = {
+                inline: {
+                    node: initial.inline,
+                    missingSamples: 0,
+                    replacements: 0,
+                    previousSource: initial.inline?.getAttribute("src") ?? null,
+                },
+                expanded: {
+                    node: initial.expanded,
+                    missingSamples: 0,
+                    replacements: 0,
+                    previousSource: initial.expanded?.getAttribute("src") ?? null,
+                },
+            };
+            const inspect = () => {
+                const current = findCopies();
+                for (const kind of ["inline", "expanded"]) {
+                    const copy = copies[kind];
+                    const node = current[kind];
+                    if (node === undefined || node !== copy.node) {
+                        copy.missingSamples += 1;
+                        continue;
+                    }
+                    const source = node.getAttribute("src");
+                    if (copy.previousSource !== null && source !== copy.previousSource) {
+                        copy.replacements += 1;
+                    }
+                    copy.previousSource = source;
+                }
+            };
+            const observer = new MutationObserver(inspect);
+            observer.observe(document.body, {
+                attributes: true,
+                attributeFilter: ["src"],
+                childList: true,
+                subtree: true,
+            });
+            const sampler = window.setInterval(inspect, 4);
+            window.setTimeout(() => {
+                window.clearInterval(sampler);
+                observer.disconnect();
+                inspect();
+                resolve({
+                    inline: {
+                        missingSamples: copies.inline.missingSamples,
+                        replacements: copies.inline.replacements,
+                    },
+                    expanded: {
+                        missingSamples: copies.expanded.missingSamples,
+                        replacements: copies.expanded.replacements,
+                    },
+                });
+            }, 1200);
+        })""",
+        "Live preview",
+    )
+    producer.join(timeout=2.0)
+
+    assert not producer.is_alive()
+    assert update_errors == []
+    for kind in ("inline", "expanded"):
+        assert continuity[kind]["replacements"] > 0, continuity
+        assert continuity[kind]["missingSamples"] == 0, continuity
+    expect(inline_image).to_have_attribute("data-leika-image-identity", "inline")
+    expect(expanded_image).to_have_attribute("data-leika-image-identity", "expanded")
+    assert page_errors == []
+
+
 @pytest.mark.plotly
 def test_charts_read_aspect_as_width_over_height(
     leika_server: leika.Server,

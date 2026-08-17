@@ -24,9 +24,20 @@ export default function ViewportMatplotlibRenderer({
   const sourceError = matplotlibSvgSourceError(svg);
   const [owner, setOwner] = React.useState<SourceObjectUrlOwner | null>(null);
 
+  // Display ownership may lag the target while its replacement is prepared.
+  // Exact matching attributes failures; it must not discard the last good SVG.
+  const currentOwner = matchingSourceObjectUrlOwner(owner, svg);
+  const ownedObjectUrl = owner?.objectUrl ?? null;
+  const decodeError = useImageDecodeError(ownedObjectUrl);
+  const targetDecodeFailed =
+    currentOwner?.objectUrl != null && decodeError.failed;
+  const displayObjectUrl = decodeError.failed ? null : ownedObjectUrl;
+
   React.useEffect(() => {
-    setOwner(null);
-    if (sourceError !== null || typeof svg !== "string") return;
+    if (sourceError !== null || typeof svg !== "string") {
+      setOwner(null);
+      return;
+    }
 
     let url: string;
     try {
@@ -44,20 +55,14 @@ export default function ViewportMatplotlibRenderer({
     return () => URL.revokeObjectURL(url);
   }, [sourceError, svg]);
 
-  const currentOwner = matchingSourceObjectUrlOwner(owner, svg);
-  const decodeError = useImageDecodeError(currentOwner?.objectUrl ?? null);
   React.useEffect(
-    () =>
-      releaseFailedObjectUrl(
-        currentOwner?.objectUrl ?? null,
-        decodeError.failed,
-      ),
-    [currentOwner?.objectUrl, decodeError.failed],
+    () => releaseFailedObjectUrl(ownedObjectUrl, decodeError.failed),
+    [decodeError.failed, ownedObjectUrl],
   );
   const message =
     sourceError ??
     currentOwner?.renderError ??
-    (decodeError.failed ? MATPLOTLIB_DECODE_FAILURE_MESSAGE : null);
+    (targetDecodeFailed ? MATPLOTLIB_DECODE_FAILURE_MESSAGE : null);
   return (
     <div
       style={{
@@ -75,9 +80,9 @@ export default function ViewportMatplotlibRenderer({
           {message}
         </div>
       )}
-      {message !== null || currentOwner?.objectUrl == null ? null : (
+      {message !== null || displayObjectUrl === null ? null : (
         <img
-          src={currentOwner.objectUrl}
+          src={displayObjectUrl}
           alt={pane.props.title}
           draggable={false}
           onError={decodeError.onError}

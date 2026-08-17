@@ -51,9 +51,12 @@ def test_matplotlib_pane_renders_svg_and_rescales_without_a_redraw(
         # Same figure: the client rescaled vector art rather than refetching.
         assert image.get_attribute("src") == source
 
+        image.evaluate("element => { element.dataset.leikaImageIdentity = 'kept'; }")
         axes.set_title("Second figure")
         handle.update(figure)
         expect(image).not_to_have_attribute("src", source)
+        expect(image).to_have_attribute("data-leika-image-identity", "kept")
+        expect(image).to_have_count(1)
 
         handle.remove()
         expect(pane).to_have_count(0)

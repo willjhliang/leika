@@ -69,25 +69,74 @@ function ImageComponent({ uuid, props }: GuiImageMessage) {
   const [urlFailure, setUrlFailure] =
     useState<OwnedImagePreparationFailure | null>(null);
   const [opened, setOpened] = useState(false);
+  const [lastExpandedOwner, setLastExpandedOwner] =
+    useState<OwnedImageObjectUrl | null>(null);
   // Stable, so the memo above can actually skip re-renders of the inline copy.
   const expand = React.useCallback(() => setOpened(true), []);
   const [fullscreen] = usePreviewFullscreen(uuid);
+  const ownedObjectUrl = ownedUrl?.url ?? null;
+  const targetObjectUrl = matchingImageObjectUrl(
+    ownedUrl,
+    props._data,
+    mimeType,
+  );
+  const currentUrlFailure = matchingImagePreparationFailure(
+    urlFailure,
+    props._data,
+    mimeType,
+  );
+  const decodeError = useImageDecodeError(ownedObjectUrl);
+  const targetDecodeFailed = targetObjectUrl !== null && decodeError.failed;
+  const displayObjectUrl = decodeError.failed ? null : ownedObjectUrl;
   const inlinePixels = useRasterPixelLease(
     props._data,
     admission.ok ? admission.size : null,
+    currentUrlFailure === null && !targetDecodeFailed,
   );
   const expandedPixels = useRasterPixelLease(
     props._data,
     admission.ok ? admission.size : null,
-    opened,
+    opened && currentUrlFailure === null && !targetDecodeFailed,
   );
+  const expandedTargetObjectUrl =
+    opened && expandedPixels.admitted ? targetObjectUrl : null;
+  const expandedDisplayObjectUrl =
+    expandedTargetObjectUrl ??
+    (opened && (expandedPixels.pending || expandedPixels.admitted)
+      ? (lastExpandedOwner?.url ?? null)
+      : null);
+
+  // The expanded copy owns a second decoder and therefore a second lease.
+  // Remember only a generation that reached both ownership boundaries. On a
+  // replacement render the target lease is still pending, so this keeps the
+  // already-mounted copy in place; on first open there is no prior owner and
+  // no raster is mounted before its reservation succeeds.
+  React.useLayoutEffect(() => {
+    if (expandedTargetObjectUrl !== null && ownedUrl !== null) {
+      setLastExpandedOwner(ownedUrl);
+    } else if (
+      !opened ||
+      (!expandedPixels.pending && !expandedPixels.admitted)
+    ) {
+      setLastExpandedOwner(null);
+    }
+  }, [
+    expandedPixels.admitted,
+    expandedPixels.pending,
+    expandedTargetObjectUrl,
+    opened,
+    ownedUrl,
+  ]);
 
   useEffect(() => {
-    setOwnedUrl(null);
     setUrlFailure(null);
-    if (!admission.ok) return;
+    if (!admission.ok) {
+      setOwnedUrl(null);
+      return;
+    }
     const result = createOwnedImageObjectUrl(props._data, mimeType);
     if ("ok" in result) {
+      setOwnedUrl(null);
       setUrlFailure({ data: props._data, mimeType, failure: result });
       return;
     }
@@ -95,16 +144,9 @@ function ImageComponent({ uuid, props }: GuiImageMessage) {
     return () => URL.revokeObjectURL(result.url);
   }, [admission.ok, mimeType, props._data]);
 
-  const imageUrl = matchingImageObjectUrl(ownedUrl, props._data, mimeType);
-  const currentUrlFailure = matchingImagePreparationFailure(
-    urlFailure,
-    props._data,
-    mimeType,
-  );
-  const decodeError = useImageDecodeError(imageUrl);
   useEffect(
-    () => releaseFailedObjectUrl(imageUrl, decodeError.failed),
-    [decodeError.failed, imageUrl],
+    () => releaseFailedObjectUrl(ownedObjectUrl, decodeError.failed),
+    [decodeError.failed, ownedObjectUrl],
   );
   // Header admission already measured the exact source. Re-decoding it with
   // `new Image()` here would create a third, hidden decoder owner in addition
@@ -112,11 +154,12 @@ function ImageComponent({ uuid, props }: GuiImageMessage) {
   const imageSize = admission.ok ? admission.size : null;
 
   const rejection = admission.ok
-    ? !inlinePixels.pending && !inlinePixels.admitted
-      ? { ok: false as const, reason: RASTER_PIXEL_BUDGET_MESSAGE }
-      : decodeError.failed
-        ? { ok: false as const, reason: IMAGE_DECODE_FAILURE_MESSAGE }
-        : currentUrlFailure
+    ? targetDecodeFailed
+      ? { ok: false as const, reason: IMAGE_DECODE_FAILURE_MESSAGE }
+      : (currentUrlFailure ??
+        (!inlinePixels.pending && !inlinePixels.admitted
+          ? { ok: false as const, reason: RASTER_PIXEL_BUDGET_MESSAGE }
+          : null))
     : admission;
   if (rejection !== null) {
     return (
@@ -134,12 +177,12 @@ function ImageComponent({ uuid, props }: GuiImageMessage) {
     );
   }
 
-  if (imageUrl === null || !inlinePixels.admitted) return null;
+  if (displayObjectUrl === null) return null;
 
   return (
     <>
       <ImageWithExpand
-        imageUrl={imageUrl}
+        imageUrl={displayObjectUrl}
         label={props.label}
         onDecodeError={decodeError.onError}
         onExpand={expand}
@@ -155,9 +198,9 @@ function ImageComponent({ uuid, props }: GuiImageMessage) {
       >
         {!expandedPixels.pending && !expandedPixels.admitted ? (
           <RejectedImageStatus reason={RASTER_PIXEL_BUDGET_MESSAGE} />
-        ) : expandedPixels.admitted ? (
+        ) : expandedDisplayObjectUrl !== null ? (
           <img
-            src={imageUrl}
+            src={expandedDisplayObjectUrl}
             alt={props.label ?? ""}
             className={previewMediaClassName(fullscreen)}
             onError={decodeError.onError}
