@@ -809,6 +809,16 @@ class Message(abc.ABC):
             return ((self.entity_type, self.lifecycle_entity_id()),)
         return ()
 
+    def delivery_scope(self) -> str | None:
+        """Return an optional transport scope used to filter retained delivery.
+
+        None is the global scope. Application protocols may override this for
+        payloads whose retained state should only be streamed to clients that
+        explicitly subscribe to that scope.
+        """
+
+        return None
+
     def serialized_metrics_upper_bound(self) -> tuple[int, int, int, int]:
         """Return metadata, raw bytes, buffer count, and decoded tree nodes."""
         binary_buffers: List[memoryview] = []

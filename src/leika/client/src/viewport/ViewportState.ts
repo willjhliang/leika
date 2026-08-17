@@ -109,11 +109,22 @@ export interface ViewportPageState {
   panes: Record<string, ViewportPane>;
   layout: ViewportLayout;
 }
+export interface ViewportPageStream {
+  pageId: string;
+  generation: number;
+  accepting: boolean;
+  ready: boolean;
+}
 
 export interface ViewportState {
   pages: Record<string, ViewportPageState>;
   pageOrder: string[];
   activePageId: string | null;
+  displayPageId: string | null;
+  warmPage: ViewportPageState | null;
+  transitionPage: ViewportPageState | null;
+  catalogReady: boolean;
+  pageStream: ViewportPageStream | null;
   interactionEpoch: number;
 }
 
@@ -173,6 +184,10 @@ export interface ViewportActions {
   addPage: (pageId: string, name: string, isDefault: boolean) => void;
   updatePage: (pageId: string, name: string) => void;
   setActivePage: (pageId: string) => void;
+  finishPageCatalog: (pageIds: readonly string[]) => void;
+  beginPageSubscription: (pageId: string, generation: number) => void;
+  beginPageStream: (pageId: string, generation: number) => void;
+  finishPageStream: (pageId: string, generation: number) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
   addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
@@ -187,6 +202,8 @@ export interface ViewportActions {
   commitUserLayout: (layout: ViewportLayout) => void;
   /** Pure admission for viewport state owned by one original wire frame. */
   preflightMessageBatch: (messages: readonly Message[]) => string | null;
+  /** Admit a wire frame, evicting inactive warm pages only under pressure. */
+  prepareMessageBatch: (messages: readonly Message[]) => string | null;
 }
 
 export interface ViewportLayoutStorage {
@@ -255,6 +272,11 @@ function initialState(interactionEpoch = 0): ViewportState {
     pages: Object.create(null) as Record<string, ViewportPageState>,
     pageOrder: [],
     activePageId: null,
+    displayPageId: null,
+    warmPage: null,
+    transitionPage: null,
+    catalogReady: false,
+    pageStream: null,
     interactionEpoch,
   };
 }
@@ -493,6 +515,44 @@ export function useViewportState(
       }
     };
 
+    const contentPanesFromPage = (
+      page: ViewportPageState | null,
+    ): ViewportContentPane[] =>
+      page === null
+        ? []
+        : Object.values(page.panes).filter(
+            (pane): pane is ViewportContentPane => pane.kind !== "root",
+          );
+
+    const clearCatalogPageModels = (
+      pages: Record<string, ViewportPageState>,
+    ): Record<string, ViewportPageState> => {
+      const cleared = Object.create(null) as Record<string, ViewportPageState>;
+      for (const [pageId, page] of Object.entries(pages)) {
+        authoritativePaneIdsRef.current.set(pageId, null);
+        cleared[pageId] = { ...page, panes: initialViewportPanes() };
+      }
+      return cleared;
+    };
+
+    const recountContentPanes = (
+      pages: Record<string, ViewportPageState>,
+      warmPage: ViewportPageState | null,
+      transitionPage: ViewportPageState | null,
+    ): void => {
+      const models = [
+        ...Object.values(pages),
+        ...(warmPage === null ? [] : [warmPage]),
+        ...(transitionPage === null ? [] : [transitionPage]),
+      ];
+      const seen = new Set<ViewportPageState>();
+      contentPaneCountRef.current = models.reduce((count, page) => {
+        if (seen.has(page)) return count;
+        seen.add(page);
+        return count + contentPanesFromPage(page).length;
+      }, 0);
+    };
+
     const replacePage = (page: ViewportPageState): void => {
       const state = store.get();
       store.set({ pages: { ...state.pages, [page.pageId]: page } });
@@ -584,10 +644,26 @@ export function useViewportState(
       replacePage({ ...page, panes, layout });
     };
 
-    const preflightMessageBatch = (
+    const projectMessageBatch = (
       messages: readonly Message[],
+      includeWarmPage: boolean,
+      includeTransitionPage: boolean,
     ): string | null => {
       const current = store.get();
+      const retainedPages = [
+        ...(includeWarmPage && current.warmPage !== null
+          ? [current.warmPage]
+          : []),
+        ...(includeTransitionPage && current.transitionPage !== null
+          ? [current.transitionPage]
+          : []),
+      ];
+      const retainedPageRefs = new Set<ViewportPageState>();
+      const retainedPanes = retainedPages.flatMap((page) => {
+        if (retainedPageRefs.has(page)) return [];
+        retainedPageRefs.add(page);
+        return contentPanesFromPage(page);
+      });
       const pages = new Map<string, PageProjection>();
       for (const pageId of current.pageOrder) {
         const page = current.pages[pageId];
@@ -610,8 +686,10 @@ export function useViewportState(
       }
       const reject = (detail: string) =>
         "Connection frame violates viewport safety limits: " + detail;
-      const allPanes = (): ViewportContentPane[] =>
-        [...pages.values()].flatMap((page) => [...page.panes.values()]);
+      const allPanes = (): ViewportContentPane[] => [
+        ...retainedPanes,
+        ...[...pages.values()].flatMap((page) => [...page.panes.values()]),
+      ];
       const authoritativeCount = (): number =>
         [...pages.values()].reduce(
           (count, page) => count + (page.authoritativePaneIds?.size ?? 0),
@@ -643,6 +721,16 @@ export function useViewportState(
           if (page === undefined || !pageNameIsValid(message.name))
             return reject("page update is invalid");
           page.name = message.name;
+          continue;
+        }
+        if (message.type === "PageCatalogMessage") {
+          if (
+            message.page_ids.length !== pages.size ||
+            message.page_ids.some(
+              (pageId, index) => [...pages.keys()][index] !== pageId,
+            )
+          )
+            return reject("page catalog does not match its declarations");
           continue;
         }
 
@@ -744,10 +832,121 @@ export function useViewportState(
       return null;
     };
 
+    type CacheAdmission = {
+      failure: string | null;
+      evictWarmPage: boolean;
+      evictTransitionPage: boolean;
+    };
+
+    const cacheAdmission = (messages: readonly Message[]): CacheAdmission => {
+      const current = store.get();
+      const failure = projectMessageBatch(messages, true, true);
+      if (failure === null)
+        return {
+          failure: null,
+          evictWarmPage: false,
+          evictTransitionPage: false,
+        };
+      if (
+        current.warmPage !== null &&
+        projectMessageBatch(messages, false, true) === null
+      )
+        return {
+          failure: null,
+          evictWarmPage: true,
+          evictTransitionPage: false,
+        };
+      if (
+        current.transitionPage !== null &&
+        projectMessageBatch(messages, true, false) === null
+      )
+        return {
+          failure: null,
+          evictWarmPage: false,
+          evictTransitionPage: true,
+        };
+      if (
+        current.warmPage !== null &&
+        current.transitionPage !== null &&
+        projectMessageBatch(messages, false, false) === null
+      )
+        return {
+          failure: null,
+          evictWarmPage: true,
+          evictTransitionPage: true,
+        };
+      return {
+        failure,
+        evictWarmPage: false,
+        evictTransitionPage: false,
+      };
+    };
+
+    let pendingAdmissionMessages: readonly Message[] | null = null;
+    let pendingAdmissionState: ViewportState | null = null;
+    let pendingAdmission: CacheAdmission | null = null;
+
+    const preflightMessageBatch = (
+      messages: readonly Message[],
+    ): string | null => {
+      pendingAdmissionMessages = messages;
+      pendingAdmissionState = store.get();
+      pendingAdmission = cacheAdmission(messages);
+      return pendingAdmission.failure;
+    };
+
+    const prepareMessageBatch = (
+      messages: readonly Message[],
+    ): string | null => {
+      const admission =
+        pendingAdmissionMessages === messages &&
+        pendingAdmissionState === store.get() &&
+        pendingAdmission !== null
+          ? pendingAdmission
+          : cacheAdmission(messages);
+      pendingAdmissionMessages = null;
+      pendingAdmissionState = null;
+      pendingAdmission = null;
+      if (admission.failure !== null) return admission.failure;
+      if (!admission.evictWarmPage && !admission.evictTransitionPage)
+        return null;
+
+      const current = store.get();
+      let warmPage = admission.evictWarmPage ? null : current.warmPage;
+      let transitionPage = admission.evictTransitionPage
+        ? null
+        : current.transitionPage;
+      if (
+        transitionPage === null &&
+        current.transitionPage !== null &&
+        warmPage !== null
+      ) {
+        transitionPage = warmPage;
+        warmPage = null;
+      }
+      const displayPageId =
+        transitionPage?.pageId ??
+        (current.pageStream?.ready === true &&
+        current.pageStream.pageId === current.activePageId
+          ? current.activePageId
+          : null);
+      recountContentPanes(current.pages, warmPage, transitionPage);
+      store.set({
+        warmPage,
+        transitionPage,
+        displayPageId,
+        interactionEpoch:
+          displayPageId === current.displayPageId
+            ? current.interactionEpoch
+            : current.interactionEpoch + 1,
+      });
+      return null;
+    };
+
     const directMessage = (type: Message["type"], value: object): Message =>
       ({ type, ...value }) as Message;
     const admitDirect = (message: Message): boolean => {
-      const failure = preflightMessageBatch([message]);
+      const failure = prepareMessageBatch([message]);
       if (failure === null) return true;
       console.error(failure);
       return false;
@@ -811,23 +1010,10 @@ export function useViewportState(
           layout: readLayout(pageId, isDefault),
         };
         authoritativePaneIdsRef.current.set(pageId, null);
-        let activePageId = state.activePageId;
-        const preferred = preferredActivePageIdRef.current;
-        if (
-          preferred === pageId ||
-          activePageId === null ||
-          (preferred === null && isDefault)
-        ) {
-          activePageId = pageId;
-        }
         store.set({
           pages: { ...state.pages, [pageId]: page },
           pageOrder: [...state.pageOrder, pageId],
-          activePageId,
-          interactionEpoch:
-            activePageId === state.activePageId
-              ? state.interactionEpoch
-              : state.interactionEpoch + 1,
+          catalogReady: false,
         });
       },
 
@@ -838,19 +1024,211 @@ export function useViewportState(
           )
         )
           return;
-        const page = store.get().pages[pageId];
-        if (page !== undefined && page.name !== name)
-          replacePage({ ...page, name });
+        const state = store.get();
+        const page = state.pages[pageId];
+        const pages =
+          page !== undefined && page.name !== name
+            ? { ...state.pages, [pageId]: { ...page, name } }
+            : state.pages;
+        const warmPage =
+          state.warmPage?.pageId === pageId
+            ? { ...state.warmPage, name }
+            : state.warmPage;
+        const transitionPage =
+          state.transitionPage?.pageId === pageId
+            ? { ...state.transitionPage, name }
+            : state.transitionPage;
+        if (
+          pages !== state.pages ||
+          warmPage !== state.warmPage ||
+          transitionPage !== state.transitionPage
+        )
+          store.set({ pages, warmPage, transitionPage });
+      },
+
+      finishPageCatalog: (pageIds) => {
+        if (
+          !admitDirect(
+            directMessage("PageCatalogMessage", { page_ids: pageIds }),
+          )
+        )
+          return;
+        const state = store.get();
+        const preferred = preferredActivePageIdRef.current;
+        const defaultPageId = state.pageOrder.find(
+          (pageId) => state.pages[pageId]?.isDefault,
+        );
+        const activePageId =
+          preferred !== null && pageIds.includes(preferred)
+            ? preferred
+            : state.activePageId !== null &&
+                pageIds.includes(state.activePageId)
+              ? state.activePageId
+              : (defaultPageId ?? pageIds[0] ?? null);
+        const activeChanged = activePageId !== state.activePageId;
+        const pages = activeChanged
+          ? clearCatalogPageModels(state.pages)
+          : state.pages;
+        const warmPage = activeChanged ? null : state.warmPage;
+        const transitionPage = activeChanged ? null : state.transitionPage;
+        if (activeChanged) recountContentPanes(pages, warmPage, transitionPage);
+        store.set({
+          pages,
+          activePageId,
+          displayPageId: activeChanged ? null : state.displayPageId,
+          warmPage,
+          transitionPage,
+          catalogReady: true,
+          pageStream: activeChanged ? null : state.pageStream,
+          interactionEpoch: activeChanged
+            ? state.interactionEpoch + 1
+            : state.interactionEpoch,
+        });
+      },
+
+      beginPageSubscription: (pageId, generation) => {
+        const state = store.get();
+        if (
+          state.activePageId !== pageId ||
+          state.pages[pageId] === undefined ||
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          (state.pageStream?.pageId === pageId &&
+            state.pageStream.generation === generation)
+        )
+          return;
+
+        let transitionPage = state.transitionPage;
+        let warmPage = state.warmPage;
+        if (
+          transitionPage === null &&
+          state.displayPageId === pageId &&
+          state.pageStream?.pageId === pageId &&
+          state.pageStream.ready
+        ) {
+          transitionPage = state.pages[pageId];
+          if (warmPage?.pageId === pageId) warmPage = null;
+        }
+        const pages = clearCatalogPageModels(state.pages);
+        const displayPageId = transitionPage?.pageId ?? null;
+        recountContentPanes(pages, warmPage, transitionPage);
+        store.set({
+          pages,
+          displayPageId,
+          warmPage,
+          transitionPage,
+          pageStream: {
+            pageId,
+            generation,
+            accepting: false,
+            ready: false,
+          },
+          interactionEpoch: state.interactionEpoch + 1,
+        });
+      },
+
+      beginPageStream: (pageId, generation) => {
+        const state = store.get();
+        const stream = state.pageStream;
+        if (
+          state.activePageId !== pageId ||
+          stream === null ||
+          stream.pageId !== pageId ||
+          stream.generation !== generation ||
+          stream.accepting
+        )
+          return;
+        store.set({ pageStream: { ...stream, accepting: true } });
+      },
+
+      finishPageStream: (pageId, generation) => {
+        const state = store.get();
+        const stream = state.pageStream;
+        if (
+          state.activePageId !== pageId ||
+          stream === null ||
+          stream.pageId !== pageId ||
+          stream.generation !== generation ||
+          !stream.accepting
+        )
+          return;
+        let warmPage = state.warmPage;
+        if (
+          state.transitionPage !== null &&
+          state.transitionPage.pageId !== pageId
+        )
+          warmPage = state.transitionPage;
+        if (warmPage?.pageId === pageId) warmPage = null;
+        recountContentPanes(state.pages, warmPage, null);
+        store.set({
+          displayPageId: pageId,
+          warmPage,
+          transitionPage: null,
+          pageStream: { ...stream, ready: true },
+          interactionEpoch: state.interactionEpoch + 1,
+        });
       },
 
       setActivePage: (pageId) => {
         const state = store.get();
         if (state.pages[pageId] === undefined || state.activePageId === pageId)
           return;
+
+        const readyLivePage =
+          state.transitionPage === null &&
+          state.displayPageId === state.activePageId &&
+          state.activePageId !== null &&
+          state.pageStream?.pageId === state.activePageId &&
+          state.pageStream.ready
+            ? state.pages[state.activePageId]
+            : null;
+        const displayedPage =
+          state.transitionPage?.pageId === state.displayPageId
+            ? state.transitionPage
+            : readyLivePage?.pageId === state.displayPageId
+              ? readyLivePage
+              : null;
+        const targetSnapshot =
+          state.transitionPage?.pageId === pageId
+            ? state.transitionPage
+            : state.warmPage?.pageId === pageId
+              ? state.warmPage
+              : null;
+
+        let transitionPage: ViewportPageState | null;
+        let warmPage: ViewportPageState | null;
+        if (targetSnapshot !== null) {
+          transitionPage = targetSnapshot;
+          const candidates = [
+            displayedPage,
+            readyLivePage,
+            state.transitionPage,
+            state.warmPage,
+          ];
+          warmPage =
+            candidates.find(
+              (candidate) =>
+                candidate !== null &&
+                candidate !== targetSnapshot &&
+                candidate.pageId !== pageId,
+            ) ?? null;
+        } else {
+          transitionPage = displayedPage;
+          warmPage = null;
+        }
+
+        const pages = clearCatalogPageModels(state.pages);
+        const displayPageId = transitionPage?.pageId ?? null;
+        recountContentPanes(pages, warmPage, transitionPage);
         preferredActivePageIdRef.current = pageId;
         persistActivePage(pageId);
         store.set({
+          pages,
           activePageId: pageId,
+          displayPageId,
+          warmPage,
+          transitionPage,
+          pageStream: null,
           interactionEpoch: state.interactionEpoch + 1,
         });
       },
@@ -1003,10 +1381,17 @@ export function useViewportState(
 
       commitUserLayout: (rawLayout) => {
         const state = store.get();
-        const page =
-          state.activePageId === null
-            ? undefined
-            : state.pages[state.activePageId];
+        const stream = state.pageStream;
+        if (
+          state.activePageId === null ||
+          state.displayPageId !== state.activePageId ||
+          state.transitionPage !== null ||
+          stream === null ||
+          stream.pageId !== state.activePageId ||
+          !stream.ready
+        )
+          return;
+        const page = state.pages[state.activePageId];
         if (page === undefined) return;
         const layout = reconcilePaneLayout(
           normalizeViewportLayout(rawLayout),
@@ -1017,6 +1402,7 @@ export function useViewportState(
           replacePage({ ...page, layout });
       },
       preflightMessageBatch,
+      prepareMessageBatch,
     };
   }, [storage, store]);
 

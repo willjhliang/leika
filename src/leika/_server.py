@@ -71,6 +71,7 @@ _TRANSFER_EXECUTOR_MAX_PENDING = 16
 _TRANSFER_EXECUTOR_MAX_RETAINED_BYTES = 256 * 1024 * 1024
 _PLOTLY_JS_MAX_BYTES = 32 * 1024 * 1024
 """Maximum stable UTF-8 source loaded from an installed Plotly runtime."""
+_PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
 
 
 class _CallbackExecutor(ThreadPoolExecutor):
@@ -737,6 +738,7 @@ class Server:
             for callback in callbacks:
                 await self._await_user_callback(callback, client)
 
+        server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
@@ -1001,18 +1003,24 @@ class Server:
             return
         self._plotly_js_sent_client_ids.add(client_id)
 
+    def _ensure_plotly_js_loaded_locked(self) -> None:
+        """Load, validate, and account the shared runtime once. Lock held."""
+
+        if self._plotly_js_source is not None:
+            return
+        source = _load_plotly_js()
+        cost = _GuiResourceCost(
+            text_units=utf16_code_unit_length(source),
+            payload_bytes=len(source.encode("utf-8")),
+        )
+        self._replace_gui_resource_cost(self._plotly_resource_cost, cost, page_global=False)
+        self._plotly_resource_cost = cost
+        self._plotly_js_source = source
+
     def _ensure_plotly_js_sent(self, connection: infra.WebsockClientConnection | None) -> None:
         """Initialize one client, or every current and future client, once."""
         with self._plotly_js_lock:
-            if self._plotly_js_source is None:
-                source = _load_plotly_js()
-                cost = _GuiResourceCost(
-                    text_units=utf16_code_unit_length(source),
-                    payload_bytes=len(source.encode("utf-8")),
-                )
-                self._replace_gui_resource_cost(self._plotly_resource_cost, cost, page_global=False)
-                self._plotly_resource_cost = cost
-                self._plotly_js_source = source
+            self._ensure_plotly_js_loaded_locked()
 
             if connection is not None:
                 self._queue_plotly_js_locked(connection)
@@ -1025,6 +1033,19 @@ class Server:
                 )
             for client_connection in connections:
                 self._queue_plotly_js_locked(client_connection)
+
+    def _ensure_page_plotly_js_sent(self, page_id: str) -> None:
+        """Initialize only browsers currently requesting a Plotly pane's page."""
+
+        with self._plotly_js_lock:
+            self._ensure_plotly_js_loaded_locked()
+        with self._client_lock:
+            connections = tuple(
+                client._websock_connection for client in self._connected_clients.values()
+            )
+        for connection in connections:
+            if connection.delivery_scope() == page_id:
+                self._ensure_plotly_js_sent(connection)
 
     def _initialize_plotly_connection(self, connection: infra.WebsockClientConnection) -> None:
         """Apply a prior global Plotly requirement to a new connection."""
@@ -1045,6 +1066,40 @@ class Server:
             client = self._connected_clients.get(client_id)
         if client is not None:
             client._cancel_outgoing_file_transfer(message.transfer_uuid)
+
+    def _handle_page_subscribe(
+        self, client_id: infra.ClientId, message: _messages.PageSubscribeMessage
+    ) -> None:
+        """Replace one browser's private active-page transport stream."""
+
+        if (
+            type(message.generation) is not int
+            or not 0 <= message.generation <= _PAGE_SUBSCRIPTION_GENERATION_MAX
+        ):
+            return
+        pages = getattr(self, "pages", None)
+        if pages is None:
+            return
+        with pages._lock:
+            page = pages._page_from_page_id.get(message.page_id)
+        if page is None:
+            return
+        with self._client_lock:
+            client = self._connected_clients.get(client_id)
+        if client is None:
+            return
+        with page.panes._lock:
+            subscribed = client._websock_connection.request_delivery_scope(
+                message.page_id,
+                _messages.PageStreamBeginMessage(
+                    page_id=message.page_id, generation=message.generation
+                ),
+                _messages.PageStreamReadyMessage(
+                    page_id=message.page_id, generation=message.generation
+                ),
+            )
+            if subscribed and page.panes._has_plotly_pane_locked():
+                self._ensure_plotly_js_sent(client._websock_connection)
 
     def _handle_client_ping(
         self, client_id: infra.ClientId, message: _messages.ClientPingMessage

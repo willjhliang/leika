@@ -19,6 +19,7 @@ import {
 } from "./messageBatch";
 import { useViewer } from "./ViewerContext";
 import { dispatchGuiLifecycleMessage } from "./guiLifecycleDispatch";
+import { filterPageStreamMessages } from "./pageStreamProjection";
 import {
   FileTransferAbort,
   FileTransferPart,
@@ -26,7 +27,6 @@ import {
   Message,
   isGuiComponentMessage,
 } from "./WebsocketMessages";
-
 function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
   const viewer = useViewer();
   const sendFileTransferMessage = React.useCallback(
@@ -61,6 +61,21 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "PageUpdateMessage":
           viewer.viewportActions.updatePage(message.page_id, message.name);
+          return;
+        case "PageCatalogMessage":
+          viewer.viewportActions.finishPageCatalog(message.page_ids);
+          return;
+        case "PageStreamBeginMessage":
+          viewer.viewportActions.beginPageStream(
+            message.page_id,
+            message.generation,
+          );
+          return;
+        case "PageStreamReadyMessage":
+          viewer.viewportActions.finishPageStream(
+            message.page_id,
+            message.generation,
+          );
           return;
         case "ThemeConfigurationMessage":
           viewer.guiActions.setTheme(message);
@@ -164,27 +179,38 @@ export function MessageHandler() {
       const queue = viewer.mutable.current.messageQueue;
       if (queue.messageCount === 0) return;
       const batches = queue.drainBatches();
-      processPreflightedMessageBatches(
-        batches,
-        (batch) =>
-          viewer.guiActions.preflightMessageBatch(batch) ??
-          viewer.viewportActions.preflightMessageBatch(batch) ??
-          preflightNotificationBatch(batch) ??
-          plotlyBootstrap.preflight(batch),
-        (batch) => {
-          const bootstrapFailure = plotlyBootstrap.execute(batch);
-          if (bootstrapFailure !== null) return bootstrapFailure;
-          dispatchMessageBatch(batch, handleMessage, undefined, {
-            guiComponents: viewer.guiActions.addGuiBatch,
-            modals: viewer.guiActions.addModalBatch,
-            commands: viewer.guiActions.addCommandBatch,
-            tabs: viewer.guiActions.applyTabLifecycleBatch,
-            guiUpdates: viewer.guiActions.updateGuiPropsBatch,
-          });
-          return null;
-        },
-        viewer.mutable.current.failConnection,
-      );
+      for (const rawBatch of batches) {
+        const batch = filterPageStreamMessages(
+          rawBatch,
+          viewer.useViewport.get(),
+        );
+        if (batch.length === 0) continue;
+        const accepted = processPreflightedMessageBatches(
+          [batch],
+          (batch) =>
+            viewer.guiActions.preflightMessageBatch(batch) ??
+            viewer.viewportActions.preflightMessageBatch(batch) ??
+            preflightNotificationBatch(batch) ??
+            plotlyBootstrap.preflight(batch),
+          (batch) => {
+            const viewportFailure =
+              viewer.viewportActions.prepareMessageBatch(batch);
+            if (viewportFailure !== null) return viewportFailure;
+            const bootstrapFailure = plotlyBootstrap.execute(batch);
+            if (bootstrapFailure !== null) return bootstrapFailure;
+            dispatchMessageBatch(batch, handleMessage, undefined, {
+              guiComponents: viewer.guiActions.addGuiBatch,
+              modals: viewer.guiActions.addModalBatch,
+              commands: viewer.guiActions.addCommandBatch,
+              tabs: viewer.guiActions.applyTabLifecycleBatch,
+              guiUpdates: viewer.guiActions.updateGuiPropsBatch,
+            });
+            return null;
+          },
+          viewer.mutable.current.failConnection,
+        );
+        if (!accepted) return;
+      }
     };
 
     const scheduler = makeMessageQueueScheduler(processQueue, {

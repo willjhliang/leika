@@ -10,7 +10,10 @@ import leika
 from leika import _messages
 from leika import _pages as pages_impl
 from leika import _panes as panes_impl
+from leika import _server as server_impl
 from leika.infra import ClientId
+from leika.infra import _async_message_buffer as buffer_impl
+from leika.infra import _infra as infra_impl
 
 
 def _retained(server: leika.Server) -> tuple[_messages.Message, ...]:
@@ -246,3 +249,113 @@ def test_stop_retires_every_pages_panes_and_releases_shared_ownership(
     assert server.pages._aggregate.resource_total == panes_impl._PaneResourceCost()
     assert server.panes._handle_from_pane_id == {}
     assert other.panes._handle_from_pane_id == {}
+
+
+def test_plotly_runtime_follows_page_subscriptions(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page-local chart initializes Plotly only for that page's browsers."""
+    plotly = pytest.importorskip("plotly.graph_objects")
+    bootstrap = "window.Plotly = {};"
+    load_count = 0
+
+    def load_plotly_js() -> str:
+        nonlocal load_count
+        load_count += 1
+        return bootstrap
+
+    monkeypatch.setattr("leika._server._load_plotly_js", load_plotly_js)
+    retained = server._websock_server._broadcast_buffer
+
+    def connect(
+        client_id: ClientId,
+    ) -> tuple[
+        server_impl.ClientHandle,
+        infra_impl.WebsockClientConnection,
+        buffer_impl.AsyncMessageBuffer,
+    ]:
+        local = buffer_impl.AsyncMessageBuffer(
+            server._event_loop,
+            persistent_messages=False,
+        )
+        connection = infra_impl.WebsockClientConnection(
+            client_id,
+            infra_impl._ClientHandleState(local, retained),
+        )
+        retained.register_client(client_id)
+        client = server_impl.ClientHandle(connection, server)
+        with server._client_lock:
+            server._connected_clients[client_id] = client
+        return client, connection, local
+
+    def bootstraps(buffer: buffer_impl.AsyncMessageBuffer) -> list[str]:
+        with buffer.buffer_lock:
+            return [
+                message.source
+                for message in buffer.message_from_id.values()
+                if isinstance(message, _messages.RunJavascriptMessage)
+            ]
+
+    first, first_connection, first_local = connect(ClientId(101))
+    second, second_connection, second_local = connect(ClientId(102))
+    try:
+        analysis = server.pages.add("Analysis", page_id="analysis")
+        for generation, connection in enumerate((first_connection, second_connection)):
+            server._handle_page_subscribe(
+                connection.client_id,
+                _messages.PageSubscribeMessage(
+                    page_id="default",
+                    generation=generation,
+                ),
+            )
+
+        # Declaration validates and accounts the runtime transactionally, but
+        # an inactive page does not queue it to any browser.
+        analysis.panes.add_plotly(plotly.Figure(), pane_id="inactive-plotly")
+        assert load_count == 1
+        assert bootstraps(first_local) == []
+        assert bootstraps(second_local) == []
+
+        # Activating that page initializes only the requesting browser.
+        server._handle_page_subscribe(
+            first_connection.client_id,
+            _messages.PageSubscribeMessage(page_id="analysis", generation=2),
+        )
+        assert load_count == 1
+        assert bootstraps(first_local) == [bootstrap]
+        assert bootstraps(second_local) == []
+
+        # The first chart added live to the other client's selected page uses
+        # the cached runtime once; later charts do not enqueue it again.
+        server.panes.add_plotly(plotly.Figure(), pane_id="live-plotly")
+        server.panes.add_plotly(plotly.Figure(), pane_id="second-live-plotly")
+        assert load_count == 1
+        assert bootstraps(first_local) == [bootstrap]
+        assert bootstraps(second_local) == [bootstrap]
+
+        # Later subscriptions reuse that same prepared runtime as well.
+        server._handle_page_subscribe(
+            second_connection.client_id,
+            _messages.PageSubscribeMessage(page_id="analysis", generation=3),
+        )
+        assert load_count == 1
+        assert bootstraps(first_local) == [bootstrap]
+        assert bootstraps(second_local) == [bootstrap]
+        with retained.buffer_lock:
+            assert not any(
+                isinstance(message, _messages.RunJavascriptMessage)
+                for message in retained.message_from_id.values()
+            )
+    finally:
+        with server._client_lock:
+            server._connected_clients.pop(first_connection.client_id, None)
+            server._connected_clients.pop(second_connection.client_id, None)
+        for client, connection, local in (
+            (first, first_connection, first_local),
+            (second, second_connection, second_local),
+        ):
+            client.gui._retire_scope_without_queue()
+            server._discard_plotly_connection(connection.client_id)
+            retained.unregister_client(connection.client_id)
+            local.set_done()

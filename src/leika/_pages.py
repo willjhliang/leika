@@ -130,6 +130,9 @@ class Pages:
                             is_default=is_default,
                         ),
                         panes._snapshot_message(),
+                        _messages.PageCatalogMessage(
+                            page_ids=tuple(self._page_from_page_id) + (page_id,)
+                        ),
                     )
                 )
             except BaseException:

@@ -18,10 +18,13 @@ import {
   resolveFilePreview,
 } from "./filePreview";
 import { retainedDownloads } from "./retainedDownloadBudget";
+import { filterPageStreamMessages } from "./pageStreamProjection";
 import {
   FileTransferPart,
   FileTransferStartDownload,
+  Message,
 } from "./WebsocketMessages";
+import type { ViewportState } from "./viewport/ViewportState";
 
 const start = (
   overrides: Partial<FileTransferStartDownload> = {},
@@ -46,6 +49,40 @@ const part = (transferUuid = "transfer"): FileTransferPart => ({
   content: new Uint8Array([1]),
 });
 
+const paneUpdate = (pageId: string, title: string): Message => ({
+  type: "ViewportPaneUpdateMessage",
+  page_id: pageId,
+  pane_id: "pane",
+  updates: { title },
+});
+
+function pageStreamState({
+  pageId = "a",
+  generation = 3,
+  accepting = false,
+}: {
+  pageId?: string;
+  generation?: number;
+  accepting?: boolean;
+} = {}): ViewportState {
+  return {
+    pages: Object.create(null) as ViewportState["pages"],
+    pageOrder: ["a", "b"],
+    activePageId: pageId,
+    displayPageId: null,
+    warmPage: null,
+    transitionPage: null,
+    catalogReady: true,
+    pageStream: {
+      pageId,
+      generation,
+      accepting,
+      ready: false,
+    },
+    interactionEpoch: 0,
+  };
+}
+
 function runtime(
   overrides: Partial<FileDownloadHandlerRuntime> = {},
 ): FileDownloadHandlerRuntime {
@@ -67,6 +104,68 @@ afterEach(() => {
   resetFilePreviewState();
   retainedDownloads.evictAll();
   vi.restoreAllMocks();
+});
+
+describe("filterPageStreamMessages", () => {
+  it("drops A-to-B-to-A stale payloads until the matching generation begins", () => {
+    const messages: Message[] = [
+      { type: "PageStreamBeginMessage", page_id: "a", generation: 1 },
+      paneUpdate("a", "stale-a"),
+      { type: "PageStreamReadyMessage", page_id: "a", generation: 1 },
+      { type: "PageStreamBeginMessage", page_id: "b", generation: 2 },
+      paneUpdate("b", "stale-b"),
+      { type: "PageStreamReadyMessage", page_id: "b", generation: 2 },
+      { type: "PageStreamBeginMessage", page_id: "a", generation: 3 },
+      paneUpdate("a", "current-a"),
+      paneUpdate("b", "inactive-b"),
+      { type: "PageStreamReadyMessage", page_id: "a", generation: 3 },
+      {
+        type: "PageUpdateMessage",
+        page_id: "a",
+        name: "Renamed globally",
+      },
+    ];
+
+    const filtered = filterPageStreamMessages(messages, pageStreamState());
+    expect(
+      filtered.flatMap((message) =>
+        message.type === "ViewportPaneUpdateMessage"
+          ? [message.updates.title]
+          : [],
+      ),
+    ).toEqual(["current-a"]);
+    expect(filtered.at(-1)?.type).toBe("PageUpdateMessage");
+  });
+
+  it("closes batch-local acceptance on wrong-page and stale-generation begins", () => {
+    const messages: Message[] = [
+      paneUpdate("a", "live-before-marker"),
+      { type: "PageStreamBeginMessage", page_id: "b", generation: 2 },
+      paneUpdate("a", "after-wrong-page-begin"),
+      { type: "PageStreamBeginMessage", page_id: "a", generation: 3 },
+      paneUpdate("a", "after-current-begin"),
+      { type: "PageStreamBeginMessage", page_id: "a", generation: 1 },
+      paneUpdate("a", "after-stale-begin"),
+      { type: "PageStreamBeginMessage", page_id: "a", generation: 3 },
+      paneUpdate("a", "after-current-reopen"),
+    ];
+
+    const filtered = filterPageStreamMessages(
+      messages,
+      pageStreamState({ accepting: true }),
+    );
+    expect(
+      filtered.flatMap((message) =>
+        message.type === "ViewportPaneUpdateMessage"
+          ? [message.updates.title]
+          : [],
+      ),
+    ).toEqual([
+      "live-before-marker",
+      "after-current-begin",
+      "after-current-reopen",
+    ]);
+  });
 });
 
 describe("handleFileDownloadMessage", () => {

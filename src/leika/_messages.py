@@ -1003,9 +1003,19 @@ class ViewportImageProps:
     "Image fit" setting, which is where an app that has no opinion leaves it."""
 
 
+class _PageScopedMessage(Message):
+    """Retained payload delivered only while its page is subscribed."""
+
+    @override
+    def delivery_scope(self) -> str:
+        return self.page_id
+
+    page_id: str
+
+
 @dataclasses.dataclass
 class _ViewportPaneCreateMessage(
-    Message,
+    _PageScopedMessage,
     entity=EntityLifecycle("viewport", "create", ("page_id", "pane_id")),
 ):
     page_id: str
@@ -1083,7 +1093,7 @@ class ViewportViserMessage(_ViewportPaneCreateMessage):
 
 @dataclasses.dataclass
 class ViewportPaneUpdateMessage(
-    Message,
+    _PageScopedMessage,
     entity=EntityLifecycle("viewport", "update_dict", ("page_id", "pane_id")),
 ):
     """Update one or more properties of a pane."""
@@ -1095,7 +1105,7 @@ class ViewportPaneUpdateMessage(
 
 @dataclasses.dataclass
 class ViewportPaneRemoveMessage(
-    Message,
+    _PageScopedMessage,
     entity=EntityLifecycle("viewport", "remove", ("page_id", "pane_id")),
 ):
     """Remove a pane."""
@@ -1105,7 +1115,7 @@ class ViewportPaneRemoveMessage(
 
 
 @dataclasses.dataclass
-class ViewportPaneSnapshotMessage(Message):
+class ViewportPaneSnapshotMessage(_PageScopedMessage):
     """Authoritative pane IDs used to reconcile browser-persisted layouts."""
 
     page_id: str
@@ -1136,6 +1146,37 @@ class PageCreateMessage(
     page_id: str
     name: str
     is_default: bool
+
+
+@dataclasses.dataclass
+class PageCatalogMessage(Message):
+    """Authoritative page IDs after the declarations in this stream."""
+
+    page_ids: Tuple[str, ...]
+
+
+@dataclasses.dataclass
+class PageSubscribeMessage(Message):
+    """Select the one page whose retained payload this browser receives."""
+
+    page_id: str
+    generation: int
+
+
+@dataclasses.dataclass
+class PageStreamBeginMessage(Message):
+    """Open a generation before its retained page replay."""
+
+    page_id: str
+    generation: int
+
+
+@dataclasses.dataclass
+class PageStreamReadyMessage(Message):
+    """Mark one page generation complete enough to render."""
+
+    page_id: str
+    generation: int
 
 
 @dataclasses.dataclass

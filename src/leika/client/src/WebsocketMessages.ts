@@ -752,6 +752,41 @@ export interface PageCreateMessage {
   name: string;
   is_default: boolean;
 }
+/** Authoritative page IDs after the declarations in this stream.
+ *
+ * (automatically generated)
+ */
+export interface PageCatalogMessage {
+  type: "PageCatalogMessage";
+  page_ids: string[];
+}
+/** Select the one page whose retained payload this browser receives.
+ *
+ * (automatically generated)
+ */
+export interface PageSubscribeMessage {
+  type: "PageSubscribeMessage";
+  page_id: string;
+  generation: number;
+}
+/** Open a generation before its retained page replay.
+ *
+ * (automatically generated)
+ */
+export interface PageStreamBeginMessage {
+  type: "PageStreamBeginMessage";
+  page_id: string;
+  generation: number;
+}
+/** Mark one page generation complete enough to render.
+ *
+ * (automatically generated)
+ */
+export interface PageStreamReadyMessage {
+  type: "PageStreamReadyMessage";
+  page_id: string;
+  generation: number;
+}
 /** Update a page's display name without changing its stable identity.
  *
  * (automatically generated)
@@ -1006,6 +1041,10 @@ export type Message =
   | ViewportPaneSnapshotMessage
   | WorkspaceConfigurationMessage
   | PageCreateMessage
+  | PageCatalogMessage
+  | PageSubscribeMessage
+  | PageStreamBeginMessage
+  | PageStreamReadyMessage
   | PageUpdateMessage
   | ThemeConfigurationMessage
   | FileTransferStartUpload
@@ -2890,6 +2929,52 @@ const messageValidators = new Map<
       typeof message["is_default"] === "boolean",
   ],
   [
+    "PageCatalogMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_ids") &&
+      message["type"] === "PageCatalogMessage" &&
+      isProtocolArray(message["page_ids"], (item) => typeof item === "string"),
+  ],
+  [
+    "PageSubscribeMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "generation") &&
+      message["type"] === "PageSubscribeMessage" &&
+      typeof message["page_id"] === "string" &&
+      Number.isSafeInteger(message["generation"]),
+  ],
+  [
+    "PageStreamBeginMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "generation") &&
+      message["type"] === "PageStreamBeginMessage" &&
+      typeof message["page_id"] === "string" &&
+      Number.isSafeInteger(message["generation"]),
+  ],
+  [
+    "PageStreamReadyMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "generation") &&
+      message["type"] === "PageStreamReadyMessage" &&
+      typeof message["page_id"] === "string" &&
+      Number.isSafeInteger(message["generation"]),
+  ],
+  [
     "PageUpdateMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3125,4 +3210,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "96a1b596517f";
+export const LEIKA_PROTOCOL = "699295a8fc97";

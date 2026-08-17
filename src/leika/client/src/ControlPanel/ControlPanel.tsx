@@ -41,8 +41,9 @@ function samePageSelectorItems(
   );
 }
 
-/** The active page's name, using the same popup and keyboard behavior as every
- * other Leika select while leaving the dock's title-bar styling intact. */
+/** The active page's name: a plain label when it is the only page, or the same
+ * popup and keyboard behavior as every other Leika select when there is a
+ * choice, while leaving the dock's title-bar styling intact. */
 export function PageSelector() {
   const viewer = useViewer();
   const activePageId = viewer.useViewport((state) => state.activePageId);
@@ -61,12 +62,26 @@ export function PageSelector() {
 
   // The popup is portaled out of a floating window. Reaching for it must not
   // make a collapsed window fade away from the trigger that owns it.
-  const releasePeekAfterPointerReturn = usePeekHold(open);
+  const releasePeekAfterPointerReturn = usePeekHold(items.length > 1 && open);
   React.useEffect(() => {
-    if (items.length === 0) setOpen(false);
+    if (items.length <= 1) setOpen(false);
   }, [items.length]);
 
   if (items.length === 0) return null;
+  if (items.length === 1) {
+    return (
+      <span
+        className={cn(
+          "inline-flex h-6 min-w-0 max-w-full shrink items-center truncate",
+          guiLabelClassName,
+        )}
+        data-dock-peek-fade
+        data-leika-page-title
+      >
+        {items[0].label}
+      </span>
+    );
+  }
   const activeName =
     items.find((item) => item.value === activePageId)?.label ?? "";
 
@@ -222,9 +237,10 @@ export function PanelHeader({
       data-leika-panel-header
     >
       <PageSelector />
-      {/* A deliberate patch of title-bar surface beside the selector. The
-          page name opens its menu; this sibling keeps moving and folding the
-          dock available without asking users to aim between glyphs. */}
+      {/* A deliberate patch of title-bar surface beside the page name. With a
+          choice of pages the name opens its menu; this sibling keeps moving
+          and folding the dock available without asking users to aim between
+          glyphs. */}
       <span
         className="min-w-2 flex-1 self-stretch"
         aria-hidden="true"

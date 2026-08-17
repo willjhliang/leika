@@ -22,17 +22,30 @@ and provide a protected transport when other machines can reach it. See
    handles, then queues typed lifecycle messages.
 2. Persistent messages are retained for clients that connect later. Repeated
    updates to the same entity/property key coalesce to the newest value.
-3. The browser applies each received batch in order, displays its locally
-   selected page, and keeps an independent pane layout for every page. GUI
-   input changes update local state optimistically before the event is sent to
-   Python.
-4. Python updates the authoritative handle and broadcasts it to the other
+3. Each browser receives workspace-global metadata and GUI state, but pane
+   payloads only for its selected page. It applies each received batch in order
+   and keeps an independent pane layout for every page.
+4. Changing pages sends an internal, generation-tagged subscription. The
+   server replays retained state for that page, then streams its live updates;
+   stale frames from a rapid switch are rejected before browser preflight.
+5. GUI input changes update local state optimistically before the event is sent
+   to Python.
+6. Python updates the authoritative handle and broadcasts it to the other
    clients. The source client is excluded from that echo, preventing a fast
    slider from flickering through an older round-trip value.
 
 Named pages partition the viewport state, not the whole application. The GUI
 tree and control dock are workspace-global and stay mounted as the viewer
-switches pages; updates for inactive pages continue to be retained.
+switches pages. Inactive-page pane state remains retained on the server, but its
+payload is not serialized or sent to that browser until the page is selected.
+The browser preserves every page's layout and may retain one inactive page's
+detached source model as a bounded warm cache. That hidden cache has no renderer
+DOM or Viser connection. During a switch exactly one stale model -- the cached
+target, or the outgoing page on a cold miss -- may remain visibly mounted but
+inert while the authoritative target replays into separate staging state.
+Matching `Ready`
+atomically promotes that state; resource pressure may evict the stale model and
+temporarily expose the loading surface.
 
 `server.atomic()` is a queue-emission barrier: no message queued inside it is
 emitted until the outermost context exits, and message order is preserved.
@@ -165,7 +178,9 @@ Python owns page existence and names, pane existence and content, visibility,
 and each pane's initial placement hint. The browser owns the selected page and
 the user's arrangement within every page after that: splits, swaps, resizes,
 floating state, and minimized panes. Selection is per viewer; changing it does
-not send an event to Python or change what another viewer sees.
+not change what another viewer sees. It sends only an internal transport
+subscription so the server can route pane payloads; it does not dispatch a
+Python application event or callback.
 
 Pages scope only the visualization viewport. `server.gui`, each `client.gui`,
 and the control dock's own position, size, and collapsed state are

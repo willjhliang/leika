@@ -76,8 +76,19 @@ class _PreparedMessage:
     message: Message
     serialized_size: tuple[int, int, int]
     decoded_nodes: int
+    delivery_scope: str | None
     redundancy_key: str | None
     purge_entities: frozenset[tuple[str, object]]
+
+
+@dataclasses.dataclass(frozen=True)
+class _DeliveryScopeRequest:
+    """Latest page-like stream requested by one connected client."""
+
+    revision: int
+    scope: str
+    begin_message: Message
+    ready_message: Message
 
 
 @dataclasses.dataclass(frozen=True)
@@ -109,6 +120,9 @@ class AsyncMessageBuffer:
         default_factory=dict, init=False
     )
     _decoded_nodes_from_id: Dict[int, int] = dataclasses.field(default_factory=dict, init=False)
+    _delivery_scope_from_id: Dict[int, str | None] = dataclasses.field(
+        default_factory=dict, init=False
+    )
     _batch_insert_no_close: bool = dataclasses.field(default=False, init=False)
     _batch_insert_no_schedule: bool = dataclasses.field(default=False, init=False)
     _queued_metadata_bytes: int = dataclasses.field(default=0, init=False)
@@ -136,6 +150,10 @@ class AsyncMessageBuffer:
     _message_signal_scheduled: bool = dataclasses.field(default=False, init=False)
     _flush_signal_scheduled: bool = dataclasses.field(default=False, init=False)
     _sent_message_id_from_client: Dict[int, int] = dataclasses.field(
+        default_factory=dict, init=False
+    )
+    _delivery_scope_revision: int = dataclasses.field(default=0, init=False)
+    _delivery_scope_request_from_client: Dict[int, _DeliveryScopeRequest] = dataclasses.field(
         default_factory=dict, init=False
     )
 
@@ -269,6 +287,7 @@ class AsyncMessageBuffer:
                     self.id_from_redundancy_key.copy(),
                     self._serialized_size_from_id.copy(),
                     self._decoded_nodes_from_id.copy(),
+                    self._delivery_scope_from_id.copy(),
                     self._file_bytes_from_id.copy(),
                     self._file_bytes_reserved,
                     self._file_parts_reserved,
@@ -305,6 +324,7 @@ class AsyncMessageBuffer:
             self.id_from_redundancy_key,
             self._serialized_size_from_id,
             self._decoded_nodes_from_id,
+            self._delivery_scope_from_id,
             self._file_bytes_from_id,
             self._file_bytes_reserved,
             self._file_parts_reserved,
@@ -340,6 +360,68 @@ class AsyncMessageBuffer:
         with self.buffer_lock:
             self._sent_message_id_from_client.pop(client_id, None)
             self._prune_delivered_tombstones_locked()
+            self._delivery_scope_request_from_client.pop(client_id, None)
+
+    def request_delivery_scope(
+        self,
+        client_id: int,
+        scope: str,
+        begin_message: Message,
+        ready_message: Message,
+    ) -> bool:
+        """Replace one client's active retained scope without copying payloads."""
+
+        if not self.persistent_messages:
+            raise RuntimeError("delivery scopes require a persistent message buffer")
+        if type(scope) is not str or not scope:
+            raise ValueError("delivery scope must be a non-empty string")
+
+        controls = (begin_message, ready_message)
+        self._enter_preparation_call()
+        try:
+            estimates = tuple(self._preparation_estimate(message) for message in controls)
+            if sum(estimate[0] for estimate in estimates) > _PREPARATION_METADATA_MAX_BYTES:
+                raise RuntimeError("delivery control preparation exceeds the metadata safety limit")
+            if sum(estimate[1] for estimate in estimates) > _PREPARATION_RAW_MAX_BYTES:
+                raise RuntimeError("delivery control preparation exceeds the binary safety limit")
+            reservation = self._acquire_preparation(len(controls))
+            if reservation is None:
+                return False
+            try:
+                prepared_controls = tuple(
+                    self._prepare_message(message, estimate)
+                    for message, estimate in zip(controls, estimates)
+                )
+            finally:
+                self._release_preparation(reservation)
+        finally:
+            self._leave_preparation_call()
+
+        if any(control.delivery_scope is not None for control in prepared_controls):
+            raise ValueError("delivery stream control messages must be global")
+        begin_snapshot, ready_snapshot = (control.message for control in prepared_controls)
+        with self.buffer_lock:
+            if self.done or client_id not in self._sent_message_id_from_client:
+                return False
+            if self.atomic_counter == 0:
+                self._schedule_message_event_locked()
+            self._delivery_scope_revision += 1
+            self._delivery_scope_request_from_client[client_id] = _DeliveryScopeRequest(
+                revision=self._delivery_scope_revision,
+                scope=scope,
+                begin_message=begin_snapshot,
+                ready_message=ready_snapshot,
+            )
+            return True
+
+    def delivery_scope_from_client(self, client_id: int) -> str | None:
+        """Return the latest retained scope requested by one client."""
+
+        if not self.persistent_messages:
+            raise RuntimeError("delivery scopes require a persistent message buffer")
+        with self.buffer_lock:
+            request = self._delivery_scope_request_from_client.get(client_id)
+            return None if request is None else request.scope
 
     def mark_messages_sent(self, client_id: int, last_message_id: int) -> None:
         """Record a successful persistent send through last_message_id."""
@@ -500,10 +582,17 @@ class AsyncMessageBuffer:
             except TypeError as error:
                 raise TypeError("purged entity identifiers must be hashable") from error
 
+        delivery_scope = snapshot.delivery_scope()
+        if delivery_scope is not None and type(delivery_scope) is not str:
+            raise TypeError("delivery_scope() must return None or a non-empty string")
+        if delivery_scope == "":
+            raise ValueError("delivery_scope() must return None or a non-empty string")
+
         return _PreparedMessage(
             snapshot,
             serialized_size,
             decoded_nodes,
+            delivery_scope,
             snapshot.redundancy_key(),
             frozenset(purge_entities),
         )
@@ -515,6 +604,7 @@ class AsyncMessageBuffer:
         message = self.message_from_id.pop(message_id)
         metadata, raw, _ = self._serialized_size_from_id.pop(message_id)
         self._decoded_nodes_from_id.pop(message_id)
+        self._delivery_scope_from_id.pop(message_id)
         self._queued_metadata_bytes -= metadata
         self._queued_raw_binary_bytes -= raw
         if self._queued_metadata_bytes < 0 or self._queued_raw_binary_bytes < 0:
@@ -615,6 +705,7 @@ class AsyncMessageBuffer:
         self.message_from_id[new_message_id] = message
         self._serialized_size_from_id[new_message_id] = prepared.serialized_size
         self._decoded_nodes_from_id[new_message_id] = prepared.decoded_nodes
+        self._delivery_scope_from_id[new_message_id] = prepared.delivery_scope
         self._queued_metadata_bytes += metadata
         self._queued_raw_binary_bytes += raw
         if file_bytes_reserved:
@@ -686,6 +777,8 @@ class AsyncMessageBuffer:
         self.id_from_redundancy_key.clear()
         self._serialized_size_from_id.clear()
         self._decoded_nodes_from_id.clear()
+        self._delivery_scope_from_id.clear()
+        self._delivery_scope_request_from_client.clear()
         self._queued_metadata_bytes = 0
         self._queued_raw_binary_bytes = 0
         if not self.persistent_messages:
@@ -710,14 +803,222 @@ class AsyncMessageBuffer:
             # Event loop may already be closed during teardown.
             pass
 
+    async def _persistent_window_generator(
+        self, client_id: int
+    ) -> AsyncGenerator[MessageWindow, None]:
+        """Yield global state plus one replaceable retained delivery scope.
+
+        Begin, replay, Ready, and live payload stay on this one ordered producer.
+        """
+
+        self.register_client(client_id)
+        last_sent_id = -1
+        active_scope: str | None = None
+        applied_revision = 0
+        replay_request: _DeliveryScopeRequest | None = None
+        replay_cutoff = -1
+        replay_message_ids: tuple[int, ...] = ()
+        replay_index = 0
+        replay_phase = "idle"
+        flush_wait = self.event_loop.create_task(self.flush_event.wait())
+        try:
+            while not self.done:
+                window: List[Message] = []
+                message: Message | None = None
+                metadata_total = 0
+                raw_total = 0
+                binary_buffer_total = 0
+                decoded_nodes_total = 1
+
+                def append_candidate(
+                    message: Message,
+                    serialized_size: tuple[int, int, int],
+                    decoded_nodes: int,
+                ) -> bool:
+                    nonlocal metadata_total
+                    nonlocal raw_total
+                    nonlocal binary_buffer_total
+                    nonlocal decoded_nodes_total
+                    metadata, raw, binary_count = serialized_size
+                    candidate_metadata = metadata_total + metadata
+                    candidate_raw = raw_total + raw
+                    candidate_binary_count = binary_buffer_total + binary_count
+                    candidate_decoded_nodes = decoded_nodes_total + decoded_nodes
+                    candidate_envelope = _metadata_envelope_upper_bound(
+                        candidate_metadata, candidate_binary_count
+                    )
+                    if window and (
+                        candidate_envelope > _OUTGOING_METADATA_LIMIT_BYTES
+                        or _frame_upper_bound(candidate_envelope, candidate_raw)
+                        > _OUTGOING_FRAME_LIMIT_BYTES
+                        or candidate_binary_count > _OUTGOING_BINARY_BUFFER_LIMIT
+                        or candidate_decoded_nodes > _OUTGOING_DECODED_NODE_LIMIT
+                    ):
+                        return False
+                    window.append(message)
+                    metadata_total = candidate_metadata
+                    raw_total = candidate_raw
+                    binary_buffer_total = candidate_binary_count
+                    decoded_nodes_total = candidate_decoded_nodes
+                    return True
+
+                with self.buffer_lock:
+                    high_water_message_id = self.message_counter - 1
+                    atomic_active = self.atomic_counter > 0
+                    if not atomic_active:
+                        request = self._delivery_scope_request_from_client.get(client_id)
+                        current_revision = (
+                            replay_request.revision
+                            if replay_request is not None
+                            else applied_revision
+                        )
+                        if request is not None and request.revision != current_revision:
+                            replay_request = request
+                            replay_cutoff = high_water_message_id
+                            replay_message_ids = tuple(
+                                message_id
+                                for message_id, message in self.message_from_id.items()
+                                if message_id <= replay_cutoff
+                                and message.excluded_self_client != client_id
+                                and self._delivery_scope_from_id[message_id] == request.scope
+                            )
+                            replay_index = 0
+                            replay_phase = "drain"
+
+                        if replay_request is not None:
+                            if replay_phase == "drain":
+                                considered_through = last_sent_id
+                                for message_id, message in self.message_from_id.items():
+                                    if message_id <= last_sent_id:
+                                        continue
+                                    if message_id > replay_cutoff:
+                                        break
+                                    if (
+                                        message.excluded_self_client == client_id
+                                        or self._delivery_scope_from_id[message_id] is not None
+                                    ):
+                                        considered_through = message_id
+                                        continue
+                                    if not append_candidate(
+                                        message,
+                                        self._serialized_size_from_id[message_id],
+                                        self._decoded_nodes_from_id[message_id],
+                                    ):
+                                        break
+                                    considered_through = message_id
+                                    if len(window) >= self.max_window_size:
+                                        break
+                                else:
+                                    considered_through = replay_cutoff
+                                last_sent_id = considered_through
+                                if last_sent_id >= replay_cutoff:
+                                    replay_phase = "begin"
+
+                            if not window and replay_phase == "begin":
+                                window.append(replay_request.begin_message)
+                                replay_phase = "replay"
+
+                            if not window and replay_phase == "replay":
+                                while (
+                                    replay_index < len(replay_message_ids)
+                                    and len(window) < self.max_window_size
+                                ):
+                                    message_id = replay_message_ids[replay_index]
+                                    message = self.message_from_id.get(message_id)
+                                    if message is None:
+                                        replay_index += 1
+                                        continue
+                                    if not append_candidate(
+                                        message,
+                                        self._serialized_size_from_id[message_id],
+                                        self._decoded_nodes_from_id[message_id],
+                                    ):
+                                        break
+                                    replay_index += 1
+                                if replay_index >= len(replay_message_ids):
+                                    replay_phase = "ready"
+
+                            if not window and replay_phase == "ready":
+                                window.append(replay_request.ready_message)
+                                active_scope = replay_request.scope
+                                applied_revision = replay_request.revision
+                                replay_request = None
+                                replay_message_ids = ()
+                                replay_index = 0
+                                replay_phase = "idle"
+                        else:
+                            considered_through = last_sent_id
+                            for message_id, message in self.message_from_id.items():
+                                if message_id <= last_sent_id:
+                                    continue
+                                if message_id > high_water_message_id:
+                                    break
+                                delivery_scope = self._delivery_scope_from_id[message_id]
+                                if message.excluded_self_client == client_id or (
+                                    delivery_scope is not None and delivery_scope != active_scope
+                                ):
+                                    considered_through = message_id
+                                    continue
+                                if not append_candidate(
+                                    message,
+                                    self._serialized_size_from_id[message_id],
+                                    self._decoded_nodes_from_id[message_id],
+                                ):
+                                    break
+                                considered_through = message_id
+                                if len(window) >= self.max_window_size:
+                                    break
+                            else:
+                                considered_through = high_water_message_id
+                            last_sent_id = considered_through
+
+                should_wait_for_window = not window or (
+                    replay_request is None and high_water_message_id == last_sent_id
+                )
+                if window:
+                    yield MessageWindow(tuple(window), last_message_id=last_sent_id)
+                    window.clear()
+                    message = None
+                else:
+                    if last_sent_id >= 0:
+                        self.mark_messages_sent(client_id, last_sent_id)
+                    message = None
+                    await self.message_event.wait()
+                    self.message_event.clear()
+
+                if should_wait_for_window:
+                    completed, _ = await asyncio.wait(
+                        [flush_wait], timeout=self.window_duration_sec
+                    )
+                    if flush_wait in completed and not self.done:
+                        self.flush_event.clear()
+                        flush_wait = self.event_loop.create_task(self.flush_event.wait())
+        finally:
+            self.unregister_client(client_id)
+            flush_wait.cancel()
+            try:
+                await flush_wait
+            except asyncio.CancelledError:
+                pass
+
     async def window_generator(self, client_id: int) -> AsyncGenerator[MessageWindow, None]:
         """Yield bounded message windows until the buffer is done."""
+        if self.persistent_messages:
+            generator = self._persistent_window_generator(client_id)
+            try:
+                async for persistent_window in generator:
+                    yield persistent_window
+                    del persistent_window
+            finally:
+                await generator.aclose()
+            return
         self.register_client(client_id)
         last_sent_id = -1
         flush_wait = self.event_loop.create_task(self.flush_event.wait())
         try:
             while not self.done:
                 window: List[Message] = []
+                message: Message | None = None
                 file_bytes_reserved = 0
                 file_parts_reserved = 0
                 metadata_total = 0
@@ -728,53 +1029,7 @@ class AsyncMessageBuffer:
                     most_recent_message_id = self.message_counter - 1
                     high_water_message_id = most_recent_message_id
                     atomic_active = self.atomic_counter > 0
-                    if self.persistent_messages and not atomic_active:
-                        considered_through = last_sent_id
-                        for message_id, message in self.message_from_id.items():
-                            if message_id <= last_sent_id:
-                                continue
-                            if message_id > most_recent_message_id:
-                                break
-                            if message.excluded_self_client == client_id:
-                                considered_through = message_id
-                                continue
-                            metadata, raw, binary_count = self._serialized_size_from_id[message_id]
-                            candidate_metadata = metadata_total + metadata
-                            candidate_raw = raw_total + raw
-                            candidate_binary_count = binary_buffer_total + binary_count
-                            candidate_decoded_nodes = (
-                                decoded_nodes_total
-                                + self._decoded_nodes_from_id.get(
-                                    message_id,
-                                    message.serialized_metrics_upper_bound()[3],
-                                )
-                            )
-                            candidate_envelope = _metadata_envelope_upper_bound(
-                                candidate_metadata, candidate_binary_count
-                            )
-                            if window and (
-                                candidate_envelope > _OUTGOING_METADATA_LIMIT_BYTES
-                                or _frame_upper_bound(candidate_envelope, candidate_raw)
-                                > _OUTGOING_FRAME_LIMIT_BYTES
-                                or candidate_binary_count > _OUTGOING_BINARY_BUFFER_LIMIT
-                                or candidate_decoded_nodes > _OUTGOING_DECODED_NODE_LIMIT
-                            ):
-                                break
-                            window.append(message)
-                            metadata_total += metadata
-                            raw_total += raw
-                            binary_buffer_total += binary_count
-                            decoded_nodes_total = candidate_decoded_nodes
-                            considered_through = message_id
-                            if len(window) >= self.max_window_size:
-                                break
-                        else:
-                            # Every retained entry through the captured high-water
-                            # was considered, including gaps and exclusions.
-                            considered_through = most_recent_message_id
-                        last_sent_id = considered_through
-
-                    if not self.persistent_messages and not atomic_active:
+                    if not atomic_active:
                         # Select, size, and remove under the same lock that
                         # atomic_start() acquires. The first individually valid
                         # message always fits; later messages defer to a window.
@@ -800,11 +1055,7 @@ class AsyncMessageBuffer:
                             candidate_raw = raw_total + raw
                             candidate_binary_count = binary_buffer_total + binary_count
                             candidate_decoded_nodes = (
-                                decoded_nodes_total
-                                + self._decoded_nodes_from_id.get(
-                                    message_id,
-                                    message.serialized_metrics_upper_bound()[3],
-                                )
+                                decoded_nodes_total + self._decoded_nodes_from_id[message_id]
                             )
                             candidate_envelope = _metadata_envelope_upper_bound(
                                 candidate_metadata, candidate_binary_count
@@ -831,6 +1082,7 @@ class AsyncMessageBuffer:
                             last_sent_id = message_id
                             message_id += 1
 
+                should_wait_for_window = not window or high_water_message_id == last_sent_id
                 if window:
                     yield MessageWindow(
                         tuple(window),
@@ -838,13 +1090,14 @@ class AsyncMessageBuffer:
                         file_parts_reserved,
                         last_message_id=last_sent_id,
                     )
+                    window.clear()
+                    message = None
                 else:
-                    if self.persistent_messages and last_sent_id >= 0:
-                        self.mark_messages_sent(client_id, last_sent_id)
+                    message = None
                     await self.message_event.wait()
                     self.message_event.clear()
 
-                if not window or high_water_message_id == last_sent_id:
+                if should_wait_for_window:
                     completed, _ = await asyncio.wait(
                         [flush_wait], timeout=self.window_duration_sec
                     )

@@ -216,12 +216,35 @@ function paneTitle(pane: ViewportPane): string {
  * viser panes. */
 export function ViewportWorkspace() {
   const viewer = useViewer();
-  const activePageId = viewer.useViewport((state) => state.activePageId);
-  const layout = viewer.useViewport((state) =>
-    state.activePageId === null
-      ? EMPTY_VIEWPORT_LAYOUT
-      : (state.pages[state.activePageId]?.layout ?? EMPTY_VIEWPORT_LAYOUT),
-  );
+  const displayPageId = viewer.useViewport((state) => state.displayPageId);
+  const layout = viewer.useViewport((state) => {
+    const pageId = state.displayPageId;
+    if (pageId === null) return EMPTY_VIEWPORT_LAYOUT;
+    if (state.transitionPage?.pageId === pageId) {
+      return state.transitionPage.layout;
+    }
+    const stream = state.pageStream;
+    if (
+      state.activePageId !== pageId ||
+      stream === null ||
+      stream.pageId !== pageId ||
+      !stream.ready
+    )
+      return EMPTY_VIEWPORT_LAYOUT;
+    return state.pages[pageId]?.layout ?? EMPTY_VIEWPORT_LAYOUT;
+  });
+  const interactive = viewer.useViewport((state) => {
+    const pageId = state.displayPageId;
+    const stream = state.pageStream;
+    return (
+      pageId !== null &&
+      state.transitionPage === null &&
+      state.activePageId === pageId &&
+      stream !== null &&
+      stream.pageId === pageId &&
+      stream.ready
+    );
+  });
   const interactionEpoch = viewer.useViewport(
     (state) => state.interactionEpoch,
   );
@@ -274,13 +297,43 @@ export function ViewportWorkspace() {
     (paneId: string | null): string => {
       if (paneId === null) return "viewport pane";
       const state = viewer.useViewport.get();
+      const pageId = state.displayPageId;
+      if (pageId === null) return "viewport pane";
+      const transitionPage = state.transitionPage;
+      const stream = state.pageStream;
       const pane =
-        activePageId === null
-          ? undefined
-          : state.pages[activePageId]?.panes[paneId];
+        transitionPage?.pageId === pageId
+          ? transitionPage.panes[paneId]
+          : state.activePageId === pageId &&
+              stream !== null &&
+              stream.pageId === pageId &&
+              stream.ready
+            ? state.pages[pageId]?.panes[paneId]
+            : undefined;
       return pane === undefined ? "viewport pane" : paneTitle(pane);
     },
-    [activePageId, viewer.useViewport],
+    [viewer.useViewport],
+  );
+
+  const isGestureStale = React.useCallback(
+    (gesture: GestureBase): boolean => {
+      const state = viewer.useViewport.get();
+      const pageId = state.activePageId;
+      const stream = state.pageStream;
+      const page = pageId === null ? undefined : state.pages[pageId];
+      return (
+        state.interactionEpoch !== gesture.startInteractionEpoch ||
+        pageId === null ||
+        state.displayPageId !== pageId ||
+        state.transitionPage !== null ||
+        stream === null ||
+        stream.pageId !== pageId ||
+        !stream.ready ||
+        page === undefined ||
+        !sameViewportLayout(page.layout, gesture.startLayout)
+      );
+    },
+    [viewer.useViewport],
   );
 
   const positionDragIndicator = React.useCallback(
@@ -296,6 +349,7 @@ export function ViewportWorkspace() {
 
   const applyPaneDragPoint = React.useCallback(
     (gesture: PaneGesture, clientX: number, clientY: number) => {
+      if (!interactive) return;
       if (!gesture.dragStarted) {
         if (
           !motionExceedsThreshold(
@@ -371,12 +425,13 @@ export function ViewportWorkspace() {
       gesture.lastHint = hint;
       setDropHint(hint);
     },
-    [getPaneTitle, positionDragIndicator],
+    [getPaneTitle, interactive, positionDragIndicator],
   );
 
   const applyDividerPoint = React.useCallback(
     (gesture: DividerGesture, clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
+      if (!interactive) return;
       if (canvas === null || gesture.grid.cellSize <= 0) return;
       const bounds = canvas.getBoundingClientRect();
       const pointerCoordinate =
@@ -395,7 +450,7 @@ export function ViewportWorkspace() {
       gesture.lastGridLine = resized.gridLine;
       setDraftLayout(resized.layout);
     },
-    [],
+    [interactive],
   );
 
   const clearGesture = React.useCallback(() => {
@@ -420,7 +475,8 @@ export function ViewportWorkspace() {
     const gesture = gestureRef.current;
     if (
       gesture !== null &&
-      (!sameViewportLayout(gesture.startLayout, layout) ||
+      (!interactive ||
+        !sameViewportLayout(gesture.startLayout, layout) ||
         gesture.startInteractionEpoch !== interactionEpoch ||
         Math.abs(gesture.workspaceWidth - workspaceSize.width) > GRID_EPSILON ||
         Math.abs(gesture.workspaceHeight - workspaceSize.height) > GRID_EPSILON)
@@ -431,6 +487,7 @@ export function ViewportWorkspace() {
     clearGesture,
     interactionEpoch,
     layout,
+    interactive,
     workspaceSize.height,
     workspaceSize.width,
   ]);
@@ -451,6 +508,7 @@ export function ViewportWorkspace() {
   const beginPaneDrag = React.useCallback(
     (event: React.PointerEvent<HTMLElement>, paneId: string) => {
       if (
+        !interactive ||
         event.button !== 0 ||
         gestureRef.current !== null ||
         grid.cellSize <= 0
@@ -487,7 +545,7 @@ export function ViewportWorkspace() {
       };
       setGestureView({ kind: "pane", grid: gestureGrid, startLayout: layout });
     },
-    [grid, interactionEpoch, layout, workspaceSize],
+    [grid, interactionEpoch, interactive, layout, workspaceSize],
   );
 
   const updatePaneDrag = React.useCallback(
@@ -518,15 +576,7 @@ export function ViewportWorkspace() {
       }
       const candidate = gesture.lastCandidate;
       const hint = gesture.lastHint;
-      const currentViewport = viewer.useViewport.get();
-      const currentPage =
-        currentViewport.activePageId === null
-          ? undefined
-          : currentViewport.pages[currentViewport.activePageId];
-      const stale =
-        currentViewport.interactionEpoch !== gesture.startInteractionEpoch ||
-        currentPage === undefined ||
-        !sameViewportLayout(currentPage.layout, gesture.startLayout);
+      const stale = isGestureStale(gesture);
       const sourceTitle = getPaneTitle(gesture.sourcePaneId);
       const targetTitle = getPaneTitle(hint?.targetPaneId ?? null);
       clearGesture();
@@ -556,14 +606,15 @@ export function ViewportWorkspace() {
       applyPaneDragPoint,
       clearGesture,
       getPaneTitle,
+      isGestureStale,
       viewer.viewportActions,
-      viewer.useViewport,
     ],
   );
 
   const beginDividerResize = React.useCallback(
     (event: React.PointerEvent<HTMLElement>, divider: DividerGeometry) => {
       if (
+        !interactive ||
         event.button !== 0 ||
         gestureRef.current !== null ||
         grid.cellSize <= 0
@@ -596,7 +647,7 @@ export function ViewportWorkspace() {
       };
       setGestureView({ kind: "divider", grid, startLayout: layout });
     },
-    [grid, interactionEpoch, layout, workspaceSize],
+    [grid, interactionEpoch, interactive, layout, workspaceSize],
   );
 
   const updateDividerResize = React.useCallback(
@@ -627,15 +678,7 @@ export function ViewportWorkspace() {
       }
       const nextLayout = gesture.lastValidLayout;
       const gridLine = gesture.lastGridLine;
-      const currentViewport = viewer.useViewport.get();
-      const currentPage =
-        currentViewport.activePageId === null
-          ? undefined
-          : currentViewport.pages[currentViewport.activePageId];
-      const stale =
-        currentViewport.interactionEpoch !== gesture.startInteractionEpoch ||
-        currentPage === undefined ||
-        !sameViewportLayout(currentPage.layout, gesture.startLayout);
+      const stale = isGestureStale(gesture);
       const axisName = gesture.divider.direction === "row" ? "column" : "row";
       clearGesture();
       if (
@@ -650,17 +693,12 @@ export function ViewportWorkspace() {
         "Moved viewport divider to " + axisName + " " + gridLine + ".",
       );
     },
-    [
-      applyDividerPoint,
-      clearGesture,
-      viewer.viewportActions,
-      viewer.useViewport,
-    ],
+    [applyDividerPoint, clearGesture, isGestureStale, viewer.viewportActions],
   );
 
   const resizeDividerWithKeyboard = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>, divider: DividerGeometry) => {
-      if (gestureRef.current !== null) return;
+      if (!interactive || gestureRef.current !== null) return;
       const negativeKey = divider.direction === "row" ? "ArrowLeft" : "ArrowUp";
       const positiveKey =
         divider.direction === "row" ? "ArrowRight" : "ArrowDown";
@@ -684,13 +722,14 @@ export function ViewportWorkspace() {
           ".",
       );
     },
-    [getPaneTitle, layout, viewer.viewportActions],
+    [getPaneTitle, interactive, layout, viewer.viewportActions],
   );
 
   const swapPaneWithKeyboard = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>, paneId: string) => {
       const direction = paneMoveDirectionFromKey[event.key];
       if (
+        !interactive ||
         !event.shiftKey ||
         direction === undefined ||
         gestureRef.current !== null
@@ -721,7 +760,7 @@ export function ViewportWorkspace() {
           ".",
       );
     },
-    [getPaneTitle, layout, viewer.viewportActions],
+    [getPaneTitle, interactive, layout, viewer.viewportActions],
   );
 
   const pristineRootOnly =
@@ -735,6 +774,7 @@ export function ViewportWorkspace() {
     <div
       ref={rootRef}
       data-viewport-workspace
+      aria-busy={!interactive}
       style={{
         position: "relative",
         isolation: "isolate",
@@ -748,6 +788,7 @@ export function ViewportWorkspace() {
       <div
         ref={canvasRef}
         data-viewport-grid-canvas
+        inert={!interactive}
         style={{
           position: "relative",
           width: canvasWidth,
@@ -765,8 +806,8 @@ export function ViewportWorkspace() {
           }
           return (
             <ViewportPaneHost
-              key={`${activePageId ?? "none"}:${paneId}`}
-              pageId={activePageId}
+              key={`${displayPageId ?? "none"}:${paneId}`}
+              pageId={displayPageId}
               paneId={paneId}
               rect={rect}
               cellSize={grid.cellSize}
@@ -817,6 +858,18 @@ export function ViewportWorkspace() {
           />
         )}
       </div>
+
+      {!interactive && (
+        <div
+          data-viewport-page-refreshing
+          className="pointer-events-none absolute top-2 right-2 z-60 flex items-center gap-1.5 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+          role="status"
+          aria-label="Refreshing page"
+        >
+          <Spinner aria-hidden="true" className="size-3" />
+          <span>Refreshing</span>
+        </div>
+      )}
 
       {dragIndicator !== null && (
         <Card
@@ -895,9 +948,22 @@ function ViewportPaneHost({
   ) => void;
 }) {
   const viewer = useViewer();
-  const pane = viewer.useViewport((state) =>
-    pageId === null ? undefined : state.pages[pageId]?.panes[paneId],
-  );
+  const pane = viewer.useViewport((state) => {
+    if (pageId === null) return undefined;
+    if (state.transitionPage?.pageId === pageId) {
+      return state.transitionPage.panes[paneId];
+    }
+    const stream = state.pageStream;
+    if (
+      state.activePageId !== pageId ||
+      state.displayPageId !== pageId ||
+      stream === null ||
+      stream.pageId !== pageId ||
+      !stream.ready
+    )
+      return undefined;
+    return state.pages[pageId]?.panes[paneId];
+  });
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const [isHovered, setIsHovered] = React.useState(false);
   // Keyboard users can focus the header without hovering; keep it visible.

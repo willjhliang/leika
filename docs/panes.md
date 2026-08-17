@@ -43,9 +43,17 @@ helpers never cross a page boundary.
 
 The selected page is browser-local: viewers can look at different pages of the
 same running server, and their selections are restored independently. Pages
-scope panes and pane layouts only. `server.gui` and each client's GUI remain
-workspace-wide, so the same controls stay available while viewers switch pages
-and can keep updating handles on inactive pages.
+scope pane payload transport as well as pane layouts: a browser receives live
+pane payloads only for its selected page. To avoid a blank canvas while a
+switch replays, the browser keeps at most one inactive page's detached source
+model as a warm cache. While hidden, that cache has no renderer DOM, decoded
+raster/GPU resources, or Viser iframe. A cached target appears immediately with
+its last received content; an uncached target leaves the
+outgoing page visible. Either stale view is inert until a separately staged
+replay reaches `Ready`, then the current model replaces it. The cache is
+discarded if client safety budgets need the space, and every page's layout
+remains preserved. `server.gui` and each client's GUI remain workspace-wide,
+so the same controls stay available while viewers switch pages.
 
 ## Pane types
 
@@ -175,7 +183,12 @@ while True:
 ```
 
 Updates apply whether or not the pane's page is currently selected. Switching
-back shows the handle's latest content without creating another pane.
+back shows the handle's latest retained content without creating another pane.
+An inactive update is still prepared and retained by the Python server, but it
+is not serialized into or compressed as an outbound frame for browsers viewing
+other pages, nor decoded or stored by them. Page selection does not pause
+caller-side queries or rendering work; an application that wants demand-driven
+computation must still decide when to produce an update.
 
 Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the

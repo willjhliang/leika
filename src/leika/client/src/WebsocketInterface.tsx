@@ -14,6 +14,7 @@ import { retainedDownloads } from "./retainedDownloadBudget";
 import { WorkerEventGate } from "./workerFailure";
 import { plotlyBootstrap } from "./plotlyBootstrap";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
+import type { PageSubscribeMessage } from "./WebsocketMessages";
 
 /** Live binary websocket producer with focus-aware reconnect behavior. */
 export function WebsocketMessageProducer() {
@@ -38,6 +39,8 @@ export function WebsocketMessageProducer() {
     const workerEvents = new WorkerEventGate();
     let isConnected = false;
     let retryAllowed = true;
+    let requestedPageId: string | null = null;
+    let pageSubscriptionGeneration = 0;
     let retryIntervalId: ReturnType<typeof setInterval> | null = null;
     const postToWorker = (data: WsWorkerIncoming) => {
       if (!workerEvents.acceptsEvents) return;
@@ -89,6 +92,13 @@ export function WebsocketMessageProducer() {
       viewer.mutable.current.messageQueue.reset();
     };
 
+    const resetConnectionState = () => {
+      requestedPageId = null;
+      viewer.guiActions.resetGui();
+      viewer.viewportActions.resetPanes();
+      resetConnectionResources();
+    };
+
     const markDisconnected = ({
       retry,
       error,
@@ -98,8 +108,7 @@ export function WebsocketMessageProducer() {
     }) => {
       isConnected = false;
       retryAllowed = retry;
-      viewer.guiActions.resetGui();
-      resetConnectionResources();
+      resetConnectionState();
       viewer.mutable.current.sendMessage = warnDisconnectedSend;
       viewer.useGui.set({ connectionError: error });
       updateRetryInterval();
@@ -117,6 +126,35 @@ export function WebsocketMessageProducer() {
       });
     };
     viewer.mutable.current.failConnection = failWorker;
+
+    const syncPageSubscription = () => {
+      const state = viewer.useViewport.get();
+      const pageId = state.activePageId;
+      if (
+        !isConnected ||
+        !state.catalogReady ||
+        pageId === null ||
+        requestedPageId === pageId
+      )
+        return;
+      requestedPageId = pageId;
+      pageSubscriptionGeneration =
+        pageSubscriptionGeneration >= Number.MAX_SAFE_INTEGER
+          ? 1
+          : pageSubscriptionGeneration + 1;
+      viewer.viewportActions.beginPageSubscription(
+        pageId,
+        pageSubscriptionGeneration,
+      );
+      const message: PageSubscribeMessage = {
+        type: "PageSubscribeMessage",
+        page_id: pageId,
+        generation: pageSubscriptionGeneration,
+      };
+      viewer.mutable.current.sendMessage(message);
+    };
+    const unsubscribePageSubscription =
+      viewer.useViewport.subscribe(syncPageSubscription);
 
     // The worker measures only while something is watching, so it is told when
     // that changes -- and only then, since the counters it reports arrive
@@ -146,9 +184,7 @@ export function WebsocketMessageProducer() {
       if (data.type === "connected") {
         isConnected = true;
         retryAllowed = true;
-        viewer.guiActions.resetGui();
-        viewer.viewportActions.resetPanes();
-        resetConnectionResources();
+        resetConnectionState();
         viewer.useGui.set({
           websocketState: "connected",
           connectionError: null,
@@ -218,6 +254,7 @@ export function WebsocketMessageProducer() {
       worker.onerror = null;
       worker.onmessageerror = null;
       terminateWorker();
+      unsubscribePageSubscription();
       unsubscribeWatchers();
       // The counters belong to the worker that is about to be replaced, so
       // they say nothing about the connection that follows.

@@ -582,6 +582,133 @@ def test_custom_low_level_protocol_roundtrips_without_leika_subprotocol() -> Non
         server.stop()
 
 
+def test_persistent_delivery_scope_filters_real_websocket_transport() -> None:
+    class _ScopedDispatchProtocol(infra_impl.Message):
+        pass
+
+    @dataclasses.dataclass
+    class ScopedTransportGlobalMessage(_ScopedDispatchProtocol):
+        value: str
+
+        def redundancy_key(self) -> str:
+            return "scoped-transport-global"
+
+    @dataclasses.dataclass
+    class ScopedTransportStateMessage(_ScopedDispatchProtocol):
+        scope: str
+        value: str
+
+        def redundancy_key(self) -> str:
+            return f"scoped-transport-state-{self.scope}"
+
+        def delivery_scope(self) -> str:
+            return self.scope
+
+    @dataclasses.dataclass
+    class ScopedTransportSubscribeMessage(_ScopedDispatchProtocol):
+        scope: str
+
+        def redundancy_key(self) -> None:
+            return None
+
+    @dataclasses.dataclass
+    class ScopedTransportBeginMessage(_ScopedDispatchProtocol):
+        scope: str
+
+        def redundancy_key(self) -> None:
+            return None
+
+    @dataclasses.dataclass
+    class ScopedTransportReadyMessage(_ScopedDispatchProtocol):
+        scope: str
+
+        def redundancy_key(self) -> None:
+            return None
+
+    def receive_messages(websocket: Any, timeout: float = 2.0) -> list[dict[str, Any]]:
+        frame = websocket.recv(timeout=timeout)
+        assert isinstance(frame, bytes)
+        inner_size = int.from_bytes(frame[:8], "little")
+        compressed_size = int.from_bytes(frame[8:16], "little")
+        envelope = msgspec.msgpack.decode(
+            zstandard.ZstdDecompressor().decompress(
+                frame[16 : 16 + compressed_size], max_output_size=inner_size
+            )
+        )
+        return envelope["messages"]
+
+    connections: dict[ClientId, Any] = {}
+    server = WebsockServer(
+        "127.0.0.1",
+        0,
+        message_class=_ScopedDispatchProtocol,
+        verbose=False,
+    )
+
+    @server.on_client_connect
+    def remember_connection(connection: Any) -> None:
+        connections[connection.client_id] = connection
+
+    def subscribe(client_id: ClientId, message: ScopedTransportSubscribeMessage) -> None:
+        connections[client_id].request_delivery_scope(
+            message.scope,
+            ScopedTransportBeginMessage(message.scope),
+            ScopedTransportReadyMessage(message.scope),
+        )
+
+    server.register_handler(ScopedTransportSubscribeMessage, subscribe)
+    server.start()
+    try:
+        assert server.queue_message(ScopedTransportGlobalMessage("retained-global"))
+        assert server.queue_message(ScopedTransportStateMessage("alpha", "retained-alpha"))
+        assert server.queue_message(ScopedTransportStateMessage("beta", "retained-beta"))
+        server.flush()
+
+        with connect(f"ws://127.0.0.1:{server._port}", open_timeout=2) as websocket:
+            assert receive_messages(websocket) == [
+                {"value": "retained-global", "type": "ScopedTransportGlobalMessage"}
+            ]
+
+            websocket.send(
+                msgspec.msgpack.encode(
+                    ScopedTransportSubscribeMessage("alpha").as_serializable_dict()
+                )
+            )
+            subscription_messages: list[dict[str, Any]] = []
+            while not any(
+                message["type"] == "ScopedTransportReadyMessage"
+                for message in subscription_messages
+            ):
+                subscription_messages.extend(receive_messages(websocket))
+
+            assert subscription_messages == [
+                {"scope": "alpha", "type": "ScopedTransportBeginMessage"},
+                {
+                    "scope": "alpha",
+                    "value": "retained-alpha",
+                    "type": "ScopedTransportStateMessage",
+                },
+                {"scope": "alpha", "type": "ScopedTransportReadyMessage"},
+            ]
+
+            assert server.queue_message(ScopedTransportStateMessage("beta", "live-beta"))
+            server.flush()
+            with pytest.raises(TimeoutError):
+                websocket.recv(timeout=0.2)
+
+            assert server.queue_message(ScopedTransportStateMessage("alpha", "live-alpha"))
+            server.flush()
+            assert receive_messages(websocket) == [
+                {
+                    "scope": "alpha",
+                    "value": "live-alpha",
+                    "type": "ScopedTransportStateMessage",
+                }
+            ]
+    finally:
+        server.stop()
+
+
 def test_client_id_allocator_wraps_at_javascript_safe_max_without_collision() -> None:
     maximum = infra_impl._CLIENT_ID_MAX
     first, next_candidate = _allocate_client_id(maximum, set())

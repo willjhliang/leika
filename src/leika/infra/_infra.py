@@ -318,6 +318,7 @@ def _add_security_headers(response: Response, *, allow_embedding: bool) -> Respo
 class _ClientHandleState:
     # Internal state for ClientConnection objects.
     message_buffer: AsyncMessageBuffer
+    persistent_message_buffer: AsyncMessageBuffer | None = None
 
 
 ClientId = NewType("ClientId", int)
@@ -479,6 +480,27 @@ class WebsockClientConnection(WebsockMessageHandler):
     def get_message_buffer(self) -> AsyncMessageBuffer:
         """Get client message buffer."""
         return self._state.message_buffer
+
+    def request_delivery_scope(
+        self,
+        scope: str,
+        begin_message: Message,
+        ready_message: Message,
+    ) -> bool:
+        """Replace the retained delivery scope for this connection."""
+
+        buffer = self._state.persistent_message_buffer
+        if buffer is None:
+            raise RuntimeError("connection has no persistent message buffer")
+        return buffer.request_delivery_scope(self.client_id, scope, begin_message, ready_message)
+
+    def delivery_scope(self) -> str | None:
+        """Return this connection's latest requested retained scope."""
+
+        buffer = self._state.persistent_message_buffer
+        if buffer is None:
+            raise RuntimeError("connection has no persistent message buffer")
+        return buffer.delivery_scope_from_client(self.client_id)
 
 
 def _static_relpath(request_target: str) -> str | None:
@@ -1260,7 +1282,8 @@ class WebsockServer(WebsockMessageHandler):
                     return
 
             client_state = _ClientHandleState(
-                AsyncMessageBuffer(event_loop, persistent_messages=False)
+                AsyncMessageBuffer(event_loop, persistent_messages=False),
+                self._broadcast_buffer,
             )
             client_connection = WebsockClientConnection(client_id, client_state)
             stop_event = self._stop_event
@@ -1893,6 +1916,16 @@ async def _message_producer(
             finally:
                 if reserved_file_parts:
                     buffer.release_file_bytes(reserved_file_bytes, reserved_file_parts)
+            # A quiet connection must not retain its last frame's original,
+            # encoded, and compressed payloads while awaiting the next window.
+            del window
+            del outgoing
+            del binary_buffers
+            del serialized_messages
+            del envelope
+            del inner
+            del compressed
+            del parts
     finally:
         await window_generator.aclose()
         if buffer.overload_reason is not None:

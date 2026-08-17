@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import numpy as np
 import pytest
@@ -66,6 +66,77 @@ class _ArrayMessage(_messages.Message):
 
     def redundancy_key(self) -> str:
         return self.key
+
+
+@dataclasses.dataclass
+class _ScopedMessage(_messages.Message):
+    scope: str
+    value: str
+
+    def delivery_scope(self) -> str:
+        return self.scope
+
+    def redundancy_key(self) -> str:
+        return f"{type(self).__name__}:{self.scope}:{self.value}"
+
+
+@dataclasses.dataclass
+class _ScopedUpdateMessage(_messages.Message):
+    scope: str
+    key: str
+    value: str
+
+    def delivery_scope(self) -> str:
+        return self.scope
+
+    def redundancy_key(self) -> str:
+        return "{}:{}:{}".format(type(self).__name__, self.scope, self.key)
+
+
+@dataclasses.dataclass
+class _SingleReadScopeMessage(_messages.Message):
+    scope: str
+    value: str
+
+    _calls: ClassVar[dict[str, int]] = {}
+
+    def delivery_scope(self) -> str:
+        calls = type(self)._calls
+        calls[self.value] = calls.get(self.value, 0) + 1
+        if calls[self.value] > 1:
+            raise RuntimeError("delivery scope was evaluated more than once")
+        return self.scope
+
+
+@dataclasses.dataclass
+class _InvalidScopeMessage(_messages.Message):
+    value: str
+
+    _scope: ClassVar[Any] = None
+
+    def delivery_scope(self) -> Any:
+        return type(self)._scope
+
+
+async def _next_sent_window(
+    message_buffer: AsyncMessageBuffer,
+    generator: Any,
+    client_id: int,
+) -> buffer_impl.MessageWindow:
+    window = await asyncio.wait_for(generator.__anext__(), timeout=0.5)
+    if window.last_message_id >= 0:
+        message_buffer.mark_messages_sent(client_id, window.last_message_id)
+    return window
+
+
+def _stream_controls(
+    page_id: str,
+    generation: int,
+) -> tuple[_messages.PageStreamBeginMessage, _messages.PageStreamReadyMessage]:
+    return (
+        _messages.PageStreamBeginMessage(page_id, generation),
+        _messages.PageStreamReadyMessage(page_id, generation),
+    )
 
 
 @dataclasses.dataclass
@@ -329,6 +400,11 @@ def test_sparse_persistent_history_jumps_to_retained_ids() -> None:
             message_id: message.serialized_size_upper_bound()
             for message_id, message in buffer.message_from_id.items()
         }
+        buffer._decoded_nodes_from_id = {
+            message_id: message.serialized_metrics_upper_bound()[3]
+            for message_id, message in buffer.message_from_id.items()
+        }
+        buffer._delivery_scope_from_id = {message_id: None for message_id in buffer.message_from_id}
         buffer._queued_metadata_bytes = sum(
             size[0] for size in buffer._serialized_size_from_id.values()
         )
@@ -343,6 +419,308 @@ def test_sparse_persistent_history_jumps_to_retained_ids() -> None:
         buffer.mark_messages_sent(9, window.last_message_id)
         await generator.aclose()
         buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_delivery_scope_is_captured_once_before_locked_routing() -> None:
+    async def run() -> None:
+        _SingleReadScopeMessage._calls.clear()
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            window_duration_sec=0,
+        )
+        retained = _SingleReadScopeMessage("page-a", "retained")
+        assert message_buffer.push(retained)
+        assert _SingleReadScopeMessage._calls == {"retained": 1}
+
+        message_buffer.register_client(1)
+        begin, ready = _stream_controls("page-a", 1)
+        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
+        begin.generation = 99
+        ready.generation = 99
+        generator = message_buffer.window_generator(1)
+        delivered = [await _next_sent_window(message_buffer, generator, 1) for _ in range(3)]
+        assert [tuple(window.messages) for window in delivered] == [
+            (_messages.PageStreamBeginMessage("page-a", 1),),
+            (retained,),
+            (_messages.PageStreamReadyMessage("page-a", 1),),
+        ]
+        assert _SingleReadScopeMessage._calls == {"retained": 1}
+
+        await generator.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_delivery_scope_must_be_none_or_a_nonempty_string() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+        )
+        _InvalidScopeMessage._scope = ""
+        with pytest.raises(ValueError, match="non-empty string"):
+            message_buffer.push(_InvalidScopeMessage("empty"))
+        _InvalidScopeMessage._scope = 1
+        with pytest.raises(TypeError, match="non-empty string"):
+            message_buffer.push(_InvalidScopeMessage("integer"))
+        assert message_buffer.message_from_id == {}
+        assert message_buffer._delivery_scope_from_id == {}
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_unsubscribed_persistent_client_receives_only_global_messages() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            window_duration_sec=0,
+        )
+        first_global = _messages.ClientPingMessage(sent_ms=1.0)
+        second_global = _messages.RunJavascriptMessage("global")
+        assert message_buffer.push_many(
+            (
+                first_global,
+                _ScopedMessage("page-a", "initial-a"),
+                second_global,
+                _ScopedMessage("page-b", "initial-b"),
+            )
+        )
+
+        generator = message_buffer.window_generator(1)
+        initial = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(initial.messages) == (first_global, second_global)
+
+        live_global = _messages.GuiUpdateMessage("component", {"value": "global"})
+        assert message_buffer.push_many(
+            (
+                _ScopedMessage("page-a", "live-a"),
+                live_global,
+                _ScopedMessage("page-b", "live-b"),
+            )
+        )
+        live = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(live.messages) == (live_global,)
+
+        await generator.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_scope_subscription_frames_replay_and_live_delivery() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            max_window_size=1,
+            window_duration_sec=0,
+        )
+        replayed = _ScopedMessage("page-a", "replayed")
+        stale_update = _ScopedUpdateMessage("page-a", "pane", "stale")
+        assert message_buffer.push_many((replayed, stale_update))
+        message_buffer.register_client(1)
+        begin, ready = _stream_controls("page-a", 7)
+        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
+        generator = message_buffer.window_generator(1)
+
+        begin_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(begin_window.messages) == (begin,)
+        replay_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(replay_window.messages) == (replayed,)
+
+        replacement = _ScopedUpdateMessage("page-a", "pane", "replacement")
+        assert message_buffer.push(replacement)
+        ready_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(ready_window.messages) == (ready,)
+        replacement_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(replacement_window.messages) == (replacement,)
+
+        selected_live = _ScopedMessage("page-a", "selected-live")
+        inactive_live = _ScopedMessage("page-b", "inactive-live")
+        global_live = _messages.ClientPingMessage(sent_ms=2.0)
+        assert message_buffer.push_many((inactive_live, selected_live, global_live))
+        selected_window = await _next_sent_window(message_buffer, generator, 1)
+        global_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(selected_window.messages) == (selected_live,)
+        assert tuple(global_window.messages) == (global_live,)
+
+        await generator.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_scope_subscriptions_isolate_two_clients() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            window_duration_sec=0,
+        )
+        retained_a = _ScopedMessage("page-a", "retained-a")
+        retained_b = _ScopedMessage("page-b", "retained-b")
+        assert message_buffer.push_many((retained_a, retained_b))
+
+        message_buffer.register_client(1)
+        message_buffer.register_client(2)
+        begin_a, ready_a = _stream_controls("page-a", 1)
+        begin_b, ready_b = _stream_controls("page-b", 1)
+        assert message_buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
+        assert message_buffer.request_delivery_scope(2, "page-b", begin_b, ready_b)
+        generator_a = message_buffer.window_generator(1)
+        generator_b = message_buffer.window_generator(2)
+
+        for generator, client_id, begin, replay, ready in (
+            (generator_a, 1, begin_a, retained_a, ready_a),
+            (generator_b, 2, begin_b, retained_b, ready_b),
+        ):
+            begin_window = await _next_sent_window(message_buffer, generator, client_id)
+            replay_window = await _next_sent_window(message_buffer, generator, client_id)
+            ready_window = await _next_sent_window(message_buffer, generator, client_id)
+            assert tuple(begin_window.messages) == (begin,)
+            assert tuple(replay_window.messages) == (replay,)
+            assert tuple(ready_window.messages) == (ready,)
+
+        live_a = _ScopedMessage("page-a", "live-a")
+        live_b = _ScopedMessage("page-b", "live-b")
+        global_live = _messages.RunJavascriptMessage("shared-live")
+        assert message_buffer.push_many((live_a, live_b, global_live))
+        client_a = await _next_sent_window(message_buffer, generator_a, 1)
+        client_b = await _next_sent_window(message_buffer, generator_b, 2)
+        assert tuple(client_a.messages) == (live_a, global_live)
+        assert tuple(client_b.messages) == (live_b, global_live)
+
+        await generator_a.aclose()
+        await generator_b.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_rapid_scope_replacement_abandons_old_replay() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            max_window_size=1,
+            window_duration_sec=0,
+        )
+        retained_a_first = _ScopedMessage("page-a", "retained-a-first")
+        retained_a_second = _ScopedMessage("page-a", "retained-a-second")
+        retained_b = _ScopedMessage("page-b", "retained-b")
+        assert message_buffer.push_many((retained_a_first, retained_a_second, retained_b))
+
+        message_buffer.register_client(1)
+        begin_a, ready_a = _stream_controls("page-a", 1)
+        assert message_buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
+        generator = message_buffer.window_generator(1)
+        assert tuple((await _next_sent_window(message_buffer, generator, 1)).messages) == (begin_a,)
+        assert tuple((await _next_sent_window(message_buffer, generator, 1)).messages) == (
+            retained_a_first,
+        )
+
+        begin_b, ready_b = _stream_controls("page-b", 2)
+        assert message_buffer.request_delivery_scope(1, "page-b", begin_b, ready_b)
+        transition = [await _next_sent_window(message_buffer, generator, 1) for _ in range(3)]
+        assert [tuple(window.messages) for window in transition] == [
+            (begin_b,),
+            (retained_b,),
+            (ready_b,),
+        ]
+
+        live_a = _ScopedMessage("page-a", "live-a")
+        live_b = _ScopedMessage("page-b", "live-b")
+        global_live = _messages.ClientPingMessage(sent_ms=3.0)
+        assert message_buffer.push_many((live_a, live_b, global_live))
+        delivered = [await _next_sent_window(message_buffer, generator, 1) for _ in range(2)]
+        assert [tuple(window.messages) for window in delivered] == [
+            (live_b,),
+            (global_live,),
+        ]
+        assert all(
+            retained_a_second not in window.messages and live_a not in window.messages
+            for window in delivered
+        )
+
+        await generator.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_skipped_inactive_tombstone_advances_cursor_and_is_collected() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            window_duration_sec=0,
+        )
+        message_buffer.register_client(1)
+        global_message = _messages.RunJavascriptMessage("global")
+        inactive_remove = _messages.ViewportPaneRemoveMessage(
+            page_id="page-b",
+            pane_id="removed-pane",
+        )
+        assert message_buffer.push_many((global_message, inactive_remove))
+
+        generator = message_buffer.window_generator(1)
+        window = await asyncio.wait_for(generator.__anext__(), timeout=0.5)
+        assert tuple(window.messages) == (global_message,)
+        assert window.last_message_id == 1
+        assert inactive_remove in message_buffer.message_from_id.values()
+
+        message_buffer.mark_messages_sent(1, window.last_message_id)
+        assert inactive_remove not in message_buffer.message_from_id.values()
+        assert inactive_remove.redundancy_key() not in message_buffer.id_from_redundancy_key
+
+        await generator.aclose()
+        message_buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_atomic_scope_request_waits_and_drains_global_prefix_first() -> None:
+    async def run() -> None:
+        message_buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=True,
+            window_duration_sec=0,
+        )
+        message_buffer.register_client(1)
+        begin, ready = _stream_controls("page-a", 1)
+
+        message_buffer.atomic_start()
+        first_global = _messages.ClientPingMessage(sent_ms=4.0)
+        scoped = _ScopedMessage("page-a", "retained")
+        second_global = _messages.RunJavascriptMessage("global")
+        assert message_buffer.push_many((first_global, scoped, second_global))
+        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
+
+        generator = message_buffer.window_generator(1)
+        pending = asyncio.create_task(generator.__anext__())
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        message_buffer.atomic_end()
+        global_window = await asyncio.wait_for(pending, timeout=0.5)
+        assert tuple(global_window.messages) == (first_global, second_global)
+        message_buffer.mark_messages_sent(1, global_window.last_message_id)
+
+        begin_window = await _next_sent_window(message_buffer, generator, 1)
+        replay_window = await _next_sent_window(message_buffer, generator, 1)
+        ready_window = await _next_sent_window(message_buffer, generator, 1)
+        assert tuple(begin_window.messages) == (begin,)
+        assert tuple(replay_window.messages) == (scoped,)
+        assert tuple(ready_window.messages) == (ready,)
+
+        await generator.aclose()
+        message_buffer.set_done()
 
     asyncio.run(run())
 

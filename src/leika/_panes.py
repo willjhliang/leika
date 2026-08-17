@@ -1305,6 +1305,13 @@ class Panes:
                 self._aggregate.release_pane(viser=is_viser)
                 raise
 
+    def _has_plotly_pane_locked(self) -> bool:
+        """Return whether this registry owns a live Plotly pane. Lock held."""
+
+        return any(
+            isinstance(handle, PlotlyPaneHandle) for handle in self._handle_from_pane_id.values()
+        )
+
     def add_image(
         self,
         image: np.ndarray,
@@ -1630,7 +1637,7 @@ class Panes:
                 equalize_group=equalize_group,
             ),
             relative_to,
-            before_publish=self._owner.gui._ensure_plotly_js_sent,
+            before_publish=lambda: self._owner._ensure_page_plotly_js_sent(self._page_id),
         )
         return handle
 

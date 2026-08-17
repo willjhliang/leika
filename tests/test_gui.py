@@ -57,6 +57,7 @@ def _client_connection_stub(
     return SimpleNamespace(
         client_id=client_id,
         register_handler=lambda *_: None,
+        delivery_scope=lambda: None,
         queue_message=queued.append,
         queue_message_or_raise=queued.append,
         queue_messages_or_raise=queued.extend,
