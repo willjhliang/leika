@@ -527,3 +527,37 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
     expect(page.get_by_text("Ready")).to_be_visible(timeout=5_000)
     assert frame.evaluate(measure)["underTitle"] == "8px"
     assert page_errors == []
+
+
+def test_panel_header_spacing_matches_the_field_spacing(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    """The title and controls follow the same vertical rhythm as the rows."""
+    leika_server.gui.configure_theme(control_layout="floating")
+    leika_server.gui.set_panel_label("Controls")
+    leika_server.gui.add_text("First", initial_value="one")
+    leika_server.gui.add_text("Second", initial_value="two")
+
+    page.goto(leika_server.url)
+    panel = page.get_by_test_id("control-panel")
+    expect(panel).to_be_visible(timeout=15_000)
+    expect(page.get_by_text("Second", exact=True)).to_be_visible(timeout=5_000)
+
+    spacing = panel.evaluate(
+        """panel => {
+            const header = panel.querySelector('[data-leika-panel-header]');
+            const rows = [...panel.querySelectorAll('[data-leika-gui-row]')];
+            const centerY = element => {
+                const box = element.getBoundingClientRect();
+                return box.top + box.height / 2;
+            };
+            return {
+                headerToFirst: centerY(rows[0]) - centerY(header),
+                firstToSecond: centerY(rows[1]) - centerY(rows[0]),
+            };
+        }"""
+    )
+    assert spacing["headerToFirst"] == pytest.approx(spacing["firstToSecond"], abs=0.5)
+    assert page_errors == []
