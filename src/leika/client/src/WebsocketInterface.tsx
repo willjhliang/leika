@@ -8,6 +8,7 @@ import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
 import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
 import { syncSearchParamServer } from "./SearchParamsUtils";
 import { installConnectionBoundSender } from "./connectionSender";
+import { resetConnectionOwners } from "./connectionLifecycle";
 import { resetFilePreviewState } from "./filePreview";
 import { resetFileTransferFailureToast } from "./fileDownloadHandler";
 import { retainedDownloads } from "./retainedDownloadBudget";
@@ -94,9 +95,11 @@ export function WebsocketMessageProducer() {
 
     const resetConnectionState = () => {
       requestedPageId = null;
-      viewer.guiActions.resetGui();
-      viewer.viewportActions.resetPanes();
-      resetConnectionResources();
+      resetConnectionOwners({
+        resetGui: viewer.guiActions.resetGui,
+        resetPanes: viewer.viewportActions.resetPanes,
+        resetResources: resetConnectionResources,
+      });
     };
 
     const markDisconnected = ({

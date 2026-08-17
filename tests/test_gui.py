@@ -937,6 +937,22 @@ def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
     assert notification._impl.props.body == ""
 
 
+def test_removing_root_components_unlinks_the_owner_registry(server: leika.Server) -> None:
+    root = server.gui._container_handle_from_uuid["root"]
+    children_before = dict(root._children)
+    live_before = server.gui._live_component_count
+
+    for index in range(4):
+        handle = server.gui.add_button(f"Temporary {index}")
+        assert root._children[handle.id] is handle
+
+        handle.remove()
+
+        assert handle.id not in root._children
+        assert root._children == children_before
+        assert server.gui._live_component_count == live_before
+
+
 def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
     server: leika.Server,
     tmp_path: Path,

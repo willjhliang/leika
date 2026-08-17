@@ -741,6 +741,8 @@ def test_disconnecting_drops_queued_preview_work(
                 _messages.GuiUpdateMessage(handle.id, {"value": True}),
             )
         )
+        assert handle._file_busy is True
+        assert handle.disabled is True
         for _ in range(2):
             asyncio.run(
                 server.gui._handle_gui_preview_reload(
@@ -756,6 +758,8 @@ def test_disconnecting_drops_queued_preview_work(
         asyncio.run(disconnect(SimpleNamespace(client_id=client_id)))
         with server.gui._preview_work_lock:
             assert (client_id, handle.id) not in server.gui._preview_work_from_key
+        assert handle._file_busy is False
+        assert handle.disabled is False
     finally:
         release_warm.set()
 

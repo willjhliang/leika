@@ -809,6 +809,7 @@ class WebsockServer(WebsockMessageHandler):
         self._http_assets: dict[str, bytes] = {}
         self._http_asset_bytes = 0
         self._http_assets_lock = threading.Lock()
+        self._http_assets_terminal = False
         self._http_asset_load_condition = threading.Condition()
         self._http_asset_load_bytes = 0
 
@@ -876,6 +877,17 @@ class WebsockServer(WebsockMessageHandler):
             with self._callback_activity_lock:
                 self._active_callback_dispatches -= 1
 
+    def _retire_http_assets(self) -> None:
+        """Close runtime-asset admission and release every cached snapshot."""
+        with self._http_assets_lock:
+            self._http_assets_terminal = True
+            self._http_assets.clear()
+            self._http_asset_bytes = 0
+        # Wake registrations waiting for load headroom so they can observe the
+        # terminal state instead of remaining blocked behind abandoned work.
+        with self._http_asset_load_condition:
+            self._http_asset_load_condition.notify_all()
+
     def _finish_stop(self) -> None:
         """Perform the bounded worker join and release retained callbacks."""
         try:
@@ -910,6 +922,7 @@ class WebsockServer(WebsockMessageHandler):
     def _signal_stop(self) -> None:
         """Request shutdown without waiting for the worker thread."""
         self._stop_requested.set()
+        self._retire_http_assets()
 
         event_loop = self._background_event_loop
         stop_event = self._stop_event
@@ -971,6 +984,7 @@ class WebsockServer(WebsockMessageHandler):
             if self._lifecycle_state == "new":
                 self._lifecycle_state = "stopped"
                 self._stop_requested.set()
+                self._retire_http_assets()
                 with self._client_callback_lock:
                     self._client_connect_cb.clear()
                     self._client_disconnect_cb.clear()
@@ -1116,6 +1130,9 @@ class WebsockServer(WebsockMessageHandler):
         """
         if not isinstance(path, Path):
             raise TypeError("path must be a pathlib.Path")
+        with self._http_assets_lock:
+            if self._http_assets_terminal:
+                raise RuntimeError("Cannot register HTTP assets after server shutdown.")
         # Resolve once: HTTP requests may be served after the process changes
         # working directory, but a registered source must keep its identity.
         path = path.resolve()
@@ -1127,7 +1144,13 @@ class WebsockServer(WebsockMessageHandler):
             raise ValueError(f"File is larger than the {_HTTP_ASSET_MAX_BYTES}-byte limit.")
         with self._http_asset_load_condition:
             while self._http_asset_load_bytes + _HTTP_ASSET_MAX_BYTES > _HTTP_ASSET_LOAD_MAX_BYTES:
+                with self._http_assets_lock:
+                    if self._http_assets_terminal:
+                        raise RuntimeError("Cannot register HTTP assets after server shutdown.")
                 self._http_asset_load_condition.wait()
+            with self._http_assets_lock:
+                if self._http_assets_terminal:
+                    raise RuntimeError("Cannot register HTTP assets after server shutdown.")
             # Charge the per-file ceiling, not the racy pre-open stat size: a
             # concurrent writer can grow the file before descriptor reading.
             self._http_asset_load_bytes += _HTTP_ASSET_MAX_BYTES
@@ -1159,6 +1182,8 @@ class WebsockServer(WebsockMessageHandler):
                     suffix = ""
                 name = f"{digest}{suffix}"
             with self._http_assets_lock:
+                if self._http_assets_terminal:
+                    raise RuntimeError("Cannot register HTTP assets after server shutdown.")
                 previous = self._http_assets.pop(name, None)
                 if previous is not None:
                     self._http_asset_bytes -= len(previous)

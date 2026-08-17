@@ -2819,7 +2819,7 @@ def _retire_gui_handle_without_queue_locked(handle: _GuiHandle[Any]) -> None:
     gui_api._container_handle_from_uuid.pop(handle._impl.uuid, None)
     gui_api._container_depth_from_uuid.pop(handle._impl.uuid, None)
     parent = gui_api._container_handle_from_uuid.get(handle._impl.parent_container_id)
-    if isinstance(parent, GuiContainer):
+    if parent is not None:
         parent._children.pop(handle._impl.uuid, None)
     if isinstance(handle, GuiUploadButtonHandle):
         gui_api._discard_file_uploads(source_component_uuid=handle._impl.uuid)

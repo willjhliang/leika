@@ -976,6 +976,7 @@ class GuiApi(GuiContainer):
     ) -> None:
         """Drop queued preview work for a disconnected client or removed source."""
         workers: list[Future[Any]] = []
+        discarded_preview_handles: list[GuiPreviewButtonHandle] = []
         with self._preview_work_lock:
             stale = [
                 key
@@ -985,6 +986,9 @@ class GuiApi(GuiContainer):
             ]
             for key in stale:
                 state = self._preview_work_from_key.pop(key)
+                discarded_preview_handles.extend(
+                    item.handle for item in state.pending if item.kind == "preview"
+                )
                 state.pending.clear()
                 if state.worker is not None:
                     workers.append(state.worker)
@@ -994,6 +998,13 @@ class GuiApi(GuiContainer):
         # the missing state above makes it stop before the next queued item.
         for worker in workers:
             worker.cancel()
+
+        # A preview press acquires the file-button lease before it enters this
+        # queue. Pending items that are discarded never reach the worker's
+        # finally block, so release their leases explicitly. Do this outside
+        # the preview lock because release takes the canonical GUI lock.
+        for handle in discarded_preview_handles:
+            handle._finish_file_press()
 
     async def _handle_gui_preview_warm(
         self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
@@ -1479,9 +1490,14 @@ class GuiApi(GuiContainer):
                         handle._impl.value = UploadedFile("", b"")
                     self._server._release_retained_file_upload(size_bytes)
                 self._retained_file_upload_bytes.clear()
-        self._discard_preview_work(client_id=client_id)
         if release_retained_uploads:
+            # The connection-local message buffer is already closed when its
+            # disconnect callback runs. Retiring the scope first marks every
+            # preview handle terminal, so releasing discarded leases cannot
+            # try to publish an enabled state to that closed connection.
             self._retire_scope_without_queue()
+        else:
+            self._discard_preview_work(client_id=client_id)
 
     async def _handle_command_trigger(
         self, client_id: ClientId, message: _messages.CommandTriggerMessage

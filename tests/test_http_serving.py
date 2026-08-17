@@ -1119,6 +1119,72 @@ def test_runtime_asset_load_reservation_covers_post_read_hashing(
     assert server._http_asset_load_bytes == 0
 
 
+def test_runtime_asset_cache_is_terminally_released_on_stop(tmp_path: Path) -> None:
+    asset = tmp_path / "asset.bin"
+    asset.write_bytes(b"cached")
+    server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    server.start()
+    try:
+        server.register_http_asset(asset)
+        assert server._http_asset_bytes == len(b"cached")
+        assert len(server._http_assets) == 1
+    finally:
+        server.stop()
+
+    assert server._http_assets == {}
+    assert server._http_asset_bytes == 0
+    with pytest.raises(RuntimeError, match="after server shutdown"):
+        server.register_http_asset(asset)
+
+
+def test_inflight_runtime_asset_cannot_publish_after_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = tmp_path / "asset.bin"
+    asset.write_bytes(b"late")
+    server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    original = infra_impl._read_bounded_file
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked(path: Path, limit: int, **kwargs: object) -> bytes:
+        entered.set()
+        assert release.wait(5.0)
+        return original(path, limit, **kwargs)
+
+    monkeypatch.setattr(infra_impl, "_read_bounded_file", blocked)
+    errors: list[BaseException] = []
+
+    def register() -> None:
+        try:
+            server.register_http_asset(asset)
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=register)
+    server.start()
+    try:
+        worker.start()
+        assert entered.wait(2.0)
+        server.stop()
+        assert server._http_assets == {}
+        assert server._http_asset_bytes == 0
+        release.set()
+        worker.join(2.0)
+    finally:
+        release.set()
+        worker.join(2.0)
+        server.stop()
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert "after server shutdown" in str(errors[0])
+    assert server._http_assets == {}
+    assert server._http_asset_bytes == 0
+    assert server._http_asset_load_bytes == 0
+
+
 def _png_header_with_size(width: int, height: int) -> bytes:
     ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x02\x00\x00\x00"
     return (
@@ -1157,6 +1223,10 @@ def test_internal_runtime_image_registration_requires_safe_raster_header(
     with pytest.raises(ValueError, match="recognized"):
         server.register_http_asset(malformed, _require_safe_image=True)
 
+    # Generic runtime assets remain arbitrary downloadable byte snapshots.
+    assert server.register_http_asset(oversized).pixel_size == (8_193, 4_096)
+    assert server.register_http_asset(malformed).pixel_size is None
+
     server.start()
     try:
         forged = safe_asset.url.replace("-16384x2048", "-1x1")
@@ -1167,10 +1237,6 @@ def test_internal_runtime_image_registration_requires_safe_raster_header(
         assert body == safe.read_bytes()
     finally:
         server.stop()
-
-    # Generic runtime assets remain arbitrary downloadable byte snapshots.
-    assert server.register_http_asset(oversized).pixel_size == (8_193, 4_096)
-    assert server.register_http_asset(malformed).pixel_size is None
 
 
 def test_bounded_file_snapshot_rejects_same_size_in_place_rewrite(
