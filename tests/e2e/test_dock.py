@@ -29,6 +29,9 @@ MINIMIZED_STRIP_PX = 36.0
 # Deliberately the control panel's own width (CONTROL_WIDTH_PX below): every
 # way of landing on an edge gives one width. A client test pins the equality.
 DEFAULT_REGION_PX = 320.0
+# Mirrors the collapsed floating-window hover grace. Assertions use a fraction
+# of it before re-entry, then wait beyond it to prove the pending fade canceled.
+PEEK_LEAVE_GRACE_MS = 1_000
 
 # Conftest's viewport.
 VIEWPORT_W = 960.0
@@ -801,8 +804,22 @@ def test_a_collapsed_panel_fades_down_to_its_status_badge(dock_page: Page) -> No
     assert restored["badge"] == "1", restored
     assert _draws_a_shadow(restored["shadow"]), restored
 
-    # And leaving it fades the panel back down.
+    # A brief slip off the header does not start the fade. Returning during the
+    # grace period cancels it completely rather than merely postponing it.
+    badge_point = center(badge)
     page.mouse.move(*CANVAS)
+    page.wait_for_timeout(PEEK_LEAVE_GRACE_MS // 4)
+    assert control_panel(page).get_attribute("data-dock-peeking") is None
+    grace = _peek_state(page)
+    assert _draws_a_shadow(grace["shadow"]), grace
+    assert grace["gear"] == "1", grace
+    page.mouse.move(*badge_point)
+    page.wait_for_timeout(PEEK_LEAVE_GRACE_MS + 100)
+    assert control_panel(page).get_attribute("data-dock-peeking") is None
+
+    # A fresh uninterrupted leave consumes the grace and fades normally.
+    page.mouse.move(*CANVAS)
+    assert control_panel(page).get_attribute("data-dock-peeking") is None
     expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
 
 
@@ -827,12 +844,9 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
         page.locator(trigger).click()
         expect(page.locator(popover)).to_be_visible(timeout=5_000)
 
-        # Pointer right away from both -- the popout itself does not need this
-        # (it is portaled, but React bubbles its pointer events back through
-        # the panel, so hovering it still counts as being on the panel). What
-        # needs it is a reader whose pointer has gone elsewhere with the popout
-        # still up: nothing holds the card then, and focus is inside the popout
-        # rather than the card, so the keyboard rule does not either.
+        # Pointer right away from both. Portal-bubbled events deliberately do
+        # not masquerade as physical panel hover; the explicit popout hold is
+        # what keeps the header visible wherever its reader's pointer goes.
         page.mouse.move(*CANVAS)
         page.wait_for_timeout(400)
         held = _peek_state(page)
@@ -849,6 +863,50 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
         expect(control_panel(page)).to_have_css(
             "background-color", "rgba(0, 0, 0, 0)", timeout=5_000
         )
+
+
+def test_page_selection_waits_for_a_real_header_leave_before_fading(
+    leika_server: leika.Server,
+    dock_page: Page,
+    page_errors: list[str],
+) -> None:
+    """Leaving through the page menu is not leaving the header for good."""
+    page = dock_page
+    leika_server.pages.add("Analysis", page_id="analysis")
+    selector = page.locator("[data-leika-page-selector]")
+
+    page.mouse.click(*center(control_handle(page)))
+    expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
+    selector.click()
+    page.get_by_role("option", name="Analysis", exact=True).click()
+    expect(selector).to_have_attribute("aria-label", "Page: Analysis")
+    expect(selector).to_have_attribute("aria-expanded", "false")
+
+    # The item lived in a portal, so closing it leaves the pointer off the
+    # header. That portal leave must not make the owning header disappear.
+    page.mouse.move(*CANVAS)
+    page.wait_for_timeout(400)
+    expect(control_panel(page)).not_to_have_attribute("data-dock-peeking", "true")
+    kept = _peek_state(page)
+    assert _draws_a_shadow(kept["shadow"]), kept
+    assert kept["gear"] == "1", kept
+
+    # A subsequent physical return to the header arms the ordinary leave.
+    selector.hover()
+    page.mouse.move(*CANVAS)
+    assert control_panel(page).get_attribute("data-dock-peeking") is None
+    expect(control_panel(page)).to_have_attribute("data-dock-peeking", "true", timeout=5_000)
+
+    # Keyboard selection has focus-visible to keep it readable; it has no
+    # physical pointer return to await and must not acquire the deferred hold.
+    selector.focus()
+    page.keyboard.press("Enter")
+    expect(selector).to_have_attribute("aria-expanded", "true")
+    page.keyboard.press("Home")
+    page.keyboard.press("Enter")
+    expect(selector).to_have_attribute("aria-label", "Page: Main")
+    expect(control_panel(page)).to_have_attribute("data-dock-peeking", "true", timeout=5_000)
+    assert page_errors == []
 
 
 def test_a_keyboard_dismissal_leaves_the_panel_where_focus_is(dock_page: Page) -> None:

@@ -83,6 +83,10 @@ const PEEK_TRANSITION_CLASSES = [
   "[&_[data-dock-peek-fade]]:motion-reduce:transition-none",
 ].join(" ");
 
+// A deliberate one-second recovery window for slipping across the header
+// edge; the existing 200ms visual fade starts only if the pointer stays away.
+const PEEK_LEAVE_GRACE_MS = 1_000;
+
 /** Return only the ScrollArea viewports owned by this floating window's
  * top-level groups. Nested DockAreas have their own group ids and must not be
  * double-counted as window bodies. */
@@ -168,15 +172,104 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
   // double-click with it. Entering is still `:hover`'s job in effect (the peek
   // element is the only thing left to enter); leaving is what this tracks.
   const [pointerInside, setPointerInside] = React.useState(false);
+  const [leaveGraceActive, setLeaveGraceActive] = React.useState(false);
+  const leaveGraceTimeoutRef = React.useRef<number | null>(null);
+  const clearLeaveGraceTimer = React.useCallback(() => {
+    if (leaveGraceTimeoutRef.current === null) return;
+    window.clearTimeout(leaveGraceTimeoutRef.current);
+    leaveGraceTimeoutRef.current = null;
+  }, []);
+  const cancelLeaveGrace = React.useCallback(() => {
+    clearLeaveGraceTimer();
+    setLeaveGraceActive(false);
+  }, [clearLeaveGraceTimer]);
+  const startLeaveGrace = React.useCallback(() => {
+    clearLeaveGraceTimer();
+    setLeaveGraceActive(true);
+    leaveGraceTimeoutRef.current = window.setTimeout(() => {
+      leaveGraceTimeoutRef.current = null;
+      setLeaveGraceActive(false);
+    }, PEEK_LEAVE_GRACE_MS);
+  }, [clearLeaveGraceTimer]);
+  React.useEffect(() => clearLeaveGraceTimer, [clearLeaveGraceTimer]);
   // Anything the panel put outside itself and still counts as itself -- a
   // popout hung off its header -- holds the window here while it is up. See
   // `usePeekHold`.
   const [peekHolds, setPeekHolds] = React.useState(0);
+  const peekRef = React.useRef(peek);
+  peekRef.current = peek;
+  const deferredPeekReleasesRef = React.useRef(new Set<() => void>());
+  const deferredPeekReleaseArmedRef = React.useRef(false);
   const holdPeek = React.useCallback<PeekHold>(() => {
     setPeekHolds((held) => held + 1);
-    return () => setPeekHolds((held) => held - 1);
+    let held = true;
+    const releaseNow = () => {
+      if (!held) return;
+      held = false;
+      deferredPeekReleasesRef.current.delete(releaseNow);
+      setPeekHolds((count) => Math.max(0, count - 1));
+    };
+    return (release = "immediate") => {
+      if (!held) return;
+      if (release === "after-pointer-return" && peekRef.current) {
+        deferredPeekReleasesRef.current.add(releaseNow);
+        return;
+      }
+      releaseNow();
+    };
   }, []);
-  const faded = peek && !pointerInside && peekHolds === 0;
+  React.useEffect(() => {
+    if (peek) return;
+    cancelLeaveGrace();
+    deferredPeekReleaseArmedRef.current = false;
+    for (const release of Array.from(deferredPeekReleasesRef.current)) {
+      release();
+    }
+  }, [cancelLeaveGrace, peek]);
+  const markPhysicalPointerReturn = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // React events from an owned portal bubble through this component too.
+      // Only a target in the card's real DOM subtree means the pointer has
+      // actually returned to the collapsed header.
+      if (
+        !(event.target instanceof Node) ||
+        !event.currentTarget.contains(event.target)
+      ) {
+        return;
+      }
+      cancelLeaveGrace();
+      setPointerInside(true);
+      if (deferredPeekReleasesRef.current.size > 0) {
+        deferredPeekReleaseArmedRef.current = true;
+      }
+    },
+    [cancelLeaveGrace],
+  );
+  const markPointerOutside = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        !(event.target instanceof Node) ||
+        !event.currentTarget.contains(event.target)
+      ) {
+        return;
+      }
+      setPointerInside(false);
+      if (peekRef.current) {
+        startLeaveGrace();
+      } else {
+        cancelLeaveGrace();
+      }
+      if (!deferredPeekReleaseArmedRef.current) {
+        return;
+      }
+      deferredPeekReleaseArmedRef.current = false;
+      for (const release of Array.from(deferredPeekReleasesRef.current)) {
+        release();
+      }
+    },
+    [cancelLeaveGrace, startLeaveGrace],
+  );
+  const faded = peek && !pointerInside && !leaveGraceActive && peekHolds === 0;
   const fixedHeight = win.height !== undefined && !collapsed;
   const [autoBodyMaxHeight, setAutoBodyMaxHeight] = React.useState<
     number | undefined
@@ -547,16 +640,16 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
           peek && PEEK_TRANSITION_CLASSES,
           faded && FADED_CLASSES,
         )}
-        onPointerDownCapture={() => {
+        onPointerDownCapture={(event) => {
           onFront(win.id);
           // A press inside the card proves the pointer is inside it, whether
           // or not an enter ever fired (see onPointerMove).
-          setPointerInside(true);
+          markPhysicalPointerReturn(event);
         }}
         // Enter fires for the peek element too: entering a descendant from
         // outside is entering the card. That is the way back in once the card
         // itself has stopped taking the pointer.
-        onPointerEnter={() => setPointerInside(true)}
+        onPointerEnter={markPhysicalPointerReturn}
         // A window BORN under the cursor -- dragged out of the dock, the
         // pointer captured to it from its first frame -- may never receive
         // that enter: boundary events chase crossings, and this pointer never
@@ -564,8 +657,8 @@ export const FloatingWindowView = React.memo(function FloatingWindowView({
         // down to its peek badge with the cursor still on the header. Any
         // traffic inside the card says what the missing enter would have (a
         // same-value set is a no-op re-render-wise).
-        onPointerMove={() => setPointerInside(true)}
-        onPointerLeave={() => setPointerInside(false)}
+        onPointerMove={markPhysicalPointerReturn}
+        onPointerLeave={markPointerOutside}
         style={{
           position: "absolute",
           ...horizontalPosition,

@@ -128,9 +128,14 @@ export function toggleGroupVisibility(
   return dock.panels[activeId]?.onHandleClick?.() === true;
 }
 
+/** How a portaled interaction gives its peek hold back. */
+export type PeekHoldRelease = "immediate" | "after-pointer-return";
+
 /** Registers one reason a peeking window must stay where it is. Call it to
- * take the hold; call what it returns to give it back. */
-export type PeekHold = () => () => void;
+ * take the hold; call what it returns to give it back. A pointer-driven
+ * portal may defer that release until the pointer has genuinely returned to
+ * the window and left it again. */
+export type PeekHold = () => (release?: PeekHoldRelease) => void;
 
 export const PeekHoldContext = React.createContext<PeekHold | null>(null);
 
@@ -146,12 +151,23 @@ export const PeekHoldContext = React.createContext<PeekHold | null>(null);
  *
  * A no-op outside a floating window -- the sidebar and the bottom sheet have
  * no state to be held out of. */
-export function usePeekHold(active: boolean): void {
+export function usePeekHold(active: boolean): () => void {
   const hold = React.useContext(PeekHoldContext);
+  const releaseRef = React.useRef<PeekHoldRelease>("immediate");
+  const releaseAfterPointerReturn = React.useCallback(() => {
+    releaseRef.current = "after-pointer-return";
+  }, []);
   React.useEffect(() => {
     if (!active || hold === null) return;
-    return hold();
+    releaseRef.current = "immediate";
+    const release = hold();
+    return () => {
+      const mode = releaseRef.current;
+      releaseRef.current = "immediate";
+      release(mode);
+    };
   }, [active, hold]);
+  return releaseAfterPointerReturn;
 }
 
 /** High-churn geometry, split out of DockContext so per-frame resize updates
