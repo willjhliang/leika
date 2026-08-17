@@ -48,8 +48,23 @@ with leika.Server(workspace_id="quickstart", label="Leika quickstart") as server
 ```
 
 Run the script and open the URL printed in the terminal (by default
-`http://localhost:8080`). Use an explicit `workspace_id` and stable `pane_id`s
-when you want the browser to restore a layout after a Python restart.
+`http://localhost:8080`). `label` names the default page shown in the dock
+header. `server.panes` is the same pane API as `server.pages.default.panes`, so
+existing one-page applications need no structural changes.
+
+Add named pages when one canvas is not enough:
+
+```python
+with leika.Server(workspace_id="experiment", label="Live signals") as server:
+    server.panes.add_image(frame, pane_id="camera")
+
+    analysis = server.pages.add("Analysis", page_id="analysis")
+    analysis.panes.add_plotly(figure, pane_id="loss")
+```
+
+Each viewer's selected page and each page's arrangement are saved locally in
+the browser. Use an explicit `workspace_id` and stable `page_id` and `pane_id`
+values when those choices and layouts should survive a Python restart.
 
 ## Learn More
 

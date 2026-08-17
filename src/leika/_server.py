@@ -30,7 +30,7 @@ from ._file_transfer import (
 from ._gui_api import GuiApi
 from ._gui_handles import PREVIEW_MAX_BYTES, _GuiResourceCost, _make_uuid
 from ._notification_handle import NotificationHandle
-from ._panes import Panes
+from ._pages import Pages, _normalize_legacy_page_label
 from ._share import CloudflaredTunnel, ShareTunnelError
 from ._validation import utf16_code_unit_length, validate_layout_id
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
@@ -643,8 +643,7 @@ class Server:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("port must be an integer from 0 to 65535.")
         workspace_id = validate_layout_id(workspace_id, "workspace_id")
-        if label is not None and not isinstance(label, str):
-            raise TypeError("label must be a string or None.")
+        default_page_name = _normalize_legacy_page_label(label)
         if password is not None:
             if type(password) is not str:
                 raise TypeError("password must be a string or None.")
@@ -780,8 +779,8 @@ class Server:
             server.queue_message_or_raise(
                 _messages.WorkspaceConfigurationMessage(workspace_id=workspace_id)
             )
-            self.panes = Panes(self)
-            self.gui.set_panel_label(label)
+            self.pages = Pages(self, default_name=default_page_name)
+            self.panes = self.pages.default.panes
 
             # Open the share tunnel last: it only matters once the server it
             # forwards to is up. A tunnel failure is reported but not fatal --
@@ -1223,9 +1222,9 @@ class Server:
             gui = getattr(self, "gui", None)
             if gui is not None:
                 gui._retire_scope_without_queue()
-            panes = getattr(self, "panes", None)
-            if panes is not None:
-                panes._retire_without_queue()
+            pages = getattr(self, "pages", None)
+            if pages is not None:
+                pages._retire_without_queue()
             with self._plotly_js_lock:
                 self._replace_gui_resource_cost(
                     self._plotly_resource_cost, _GuiResourceCost(), page_global=False

@@ -138,7 +138,7 @@ class GuiTab:
 TagLiteral = Literal["GuiComponentMessage"]
 
 # Entity lifecycle markers, which drive coalescing and garbage collection.
-EntityType: TypeAlias = Literal["gui", "command", "notification", "modal", "viewport"]
+EntityType: TypeAlias = Literal["gui", "command", "notification", "modal", "page", "viewport"]
 """Kinds of removable entities in the protocol."""
 
 LifecyclePhase: TypeAlias = Literal["create", "update_dict", "update_simple", "remove"]
@@ -153,8 +153,8 @@ purged when their entity is removed:
   coalesces latest-wins per message *type*
   (``{entity}:{id}:update:{ClassName}``)."""
 
-EntityIdField: TypeAlias = Literal["uuid", "pane_id"]
-"""Dataclass field carrying the entity ID."""
+EntityIdField: TypeAlias = Literal["uuid", "page_id", "pane_id"]
+"""Dataclass field carrying all or part of an entity ID."""
 
 FileDisposition: TypeAlias = Literal["save", "link", "preview", "warm", "reload"]
 """What the browser does with a file once every chunk of it has arrived.
@@ -181,7 +181,7 @@ class EntityLifecycle:
 
     type: EntityType
     phase: LifecyclePhase
-    id_field: EntityIdField
+    id_field: EntityIdField | Tuple[EntityIdField, ...]
 
 
 class Message(infra.Message):
@@ -210,19 +210,20 @@ class Message(infra.Message):
             and self.lifecycle_phase is not None
             and self.entity_id_field is not None
         ):
-            entity_id = getattr(self, self.entity_id_field)
+            entity_id = self.lifecycle_entity_id()
+            entity_key = repr(entity_id) if isinstance(entity_id, tuple) else str(entity_id)
             if self.lifecycle_phase in ("create", "remove"):
-                key = f"{self.entity_type}:{entity_id}:create-or-remove"
+                key = f"{self.entity_type}:{entity_key}:create-or-remove"
             elif self.lifecycle_phase == "update_dict":
                 # Delta updates coalesce per prop-set, so independent prop
                 # changes don't clobber each other.
                 updates = cast(Dict[str, Any], getattr(self, "updates"))
                 prop_suffix = ",".join(sorted(updates.keys()))
-                key = f"{self.entity_type}:{entity_id}:update:{prop_suffix}"
+                key = f"{self.entity_type}:{entity_key}:update:{prop_suffix}"
             else:
                 # update_simple: single-purpose update, coalesce latest-wins
                 # per message type (so independent update message classes stay in separate slots).
-                key = f"{self.entity_type}:{entity_id}:update:{type(self).__name__}"
+                key = f"{self.entity_type}:{entity_key}:update:{type(self).__name__}"
         else:
             # Non-entity fallback: ClassName + any incidental uuid field.
             parts = [type(self).__name__]
@@ -1005,8 +1006,9 @@ class ViewportImageProps:
 @dataclasses.dataclass
 class _ViewportPaneCreateMessage(
     Message,
-    entity=EntityLifecycle("viewport", "create", "pane_id"),
+    entity=EntityLifecycle("viewport", "create", ("page_id", "pane_id")),
 ):
+    page_id: str
     pane_id: str
     placement: Literal["left", "right", "top", "bottom"]
     relative_to: str
@@ -1082,10 +1084,11 @@ class ViewportViserMessage(_ViewportPaneCreateMessage):
 @dataclasses.dataclass
 class ViewportPaneUpdateMessage(
     Message,
-    entity=EntityLifecycle("viewport", "update_dict", "pane_id"),
+    entity=EntityLifecycle("viewport", "update_dict", ("page_id", "pane_id")),
 ):
     """Update one or more properties of a pane."""
 
+    page_id: str
     pane_id: str
     updates: Dict[str, Any]
 
@@ -1093,10 +1096,11 @@ class ViewportPaneUpdateMessage(
 @dataclasses.dataclass
 class ViewportPaneRemoveMessage(
     Message,
-    entity=EntityLifecycle("viewport", "remove", "pane_id"),
+    entity=EntityLifecycle("viewport", "remove", ("page_id", "pane_id")),
 ):
     """Remove a pane."""
 
+    page_id: str
     pane_id: str
 
 
@@ -1104,8 +1108,15 @@ class ViewportPaneRemoveMessage(
 class ViewportPaneSnapshotMessage(Message):
     """Authoritative pane IDs used to reconcile browser-persisted layouts."""
 
+    page_id: str
     # The hidden layout root sentinel is implicit and deliberately excluded.
     pane_ids: Tuple[str, ...]
+
+    @override
+    def redundancy_key(self) -> str:
+        """Keep one authoritative snapshot for each independent page."""
+
+        return f"{type(self).__name__}:{self.page_id}"
 
 
 @dataclasses.dataclass
@@ -1113,6 +1124,29 @@ class WorkspaceConfigurationMessage(Message):
     """Identify the workspace for browser layout persistence."""
 
     workspace_id: str
+
+
+@dataclasses.dataclass
+class PageCreateMessage(
+    Message,
+    entity=EntityLifecycle("page", "create", "page_id"),
+):
+    """Declare one page before publishing any panes that belong to it."""
+
+    page_id: str
+    name: str
+    is_default: bool
+
+
+@dataclasses.dataclass
+class PageUpdateMessage(
+    Message,
+    entity=EntityLifecycle("page", "update_simple", "page_id"),
+):
+    """Update a page's display name without changing its stable identity."""
+
+    page_id: str
+    name: str
 
 
 @dataclasses.dataclass
@@ -1247,13 +1281,6 @@ class ServerPongMessage(Message):
         # When a peer is slower than a ping flood, only the latest pending
         # latency sample is useful; keeping every stamp would be unbounded.
         return type(self).__name__
-
-
-@dataclasses.dataclass
-class SetGuiPanelLabelMessage(Message):
-    """Message from server->client to set the label of the GUI panel."""
-
-    label: Optional[str]
 
 
 @dataclasses.dataclass

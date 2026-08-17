@@ -1596,18 +1596,31 @@ class GuiApi(GuiContainer):
                 notification._retire_without_queue()
 
     def set_panel_label(self, label: str | None) -> None:
-        """Set the main label that appears in the GUI panel.
+        """Compatibility alias for naming the server's default page.
+
+        The panel header now selects pages, so it has no visualization-wide
+        label of its own. Calls on ``server.gui`` rename the authoritative
+        default page; calls on a client-local GUI send that rename only to the
+        owning browser, preserving the historical connection-local behavior.
 
         Args:
-            label: The new label.
+            label: Default-page name. ``None`` and ``""`` become ``"Main"``.
         """
-        label = cast(str | None, validate_renderer_string(label, "panel label", optional=True))
+        from ._pages import _normalize_legacy_page_label
+        from ._server import Server
+
+        name = _normalize_legacy_page_label(label)
+        if isinstance(self._owner, Server):
+            self._owner.pages.default.name = name
+            return
         with self._lock:
             self._check_active_locked()
-            with self._gui_resource_transaction_locked("panel", None, label):
-                self._websock_interface.queue_message_or_raise(
-                    _messages.SetGuiPanelLabelMessage(label)
+            self._websock_interface.queue_message_or_raise(
+                _messages.PageUpdateMessage(
+                    page_id=str(self._server.pages.default.page_id),
+                    name=name,
                 )
+            )
 
     def configure_theme(
         self,

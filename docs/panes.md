@@ -1,13 +1,51 @@
 # Panes
 
-Panes are the workspace's content surfaces. Each one relays a visualization you
-composed elsewhere: Leika transports it and gives it a place to live, but does
-not draw it for you.
+Panes are the workspace's content surfaces. Each pane belongs to one named page
+and relays a visualization you composed elsewhere: Leika transports it and
+gives it a place to live, but does not draw it for you.
 
-Python declares which panes exist, what they contain, and where they should
-first appear. Everything the viewer does afterwards -- splitting, resizing,
-tearing out, minimizing -- belongs to the browser and is persisted there. See
-[Architecture](architecture.md#workspace-ownership) for how that split is kept.
+Python declares which pages and panes exist, what the panes contain, and where
+they should first appear. Each viewer chooses a page and arranges its panes in
+the browser. Those choices are persisted locally. See
+[Architecture](architecture.md#workspace-ownership) for how that ownership is
+split.
+
+## Pages
+
+Every server begins with a default page. It is named `Main` unless
+`Server(label=...)` supplies another name; the server itself has no separate
+visualization-wide title. The existing one-page API remains exact shorthand:
+`server.panes` is `server.pages.default.panes`.
+
+Add more pages through `server.pages` and place panes through the returned
+page's `panes` API:
+
+```python
+with leika.Server(workspace_id="run", label="Live signals") as server:
+    server.panes.add_image(frame, pane_id="camera")
+
+    analysis = server.pages.add("Analysis", page_id="analysis")
+    analysis.panes.add_plotly(figure, pane_id="loss")
+```
+
+A page's `name` is what viewers see in the dock-header selector. Its `page_id`
+is the stable identity used for browser persistence, so renaming a page does
+not discard its layout. Page names and IDs are each unique within a server:
+
+```python
+analysis.name = "Results"
+```
+
+Pass explicit `page_id` values when layouts should survive a Python restart;
+otherwise `add()` generates UUIDs. Pane IDs are local to their page, so two
+pages may both contain a pane called `summary`, but `relative_to` and the layout
+helpers never cross a page boundary.
+
+The selected page is browser-local: viewers can look at different pages of the
+same running server, and their selections are restored independently. Pages
+scope panes and pane layouts only. `server.gui` and each client's GUI remain
+workspace-wide, so the same controls stay available while viewers switch pages
+and can keep updating handles on inactive pages.
 
 ## Pane types
 
@@ -119,11 +157,11 @@ page's authority. Embed only trusted Viser clients and absolute URLs.
 
 ## Workspace limits
 
-One workspace retains at most 128 content panes, including hidden and minimized
-ones, and at most 16 Viser panes. Their sources share 32 Mi UTF-16 code units,
-256 MiB of retained payload, and 64 Mi-pixels. These are Leika-owned state
-budgets rather than a bound on the memory retained by caller objects or by
-trusted renderer code.
+One workspace retains at most 128 named pages and, across all of them, at most
+128 content panes, including hidden and minimized ones, and at most 16 Viser
+panes. All page pane sources share 32 Mi UTF-16 code units, 256 MiB of retained
+payload, and 64 Mi-pixels. These are Leika-owned state budgets rather than a
+bound on the memory retained by caller objects or by trusted renderer code.
 
 ## Updating a pane
 
@@ -135,6 +173,9 @@ pane = server.panes.add_image(render(0.0))
 while True:
     pane.update(render(phase))
 ```
+
+Updates apply whether or not the pane's page is currently selected. Switching
+back shows the handle's latest content without creating another pane.
 
 Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the
@@ -157,7 +198,14 @@ grid.add_image(frame, pane_id="field", title="Field")
 grid.add_plotly(figure, pane_id="signal", title="Signal")
 ```
 
-These are creation-time hints only. Once the browser has a saved arrangement
-for a pane, that arrangement wins on reload -- which is what makes a stable
-`pane_id` worth setting: it is how a saved layout recognizes a pane after a
-Python restart.
+These are creation-time hints within the owning page only. Each page has an
+independent saved arrangement, and that arrangement wins on reload. Stable
+`page_id` and `pane_id` values let the browser match a page and its panes after
+a Python restart; changing a display name or pane title does not change that
+identity.
+
+Page layouts use the version-3 browser store, keyed by server URL,
+`workspace_id`, and `page_id`. When the default page has no version-3 layout,
+Leika imports the prior version-2 single-page layout and writes it under the
+default page's new key. Additional pages start with their declared placement
+hints and never inherit that legacy layout.

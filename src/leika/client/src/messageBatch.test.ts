@@ -271,12 +271,12 @@ describe("dispatchMessageBatch", () => {
 describe("processPreflightedMessageBatches", () => {
   it("applies no side effects from a frame whose later message is invalid", () => {
     const first = {
-      type: "SetGuiPanelLabelMessage",
-      label: "must not apply",
+      type: "ServerPongMessage",
+      sent_ms: 1,
     } satisfies Message;
     const invalid = {
-      type: "SetGuiPanelLabelMessage",
-      label: "oversized",
+      type: "ServerPongMessage",
+      sent_ms: 2,
     } satisfies Message;
     const apply = vi.fn();
     const fail = vi.fn();
@@ -301,7 +301,7 @@ describe("processPreflightedMessageBatches", () => {
       { type: "ServerPongMessage", sent_ms: 1 },
     ] satisfies Message[];
     const invalid = [
-      { type: "SetGuiPanelLabelMessage", label: "bad" },
+      { type: "ServerPongMessage", sent_ms: 2 },
     ] satisfies Message[];
     const applied: Message[][] = [];
 

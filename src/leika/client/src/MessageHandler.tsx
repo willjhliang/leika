@@ -52,8 +52,15 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           viewer.useGui.set({ workspaceId: message.workspace_id });
           viewer.viewportActions.setPersistenceWorkspace(message.workspace_id);
           return;
-        case "SetGuiPanelLabelMessage":
-          viewer.guiActions.setLabel(message.label ?? "");
+        case "PageCreateMessage":
+          viewer.viewportActions.addPage(
+            message.page_id,
+            message.name,
+            message.is_default,
+          );
+          return;
+        case "PageUpdateMessage":
+          viewer.viewportActions.updatePage(message.page_id, message.name);
           return;
         case "ThemeConfigurationMessage":
           viewer.guiActions.setTheme(message);
@@ -100,13 +107,20 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           viewer.viewportActions.addViserPane(message);
           return;
         case "ViewportPaneUpdateMessage":
-          viewer.viewportActions.updatePane(message.pane_id, message.updates);
+          viewer.viewportActions.updatePane(
+            message.page_id,
+            message.pane_id,
+            message.updates,
+          );
           return;
         case "ViewportPaneRemoveMessage":
-          viewer.viewportActions.removePane(message.pane_id);
+          viewer.viewportActions.removePane(message.page_id, message.pane_id);
           return;
         case "ViewportPaneSnapshotMessage":
-          viewer.viewportActions.setPaneSnapshot(message.pane_ids);
+          viewer.viewportActions.setPaneSnapshot(
+            message.page_id,
+            message.pane_ids,
+          );
           return;
         case "FileTransferStartDownload":
         case "FileTransferPart":

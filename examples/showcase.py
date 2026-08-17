@@ -256,9 +256,11 @@ def draw_distribution(figure: Figure, values: list[float]) -> None:
 def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
     server = lifetime.own(
         "Leika server",
-        leika.Server(workspace_id="showcase-v1", label="Leika showcase"),
+        leika.Server(workspace_id="showcase-v2", label="Live signals"),
     )
     server.gui.configure_theme(control_layout="floating")
+    analysis_page = server.pages.add("Analysis", page_id="analysis")
+    scene_page = server.pages.add("3D scene", page_id="scene")
 
     initial = render_field(0.0, 1.2, "Ocean", (0.0, 0.0), (20, 90, 210, 45))
     grid = server.panes.add_grid(columns=2)
@@ -276,7 +278,11 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         "Viser server",
         viser.ViserServer(port=8081, verbose=False),
     )
-    grid.add_viser(viser_server, pane_id="scene", title="Live viser scene")
+    scene_page.panes.add_viser(
+        viser_server,
+        pane_id="scene",
+        title="Live viser scene",
+    )
     plot_figure = make_plot()
     plot_pane = grid.add_plotly(
         plot_figure,
@@ -285,7 +291,7 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         config={"displayModeBar": False, "responsive": True},
     )
     distribution_figure = make_distribution()
-    distribution_pane = grid.add_matplotlib(
+    distribution_pane = analysis_page.panes.add_matplotlib(
         distribution_figure,
         pane_id="distribution",
         title="matplotlib distribution",

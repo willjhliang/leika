@@ -21,6 +21,7 @@ from websockets.typing import Subprotocol
 import leika
 import leika._client_autobuild
 import leika._messages
+import leika._pages as pages_impl
 import leika._server as server_impl
 import leika.infra._infra as infra_impl
 from leika._server import ClientHandle, _CallbackExecutor
@@ -631,13 +632,13 @@ def test_late_constructor_failure_stops_server_and_executors(
             super().__init__(max_workers, **kwargs)
             executors.append(self)
 
-    def fail_panes(owner: Any) -> None:
+    def fail_panes(owner: Any, **_: Any) -> None:
         del owner
         raise RuntimeError("late pane initialization failure")
 
     monkeypatch.setattr(server_impl.infra, "WebsockServer", RecordingServer)
     monkeypatch.setattr(server_impl, "_CallbackExecutor", RecordingExecutor)
-    monkeypatch.setattr(server_impl, "Panes", fail_panes)
+    monkeypatch.setattr(pages_impl, "Panes", fail_panes)
 
     with pytest.raises(RuntimeError, match="late pane initialization failure"):
         leika.Server(host="127.0.0.1", port=0, verbose=False)
@@ -668,11 +669,11 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
             super().shutdown_cancel_pending()
             raise RuntimeError("secondary executor cleanup failure")
 
-    def fail_panes(_: Any) -> None:
+    def fail_panes(_: Any, **__: Any) -> None:
         raise primary
 
     monkeypatch.setattr(server_impl, "_CallbackExecutor", FailingCleanupExecutor)
-    monkeypatch.setattr(server_impl, "Panes", fail_panes)
+    monkeypatch.setattr(pages_impl, "Panes", fail_panes)
 
     with pytest.raises(RuntimeError, match="primary pane construction failure") as captured:
         leika.Server(host="127.0.0.1", port=0, verbose=False)

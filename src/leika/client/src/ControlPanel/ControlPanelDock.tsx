@@ -89,6 +89,10 @@ export function ControlPanelDockSurface({
   const hasGenerated = useShowGenerated();
   const controlsShown = useControlsShown();
   const hasBody = hasGenerated && controlsShown;
+  const activePageName = viewer.useViewport((state) => {
+    const activePageId = state.activePageId;
+    return activePageId === null ? "" : (state.pages[activePageId]?.name ?? "");
+  });
   // Double-clicking the handle sends the panel home; the sync node inside the
   // DockManager is what knows where that is, so the spec calls through a ref.
   const resetLayoutRef = React.useRef<() => void>(() => {});
@@ -96,7 +100,9 @@ export function ControlPanelDockSurface({
     () => ({
       [CONTROL_PANEL_ID]: {
         id: CONTROL_PANEL_ID,
-        title: "Control panel",
+        // The dock's generic/minimized chrome reads this string when it cannot
+        // render titleNode, so every form of the header names the active page.
+        title: activePageName,
         unmergeable: true,
         testId: CONTROL_PANEL_TESTID,
         titleNode: <PanelHeader actions={<SettingsButton />} />,
@@ -122,7 +128,7 @@ export function ControlPanelDockSurface({
         peekWhenCollapsed: true,
       },
     }),
-    [hasBody],
+    [activePageName, hasBody],
   );
   const panels: PanelRegistry = React.useMemo(
     () => ({ ...guiPanels, ...controlPanelSpec }),

@@ -298,18 +298,21 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     scroll_viewport = scroll_root.locator(':scope > [data-slot="scroll-area-viewport"]')
     expect(handle).to_be_visible()
     expect(handle).to_have_attribute("data-slot", "collapsible-trigger")
+    selector = bottom_panel.locator("[data-leika-page-selector]")
+    expect(selector).to_be_visible()
+    expect(handle.locator("[data-leika-page-selector]")).to_have_count(0)
     collapsible_content = bottom_panel.locator(
         ':scope > [data-slot="collapsible"] > [data-slot="collapsible-content"]'
     )
     controls_id = handle.get_attribute("aria-controls")
     assert controls_id is not None
     expect(collapsible_content).to_have_attribute("id", controls_id)
-    header_bounds = handle.bounding_box()
+    selector_bounds = selector.bounding_box()
     content_inset_x = bottom_panel.locator('[data-slot="card-content"]').evaluate(
         "element => element.getBoundingClientRect().left + parseFloat(getComputedStyle(element).paddingLeft)"
     )
-    assert header_bounds is not None
-    assert abs(header_bounds["x"] - content_inset_x) <= 0.5
+    assert selector_bounds is not None
+    assert abs(selector_bounds["x"] - content_inset_x) <= 0.5
 
     handle.click()
     expect(handle).to_have_attribute("aria-expanded", "false")

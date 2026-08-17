@@ -299,7 +299,7 @@ def test_docked_panel_minimizes_to_a_strip_and_expands_again(
     # reserves its own width.
     assert canvas_inset(page) == pytest.approx(MINIMIZED_STRIP_PX, abs=1.0)
     assert bounds(strip)["width"] <= MINIMIZED_STRIP_PX + 0.5
-    expect(page.get_by_text("Control panel", exact=True)).to_be_visible()
+    expect(page.get_by_text("Main", exact=True)).to_be_visible()
 
     # The strip's expand (+) button restores the panel at its previous width.
     strip.locator("[data-dock-minimize]").click()
@@ -994,7 +994,7 @@ def test_a_server_docked_panel_collapses_to_the_rail_and_floats_out(
     strip = page.get_by_test_id("control-panel-handle")
     expect(strip).to_have_attribute("data-dock-collapsed", "true", timeout=5_000)
     assert canvas_inset(page) == pytest.approx(MINIMIZED_STRIP_PX, abs=1.0)
-    expect(page.get_by_text("Control panel", exact=True)).to_be_visible()
+    expect(page.get_by_text("Main", exact=True)).to_be_visible()
     # The rail is flush with the edge like the expanded card: square too.
     expect(strip.locator("xpath=ancestor::*[@data-slot='card']")).to_have_css(
         "border-radius", "0px"

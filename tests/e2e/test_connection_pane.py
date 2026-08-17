@@ -195,7 +195,10 @@ def test_the_badge_wears_the_same_states_as_the_gear(
     # ancestor, and the selector Tailwind writes for that loses to the pill's
     # transparent border without a word.
     resting_border = _style(badge, "borderColor")
-    leika_page.keyboard.press("Tab")  # the gear
+    leika_page.keyboard.press("Tab")  # the page selector
+    assert _focused(leika_page, "[data-leika-page-selector]")
+
+    leika_page.keyboard.press("Tab")  # then the gear
     assert _focused(leika_page, "[data-leika-settings-trigger]")
     gear_focus_border = _settled(gear, "borderColor")
     assert gear_focus_border != resting_border

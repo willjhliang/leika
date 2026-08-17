@@ -2,8 +2,17 @@ import GeneratedGuiContainer from "./Generated";
 import { useViewer } from "../ViewerContext";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
+import { usePeekHold } from "../dock/DockContext";
 
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import React from "react";
 import { ConnectionBadge } from "./ConnectionPane";
 import BottomPanel from "./BottomPanel";
@@ -13,6 +22,101 @@ import { useShowGenerated } from "./useShowGenerated";
 import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 
 const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
+
+interface PageSelectorItem {
+  value: string;
+  label: string;
+}
+
+function samePageSelectorItems(
+  left: readonly PageSelectorItem[],
+  right: readonly PageSelectorItem[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (item, index) =>
+        item.value === right[index].value && item.label === right[index].label,
+    )
+  );
+}
+
+/** The active page's name, using the same popup and keyboard behavior as every
+ * other Leika select while leaving the dock's title-bar styling intact. */
+export function PageSelector() {
+  const viewer = useViewer();
+  const activePageId = viewer.useViewport((state) => state.activePageId);
+  const items = viewer.useViewport(
+    (state): PageSelectorItem[] =>
+      state.pageOrder.flatMap((pageId) => {
+        const page = state.pages[pageId];
+        return page === undefined
+          ? []
+          : [{ value: page.pageId, label: page.name }];
+      }),
+    samePageSelectorItems,
+  );
+  const [open, setOpen] = React.useState(false);
+
+  // The popup is portaled out of a floating window. Reaching for it must not
+  // make a collapsed window fade away from the trigger that owns it.
+  usePeekHold(open);
+  React.useEffect(() => {
+    if (items.length === 0) setOpen(false);
+  }, [items.length]);
+
+  if (items.length === 0) return null;
+  const activeName =
+    items.find((item) => item.value === activePageId)?.label ?? "";
+
+  return (
+    // The surrounding dock header starts its drag/collapse gesture on
+    // pointerdown. The selector is the one interactive part of that title bar,
+    // so its press belongs only to the select; the sibling space remains the
+    // drag handle.
+    <span
+      className="inline-flex min-w-0 max-w-full shrink"
+      onPointerDown={(event) => event.stopPropagation()}
+      data-dock-peek-fade
+    >
+      <Select
+        items={items}
+        value={activePageId}
+        open={open}
+        onOpenChange={setOpen}
+        onValueChange={(next) => {
+          if (next !== null && next !== activePageId) {
+            viewer.viewportActions.setActivePage(next);
+          }
+        }}
+      >
+        <SelectTrigger
+          aria-label={activeName === "" ? "Select page" : `Page: ${activeName}`}
+          className={cn(
+            "h-6 min-w-0 max-w-full rounded-none border-0 bg-transparent p-0 shadow-none hover:bg-transparent focus-visible:border-transparent focus-visible:ring-1 focus-visible:ring-ring data-[size=default]:h-6 dark:bg-transparent dark:hover:bg-transparent [&_svg]:text-current",
+            guiLabelClassName,
+          )}
+          data-leika-page-selector
+        >
+          <SelectValue className="block! min-w-0 truncate" />
+        </SelectTrigger>
+        {/* A page switch should not change the menu's geometry. Item-aligned
+            selects overlap the trigger when the selected row fits above it,
+            then fall back below when another row would cross the viewport
+            edge. This title-bar selector is consistently a dropdown instead. */}
+        <SelectContent align="start" alignItemWithTrigger={false}>
+          <SelectGroup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </span>
+  );
+}
 
 /** The control panel's body: the generated GUI. Shared by both panel chromes
  * (the phone's bottom sheet and the desktop dock panel). */
@@ -43,10 +147,9 @@ export function ControlPanelContents() {
 /** The phone's control panel: a bottom sheet. Desktop always uses the dock
  * (ControlPanelDockSurface); App renders this only in the mobile view.
  *
- * The whole handle is the collapse button, so neither the gear nor the
- * connection badge -- both buttons of their own -- can sit inside the header
- * the way they do elsewhere; they go beside it, in the order the header would
- * have put them. */
+ * The page name, sheet collapse, connection badge, and settings gear are four
+ * independent controls. BottomPanel keeps the collapse button beside the
+ * header rather than wrapping these other buttons in it. */
 export default function ControlPanel() {
   return (
     <BottomPanel>
@@ -67,7 +170,7 @@ export default function ControlPanel() {
   );
 }
 
-/** The panel header's contents: the visualization's title on the left, the
+/** The panel header's contents: the active page on the left, the
  * websocket connection status on the right, and whatever the chrome around it
  * wants between the two. */
 export function PanelHeader({
@@ -79,9 +182,6 @@ export function PanelHeader({
    * button and cannot hold one. */
   badge?: React.ReactNode;
 }) {
-  const { useGui } = useViewer();
-  const label = useGui((state) => state.label);
-
   return (
     // Collapsed, the floating panel fades down to the one thing worth leaving
     // on the canvas: the connection badge. The title and the gear go with the
@@ -89,21 +189,24 @@ export function PanelHeader({
     // comes back to (`data-dock-peek`). Inert in every other chrome -- the
     // sidebar and the bottom sheet have no such state to be in.
     <div
-      className="flex min-w-0 flex-1 items-center gap-2"
+      // Match a GUI row's 24px frame so the title-to-first-row rhythm is the
+      // same as the rhythm between rows, even though the header actions are
+      // only 20px tall.
+      className="flex min-h-6 min-w-0 flex-1 items-center gap-2"
       // What the settings popout aligns to: the gear is a 20px circle in the
       // middle of this row, and a popout hung off it would sit wherever the
       // title's length left it. See SettingsButton.
       data-leika-panel-header
     >
-      {/* The title is whatever the server passed as its panel label, so it is
-          empty until one is set. Typed like a GUI row's field label, so the
-          panel reads with one voice from its header down. */}
+      <PageSelector />
+      {/* A deliberate patch of title-bar surface beside the selector. The
+          page name opens its menu; this sibling keeps moving and folding the
+          dock available without asking users to aim between glyphs. */}
       <span
-        className={cn("min-w-0 flex-1 truncate text-sm", guiLabelClassName)}
-        data-dock-peek-fade
-      >
-        {label}
-      </span>
+        className="min-w-2 flex-1 self-stretch"
+        aria-hidden="true"
+        data-leika-panel-drag-space
+      />
       {actions !== undefined && (
         <span className="inline-flex" data-dock-peek-fade>
           {actions}

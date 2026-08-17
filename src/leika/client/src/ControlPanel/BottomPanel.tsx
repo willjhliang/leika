@@ -1,4 +1,5 @@
 import React from "react";
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader } from "../components/ui/card";
 import {
@@ -50,27 +51,33 @@ BottomPanel.Handle = function BottomPanelHandle({
   actions,
 }: {
   children: string | React.ReactNode;
-  /** Controls of their own, placed beside the trigger rather than inside it:
-   * the whole handle is one button here, and a button cannot hold another. */
+  /** Controls of their own, placed beside the page title and collapse button. */
   actions?: React.ReactNode;
 }) {
   const panelContext = React.useContext(BottomPanelContext)!;
   return (
-    <CardHeader className="flex h-12 shrink-0 flex-row items-center gap-0 py-0">
+    <CardHeader className="flex h-12 shrink-0 flex-row items-center gap-2 py-0">
+      {/* The page selector is a button of its own. Keep it beside, never
+          inside, the sheet's collapse button so both controls have valid,
+          independent keyboard and pointer behavior. */}
+      <div className="flex min-w-0 flex-1 items-center">{children}</div>
       <CollapsibleTrigger
         render={
           <Button
             type="button"
             variant="ghost"
-            className="min-w-0 flex-1 justify-start px-0"
+            size="icon-xs"
             aria-label={
+              panelContext.expanded ? "Collapse controls" : "Expand controls"
+            }
+            title={
               panelContext.expanded ? "Collapse controls" : "Expand controls"
             }
             data-leika-bottom-panel-handle
           />
         }
       >
-        {children}
+        {panelContext.expanded ? <ChevronDownIcon /> : <ChevronUpIcon />}
       </CollapsibleTrigger>
       {actions}
     </CardHeader>

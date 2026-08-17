@@ -482,7 +482,7 @@ class AsyncMessageBuffer:
             and snapshot.entity_type is not None
             and snapshot.entity_id_field is not None
         ):
-            entity_id = getattr(snapshot, snapshot.entity_id_field)
+            entity_id = snapshot.lifecycle_entity_id()
             try:
                 hash((snapshot.entity_type, entity_id))
             except TypeError as error:
@@ -570,7 +570,7 @@ class AsyncMessageBuffer:
                     and queued.entity_id_field is not None
                     and (
                         queued.entity_type,
-                        getattr(queued, queued.entity_id_field, None),
+                        queued.lifecycle_entity_id(),
                     )
                     in prepared.purge_entities
                 ):

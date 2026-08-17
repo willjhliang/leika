@@ -652,13 +652,17 @@ def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     folded = leika_page.locator("[data-dock-collapsed]")
     expect(generated).to_be_visible(timeout=5_000)
 
-    box = leika_page.get_by_test_id("control-panel-handle").bounding_box()
-    assert box is not None
+    drag_space = leika_page.locator("[data-leika-panel-drag-space]")
 
     def click_handle() -> None:
-        """One deliberate click, spaced clear of the double-click window."""
+        """Click the title-bar surface beside the page selector."""
         leika_page.wait_for_timeout(450)
-        leika_page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
+        box = drag_space.bounding_box()
+        assert box is not None
+        leika_page.mouse.click(
+            box["x"] + box["width"] / 2,
+            box["y"] + box["height"] / 2,
+        )
 
     # Opening the settings leaves the controls alone.
     open_settings(leika_page)

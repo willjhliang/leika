@@ -58,11 +58,14 @@ import {
 
 import { Spinner } from "../components/ui/spinner";
 import {
+  initialViewportLayout,
   ViewportImagePane,
   ViewportPane,
   ViewportPlotlyPane,
   ViewportViserPane,
 } from "./ViewportState";
+
+const EMPTY_VIEWPORT_LAYOUT = initialViewportLayout();
 
 /** The pane title bar matches the dock's 24px label rows. A constant rather
  * than a class so the content offset below an in-flow bar cannot drift from
@@ -213,7 +216,12 @@ function paneTitle(pane: ViewportPane): string {
  * viser panes. */
 export function ViewportWorkspace() {
   const viewer = useViewer();
-  const layout = viewer.useViewport((state) => state.layout);
+  const activePageId = viewer.useViewport((state) => state.activePageId);
+  const layout = viewer.useViewport((state) =>
+    state.activePageId === null
+      ? EMPTY_VIEWPORT_LAYOUT
+      : (state.pages[state.activePageId]?.layout ?? EMPTY_VIEWPORT_LAYOUT),
+  );
   const interactionEpoch = viewer.useViewport(
     (state) => state.interactionEpoch,
   );
@@ -265,10 +273,14 @@ export function ViewportWorkspace() {
   const getPaneTitle = React.useCallback(
     (paneId: string | null): string => {
       if (paneId === null) return "viewport pane";
-      const pane = viewer.useViewport.get().panes[paneId];
+      const state = viewer.useViewport.get();
+      const pane =
+        activePageId === null
+          ? undefined
+          : state.pages[activePageId]?.panes[paneId];
       return pane === undefined ? "viewport pane" : paneTitle(pane);
     },
-    [viewer.useViewport],
+    [activePageId, viewer.useViewport],
   );
 
   const positionDragIndicator = React.useCallback(
@@ -507,9 +519,14 @@ export function ViewportWorkspace() {
       const candidate = gesture.lastCandidate;
       const hint = gesture.lastHint;
       const currentViewport = viewer.useViewport.get();
+      const currentPage =
+        currentViewport.activePageId === null
+          ? undefined
+          : currentViewport.pages[currentViewport.activePageId];
       const stale =
         currentViewport.interactionEpoch !== gesture.startInteractionEpoch ||
-        !sameViewportLayout(currentViewport.layout, gesture.startLayout);
+        currentPage === undefined ||
+        !sameViewportLayout(currentPage.layout, gesture.startLayout);
       const sourceTitle = getPaneTitle(gesture.sourcePaneId);
       const targetTitle = getPaneTitle(hint?.targetPaneId ?? null);
       clearGesture();
@@ -611,9 +628,14 @@ export function ViewportWorkspace() {
       const nextLayout = gesture.lastValidLayout;
       const gridLine = gesture.lastGridLine;
       const currentViewport = viewer.useViewport.get();
+      const currentPage =
+        currentViewport.activePageId === null
+          ? undefined
+          : currentViewport.pages[currentViewport.activePageId];
       const stale =
         currentViewport.interactionEpoch !== gesture.startInteractionEpoch ||
-        !sameViewportLayout(currentViewport.layout, gesture.startLayout);
+        currentPage === undefined ||
+        !sameViewportLayout(currentPage.layout, gesture.startLayout);
       const axisName = gesture.divider.direction === "row" ? "column" : "row";
       clearGesture();
       if (
@@ -743,7 +765,8 @@ export function ViewportWorkspace() {
           }
           return (
             <ViewportPaneHost
-              key={paneId}
+              key={`${activePageId ?? "none"}:${paneId}`}
+              pageId={activePageId}
               paneId={paneId}
               rect={rect}
               cellSize={grid.cellSize}
@@ -835,6 +858,7 @@ export function ViewportWorkspace() {
 }
 
 function ViewportPaneHost({
+  pageId,
   paneId,
   rect,
   cellSize,
@@ -849,6 +873,7 @@ function ViewportPaneHost({
   onHeaderLostPointerCapture,
   onHeaderKeyDown,
 }: {
+  pageId: string | null;
   paneId: string;
   rect: GridRect | null;
   cellSize: number;
@@ -870,7 +895,9 @@ function ViewportPaneHost({
   ) => void;
 }) {
   const viewer = useViewer();
-  const pane = viewer.useViewport((state) => state.panes[paneId]);
+  const pane = viewer.useViewport((state) =>
+    pageId === null ? undefined : state.pages[pageId]?.panes[paneId],
+  );
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const [isHovered, setIsHovered] = React.useState(false);
   // Keyboard users can focus the header without hovering; keep it visible.

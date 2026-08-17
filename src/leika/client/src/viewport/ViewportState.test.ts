@@ -17,11 +17,25 @@ import {
   ViewportActions,
   ViewportImageDeclaration,
   ViewportLayoutStorage,
-  ViewportState,
+  ViewportPageState,
   ViewportViserDeclaration,
   useViewportState,
   viewportLayoutStorageKey,
 } from "./ViewportState";
+
+const DEFAULT_PAGE_ID = "default";
+
+type HarnessActions = Omit<
+  ViewportActions,
+  "updatePane" | "removePane" | "setPaneSnapshot"
+> & {
+  updatePane: (
+    paneId: string,
+    updates: Parameters<ViewportActions["updatePane"]>[2],
+  ) => void;
+  removePane: (paneId: string) => void;
+  setPaneSnapshot: (paneIds: readonly string[]) => void;
+};
 
 class MemoryStorage implements ViewportLayoutStorage {
   readonly values = new Map<string, string>();
@@ -44,8 +58,10 @@ class ReadOnlyStorage implements ViewportLayoutStorage {
 }
 
 function createViewportHarness(storage: ViewportLayoutStorage | null = null): {
-  actions: ViewportActions;
-  getState: () => ViewportState;
+  actions: HarnessActions;
+  getState: () => ViewportPageState;
+  viewportActions: ViewportActions;
+  getViewportState: ReturnType<typeof useViewportState>["store"]["get"];
 } {
   let viewport: ReturnType<typeof useViewportState> | undefined;
   function Harness(): React.ReactNode {
@@ -55,7 +71,37 @@ function createViewportHarness(storage: ViewportLayoutStorage | null = null): {
   renderToStaticMarkup(React.createElement(Harness));
   if (viewport === undefined)
     throw new Error("Viewport harness did not render");
-  return { actions: viewport.actions, getState: viewport.store.get };
+  const viewportActions = viewport.actions;
+  const addDefaultPage = () =>
+    viewportActions.addPage(DEFAULT_PAGE_ID, "Main", true);
+  addDefaultPage();
+  const actions: HarnessActions = {
+    ...viewportActions,
+    reset: () => {
+      viewportActions.reset();
+      addDefaultPage();
+    },
+    resetPanes: () => {
+      viewportActions.resetPanes();
+      addDefaultPage();
+    },
+    setPersistenceWorkspace: (workspaceId) => {
+      viewportActions.setPersistenceWorkspace(workspaceId);
+      addDefaultPage();
+    },
+    updatePane: (paneId, updates) =>
+      viewportActions.updatePane(DEFAULT_PAGE_ID, paneId, updates),
+    removePane: (paneId) => viewportActions.removePane(DEFAULT_PAGE_ID, paneId),
+    setPaneSnapshot: (paneIds) =>
+      viewportActions.setPaneSnapshot(DEFAULT_PAGE_ID, paneIds),
+  };
+  const getViewportState = viewport.store.get;
+  const getState = (): ViewportPageState => {
+    const page = getViewportState().pages[DEFAULT_PAGE_ID];
+    if (page === undefined) throw new Error("Default page is absent");
+    return page;
+  };
+  return { actions, getState, viewportActions, getViewportState };
 }
 
 function imageDeclaration(
@@ -63,6 +109,7 @@ function imageDeclaration(
   overrides: Partial<ViewportImageDeclaration> = {},
 ): ViewportImageDeclaration {
   return {
+    page_id: DEFAULT_PAGE_ID,
     pane_id: paneId,
     props: {
       _data: null,
@@ -83,6 +130,7 @@ function viserDeclaration(
   overrides: Partial<ViewportViserDeclaration> = {},
 ): ViewportViserDeclaration {
   return {
+    page_id: DEFAULT_PAGE_ID,
     pane_id: paneId,
     props: {
       _url: null,
@@ -383,6 +431,7 @@ describe("useViewportState snapshot reconciliation", () => {
     const { actions, getState } = createViewportHarness();
     const source = "x".repeat(MAX_VIEWPORT_SOURCE_CODE_UNITS / 2 - 1);
     const declaration = (paneId: string) => ({
+      page_id: DEFAULT_PAGE_ID,
       pane_id: paneId,
       placement: "right" as const,
       relative_to: VIEWPORT_ROOT_PANE_ID,
@@ -402,5 +451,123 @@ describe("useViewportState snapshot reconciliation", () => {
     expect(second?.kind === "plotly" ? second.props.title : undefined).toBe(
       "x",
     );
+  });
+});
+
+describe("useViewportState pages", () => {
+  it("scopes identical pane IDs, updates, removals, and snapshots by page", () => {
+    const { viewportActions, getViewportState } = createViewportHarness();
+    viewportActions.addPage("analysis", "Analysis", false);
+    viewportActions.addImagePane(imageDeclaration("shared"));
+    viewportActions.addImagePane(
+      imageDeclaration("shared", { page_id: "analysis" }),
+    );
+
+    viewportActions.updatePane("analysis", "shared", { title: "Result" });
+    const defaultPane = getViewportState().pages.default.panes.shared;
+    const analysisPane = getViewportState().pages.analysis.panes.shared;
+    expect(
+      defaultPane?.kind === "image" ? defaultPane.props.title : undefined,
+    ).toBe("shared");
+    expect(
+      analysisPane?.kind === "image" ? analysisPane.props.title : undefined,
+    ).toBe("Result");
+
+    viewportActions.setPaneSnapshot("analysis", []);
+    expect(getViewportState().pages.analysis.panes.shared).toBeUndefined();
+    expect(getViewportState().pages.default.panes.shared?.kind).toBe("image");
+
+    viewportActions.removePane(DEFAULT_PAGE_ID, "shared");
+    expect(getViewportState().pages.default.panes.shared).toBeUndefined();
+  });
+
+  it("switches locally, preserves each layout, and advances the gesture epoch", () => {
+    const { viewportActions, getViewportState } = createViewportHarness();
+    viewportActions.addPage("analysis", "Analysis", false);
+    viewportActions.addImagePane(imageDeclaration("live"));
+    viewportActions.addImagePane(
+      imageDeclaration("chart", { page_id: "analysis" }),
+    );
+    const before = getViewportState().interactionEpoch;
+
+    viewportActions.setActivePage("analysis");
+    expect(getViewportState().activePageId).toBe("analysis");
+    expect(getViewportState().interactionEpoch).toBe(before + 1);
+    expect(
+      collectViewportPaneIds(getViewportState().pages.analysis.layout),
+    ).toEqual(["chart"]);
+    expect(
+      collectViewportPaneIds(getViewportState().pages.default.layout),
+    ).toEqual(["live"]);
+
+    viewportActions.updatePane(DEFAULT_PAGE_ID, "live", {
+      title: "Updated while inactive",
+    });
+    viewportActions.setActivePage(DEFAULT_PAGE_ID);
+    const pane = getViewportState().pages.default.panes.live;
+    expect(pane.kind === "image" ? pane.props.title : undefined).toBe(
+      "Updated while inactive",
+    );
+  });
+
+  it("uses independent layout keys, migrates v2 for only the default page, and restores selection", () => {
+    const storage = new MemoryStorage();
+    const legacy = {
+      version: 1,
+      root: { type: "pane", pane_id: "legacy" },
+    };
+    storage.values.set(
+      "leika.viewport.layout.v2:ws://server:workspace",
+      JSON.stringify(legacy),
+    );
+    const { actions, viewportActions, getViewportState } =
+      createViewportHarness(storage);
+    actions.setPersistenceServer("ws://server");
+    actions.setPersistenceWorkspace("workspace");
+    viewportActions.addPage("analysis", "Analysis", false);
+
+    expect(
+      collectViewportPaneIds(getViewportState().pages.default.layout),
+    ).toEqual([VIEWPORT_ROOT_PANE_ID, "legacy"]);
+    expect(
+      collectViewportPaneIds(getViewportState().pages.analysis.layout),
+    ).toEqual([VIEWPORT_ROOT_PANE_ID]);
+    expect(
+      storage.values.has(
+        viewportLayoutStorageKey("ws://server", "workspace", DEFAULT_PAGE_ID),
+      ),
+    ).toBe(true);
+
+    // A live client sees PageCreate + the page's empty baseline before the
+    // caller can add panes. That bootstrap must not erase the saved position.
+    viewportActions.setPaneSnapshot(DEFAULT_PAGE_ID, []);
+    expect(
+      collectViewportPaneIds(getViewportState().pages.default.layout),
+    ).toEqual([VIEWPORT_ROOT_PANE_ID]);
+    viewportActions.addImagePane(imageDeclaration("legacy"));
+    expect(
+      collectViewportPaneIds(getViewportState().pages.default.layout),
+    ).toEqual(["legacy"]);
+
+    viewportActions.setActivePage("analysis");
+    actions.resetPanes();
+    viewportActions.addPage("analysis", "Analysis", false);
+    expect(getViewportState().activePageId).toBe("analysis");
+  });
+
+  it("enforces live-pane limits across pages rather than per page", () => {
+    const { viewportActions, getViewportState } = createViewportHarness();
+    viewportActions.addPage("analysis", "Analysis", false);
+    for (let index = 0; index < MAX_LIVE_VIEWPORT_CONTENT_PANES; index += 1) {
+      const declaration = imageDeclaration(`pane-${index}`, {
+        page_id: index % 2 === 0 ? DEFAULT_PAGE_ID : "analysis",
+      });
+      declaration.props.visible = false;
+      viewportActions.addImagePane(declaration);
+    }
+    viewportActions.addImagePane(
+      imageDeclaration("overflow", { page_id: "analysis" }),
+    );
+    expect(getViewportState().pages.analysis.panes.overflow).toBeUndefined();
   });
 });

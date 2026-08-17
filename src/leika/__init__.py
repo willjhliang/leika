@@ -40,6 +40,9 @@ from ._gui_handles import UploadedFile as UploadedFile
 from ._icons_enum import Icon as Icon
 from ._icons_enum import IconName as IconName
 from ._notification_handle import NotificationHandle as NotificationHandle
+from ._pages import Page as Page
+from ._pages import PageId as PageId
+from ._pages import Pages as Pages
 from ._panes import ImageFit as ImageFit
 from ._panes import ImagePaneHandle as ImagePaneHandle
 from ._panes import MatplotlibPaneHandle as MatplotlibPaneHandle

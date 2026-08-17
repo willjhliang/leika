@@ -644,6 +644,7 @@ export interface GuiUpdateMessage {
  */
 export interface ViewportImageMessage {
   type: "ViewportImageMessage";
+  page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
   relative_to: string;
@@ -662,6 +663,7 @@ export interface ViewportImageMessage {
  */
 export interface ViewportMatplotlibMessage {
   type: "ViewportMatplotlibMessage";
+  page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
   relative_to: string;
@@ -674,6 +676,7 @@ export interface ViewportMatplotlibMessage {
  */
 export interface ViewportPlotlyMessage {
   type: "ViewportPlotlyMessage";
+  page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
   relative_to: string;
@@ -691,6 +694,7 @@ export interface ViewportPlotlyMessage {
  */
 export interface ViewportViserMessage {
   type: "ViewportViserMessage";
+  page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
   relative_to: string;
@@ -708,6 +712,7 @@ export interface ViewportViserMessage {
  */
 export interface ViewportPaneUpdateMessage {
   type: "ViewportPaneUpdateMessage";
+  page_id: string;
   pane_id: string;
   updates: { [key: string]: any };
 }
@@ -717,6 +722,7 @@ export interface ViewportPaneUpdateMessage {
  */
 export interface ViewportPaneRemoveMessage {
   type: "ViewportPaneRemoveMessage";
+  page_id: string;
   pane_id: string;
 }
 /** Authoritative pane IDs used to reconcile browser-persisted layouts.
@@ -725,6 +731,7 @@ export interface ViewportPaneRemoveMessage {
  */
 export interface ViewportPaneSnapshotMessage {
   type: "ViewportPaneSnapshotMessage";
+  page_id: string;
   pane_ids: string[];
 }
 /** Identify the workspace for browser layout persistence.
@@ -734,6 +741,25 @@ export interface ViewportPaneSnapshotMessage {
 export interface WorkspaceConfigurationMessage {
   type: "WorkspaceConfigurationMessage";
   workspace_id: string;
+}
+/** Declare one page before publishing any panes that belong to it.
+ *
+ * (automatically generated)
+ */
+export interface PageCreateMessage {
+  type: "PageCreateMessage";
+  page_id: string;
+  name: string;
+  is_default: boolean;
+}
+/** Update a page's display name without changing its stable identity.
+ *
+ * (automatically generated)
+ */
+export interface PageUpdateMessage {
+  type: "PageUpdateMessage";
+  page_id: string;
+  name: string;
 }
 /** Message from server->client to configure parts of the GUI.
  *
@@ -827,14 +853,6 @@ export interface ClientPingMessage {
 export interface ServerPongMessage {
   type: "ServerPongMessage";
   sent_ms: number;
-}
-/** Message from server->client to set the label of the GUI panel.
- *
- * (automatically generated)
- */
-export interface SetGuiPanelLabelMessage {
-  type: "SetGuiPanelLabelMessage";
-  label: string | null;
 }
 /** Message from server->client to register a command in the command palette.
  *
@@ -987,6 +1005,8 @@ export type Message =
   | ViewportPaneRemoveMessage
   | ViewportPaneSnapshotMessage
   | WorkspaceConfigurationMessage
+  | PageCreateMessage
+  | PageUpdateMessage
   | ThemeConfigurationMessage
   | FileTransferStartUpload
   | FileTransferStartDownload
@@ -995,7 +1015,6 @@ export type Message =
   | FileTransferPartAck
   | ClientPingMessage
   | ServerPongMessage
-  | SetGuiPanelLabelMessage
   | RegisterCommandMessage
   | CommandUpdateMessage
   | RemoveCommandMessage
@@ -2673,14 +2692,16 @@ const messageValidators = new Map<
     "ViewportImageMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 6 &&
+      Object.keys(message).length === 7 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       Object.hasOwn(message, "placement") &&
       Object.hasOwn(message, "relative_to") &&
       Object.hasOwn(message, "equalize_group") &&
       Object.hasOwn(message, "props") &&
       message["type"] === "ViewportImageMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])) &&
@@ -2703,14 +2724,16 @@ const messageValidators = new Map<
     "ViewportMatplotlibMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 6 &&
+      Object.keys(message).length === 7 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       Object.hasOwn(message, "placement") &&
       Object.hasOwn(message, "relative_to") &&
       Object.hasOwn(message, "equalize_group") &&
       Object.hasOwn(message, "props") &&
       message["type"] === "ViewportMatplotlibMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])) &&
@@ -2733,14 +2756,16 @@ const messageValidators = new Map<
     "ViewportPlotlyMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 6 &&
+      Object.keys(message).length === 7 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       Object.hasOwn(message, "placement") &&
       Object.hasOwn(message, "relative_to") &&
       Object.hasOwn(message, "equalize_group") &&
       Object.hasOwn(message, "props") &&
       message["type"] === "ViewportPlotlyMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])) &&
@@ -2763,14 +2788,16 @@ const messageValidators = new Map<
     "ViewportViserMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 6 &&
+      Object.keys(message).length === 7 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       Object.hasOwn(message, "placement") &&
       Object.hasOwn(message, "relative_to") &&
       Object.hasOwn(message, "equalize_group") &&
       Object.hasOwn(message, "props") &&
       message["type"] === "ViewportViserMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])) &&
@@ -2793,11 +2820,13 @@ const messageValidators = new Map<
     "ViewportPaneUpdateMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 3 &&
+      Object.keys(message).length === 4 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       Object.hasOwn(message, "updates") &&
       message["type"] === "ViewportPaneUpdateMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])) &&
@@ -2807,10 +2836,12 @@ const messageValidators = new Map<
     "ViewportPaneRemoveMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 2 &&
+      Object.keys(message).length === 3 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_id") &&
       message["type"] === "ViewportPaneRemoveMessage" &&
+      typeof message["page_id"] === "string" &&
       typeof message["pane_id"] === "string" &&
       (typeof message["pane_id"] !== "string" ||
         isProtocolIdentifier(message["pane_id"])),
@@ -2819,10 +2850,12 @@ const messageValidators = new Map<
     "ViewportPaneSnapshotMessage",
     (message) =>
       isProtocolRecord(message) &&
-      Object.keys(message).length === 2 &&
+      Object.keys(message).length === 3 &&
       Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
       Object.hasOwn(message, "pane_ids") &&
       message["type"] === "ViewportPaneSnapshotMessage" &&
+      typeof message["page_id"] === "string" &&
       isProtocolArray(
         message["pane_ids"],
         (item) => typeof item === "string",
@@ -2841,6 +2874,32 @@ const messageValidators = new Map<
       typeof message["workspace_id"] === "string" &&
       (typeof message["workspace_id"] !== "string" ||
         isProtocolIdentifier(message["workspace_id"])),
+  ],
+  [
+    "PageCreateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "name") &&
+      Object.hasOwn(message, "is_default") &&
+      message["type"] === "PageCreateMessage" &&
+      typeof message["page_id"] === "string" &&
+      typeof message["name"] === "string" &&
+      typeof message["is_default"] === "boolean",
+  ],
+  [
+    "PageUpdateMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "name") &&
+      message["type"] === "PageUpdateMessage" &&
+      typeof message["page_id"] === "string" &&
+      typeof message["name"] === "string",
   ],
   [
     "ThemeConfigurationMessage",
@@ -2994,16 +3053,6 @@ const messageValidators = new Map<
       Number.isFinite(message["sent_ms"]),
   ],
   [
-    "SetGuiPanelLabelMessage",
-    (message) =>
-      isProtocolRecord(message) &&
-      Object.keys(message).length === 2 &&
-      Object.hasOwn(message, "type") &&
-      Object.hasOwn(message, "label") &&
-      message["type"] === "SetGuiPanelLabelMessage" &&
-      (typeof message["label"] === "string" || message["label"] === null),
-  ],
-  [
     "RegisterCommandMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3076,4 +3125,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "3a4d8737ffd7";
+export const LEIKA_PROTOCOL = "96a1b596517f";

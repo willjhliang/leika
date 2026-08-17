@@ -19,6 +19,7 @@ import {
   isBoundedLayoutId,
   parseBoundedPersistedJson,
 } from "../persistenceLimits";
+import { commonRendererStringWithinLimit } from "../guiLimits";
 import type { Message } from "../WebsocketMessages";
 import {
   MAX_LIVE_VIEWPORT_CONTENT_PANES,
@@ -101,13 +102,23 @@ export type ViewportContentPane =
 
 export type ViewportPane = ViewportRootPane | ViewportContentPane;
 
-export interface ViewportState {
+export interface ViewportPageState {
+  pageId: string;
+  name: string;
+  isDefault: boolean;
   panes: Record<string, ViewportPane>;
   layout: ViewportLayout;
+}
+
+export interface ViewportState {
+  pages: Record<string, ViewportPageState>;
+  pageOrder: string[];
+  activePageId: string | null;
   interactionEpoch: number;
 }
 
 export interface ViewportImageDeclaration {
+  page_id: string;
   pane_id: string;
   props: ViewportImageProps;
   placement: ViewportPanePlacement;
@@ -116,6 +127,7 @@ export interface ViewportImageDeclaration {
 }
 
 export interface ViewportMatplotlibDeclaration {
+  page_id: string;
   pane_id: string;
   props: ViewportMatplotlibProps;
   placement: ViewportPanePlacement;
@@ -124,6 +136,7 @@ export interface ViewportMatplotlibDeclaration {
 }
 
 export interface ViewportPlotlyDeclaration {
+  page_id: string;
   pane_id: string;
   props: ViewportPlotlyProps;
   placement: ViewportPanePlacement;
@@ -132,6 +145,7 @@ export interface ViewportPlotlyDeclaration {
 }
 
 export interface ViewportViserDeclaration {
+  page_id: string;
   pane_id: string;
   props: ViewportViserProps;
   placement: ViewportPanePlacement;
@@ -156,13 +170,20 @@ export interface ViewportActions {
   setPersistenceServer: (serverUrl: string) => void;
   /** Restore the workspace-specific persisted layout. */
   setPersistenceWorkspace: (workspaceId: string) => void;
+  addPage: (pageId: string, name: string, isDefault: boolean) => void;
+  updatePage: (pageId: string, name: string) => void;
+  setActivePage: (pageId: string) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
   addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
   addViserPane: (message: ViewportViserDeclaration) => void;
-  updatePane: (paneId: string, updates: ViewportPaneUpdates) => void;
-  removePane: (paneId: string) => void;
-  setPaneSnapshot: (paneIds: readonly string[]) => void;
+  updatePane: (
+    pageId: string,
+    paneId: string,
+    updates: ViewportPaneUpdates,
+  ) => void;
+  removePane: (pageId: string, paneId: string) => void;
+  setPaneSnapshot: (pageId: string, paneIds: readonly string[]) => void;
   commitUserLayout: (layout: ViewportLayout) => void;
   /** Pure admission for viewport state owned by one original wire frame. */
   preflightMessageBatch: (messages: readonly Message[]) => string | null;
@@ -173,13 +194,34 @@ export interface ViewportLayoutStorage {
   setItem(key: string, value: string): void;
 }
 
-const STORAGE_KEY_PREFIX = "leika.viewport.layout.v2:";
+const STORAGE_KEY_PREFIX = "leika.viewport.layout.v3:";
+const LEGACY_STORAGE_KEY_PREFIX = "leika.viewport.layout.v2:";
+const ACTIVE_PAGE_STORAGE_KEY_PREFIX = "leika.viewport.active-page.v1:";
+
+export const MAX_VIEWPORT_PAGES = 128;
 
 export function viewportLayoutStorageKey(
   serverUrl: string,
   workspaceId: string,
+  pageId = "default",
 ): string {
-  return STORAGE_KEY_PREFIX + serverUrl + ":" + workspaceId;
+  return STORAGE_KEY_PREFIX + JSON.stringify([serverUrl, workspaceId, pageId]);
+}
+
+export function legacyViewportLayoutStorageKey(
+  serverUrl: string,
+  workspaceId: string,
+): string {
+  return LEGACY_STORAGE_KEY_PREFIX + serverUrl + ":" + workspaceId;
+}
+
+export function activeViewportPageStorageKey(
+  serverUrl: string,
+  workspaceId: string,
+): string {
+  return (
+    ACTIVE_PAGE_STORAGE_KEY_PREFIX + JSON.stringify([serverUrl, workspaceId])
+  );
 }
 
 function browserStorage(): ViewportLayoutStorage | null {
@@ -191,14 +233,14 @@ function browserStorage(): ViewportLayoutStorage | null {
   }
 }
 
-function initialLayout(): ViewportLayout {
+export function initialViewportLayout(): ViewportLayout {
   return {
     version: 1,
     root: { type: "pane", pane_id: VIEWPORT_ROOT_PANE_ID },
   };
 }
 
-function initialPanes(): Record<string, ViewportPane> {
+export function initialViewportPanes(): Record<string, ViewportPane> {
   const panes = Object.create(null) as Record<string, ViewportPane>;
   panes[VIEWPORT_ROOT_PANE_ID] = {
     kind: "root",
@@ -208,11 +250,13 @@ function initialPanes(): Record<string, ViewportPane> {
   return panes;
 }
 
-function initialState(
-  layout = initialLayout(),
-  interactionEpoch = 0,
-): ViewportState {
-  return { panes: initialPanes(), layout, interactionEpoch };
+function initialState(interactionEpoch = 0): ViewportState {
+  return {
+    pages: Object.create(null) as Record<string, ViewportPageState>,
+    pageOrder: [],
+    activePageId: null,
+    interactionEpoch,
+  };
 }
 
 function copyPaneRecord(
@@ -356,7 +400,22 @@ function reconcilePaneLayout(
   );
 }
 
-/** Per-viewer pane registry and browser-owned layout store. */
+type PageProjection = {
+  panes: Map<string, ViewportContentPane>;
+  authoritativePaneIds: Set<string> | null;
+  isDefault: boolean;
+  name: string;
+};
+
+function pageNameIsValid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    commonRendererStringWithinLimit(value)
+  );
+}
+
+/** Per-viewer page catalog, pane registries, and browser-owned layout store. */
 export function useViewportState(
   storage: ViewportLayoutStorage | null = browserStorage(),
 ): {
@@ -364,38 +423,96 @@ export function useViewportState(
   actions: ViewportActions;
 } {
   const store = React.useMemo(() => createStore(initialState()), []);
-  const storageKeyRef = React.useRef<string | null>(null);
   const persistenceServerRef = React.useRef<string | null>(null);
-  const authoritativePaneIdsRef = React.useRef<Set<string> | null>(null);
+  const persistenceWorkspaceRef = React.useRef<string | null>(null);
+  const preferredActivePageIdRef = React.useRef<string | null>(null);
+  const authoritativePaneIdsRef = React.useRef(
+    new Map<string, Set<string> | null>(),
+  );
   const contentPaneCountRef = React.useRef(0);
 
   const actions = React.useMemo<ViewportActions>(() => {
-    const persistLayout = (layout: ViewportLayout): void => {
-      const storageKey = storageKeyRef.current;
-      if (storage === null || storageKey === null) return;
+    const layoutKey = (pageId: string): string | null => {
+      const server = persistenceServerRef.current;
+      const workspace = persistenceWorkspaceRef.current;
+      return server === null || workspace === null
+        ? null
+        : viewportLayoutStorageKey(server, workspace, pageId);
+    };
+
+    const persistLayout = (pageId: string, layout: ViewportLayout): void => {
+      const key = layoutKey(pageId);
+      if (storage === null || key === null) return;
       try {
-        storage.setItem(storageKey, JSON.stringify(layout));
+        storage.setItem(key, JSON.stringify(layout));
       } catch {
         // Storage can be unavailable or full. Layout remains usable in memory.
       }
     };
 
-    // Server-driven mutations (pane creates, visibility toggles, removals)
-    // change the layout in memory only: persisting them would overwrite the
-    // user's saved arrangement, e.g. a visibility round-trip would durably
-    // lose the pane's position. Storage is written only for user gestures
-    // and for authoritative snapshot reconciliation.
-    const commitLayout = (
+    const readLayout = (pageId: string, isDefault: boolean): ViewportLayout => {
+      const key = layoutKey(pageId);
+      if (storage === null || key === null) return initialViewportLayout();
+      let serialized: string | null = null;
+      let layout: ViewportLayout;
+      try {
+        serialized = storage.getItem(key);
+        if (serialized === null && isDefault) {
+          const server = persistenceServerRef.current;
+          const workspace = persistenceWorkspaceRef.current;
+          if (server !== null && workspace !== null) {
+            serialized = storage.getItem(
+              legacyViewportLayoutStorageKey(server, workspace),
+            );
+          }
+        }
+        if (serialized === null) return initialViewportLayout();
+        layout = normalizeViewportLayout(parseBoundedPersistedJson(serialized));
+      } catch {
+        return initialViewportLayout();
+      }
+      try {
+        storage.setItem(key, JSON.stringify(layout));
+      } catch {
+        // A read-only/full store must not discard a layout already read.
+      }
+      return layout;
+    };
+
+    const persistActivePage = (pageId: string): void => {
+      const server = persistenceServerRef.current;
+      const workspace = persistenceWorkspaceRef.current;
+      if (storage === null || server === null || workspace === null) return;
+      try {
+        storage.setItem(
+          activeViewportPageStorageKey(server, workspace),
+          pageId,
+        );
+      } catch {
+        // Selection persistence is best-effort, like layout persistence.
+      }
+    };
+
+    const replacePage = (page: ViewportPageState): void => {
+      const state = store.get();
+      store.set({ pages: { ...state.pages, [page.pageId]: page } });
+    };
+
+    // Server-driven mutations change layouts in memory only. Persisting them
+    // would overwrite a user's arrangement during a visibility round-trip.
+    const commitPageLayout = (
+      page: ViewportPageState,
       layout: ViewportLayout,
-      options?: { persist: boolean },
+      persist = false,
     ): boolean => {
-      if (sameViewportLayout(layout, store.get().layout)) return false;
-      if (options?.persist) persistLayout(layout);
+      if (sameViewportLayout(layout, page.layout)) return false;
+      if (persist) persistLayout(page.pageId, layout);
       return true;
     };
 
     const addContentPane = (
       message: {
+        page_id: string;
         pane_id: string;
         placement: ViewportPanePlacement;
         relative_to: string;
@@ -403,158 +520,219 @@ export function useViewportState(
       },
       pane: ViewportContentPane,
     ): void => {
-      const paneId = message.pane_id;
-      if (paneId === VIEWPORT_ROOT_PANE_ID || paneId.length === 0) return;
       const state = store.get();
-      const alreadyDeclared = Object.hasOwn(state.panes, paneId);
-      const authoritativePaneIds = authoritativePaneIdsRef.current;
+      const page = state.pages[message.page_id];
+      const paneId = message.pane_id;
+      if (
+        page === undefined ||
+        paneId === VIEWPORT_ROOT_PANE_ID ||
+        paneId.length === 0
+      )
+        return;
+      const alreadyDeclared = Object.hasOwn(page.panes, paneId);
+      const authoritativePaneIds =
+        authoritativePaneIdsRef.current.get(page.pageId) ?? null;
       if (
         (!alreadyDeclared &&
           contentPaneCountRef.current >= MAX_LIVE_VIEWPORT_CONTENT_PANES) ||
         (authoritativePaneIds !== null &&
           !authoritativePaneIds.has(paneId) &&
-          authoritativePaneIds.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES)
-      ) {
+          [...authoritativePaneIdsRef.current.values()].reduce(
+            (count, ids) => count + (ids?.size ?? 0),
+            0,
+          ) >= MAX_LIVE_VIEWPORT_CONTENT_PANES)
+      )
         return;
-      }
+
       authoritativePaneIds?.add(paneId);
-      const panes = copyPaneRecord(state.panes);
+      const panes = copyPaneRecord(page.panes);
       panes[paneId] = detachViewportPaneBinary(pane);
       if (!alreadyDeclared) contentPaneCountRef.current += 1;
 
-      let layout = state.layout;
+      let layout = page.layout;
       if (!pane.props.visible) {
         layout = removeViewportPane(layout, paneId);
       } else if (!hasViewportPane(layout, paneId)) {
-        const layoutPaneIds = collectViewportPaneIds(layout);
-        const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
-        const relativeTo = hasViewportPane(layout, message.relative_to)
-          ? message.relative_to
-          : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID);
-        layout = insertViewportPane(
-          layout,
-          paneId,
-          relativeTo,
-          message.placement,
-        );
-        if (message.equalize_group.length > 0) {
-          layout = equalizeViewportPanes(layout, [
-            ...message.equalize_group,
+        const savedLayout = readLayout(page.pageId, page.isDefault);
+        if (hasViewportPane(savedLayout, paneId)) {
+          // A page declaration and its initial empty snapshot can reach an
+          // already-connected browser before Python declares that page's
+          // panes. Recover each arriving pane from the browser-owned layout
+          // instead of replacing that layout with creation-time hints.
+          layout = savedLayout;
+        } else {
+          const layoutPaneIds = collectViewportPaneIds(layout);
+          const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
+          const relativeTo = hasViewportPane(layout, message.relative_to)
+            ? message.relative_to
+            : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID);
+          layout = insertViewportPane(
+            layout,
             paneId,
-          ]);
+            relativeTo,
+            message.placement,
+          );
+          if (message.equalize_group.length > 0) {
+            layout = equalizeViewportPanes(layout, [
+              ...message.equalize_group,
+              paneId,
+            ]);
+          }
         }
       }
-
-      layout = reconcilePaneLayout(
-        layout,
-        panes,
-        authoritativePaneIdsRef.current,
-      );
-
-      if (commitLayout(layout)) store.set({ panes, layout });
-      else store.set({ panes });
+      layout = reconcilePaneLayout(layout, panes, authoritativePaneIds);
+      replacePage({ ...page, panes, layout });
     };
 
     const preflightMessageBatch = (
       messages: readonly Message[],
     ): string | null => {
-      const panes = new Map<string, ViewportContentPane>();
-      for (const pane of Object.values(store.get().panes)) {
-        if (pane.kind !== "root") panes.set(pane.paneId, pane);
+      const current = store.get();
+      const pages = new Map<string, PageProjection>();
+      for (const pageId of current.pageOrder) {
+        const page = current.pages[pageId];
+        const panes = new Map<string, ViewportContentPane>();
+        for (const pane of Object.values(page.panes)) {
+          if (pane.kind !== "root") panes.set(pane.paneId, pane);
+        }
+        const authoritative = authoritativePaneIdsRef.current.get(pageId);
+        pages.set(pageId, {
+          panes,
+          authoritativePaneIds:
+            authoritative === undefined
+              ? null
+              : authoritative === null
+                ? null
+                : new Set(authoritative),
+          isDefault: page.isDefault,
+          name: page.name,
+        });
       }
-      let authoritativePaneIds =
-        authoritativePaneIdsRef.current === null
-          ? null
-          : new Set(authoritativePaneIdsRef.current);
       const reject = (detail: string) =>
         "Connection frame violates viewport safety limits: " + detail;
+      const allPanes = (): ViewportContentPane[] =>
+        [...pages.values()].flatMap((page) => [...page.panes.values()]);
+      const authoritativeCount = (): number =>
+        [...pages.values()].reduce(
+          (count, page) => count + (page.authoritativePaneIds?.size ?? 0),
+          0,
+        );
 
       for (const message of messages) {
+        if (message.type === "PageCreateMessage") {
+          if (
+            !isBoundedLayoutId(message.page_id) ||
+            !pageNameIsValid(message.name) ||
+            typeof message.is_default !== "boolean" ||
+            pages.has(message.page_id) ||
+            pages.size >= MAX_VIEWPORT_PAGES ||
+            (message.is_default &&
+              [...pages.values()].some((page) => page.isDefault))
+          )
+            return reject("page declaration is invalid");
+          pages.set(message.page_id, {
+            panes: new Map(),
+            authoritativePaneIds: null,
+            isDefault: message.is_default,
+            name: message.name,
+          });
+          continue;
+        }
+        if (message.type === "PageUpdateMessage") {
+          const page = pages.get(message.page_id);
+          if (page === undefined || !pageNameIsValid(message.name))
+            return reject("page update is invalid");
+          page.name = message.name;
+          continue;
+        }
+
         const declaration = contentPaneFromMessage(message);
         if (declaration !== null) {
           if (
-            message.type === "ViewportImageMessage" ||
-            message.type === "ViewportMatplotlibMessage" ||
-            message.type === "ViewportPlotlyMessage" ||
-            message.type === "ViewportViserMessage"
-          ) {
-            if (
-              !isBoundedLayoutId(message.relative_to) ||
-              !equalizeGroupIsValid(message.pane_id, message.equalize_group)
-            )
-              return reject("pane placement identifiers are invalid");
-          }
+            message.type !== "ViewportImageMessage" &&
+            message.type !== "ViewportMatplotlibMessage" &&
+            message.type !== "ViewportPlotlyMessage" &&
+            message.type !== "ViewportViserMessage"
+          )
+            return reject("pane declaration type is invalid");
+          const page = pages.get(message.page_id);
+          if (
+            page === undefined ||
+            !isBoundedLayoutId(message.relative_to) ||
+            !equalizeGroupIsValid(message.pane_id, message.equalize_group)
+          )
+            return reject("pane page or placement identifiers are invalid");
           if (
             !isBoundedLayoutId(declaration.paneId) ||
             declaration.paneId === VIEWPORT_ROOT_PANE_ID ||
             !panePropsHaveValidShape(declaration)
-          ) {
+          )
             return reject("pane declaration is invalid");
-          }
           if (
-            !panes.has(declaration.paneId) &&
-            panes.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES
-          ) {
+            !page.panes.has(declaration.paneId) &&
+            allPanes().length >= MAX_LIVE_VIEWPORT_CONTENT_PANES
+          )
             return reject("live pane owner limit exceeded");
-          }
           if (
-            authoritativePaneIds !== null &&
-            !authoritativePaneIds.has(declaration.paneId) &&
-            authoritativePaneIds.size >= MAX_LIVE_VIEWPORT_CONTENT_PANES
-          ) {
+            page.authoritativePaneIds !== null &&
+            !page.authoritativePaneIds.has(declaration.paneId) &&
+            authoritativeCount() >= MAX_LIVE_VIEWPORT_CONTENT_PANES
+          )
             return reject("authoritative pane owner limit exceeded");
-          }
-          panes.set(declaration.paneId, declaration);
-          authoritativePaneIds?.add(declaration.paneId);
-          if (!viewportPanesWithinAggregateLimits(panes.values())) {
+          page.panes.set(declaration.paneId, declaration);
+          page.authoritativePaneIds?.add(declaration.paneId);
+          if (!viewportPanesWithinAggregateLimits(allPanes()))
             return reject("pane source, renderer, or iframe budget exceeded");
-          }
           continue;
         }
-        if (message.type === "ViewportPaneUpdateMessage") {
-          if (!isBoundedLayoutId(message.pane_id)) {
-            return reject("pane update identifier is invalid");
-          }
-          const previous = panes.get(message.pane_id);
-          if (previous === undefined) continue;
-          const candidate = {
-            ...previous,
-            props: { ...previous.props, ...message.updates },
-          } as ViewportContentPane;
-          if (
-            !panePropsHaveValidShape(candidate) ||
-            !viewportPanesWithinAggregateLimits(
-              [...panes.values()].map((pane) =>
-                pane.paneId === message.pane_id ? candidate : pane,
-              ),
-            )
-          ) {
-            return reject("pane update violates its schema or budget");
-          }
-          panes.set(message.pane_id, candidate);
-        } else if (message.type === "ViewportPaneRemoveMessage") {
-          if (!isBoundedLayoutId(message.pane_id)) {
-            return reject("pane removal identifier is invalid");
-          }
-          panes.delete(message.pane_id);
-          authoritativePaneIds?.delete(message.pane_id);
-        } else if (message.type === "ViewportPaneSnapshotMessage") {
-          if (message.pane_ids.length > MAX_LIVE_VIEWPORT_CONTENT_PANES) {
-            return reject("pane snapshot owner limit exceeded");
-          }
-          authoritativePaneIds = new Set<string>();
-          for (const paneId of message.pane_ids) {
+
+        if (
+          message.type === "ViewportPaneUpdateMessage" ||
+          message.type === "ViewportPaneRemoveMessage" ||
+          message.type === "ViewportPaneSnapshotMessage"
+        ) {
+          const page = pages.get(message.page_id);
+          if (page === undefined)
+            return reject("pane lifecycle references an unknown page");
+          if (message.type === "ViewportPaneUpdateMessage") {
+            if (!isBoundedLayoutId(message.pane_id))
+              return reject("pane update identifier is invalid");
+            const previous = page.panes.get(message.pane_id);
+            if (previous === undefined) continue;
+            const candidate = {
+              ...previous,
+              props: { ...previous.props, ...message.updates },
+            } as ViewportContentPane;
+            page.panes.set(message.pane_id, candidate);
             if (
-              !isBoundedLayoutId(paneId) ||
-              paneId === VIEWPORT_ROOT_PANE_ID ||
-              authoritativePaneIds.has(paneId)
-            ) {
-              return reject("pane snapshot identifiers are invalid");
+              !panePropsHaveValidShape(candidate) ||
+              !viewportPanesWithinAggregateLimits(allPanes())
+            )
+              return reject("pane update violates its schema or budget");
+          } else if (message.type === "ViewportPaneRemoveMessage") {
+            if (!isBoundedLayoutId(message.pane_id))
+              return reject("pane removal identifier is invalid");
+            page.panes.delete(message.pane_id);
+            page.authoritativePaneIds?.delete(message.pane_id);
+          } else {
+            if (message.pane_ids.length > MAX_LIVE_VIEWPORT_CONTENT_PANES)
+              return reject("pane snapshot owner limit exceeded");
+            const ids = new Set<string>();
+            for (const paneId of message.pane_ids) {
+              if (
+                !isBoundedLayoutId(paneId) ||
+                paneId === VIEWPORT_ROOT_PANE_ID ||
+                ids.has(paneId)
+              )
+                return reject("pane snapshot identifiers are invalid");
+              ids.add(paneId);
             }
-            authoritativePaneIds.add(paneId);
-          }
-          for (const paneId of panes.keys()) {
-            if (!authoritativePaneIds.has(paneId)) panes.delete(paneId);
+            page.authoritativePaneIds = ids;
+            for (const paneId of page.panes.keys()) {
+              if (!ids.has(paneId)) page.panes.delete(paneId);
+            }
+            if (authoritativeCount() > MAX_LIVE_VIEWPORT_CONTENT_PANES)
+              return reject("aggregate pane snapshot owner limit exceeded");
           }
         } else if (
           message.type === "WorkspaceConfigurationMessage" &&
@@ -568,75 +746,113 @@ export function useViewportState(
 
     const directMessage = (type: Message["type"], value: object): Message =>
       ({ type, ...value }) as Message;
-
     const admitDirect = (message: Message): boolean => {
       const failure = preflightMessageBatch([message]);
       if (failure === null) return true;
       console.error(failure);
       return false;
     };
+    const clearPages = (): void => {
+      authoritativePaneIdsRef.current.clear();
+      contentPaneCountRef.current = 0;
+      store.set(initialState(store.get().interactionEpoch + 1));
+    };
 
     return {
-      reset: () => {
-        authoritativePaneIdsRef.current = null;
-        contentPaneCountRef.current = 0;
-        store.set(
-          initialState(initialLayout(), store.get().interactionEpoch + 1),
-        );
-      },
-
-      resetPanes: () => {
-        authoritativePaneIdsRef.current = null;
-        contentPaneCountRef.current = 0;
-        store.set((state) => ({
-          panes: initialPanes(),
-          interactionEpoch: state.interactionEpoch + 1,
-        }));
-      },
+      reset: clearPages,
+      resetPanes: clearPages,
 
       setPersistenceServer: (serverUrl) => {
         if (persistenceServerRef.current === serverUrl) return;
         persistenceServerRef.current = serverUrl;
-        storageKeyRef.current = null;
-        authoritativePaneIdsRef.current = null;
-        contentPaneCountRef.current = 0;
-        store.set(
-          initialState(initialLayout(), store.get().interactionEpoch + 1),
-        );
+        persistenceWorkspaceRef.current = null;
+        preferredActivePageIdRef.current = null;
+        clearPages();
       },
 
       setPersistenceWorkspace: (workspaceId) => {
         const serverUrl = persistenceServerRef.current;
         if (serverUrl === null || !isBoundedLayoutId(workspaceId)) return;
-        const storageKey = viewportLayoutStorageKey(serverUrl, workspaceId);
-        if (storageKeyRef.current === storageKey) return;
-        storageKeyRef.current = storageKey;
-        authoritativePaneIdsRef.current = null;
-        contentPaneCountRef.current = 0;
-
-        let layout = initialLayout();
+        if (persistenceWorkspaceRef.current === workspaceId) return;
+        persistenceWorkspaceRef.current = workspaceId;
+        preferredActivePageIdRef.current = null;
         if (storage !== null) {
-          let storedLayout: ViewportLayout | null = null;
           try {
-            const serialized = storage.getItem(storageKey);
-            if (serialized !== null) {
-              storedLayout = normalizeViewportLayout(
-                parseBoundedPersistedJson(serialized),
-              );
+            const pageId = storage.getItem(
+              activeViewportPageStorageKey(serverUrl, workspaceId),
+            );
+            if (pageId !== null && isBoundedLayoutId(pageId)) {
+              preferredActivePageIdRef.current = pageId;
             }
           } catch {
-            // Malformed or inaccessible storage falls back to the root sentinel.
-          }
-          if (storedLayout !== null) {
-            layout = storedLayout;
-            try {
-              storage.setItem(storageKey, JSON.stringify(layout));
-            } catch {
-              // A read-only/full store must not discard a layout already read.
-            }
+            // Inaccessible storage simply starts on the default page.
           }
         }
-        store.set(initialState(layout, store.get().interactionEpoch + 1));
+        clearPages();
+      },
+
+      addPage: (pageId, name, isDefault) => {
+        if (
+          !admitDirect(
+            directMessage("PageCreateMessage", {
+              page_id: pageId,
+              name,
+              is_default: isDefault,
+            }),
+          )
+        )
+          return;
+        const state = store.get();
+        const page: ViewportPageState = {
+          pageId,
+          name,
+          isDefault,
+          panes: initialViewportPanes(),
+          layout: readLayout(pageId, isDefault),
+        };
+        authoritativePaneIdsRef.current.set(pageId, null);
+        let activePageId = state.activePageId;
+        const preferred = preferredActivePageIdRef.current;
+        if (
+          preferred === pageId ||
+          activePageId === null ||
+          (preferred === null && isDefault)
+        ) {
+          activePageId = pageId;
+        }
+        store.set({
+          pages: { ...state.pages, [pageId]: page },
+          pageOrder: [...state.pageOrder, pageId],
+          activePageId,
+          interactionEpoch:
+            activePageId === state.activePageId
+              ? state.interactionEpoch
+              : state.interactionEpoch + 1,
+        });
+      },
+
+      updatePage: (pageId, name) => {
+        if (
+          !admitDirect(
+            directMessage("PageUpdateMessage", { page_id: pageId, name }),
+          )
+        )
+          return;
+        const page = store.get().pages[pageId];
+        if (page !== undefined && page.name !== name)
+          replacePage({ ...page, name });
+      },
+
+      setActivePage: (pageId) => {
+        const state = store.get();
+        if (state.pages[pageId] === undefined || state.activePageId === pageId)
+          return;
+        preferredActivePageIdRef.current = pageId;
+        persistActivePage(pageId);
+        store.set({
+          activePageId: pageId,
+          interactionEpoch: state.interactionEpoch + 1,
+        });
       },
 
       addImagePane: (message) => {
@@ -648,7 +864,6 @@ export function useViewportState(
           props: message.props,
         });
       },
-
       addMatplotlibPane: (message) => {
         if (!admitDirect(directMessage("ViewportMatplotlibMessage", message)))
           return;
@@ -658,7 +873,6 @@ export function useViewportState(
           props: message.props,
         });
       },
-
       addPlotlyPane: (message) => {
         if (!admitDirect(directMessage("ViewportPlotlyMessage", message)))
           return;
@@ -668,7 +882,6 @@ export function useViewportState(
           props: message.props,
         });
       },
-
       addViserPane: (message) => {
         if (!admitDirect(directMessage("ViewportViserMessage", message)))
           return;
@@ -679,149 +892,129 @@ export function useViewportState(
         });
       },
 
-      updatePane: (paneId, updates) => {
+      updatePane: (pageId, paneId, updates) => {
         if (
           !admitDirect(
             directMessage("ViewportPaneUpdateMessage", {
+              page_id: pageId,
               pane_id: paneId,
               updates,
             }),
           )
         )
           return;
-        const state = store.get();
-        const pane = state.panes[paneId];
-        if (pane === undefined) return;
-
-        const panes = copyPaneRecord(state.panes);
-        if (pane.kind === "root") {
-          if (
-            typeof updates.visible !== "boolean" ||
-            updates.visible === pane.visible
-          ) {
-            return;
-          }
-          panes[paneId] = { ...pane, visible: updates.visible };
-          const layout = reconcilePaneLayout(
-            state.layout,
-            panes,
-            authoritativePaneIdsRef.current,
-          );
-          if (commitLayout(layout)) store.set({ panes, layout });
-          else store.set({ panes });
+        const page = store.get().pages[pageId];
+        const pane = page?.panes[paneId];
+        if (page === undefined || pane === undefined || pane.kind === "root")
           return;
-        }
-
-        // The server only sends updates matching the pane's kind, which the
-        // type system cannot prove across the content-pane union.
-        const updatedPane = {
+        const panes = copyPaneRecord(page.panes);
+        const updatedPane = detachViewportPaneBinary({
           ...pane,
           props: { ...pane.props, ...updates },
-        } as ViewportContentPane;
-        panes[paneId] = detachViewportPaneBinary(updatedPane);
-
-        let layout = state.layout;
+        } as ViewportContentPane);
+        panes[paneId] = updatedPane;
+        let layout = page.layout;
         if (updatedPane.props.visible !== pane.props.visible) {
           if (updatedPane.props.visible) {
-            const layoutPaneIds = collectViewportPaneIds(layout);
-            const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
-            layout = insertViewportPane(
-              layout,
-              paneId,
-              hasViewportPane(layout, VIEWPORT_ROOT_PANE_ID)
-                ? VIEWPORT_ROOT_PANE_ID
-                : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID),
-              "right",
-            );
+            const savedLayout = readLayout(page.pageId, page.isDefault);
+            if (hasViewportPane(savedLayout, paneId)) {
+              layout = savedLayout;
+            } else {
+              const layoutPaneIds = collectViewportPaneIds(layout);
+              const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
+              layout = insertViewportPane(
+                layout,
+                paneId,
+                hasViewportPane(layout, VIEWPORT_ROOT_PANE_ID)
+                  ? VIEWPORT_ROOT_PANE_ID
+                  : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID),
+                "right",
+              );
+            }
           } else {
             layout = removeViewportPane(layout, paneId);
           }
           layout = reconcilePaneLayout(
             layout,
             panes,
-            authoritativePaneIdsRef.current,
+            authoritativePaneIdsRef.current.get(pageId) ?? null,
           );
         }
-
-        if (commitLayout(layout)) store.set({ panes, layout });
-        else store.set({ panes });
+        replacePage({ ...page, panes, layout });
       },
 
-      removePane: (paneId) => {
-        if (paneId === VIEWPORT_ROOT_PANE_ID) return;
-        authoritativePaneIdsRef.current?.delete(paneId);
-        const state = store.get();
-        const panes = copyPaneRecord(state.panes);
-        if (Object.hasOwn(panes, paneId)) {
-          contentPaneCountRef.current -= 1;
-        }
+      removePane: (pageId, paneId) => {
+        if (
+          paneId === VIEWPORT_ROOT_PANE_ID ||
+          !admitDirect(
+            directMessage("ViewportPaneRemoveMessage", {
+              page_id: pageId,
+              pane_id: paneId,
+            }),
+          )
+        )
+          return;
+        const page = store.get().pages[pageId];
+        if (page === undefined) return;
+        const panes = copyPaneRecord(page.panes);
+        if (Object.hasOwn(panes, paneId)) contentPaneCountRef.current -= 1;
         delete panes[paneId];
-        let layout = removeViewportPane(state.layout, paneId);
-        layout = reconcilePaneLayout(
-          layout,
+        authoritativePaneIdsRef.current.get(pageId)?.delete(paneId);
+        const layout = reconcilePaneLayout(
+          removeViewportPane(page.layout, paneId),
           panes,
-          authoritativePaneIdsRef.current,
+          authoritativePaneIdsRef.current.get(pageId) ?? null,
           paneId,
         );
-        if (commitLayout(layout)) store.set({ panes, layout });
-        else store.set({ panes });
+        replacePage({ ...page, panes, layout });
       },
 
-      setPaneSnapshot: (paneIds) => {
-        // Reject before constructing a Set: the wire schema permits much
-        // larger arrays than the viewport can ever reconcile or render.
+      setPaneSnapshot: (pageId, paneIds) => {
         if (
           !admitDirect(
             directMessage("ViewportPaneSnapshotMessage", {
+              page_id: pageId,
               pane_ids: paneIds,
             }),
           )
         )
           return;
-        const authoritativePaneIds = new Set<string>();
-        for (const paneId of paneIds) {
-          if (paneId.length > 0 && paneId !== VIEWPORT_ROOT_PANE_ID) {
-            authoritativePaneIds.add(paneId);
+        const page = store.get().pages[pageId];
+        if (page === undefined) return;
+        const firstSnapshot =
+          authoritativePaneIdsRef.current.get(pageId) === null;
+        const ids = new Set(paneIds);
+        authoritativePaneIdsRef.current.set(pageId, ids);
+        const panes = copyPaneRecord(page.panes);
+        for (const paneId of Object.keys(panes)) {
+          if (paneId !== VIEWPORT_ROOT_PANE_ID && !ids.has(paneId)) {
+            delete panes[paneId];
+            contentPaneCountRef.current -= 1;
           }
         }
-        authoritativePaneIdsRef.current = authoritativePaneIds;
-
-        const state = store.get();
-        const panes = copyPaneRecord(state.panes);
-        Object.keys(panes).forEach((paneId) => {
-          if (
-            paneId !== VIEWPORT_ROOT_PANE_ID &&
-            !authoritativePaneIds.has(paneId)
-          ) {
-            delete panes[paneId];
-          }
-        });
-        contentPaneCountRef.current = Object.keys(panes).length - 1;
-
-        // Retain saved leaves named by the snapshot even if their create has
-        // not arrived yet, but do not invent leaves for unhydrated IDs.
-        const layout = reconcilePaneLayout(
-          state.layout,
-          panes,
-          authoritativePaneIds,
-        );
-        // The snapshot is the authoritative reconciliation point: persist
-        // even when the in-memory layout already reflects it, since earlier
-        // server-driven mutations (creates, removals) deliberately don't.
-        persistLayout(layout);
-        if (commitLayout(layout)) store.set({ panes, layout });
-        else store.set({ panes });
+        const layout = reconcilePaneLayout(page.layout, panes, ids);
+        // The first empty snapshot only establishes a newly declared page's
+        // baseline. Keep any saved arrangement available for panes that are
+        // declared immediately afterwards; later exact snapshots still prune
+        // layouts after real removals.
+        if (!(firstSnapshot && ids.size === 0)) persistLayout(pageId, layout);
+        replacePage({ ...page, panes, layout });
       },
 
       commitUserLayout: (rawLayout) => {
         const state = store.get();
-        const normalized = normalizeViewportLayout(rawLayout);
+        const page =
+          state.activePageId === null
+            ? undefined
+            : state.pages[state.activePageId];
+        if (page === undefined) return;
         const layout = reconcilePaneLayout(
-          normalized,
-          state.panes,
-          authoritativePaneIdsRef.current,
+          normalizeViewportLayout(rawLayout),
+          page.panes,
+          authoritativePaneIdsRef.current.get(page.pageId) ?? null,
         );
-        if (commitLayout(layout, { persist: true })) store.set({ layout });
+        if (commitPageLayout(page, layout, true))
+          replacePage({ ...page, layout });
       },
       preflightMessageBatch,
     };

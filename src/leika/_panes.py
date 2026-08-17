@@ -72,6 +72,74 @@ class _PaneResourceCost:
     decoded_pixels: int = 0
 
 
+class _PanesAggregate:
+    """Server-wide ownership shared by every page's local pane registry."""
+
+    def __init__(self, owner: Server) -> None:
+        self._owner = owner
+        self._lock = threading.RLock()
+        self.resource_total = _PaneResourceCost()
+        self.live_panes = 0
+        self.live_viser_panes = 0
+
+    def replace_resource(
+        self,
+        old: _PaneResourceCost,
+        new: _PaneResourceCost,
+    ) -> None:
+        with self._lock:
+            prospective = _PaneResourceCost(
+                self.resource_total.text_units - old.text_units + new.text_units,
+                self.resource_total.payload_bytes - old.payload_bytes + new.payload_bytes,
+                self.resource_total.decoded_pixels - old.decoded_pixels + new.decoded_pixels,
+            )
+            if prospective.text_units > _PANE_TEXT_MAX_UTF16_CODE_UNITS:
+                raise RuntimeError("Panes exceeded the 32 Mi UTF-16 source budget.")
+            if prospective.payload_bytes > _PANE_PAYLOAD_MAX_BYTES:
+                raise RuntimeError("Panes exceeded the 256 MiB retained payload budget.")
+            if prospective.decoded_pixels > _PANE_PIXELS_MAX:
+                raise RuntimeError("Panes exceeded the 64 Mi-pixel raster budget.")
+            if (
+                min(
+                    prospective.text_units,
+                    prospective.payload_bytes,
+                    prospective.decoded_pixels,
+                )
+                < 0
+            ):
+                raise RuntimeError("pane aggregate resource accounting underflow")
+
+            # Pane rasters share the browser page allowance with server.gui.
+            from ._gui_handles import _GuiResourceCost
+
+            self._owner._replace_gui_resource_cost(
+                _GuiResourceCost(decoded_pixels=old.decoded_pixels),
+                _GuiResourceCost(decoded_pixels=new.decoded_pixels),
+                page_global=True,
+            )
+            self.resource_total = prospective
+
+    def reserve_pane(self, *, viser: bool) -> None:
+        with self._lock:
+            if self.live_panes >= _PANE_MAX:
+                raise RuntimeError(f"A workspace cannot own more than {_PANE_MAX} panes.")
+            if viser and self.live_viser_panes >= _VISER_PANE_MAX:
+                raise RuntimeError(
+                    f"A workspace cannot own more than {_VISER_PANE_MAX} viser panes."
+                )
+            self.live_panes += 1
+            if viser:
+                self.live_viser_panes += 1
+
+    def release_pane(self, *, viser: bool) -> None:
+        with self._lock:
+            if self.live_panes <= 0 or (viser and self.live_viser_panes <= 0):
+                raise RuntimeError("pane aggregate count accounting underflow")
+            self.live_panes -= 1
+            if viser:
+                self.live_viser_panes -= 1
+
+
 def _pane_resource_cost(handle: "PaneHandle[Any]") -> _PaneResourceCost:
     props = handle._impl.props
     text_units = 0
@@ -390,6 +458,7 @@ class PaneHandle(Generic[_PaneStateT]):
     def _queue_update(self, updates: dict[str, Any]) -> None:
         self._impl.api._websock_interface.queue_message_or_raise(
             _messages.ViewportPaneUpdateMessage(
+                page_id=self._impl.api._page_id,
                 pane_id=self._impl.pane_id,
                 updates=updates,
             )
@@ -465,7 +534,10 @@ class PaneHandle(Generic[_PaneStateT]):
             )
             api._websock_interface.queue_messages_or_raise(
                 (
-                    _messages.ViewportPaneRemoveMessage(pane_id=self._impl.pane_id),
+                    _messages.ViewportPaneRemoveMessage(
+                        page_id=api._page_id,
+                        pane_id=self._impl.pane_id,
+                    ),
                     api._snapshot_message(remaining),
                 )
             )
@@ -474,7 +546,10 @@ class PaneHandle(Generic[_PaneStateT]):
             try:
                 api._release_resource_locked(self._impl.pane_id)
             finally:
-                _scrub_pane_handle_locked(self)
+                try:
+                    api._aggregate.release_pane(viser=isinstance(self, ViserPaneHandle))
+                finally:
+                    _scrub_pane_handle_locked(self)
 
 
 class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
@@ -1069,15 +1144,25 @@ class Panes:
     _root_pane_id: Literal["__leika_root__"] = "__leika_root__"
     """Hidden layout sentinel used when no data pane can anchor a split."""
 
-    def __init__(self, owner: Server) -> None:
+    def __init__(
+        self,
+        owner: Server,
+        *,
+        page_id: str = "default",
+        aggregate: _PanesAggregate | None = None,
+        queue_snapshot: bool = True,
+    ) -> None:
         self._lock = threading.RLock()
         self._owner = owner
+        self._page_id = validate_layout_id(page_id, "Page ID")
+        self._aggregate = aggregate if aggregate is not None else _PanesAggregate(owner)
         self._websock_interface = owner._websock_server
         self._handle_from_pane_id: dict[str, PaneHandle[Any]] = {}
         self._resource_from_pane_id: dict[str, _PaneResourceCost] = {}
         self._resource_total = _PaneResourceCost()
         self._terminal = False
-        self._queue_snapshot()
+        if queue_snapshot:
+            self._queue_snapshot()
 
     def _set_resource_locked(self, pane_id: str, cost: _PaneResourceCost) -> _PaneResourceCost:
         old = self._resource_from_pane_id.get(pane_id, _PaneResourceCost())
@@ -1086,21 +1171,7 @@ class Panes:
             self._resource_total.payload_bytes - old.payload_bytes + cost.payload_bytes,
             self._resource_total.decoded_pixels - old.decoded_pixels + cost.decoded_pixels,
         )
-        if prospective.text_units > _PANE_TEXT_MAX_UTF16_CODE_UNITS:
-            raise RuntimeError("Panes exceeded the 32 Mi UTF-16 source budget.")
-        if prospective.payload_bytes > _PANE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Panes exceeded the 256 MiB retained payload budget.")
-        if prospective.decoded_pixels > _PANE_PIXELS_MAX:
-            raise RuntimeError("Panes exceeded the 64 Mi-pixel raster budget.")
-        # Pane payload is process-global and shares the browser page raster
-        # allowance with server.gui.
-        from ._gui_handles import _GuiResourceCost
-
-        self._owner._replace_gui_resource_cost(
-            _GuiResourceCost(decoded_pixels=old.decoded_pixels),
-            _GuiResourceCost(decoded_pixels=cost.decoded_pixels),
-            page_global=True,
-        )
+        self._aggregate.replace_resource(old, cost)
         self._resource_total = prospective
         if cost == _PaneResourceCost():
             self._resource_from_pane_id.pop(pane_id, None)
@@ -1127,7 +1198,10 @@ class Panes:
             self._terminal = True
             for handle in tuple(self._handle_from_pane_id.values()):
                 handle._impl.removed = True
-                _scrub_pane_handle_locked(handle)
+                try:
+                    self._aggregate.release_pane(viser=isinstance(handle, ViserPaneHandle))
+                finally:
+                    _scrub_pane_handle_locked(handle)
             self._handle_from_pane_id.clear()
             # Release every reservation, including a defensive orphan left by
             # an interrupted or corrupted registry transition.
@@ -1152,7 +1226,7 @@ class Panes:
     ) -> _messages.ViewportPaneSnapshotMessage:
         """Build the authoritative pane-registry reconciliation message."""
         return _messages.ViewportPaneSnapshotMessage(
-            pane_ids=self._known_pane_ids() if pane_ids is None else pane_ids
+            page_id=self._page_id, pane_ids=self._known_pane_ids() if pane_ids is None else pane_ids
         )
 
     def _queue_snapshot(self) -> None:
@@ -1210,31 +1284,25 @@ class Panes:
                 raise RuntimeError("Panes is no longer active.")
             if pane_id in self._handle_from_pane_id:
                 raise ValueError(f"Pane ID {pane_id!r} already exists.")
-            if len(self._handle_from_pane_id) >= _PANE_MAX:
-                raise RuntimeError(f"A workspace cannot own more than {_PANE_MAX} panes.")
-            if (
-                isinstance(handle, ViserPaneHandle)
-                and sum(
-                    isinstance(item, ViserPaneHandle) for item in self._handle_from_pane_id.values()
-                )
-                >= _VISER_PANE_MAX
-            ):
-                raise RuntimeError(
-                    f"A workspace cannot own more than {_VISER_PANE_MAX} viser panes."
-                )
             if relative_to not in self._visible_pane_ids():
                 raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
-            old_resource = self._set_resource_locked(pane_id, _pane_resource_cost(handle))
-            self._handle_from_pane_id[pane_id] = handle
+            is_viser = isinstance(handle, ViserPaneHandle)
+            self._aggregate.reserve_pane(viser=is_viser)
             try:
-                if before_publish is not None:
-                    before_publish()
-                self._websock_interface.queue_messages_or_raise(
-                    (create_message, self._snapshot_message())
-                )
+                old_resource = self._set_resource_locked(pane_id, _pane_resource_cost(handle))
+                self._handle_from_pane_id[pane_id] = handle
+                try:
+                    if before_publish is not None:
+                        before_publish()
+                    self._websock_interface.queue_messages_or_raise(
+                        (create_message, self._snapshot_message())
+                    )
+                except BaseException:
+                    self._handle_from_pane_id.pop(pane_id, None)
+                    self._set_resource_locked(pane_id, old_resource)
+                    raise
             except BaseException:
-                self._handle_from_pane_id.pop(pane_id, None)
-                self._set_resource_locked(pane_id, old_resource)
+                self._aggregate.release_pane(viser=is_viser)
                 raise
 
     def add_image(
@@ -1340,6 +1408,7 @@ class Panes:
                 pane_id,
                 handle,
                 _messages.ViewportImageMessage(
+                    page_id=self._page_id,
                     pane_id=pane_id,
                     props=props,
                     placement=placement,
@@ -1444,6 +1513,7 @@ class Panes:
             pane_id,
             handle,
             _messages.ViewportMatplotlibMessage(
+                page_id=self._page_id,
                 pane_id=pane_id,
                 props=props,
                 placement=placement,
@@ -1552,6 +1622,7 @@ class Panes:
             pane_id,
             handle,
             _messages.ViewportPlotlyMessage(
+                page_id=self._page_id,
                 pane_id=pane_id,
                 props=props,
                 placement=placement,
@@ -1678,6 +1749,7 @@ class Panes:
             pane_id,
             handle,
             _messages.ViewportViserMessage(
+                page_id=self._page_id,
                 pane_id=pane_id,
                 props=props,
                 placement=placement,

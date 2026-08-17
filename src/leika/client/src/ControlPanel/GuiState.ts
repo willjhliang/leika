@@ -6,7 +6,6 @@ import {
   MAX_BROWSER_LIVE_GUI_COMPONENTS,
   MAX_BROWSER_LIVE_GUI_MODALS,
   addGuiConfigCosts,
-  commonRendererStringWithinLimit,
   guiConfigCost,
   guiConfigCostWithinBrowserLimits,
   guiConfigWithinEntityLimits,
@@ -14,7 +13,6 @@ import {
   guiCommandCost,
   guiModalWithinEntityLimits,
   guiModalCost,
-  guiStringsCost,
   subtractGuiConfigCosts,
   type GuiConfigCost,
 } from "../guiLimits";
@@ -44,7 +42,6 @@ import {
 
 export interface GuiState {
   theme: ThemeConfigurationMessage;
-  label: string;
   server: string;
   /** Server-provided namespace for browser-owned workspace state. */
   workspaceId: string | null;
@@ -77,7 +74,6 @@ export interface GuiState {
 
 export interface GuiActions {
   setTheme: (theme: ThemeConfigurationMessage) => void;
-  setLabel: (label: string) => void;
   addGui: (config: GuiComponentMessage) => void;
   addGuiBatch: (configs: readonly GuiComponentMessage[]) => void;
   addModal: (config: GuiModalMessage) => void;
@@ -139,7 +135,6 @@ const cleanGuiState: GuiState = {
     // viewer when the first theme message arrives.
     dark_mode: "auto",
   },
-  label: "",
   server: "",
   workspaceId: null,
   websocketState: "inactive",
@@ -664,8 +659,6 @@ export function useGuiState(initialServer: string) {
           .modals.map((modalConfig) => [modalConfig.uuid, modalConfig]),
       );
       const commands = new Map(Object.entries(store.get().commands));
-      let panelLabel = store.get().label;
-
       const reject = (detail: string) =>
         "Connection frame violates browser GUI safety limits: " + detail;
       const graphIsValid = () =>
@@ -912,22 +905,6 @@ export function useGuiState(initialServer: string) {
             commands.delete(message.uuid);
             break;
           }
-          case "SetGuiPanelLabelMessage":
-            if (!commonRendererStringWithinLimit(message.label)) {
-              return reject("panel label exceeds its string limit");
-            }
-            projection.cost = addGuiConfigCosts(
-              subtractGuiConfigCosts(
-                projection.cost,
-                guiStringsCost([panelLabel]),
-              ),
-              guiStringsCost([message.label]),
-            );
-            if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-              return reject("panel label exceeds the aggregate UI text budget");
-            }
-            panelLabel = message.label ?? "";
-            break;
         }
         if (nextBatchKind === null && !graphIsValid()) {
           return reject(
@@ -944,21 +921,6 @@ export function useGuiState(initialServer: string) {
 
     const actions: GuiActions = {
       setTheme: (theme) => store.set({ theme }),
-      setLabel: (label) => {
-        const failure = preflightMessageBatch([
-          { type: "SetGuiPanelLabelMessage", label },
-        ]);
-        if (failure !== null) {
-          console.error(failure);
-          return;
-        }
-        const previous = store.get().label;
-        aggregateGuiCost = addGuiConfigCosts(
-          subtractGuiConfigCosts(aggregateGuiCost, guiStringsCost([previous])),
-          guiStringsCost([label]),
-        );
-        store.set({ label });
-      },
       addGui: (guiConfig) => addGuiBatch([guiConfig]),
       addGuiBatch,
       addModal: (modalConfig) => addModalBatch([modalConfig]),
@@ -974,7 +936,6 @@ export function useGuiState(initialServer: string) {
         // Keep the theme to avoid a visual flash. Branding and every retained
         // GUI owner belong to the connection and must not cross reconnects.
         store.set({
-          label: cleanGuiState.label,
           // The persistence namespace belongs to this connection. Clear it
           // until the next WorkspaceConfigurationMessage arrives so a new
           // session cannot read or write the previous workspace's layout.

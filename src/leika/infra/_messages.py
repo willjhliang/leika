@@ -709,7 +709,15 @@ class Message(abc.ABC):
     # uniformly across entity types.
     entity_type: ClassVar[Optional[str]] = None
     lifecycle_phase: ClassVar[Optional[str]] = None
-    entity_id_field: ClassVar[Optional[str]] = None
+    entity_id_field: ClassVar[Optional[str | tuple[str, ...]]] = None
+    """Dataclass field, or fields, that form the lifecycle identity.
+
+    Most protocol entities have one globally unique identifier. Some are
+    naturally scoped, however, and use a tuple such as ``("page_id",
+    "pane_id")``. Keeping the scope structural here avoids delimiter-based
+    synthetic identifiers and lets the persistent buffer treat both forms
+    uniformly.
+    """
     redundancy_key_is_identity: ClassVar[bool] = False
     """Whether a cached key names this message instance rather than its fields."""
 
@@ -733,6 +741,16 @@ class Message(abc.ABC):
         fingerprint = getattr(generator, "protocol_fingerprint", None)
         if fingerprint is not None:
             fingerprint.cache_clear()
+
+    def lifecycle_entity_id(self) -> object | None:
+        """Return this message's scalar or composite lifecycle identity."""
+
+        fields = self.entity_id_field
+        if fields is None:
+            return None
+        if isinstance(fields, str):
+            return getattr(self, fields)
+        return tuple(getattr(self, field) for field in fields)
 
     def _validated_source_metrics(self) -> tuple[int, int, int, int]:
         """Validate source fields and return conservative pre-copy metrics."""
@@ -788,7 +806,7 @@ class Message(abc.ABC):
             and self.entity_type is not None
             and self.entity_id_field is not None
         ):
-            return ((self.entity_type, getattr(self, self.entity_id_field)),)
+            return ((self.entity_type, self.lifecycle_entity_id()),)
         return ()
 
     def serialized_metrics_upper_bound(self) -> tuple[int, int, int, int]:

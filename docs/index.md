@@ -26,6 +26,7 @@ development
 
 Overview <api/index>
 api/server
+api/pages
 api/panes
 api/gui
 api/gui_handles

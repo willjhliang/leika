@@ -18,14 +18,21 @@ and provide a protected transport when other machines can reach it. See
 
 ## State flow
 
-1. Python creates panes and GUI handles and queues typed lifecycle messages.
+1. Python creates named pages, page-scoped panes, and workspace-wide GUI
+   handles, then queues typed lifecycle messages.
 2. Persistent messages are retained for clients that connect later. Repeated
    updates to the same entity/property key coalesce to the newest value.
-3. The browser applies each received batch in order. GUI input changes update
-   local state optimistically before the event is sent to Python.
+3. The browser applies each received batch in order, displays its locally
+   selected page, and keeps an independent pane layout for every page. GUI
+   input changes update local state optimistically before the event is sent to
+   Python.
 4. Python updates the authoritative handle and broadcasts it to the other
    clients. The source client is excluded from that echo, preventing a fast
    slider from flickering through an older round-trip value.
+
+Named pages partition the viewport state, not the whole application. The GUI
+tree and control dock are workspace-global and stay mounted as the viewer
+switches pages; updates for inactive pages continue to be retained.
 
 `server.atomic()` is a queue-emission barrier: no message queued inside it is
 emitted until the outermost context exits, and message order is preserved.
@@ -52,21 +59,23 @@ The scope-wide budgets are 16 Mi UTF-16 code units, 128 MiB of retained text
 and binary payload, and 64 Mi-pixels. Notifications additionally share a
 separate 2 Mi UTF-16 text ledger.
 
-One browser page combines `server.gui` with its own `client.gui`, and therefore
-admits at most 8,192 components, 2,048 commands, 64 modals, 256 notifications,
-32,768 tabs and collection entries, 32 Mi UTF-16 code units, and 256 MiB of
-retained GUI payload. Notifications have a separate 4 Mi UTF-16 page ledger.
-Each handle retains at most 256 callbacks; connect and disconnect lists retain
-at most 256 each. Programmatic GUI callbacks queue at most 1,024 snapshots and
-128 MiB before later callbacks are reported and declined.
+One connected browser document combines `server.gui` with its own `client.gui`,
+and therefore admits at most 8,192 components, 2,048 commands, 64 modals, 256
+notifications, 32,768 tabs and collection entries, 32 Mi UTF-16 code units, and
+256 MiB of retained GUI payload. Notifications have a separate 4 Mi UTF-16
+document ledger. Each handle retains at most 256 callbacks; connect and
+disconnect lists retain at most 256 each. Programmatic GUI callbacks queue at
+most 1,024 snapshots and 128 MiB before later callbacks are reported and
+declined.
 
-The workspace owns at most 128 content panes, including hidden and minimized
-ones, and at most 16 Viser panes. Pane sources share 32 Mi UTF-16 code units,
-256 MiB of retained payload, and 64 Mi-pixels. Across all GUI scopes on one
-server, retained GUI state is capped at 256 MiB and GUI rasters at 128
-Mi-pixels; `server.gui` and workspace panes additionally share a 64 Mi-pixel
-page-global raster ledger. The browser counts every mounted copy of a direct
-raster against its own 128 Mi-pixel page budget.
+The workspace owns at most 128 named pages and, across all pages, at most 128
+content panes, including hidden and minimized ones, and at most 16 Viser panes.
+Pane sources share 32 Mi UTF-16 code units, 256 MiB of retained payload, and 64
+Mi-pixels. Across all GUI scopes on one server, retained GUI state is capped at
+256 MiB and GUI rasters at 128 Mi-pixels; `server.gui` and all workspace panes
+additionally share a 64 Mi-pixel workspace-global raster ledger. The browser
+counts every mounted copy of a direct raster against its own 128 Mi-pixel
+document budget.
 
 Image preparation has a separate 512 MiB server-wide envelope and charges four
 times the source buffer, making 128 MiB the effective per-call ndarray source
@@ -88,8 +97,8 @@ Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
 The server's 256 MiB combined upload budget includes transfers in progress,
 transient conversion headroom, and retained `UploadedFile` values; explicit
 cancellation releases a transfer's reservation. The server admits at most 128
-active uploads per server instance; each browser page independently admits at
-most 128.
+active uploads per server instance; each browser document independently admits
+at most 128.
 
 Runtime HTTP assets are capped at 64 MiB each and their immutable snapshot
 cache at 128 MiB/1,024 entries. Static files are capped at 32 MiB each and
@@ -100,15 +109,15 @@ share a 128 MiB and 256-owner per-server budget; overload returns 503 with
 Downloads are stream-flow-controlled to an 8 MiB queued budget per server
 client, but browser save and link flows still assemble the complete file as a
 Blob. The browser accepts at most 256 MiB and 65,536 parts per download, with
-at most 128 active assemblies. One page-wide 512 MiB budget covers both the
-declared bytes of active assemblies and completed Blobs retained by save
+at most 128 active assemblies. One document-wide 512 MiB budget covers both
+the declared bytes of active assemblies and completed Blobs retained by save
 navigation, links, current or deferred previews, and the warm cache. Completion
 transfers the reservation atomically to its Blob owner; under pressure,
 lower-priority cache and link owners are evicted before a new transfer is
-rejected. The same page admits at most 512 active or retained owners and 65,536
-received part records in aggregate, including zero-byte and highly fragmented
-transfers. These limits bound browser memory commitments; callers should use a
-dedicated streaming endpoint for larger files.
+rejected. The same document admits at most 512 active or retained owners and
+65,536 received part records in aggregate, including zero-byte and highly
+fragmented transfers. These limits bound browser memory commitments; callers
+should use a dedicated streaming endpoint for larger files.
 
 A path-backed download is a live descriptor stream: atomically replacing the
 path leaves an already-open transfer stable, while modifying the same file in
@@ -152,17 +161,34 @@ content first.
 
 ## Workspace ownership
 
-Python owns pane existence, content, visibility, and the initial placement
-hint. The browser owns the user's arrangement after that: splits, swaps,
-resizes, floating state, and minimized panes.
+Python owns page existence and names, pane existence and content, visibility,
+and each pane's initial placement hint. The browser owns the selected page and
+the user's arrangement within every page after that: splits, swaps, resizes,
+floating state, and minimized panes. Selection is per viewer; changing it does
+not send an event to Python or change what another viewer sees.
 
-Layouts are stored under a versioned browser key containing the server URL and
-`workspace_id`. This avoids collisions between servers, and bumping the version
-retires saved layouts that the current client can no longer read. Stable
-`pane_id`s allow a saved layout to recognize panes after a Python restart.
-Public `workspace_id` and explicit `pane_id` values are nonempty valid Unicode,
-at most 1,024 UTF-16 code units, and cannot be the reserved JavaScript property
-names `__proto__`, `prototype`, or `constructor`.
+Pages scope only the visualization viewport. `server.gui`, each `client.gui`,
+and the control dock's own position, size, and collapsed state are
+workspace-global. Switching pages therefore changes the page name in the dock
+header and the panes on the canvas without replacing the controls or moving the
+dock.
+
+Version-3 pane layouts are stored under a browser key containing the server
+URL, `workspace_id`, and `page_id`. The selected `page_id` is stored separately
+under the server URL and `workspace_id`, while the control dock keeps its own
+workspace-level key. These namespaces avoid collisions between servers and
+pages. Stable `page_id` and `pane_id` values let saved state recognize a page
+and its panes after a Python restart; display names and pane titles may change
+without changing layout identity.
+
+The default page provides the compatibility bridge from the former one-page
+model. If it has no version-3 layout, the client reads the version-2 layout for
+the same server URL and `workspace_id`, normalizes it, and saves it under the
+default page's version-3 key. Other pages never consume the old layout.
+
+Public `workspace_id`, explicit `page_id`, and explicit `pane_id` values are
+nonempty valid Unicode, at most 1,024 UTF-16 code units, and cannot be the
+reserved JavaScript property names `__proto__`, `prototype`, or `constructor`.
 
 Internally, an invisible root sentinel gives the dock manager a valid anchor
 before any data pane exists. It is not a public pane and occupies no workspace
