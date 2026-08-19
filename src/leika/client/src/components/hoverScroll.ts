@@ -26,6 +26,54 @@ export interface HoverScrollCycle {
   stop(): void;
 }
 
+type InputFocusViewportResetOptions = {
+  /** Restore the prefix that the outgoing hover cycle had displaced. */
+  reset: () => void;
+  /** Keep the handoff scoped to the input which received focus. */
+  shouldReset: () => boolean;
+};
+
+/** A pending handoff from a hover-owned viewport to native input focus. */
+export interface InputFocusViewportReset {
+  /** Abandon the reset when another interaction takes ownership. */
+  cancel(): void;
+}
+
+/**
+ * Restore an input viewport after native focus has finished revealing its caret.
+ *
+ * Focus is dispatched before Firefox and WebKit finish that native work, and
+ * WebKit may perform a second adjustment during the following rendering
+ * update. Resetting at both frame boundaries keeps the prefix stable without
+ * touching later pointer-driven focus, selection, or manual scrolling.
+ */
+export function scheduleInputFocusViewportReset({
+  reset,
+  shouldReset,
+}: InputFocusViewportResetOptions): InputFocusViewportReset {
+  let frame: number | null = null;
+  let framesRemaining = 2;
+
+  const cancel = () => {
+    if (frame === null) return;
+    cancelAnimationFrame(frame);
+    frame = null;
+  };
+
+  const finishFrame = () => {
+    frame = null;
+    if (!shouldReset()) return;
+    reset();
+    framesRemaining -= 1;
+    if (framesRemaining > 0) {
+      frame = requestAnimationFrame(finishFrame);
+    }
+  };
+
+  frame = requestAnimationFrame(finishFrame);
+  return { cancel };
+}
+
 function boundedMaximum(maximum: number): number {
   return Number.isFinite(maximum) ? Math.max(0, maximum) : 0;
 }

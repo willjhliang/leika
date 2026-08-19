@@ -12,6 +12,7 @@ vi.mock("@/utils/motion", () => motion);
 import {
   HOVER_SCROLL_PAUSE_MS,
   HOVER_SCROLL_START_DELAY_MS,
+  scheduleInputFocusViewportReset,
   startHoverScrollCycle,
 } from "./hoverScroll";
 
@@ -250,5 +251,36 @@ describe("startHoverScrollCycle", () => {
 
     cycle.stop();
     expect(lifecycle).toEqual(["start", "stop", "start", "stop"]);
+  });
+});
+
+describe("scheduleInputFocusViewportReset", () => {
+  it("restores the owned viewport across both native focus frames", () => {
+    const frames = installFrameHarness();
+    const reset = vi.fn();
+    scheduleInputFocusViewportReset({ reset, shouldReset: () => true });
+
+    expect(reset).not.toHaveBeenCalled();
+    frames.advance(16);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(frames.callbacks.size).toBe(1);
+
+    frames.advance(32);
+    expect(reset).toHaveBeenCalledTimes(2);
+    expect(frames.callbacks.size).toBe(0);
+  });
+
+  it("cancels before another interaction can lose its viewport", () => {
+    const frames = installFrameHarness();
+    const reset = vi.fn();
+    const pending = scheduleInputFocusViewportReset({
+      reset,
+      shouldReset: () => true,
+    });
+
+    frames.advance(16);
+    pending.cancel();
+    expect(frames.callbacks.size).toBe(0);
+    expect(reset).toHaveBeenCalledTimes(1);
   });
 });

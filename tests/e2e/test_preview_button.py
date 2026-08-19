@@ -1809,6 +1809,11 @@ def test_only_the_document_scrolls_not_the_dialog_around_it(
     _press(preview_page, "Show report")
     dialog = _dialog(preview_page)
     expect(dialog).to_be_visible()
+    # The dialog paints from transfer metadata before the Blob has been read.
+    # Wait for the document's final block so this measures the reading layout,
+    # not WebKit's otherwise-valid initial spinner frame.
+    expect(dialog.get_by_text("Paragraph 119 of the report.", exact=True)).to_be_attached()
+
     frame = dialog.locator("div.overflow-auto").first
 
     measure = """(element) => element.scrollHeight - element.clientHeight"""

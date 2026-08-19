@@ -3,6 +3,8 @@ import { Input as InputPrimitive } from "@base-ui/react/input";
 
 import {
   type HoverScrollCycle,
+  type InputFocusViewportReset,
+  scheduleInputFocusViewportReset,
   startHoverScrollCycle,
 } from "@/components/hoverScroll";
 import { cn } from "@/lib/utils";
@@ -47,7 +49,7 @@ const Input = React.forwardRef<
   const cycleRef = React.useRef<HoverScrollCycle | null>(null);
   const pointerInsideRef = React.useRef(false);
   const blurFrameRef = React.useRef<number | null>(null);
-  const focusFrameRef = React.useRef<number | null>(null);
+  const focusResetRef = React.useRef<InputFocusViewportReset | null>(null);
 
   const setInputRef = React.useCallback(
     (input: HTMLInputElement | null) => {
@@ -62,10 +64,8 @@ const Input = React.forwardRef<
   );
 
   const cancelFocusReset = React.useCallback(() => {
-    if (focusFrameRef.current !== null) {
-      cancelAnimationFrame(focusFrameRef.current);
-      focusFrameRef.current = null;
-    }
+    focusResetRef.current?.cancel();
+    focusResetRef.current = null;
   }, []);
 
   /**
@@ -181,18 +181,15 @@ const Input = React.forwardRef<
         if (stopHoverScroll(false)) {
           const input = event.currentTarget;
           input.scrollLeft = 0;
-          // Firefox and WebKit reveal the caret after dispatching `focus`,
-          // which can undo the synchronous reset above. Complete the handoff
-          // after that native work. Pointer focus already released hover on
-          // pointer-down, so this never overrides click caret placement.
-          focusFrameRef.current = requestAnimationFrame(() => {
-            focusFrameRef.current = null;
-            if (
-              inputRef.current === input &&
-              document.activeElement === input
-            ) {
+          // Pointer focus released hover on pointer-down, so only a keyboard
+          // or programmatic focus which inherited the animated viewport enters
+          // this native-focus handoff.
+          focusResetRef.current = scheduleInputFocusViewportReset({
+            reset: () => {
               input.scrollLeft = 0;
-            }
+            },
+            shouldReset: () =>
+              inputRef.current === input && document.activeElement === input,
           });
         }
         onFocus?.(event);
