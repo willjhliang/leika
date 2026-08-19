@@ -39,9 +39,7 @@ def test_icon_archive_generation_is_byte_stable(
     assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in infos)
 
 
-def test_icon_sources_must_be_regular_and_portably_unique(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_icon_sources_must_be_regular(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "source"
     source.mkdir()
     target = source / "target"
@@ -56,17 +54,13 @@ def test_icon_sources_must_be_regular_and_portably_unique(
     with pytest.raises(RuntimeError, match="not a regular file"):
         generator.build_archive()
 
-    (source / "linked.svg").unlink()
-    (source / "A.svg").write_text("<svg/>", encoding="utf-8")
-    (source / "a.svg").write_text("<svg/>", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="collide portably"):
-        generator.build_archive()
 
-    (source / "A.svg").unlink()
-    (source / "a.svg").unlink()
-    (source / "bad:name.svg").write_text("<svg/>", encoding="utf-8")
+def test_icon_source_names_must_be_portable_and_unique() -> None:
+    with pytest.raises(RuntimeError, match="collide portably"):
+        generator._validate_portable_source_names(["A.svg", "a.svg"])
+
     with pytest.raises(RuntimeError, match="not portable"):
-        generator.build_archive()
+        generator._validate_portable_source_names(["bad:name.svg"])
 
 
 def test_failed_icon_archive_generation_preserves_previous_file(
@@ -104,7 +98,8 @@ def test_generated_source_preserves_mode_and_fsyncs_parent(
     generator._write_generated(target, "new")
 
     assert target.read_text(encoding="utf-8") == "new\n"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    if generator.os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
     assert synced == [tmp_path]
 
 

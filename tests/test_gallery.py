@@ -65,7 +65,8 @@ def test_atomic_page_write_failure_preserves_existing_page(
         gallery._atomic_write_text(target, "new page\n")
 
     assert target.read_text(encoding="utf-8") == "old page\n"
-    assert target.stat().st_mode & 0o777 == 0o640
+    if gallery.os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o640
     assert not any(path.name.startswith(".gallery.md.") for path in tmp_path.iterdir())
 
 

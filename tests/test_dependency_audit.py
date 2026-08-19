@@ -49,7 +49,8 @@ def test_inventory_write_preserves_mode_and_flushes_parent(
     check_dependency_audit._atomic_write_inventory(output, {"demo": "1"})
 
     assert output.read_text(encoding="utf-8") == "demo==1\n"
-    assert stat.S_IMODE(output.stat().st_mode) == 0o640
+    if check_dependency_audit.os.name != "nt":
+        assert stat.S_IMODE(output.stat().st_mode) == 0o640
     assert synced == [tmp_path]
 
 

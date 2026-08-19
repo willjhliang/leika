@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import http.client
 import shutil
-import stat
 import subprocess
+import sys
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -27,11 +26,22 @@ def _get(port: int, path: str, headers: dict[str, str] | None = None) -> int:
         connection.close()
 
 
-def _fake_cloudflared(tmp_path: Path, body: str) -> str:
-    script = tmp_path / "fake_cloudflared"
-    script.write_text(f"#!/bin/sh\n{body}\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    return str(script)
+def _fake_cloudflared(monkeypatch: pytest.MonkeyPatch, body: str) -> str:
+    original_popen = subprocess.Popen
+    child_body = "import sys\n" + body
+
+    def launch(command, **kwargs):
+        assert command == [
+            "fake-cloudflared",
+            "tunnel",
+            "--url",
+            "http://127.0.0.1:1234",
+            "--no-autoupdate",
+        ]
+        return original_popen([sys.executable, "-u", "-c", child_body], **kwargs)
+
+    monkeypatch.setattr(leika._share.subprocess, "Popen", launch)
+    return "fake-cloudflared"
 
 
 def test_share_url_is_read_from_cloudflared_banner() -> None:
@@ -56,12 +66,13 @@ def test_missing_binary_reports_install_instructions(monkeypatch: pytest.MonkeyP
         CloudflaredTunnel(1234).start(timeout=1)
 
 
-def test_tunnel_reports_url_and_closes(tmp_path: Path) -> None:
+def test_tunnel_reports_url_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fake_cloudflared(
-        tmp_path,
-        'echo "INF Requesting new quick Tunnel on trycloudflare.com..." >&2\n'
-        'echo "INF https://leika-test.trycloudflare.com" >&2\n'
-        "sleep 30",
+        monkeypatch,
+        "import time\n"
+        'print("INF Requesting new quick Tunnel on trycloudflare.com...", file=sys.stderr, flush=True)\n'
+        'print("INF https://leika-test.trycloudflare.com", file=sys.stderr, flush=True)\n'
+        "time.sleep(30)\n",
     )
     tunnel = CloudflaredTunnel(1234, binary=binary)
     try:
@@ -72,8 +83,11 @@ def test_tunnel_reports_url_and_closes(tmp_path: Path) -> None:
     assert tunnel.url is None
 
 
-def test_early_exit_surfaces_cloudflared_output(tmp_path: Path) -> None:
-    binary = _fake_cloudflared(tmp_path, 'echo "ERR failed to request quick tunnel" >&2\nexit 1')
+def test_early_exit_surfaces_cloudflared_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    binary = _fake_cloudflared(
+        monkeypatch,
+        'print("ERR failed to request quick tunnel", file=sys.stderr, flush=True)\nraise SystemExit(1)\n',
+    )
     tunnel = CloudflaredTunnel(1234, binary=binary)
     # The failure must carry cloudflared's own words: they are the only
     # diagnostic there is, and waiting out the full timeout would be worse.
@@ -171,10 +185,12 @@ def test_timeout_validation_does_not_consume_one_shot(
     assert not tunnel._started
 
 
-def test_start_is_explicitly_one_shot_after_close(tmp_path: Path) -> None:
+def test_start_is_explicitly_one_shot_after_close(monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fake_cloudflared(
-        tmp_path,
-        'echo "INF https://one-shot.trycloudflare.com" >&2\nsleep 30',
+        monkeypatch,
+        "import time\n"
+        'print("INF https://one-shot.trycloudflare.com", file=sys.stderr, flush=True)\n'
+        "time.sleep(30)\n",
     )
     tunnel = CloudflaredTunnel(1234, binary=binary)
     assert tunnel.start(timeout=5) == "https://one-shot.trycloudflare.com"
@@ -183,8 +199,11 @@ def test_start_is_explicitly_one_shot_after_close(tmp_path: Path) -> None:
         tunnel.start(timeout=1)
 
 
-def test_failed_start_is_explicitly_one_shot(tmp_path: Path) -> None:
-    binary = _fake_cloudflared(tmp_path, 'echo "ERR failed" >&2\nexit 1')
+def test_failed_start_is_explicitly_one_shot(monkeypatch: pytest.MonkeyPatch) -> None:
+    binary = _fake_cloudflared(
+        monkeypatch,
+        'print("ERR failed", file=sys.stderr, flush=True)\nraise SystemExit(1)\n',
+    )
     tunnel = CloudflaredTunnel(1234, binary=binary)
     with pytest.raises(ShareTunnelError):
         tunnel.start(timeout=2)
@@ -203,11 +222,11 @@ def test_spawn_oserror_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_banner_followed_by_exit_is_not_published_as_a_live_tunnel(
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binary = _fake_cloudflared(
-        tmp_path,
-        'echo "INF https://already-dead.trycloudflare.com" >&2\nexit 0',
+        monkeypatch,
+        'print("INF https://already-dead.trycloudflare.com", file=sys.stderr, flush=True)\n',
     )
     tunnel = CloudflaredTunnel(1234, binary=binary)
     with pytest.raises(ShareTunnelError):

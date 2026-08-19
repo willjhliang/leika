@@ -381,6 +381,8 @@ function PreviewBody({
         <img
           src={url}
           alt={filename}
+          width={imageAdmission.size.width}
+          height={imageAdmission.size.height}
           className={previewMediaClassName(fullscreen)}
           onError={imageDecodeError.onError}
         />

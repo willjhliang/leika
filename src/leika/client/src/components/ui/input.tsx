@@ -47,6 +47,7 @@ const Input = React.forwardRef<
   const cycleRef = React.useRef<HoverScrollCycle | null>(null);
   const pointerInsideRef = React.useRef(false);
   const blurFrameRef = React.useRef<number | null>(null);
+  const focusFrameRef = React.useRef<number | null>(null);
 
   const setInputRef = React.useCallback(
     (input: HTMLInputElement | null) => {
@@ -59,6 +60,13 @@ const Input = React.forwardRef<
     },
     [forwardedRef],
   );
+
+  const cancelFocusReset = React.useCallback(() => {
+    if (focusFrameRef.current !== null) {
+      cancelAnimationFrame(focusFrameRef.current);
+      focusFrameRef.current = null;
+    }
+  }, []);
 
   /**
    * Release hover ownership. Only an active cycle may restore the prefix:
@@ -124,9 +132,10 @@ const Input = React.forwardRef<
         cancelAnimationFrame(blurFrameRef.current);
         blurFrameRef.current = null;
       }
+      cancelFocusReset();
       stopHoverScroll(false);
     },
-    [stopHoverScroll],
+    [cancelFocusReset, stopHoverScroll],
   );
 
   return (
@@ -160,6 +169,7 @@ const Input = React.forwardRef<
         // A blurred hover cycle is only paint for reading. Restore its prefix
         // before native caret hit-testing, but never disturb a focused field's
         // own selection or manually scrolled viewport.
+        cancelFocusReset();
         if (stopHoverScroll(false)) {
           event.currentTarget.scrollLeft = 0;
         }
@@ -167,13 +177,29 @@ const Input = React.forwardRef<
       }}
       onFocus={(event) => {
         // Focus gives the native field complete ownership of its viewport.
+        cancelFocusReset();
         if (stopHoverScroll(false)) {
-          event.currentTarget.scrollLeft = 0;
+          const input = event.currentTarget;
+          input.scrollLeft = 0;
+          // Firefox and WebKit reveal the caret after dispatching `focus`,
+          // which can undo the synchronous reset above. Complete the handoff
+          // after that native work. Pointer focus already released hover on
+          // pointer-down, so this never overrides click caret placement.
+          focusFrameRef.current = requestAnimationFrame(() => {
+            focusFrameRef.current = null;
+            if (
+              inputRef.current === input &&
+              document.activeElement === input
+            ) {
+              input.scrollLeft = 0;
+            }
+          });
         }
         onFocus?.(event);
       }}
       onBlur={(event) => {
         const input = event.currentTarget;
+        cancelFocusReset();
         onBlur?.(event);
         if (blurFrameRef.current !== null) {
           cancelAnimationFrame(blurFrameRef.current);

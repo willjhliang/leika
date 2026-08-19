@@ -35,7 +35,8 @@ def test_write_or_check_replaces_generated_file_atomically(
 
     assert sync._write_or_check(target, "new\n", check=False)
     assert target.read_text(encoding="utf-8") == "new\n"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    if sync.os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
     assert len(observed_source) == 1
     assert not observed_source[0].exists()
     assert synced == [tmp_path]
@@ -49,7 +50,8 @@ def test_new_generated_file_uses_portable_source_mode(
 
     assert sync._write_or_check(target, "new\n", check=False)
 
-    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    if sync.os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 def test_write_or_check_preserves_generated_file_when_replace_fails(

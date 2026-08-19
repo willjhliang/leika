@@ -195,5 +195,6 @@ def test_editable_radio_text_scrolls_on_hover_but_clicks_from_its_prefix(
     leika_page.wait_for_function("input => input.scrollLeft > 20", arg=handle)
     field.focus()
     expect(field).not_to_have_attribute("data-leika-hover-scroll-active", "")
+    leika_page.wait_for_function("input => input.scrollLeft < 1", arg=handle)
     assert field.evaluate("input => input.scrollLeft") < 1
     assert page_errors == []

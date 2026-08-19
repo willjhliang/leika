@@ -411,6 +411,7 @@ def test_a_str_is_refused_rather_than_guessed_at() -> None:
         _send("notes.txt", "hello")  # type: ignore[arg-type]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not permit renaming this CRT-open file")
 def test_a_file_replaced_mid_send_is_still_sent_whole(tmp_path: Path) -> None:
     # A rotated log: the path is renamed away and a new file takes its place
     # after the transfer has announced its length. The open descriptor still

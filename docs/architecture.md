@@ -134,8 +134,10 @@ should use a dedicated streaming endpoint for larger files.
 
 A path-backed download is a live descriptor stream: atomically replacing the
 path leaves an already-open transfer stable, while modifying the same file in
-place can change bytes the transfer has not read yet. Pass immutable `bytes`
-when the complete snapshot must be fixed at the time the download begins.
+place can change bytes the transfer has not read yet. Windows may refuse to
+replace a path while this standard file handle remains open. Pass immutable
+`bytes` when the complete snapshot must be fixed at the time the download
+begins.
 
 Plain-text, prose, and source previews render through 16 MiB; Markdown renders
 through 1 MiB to bound parse and DOM expansion. The Blob remains available to

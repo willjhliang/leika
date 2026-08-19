@@ -430,7 +430,7 @@ def test_registered_asset_rejects_oversized_and_unsafe_suffix(
     with pytest.raises(ValueError, match="larger"):
         server.register_http_asset(oversized)
 
-    odd = tmp_path / "asset.?#%"
+    odd = tmp_path / "asset.bad_suffix"
     odd.write_bytes(b"1234")
     url = server.register_http_asset(odd).url
     name = url.rsplit("/", 1)[-1]

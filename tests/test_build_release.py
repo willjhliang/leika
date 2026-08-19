@@ -444,7 +444,7 @@ def test_main_does_not_publish_when_client_build_fails(monkeypatch) -> None:
     with pytest.raises(subprocess.CalledProcessError):
         build_release.main()
 
-    assert calls[0][0][1].endswith("src/leika/_client_autobuild.py")
+    assert Path(calls[0][0][1]) == build_release.ROOT / "src/leika/_client_autobuild.py"
     assert not published
 
     assert calls[0][0][-2:] == ["--force", "--clean-install"]
@@ -466,8 +466,8 @@ def test_main_does_not_publish_when_generated_protocol_check_fails(monkeypatch) 
     with pytest.raises(subprocess.CalledProcessError):
         build_release.main()
 
-    assert calls[0][1].endswith("src/leika/_client_autobuild.py")
-    assert calls[1][1].endswith("sync_client_server.py")
+    assert Path(calls[0][1]) == build_release.ROOT / "src/leika/_client_autobuild.py"
+    assert Path(calls[1][1]) == build_release.ROOT / "sync_client_server.py"
     assert calls[1][-1] == "--check"
     assert not published
 

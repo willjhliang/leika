@@ -60,6 +60,10 @@ def test_an_image_opens_in_the_dialog(
 
     _press(preview_page, "Show field")
     image = _dialog(preview_page).locator("img")
+    # Header dimensions reserve the image's shape before slower decoders have
+    # produced pixels; the popup must never collapse to title-bar height.
+    expect(image).to_have_attribute("width", "8")
+    expect(image).to_have_attribute("height", "6")
     expect(image).to_be_visible()
     # Decoded, not merely present: a broken object URL still renders an <img>.
     expect(image).to_have_js_property("naturalWidth", 8)
@@ -1681,7 +1685,10 @@ def test_the_contents_toggle_is_remembered_for_that_file(
                           - el.getBoundingClientRect().top""",
         seeds.element_handle(),
     )
-    frame.evaluate("(el, top) => { el.scrollTop = top * 0.96; }", seeds_top)
+    # The section line has 24px of arrival slack. Stay a known distance above
+    # it rather than using a percentage whose pixel distance varies with font
+    # metrics and browser layout.
+    frame.evaluate("(el, top) => { el.scrollTop = top - 40; }", seeds_top)
     expect(_contents(preview_page).get_by_role("link", name="Setup")).to_have_attribute(
         "aria-current", "true"
     )

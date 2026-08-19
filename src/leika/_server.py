@@ -339,11 +339,13 @@ class ClientHandle:
                 retains the complete download to create its Blob and rejects
                 files over 256 MiB or 65,536 parts, so this is not end-to-end
                 constant-memory streaming. A path is streamed from one live open
-                descriptor: replacing its directory entry cannot alter the transfer,
-                but an in-place writer can change bytes still to be read. Pass bytes
-                (or publish files by atomic rename) when an immutable snapshot is
-                required. Text has to be encoded: a `str` names no file and
-                holds no bytes, so it is refused rather than guessed at.
+                descriptor: replacing its directory entry cannot alter the
+                transfer, though Windows may refuse that replacement until the
+                transfer closes. An in-place writer can change bytes still to be
+                read. Pass bytes when an immutable snapshot is required; on systems
+                that permit replacing open files, atomic rename also preserves the
+                transfer snapshot. Text has to be encoded: a `str` names no file
+                and holds no bytes, so it is refused rather than guessed at.
             chunk_size: Positive part size, at most 8 MiB.
             save_immediately: Whether to save the file immediately. If `False`,
                 a link to the file will be shown as a notification. Being able to

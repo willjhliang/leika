@@ -20,7 +20,7 @@ import tempfile
 import unicodedata
 import zipfile
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from ._client_autobuild import _build_lock
@@ -67,8 +67,10 @@ def _replace_generated(path: Path, write: Callable[[Path], None]) -> None:
     os.close(descriptor)
     try:
         write(temporary)
-        os.chmod(temporary, mode)
-        with temporary.open("rb") as stream:
+        # Windows requires write access for fsync. Open while mkstemp's mode is
+        # still writable, then restore a potentially read-only target mode.
+        with temporary.open("r+b") as stream:
+            os.chmod(temporary, mode)
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         _fsync_directory(path.parent)
@@ -112,20 +114,25 @@ def _portable_source_key(name: str) -> str:
     return normalized.casefold()
 
 
+def _validate_portable_source_names(names: Iterable[str]) -> None:
+    keys: dict[str, str] = {}
+    for name in names:
+        key = _portable_source_key(name)
+        previous = keys.setdefault(key, name)
+        if previous != name:
+            raise RuntimeError(f"icon source names collide portably: {previous!r}, {name!r}")
+
+
 def _validated_sources() -> list[Path]:
     if SOURCE_DIR.is_symlink() or not SOURCE_DIR.is_dir():
         raise SystemExit(f"{SOURCE_DIR} not found; run `npm ci` in src/leika/client first.")
     sources = sorted(path for path in SOURCE_DIR.iterdir() if path.suffix == ".svg")
     if not sources:
         raise SystemExit(f"no SVGs found in {SOURCE_DIR}")
-    keys: dict[str, str] = {}
     for path in sources:
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"icon source is not a regular file: {path}")
-        key = _portable_source_key(path.name)
-        previous = keys.setdefault(key, path.name)
-        if previous != path.name:
-            raise RuntimeError(f"icon source names collide portably: {previous!r}, {path.name!r}")
+    _validate_portable_source_names(path.name for path in sources)
     return sources
 
 

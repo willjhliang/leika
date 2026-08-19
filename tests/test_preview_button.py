@@ -222,7 +222,7 @@ def test_scrolling_into_view_warms_a_static_preview(server: leika.Server, tmp_pa
     # The warm is the press's transfer sent early, under a disposition the
     # browser holds rather than shows -- so nothing lands in `previewed`.
     document = tmp_path / "notes.md"
-    document.write_text("# hi\n")
+    document.write_bytes(b"# hi\n")
 
     handle = server.gui.add_preview_button("Look", document)
     client = _Client(server)

@@ -443,11 +443,9 @@ def _release_lock() -> Iterator[None]:
         if os.name == "nt":
             import msvcrt
 
-            handle.seek(0)
-            if not handle.read(1):
-                handle.seek(0)
-                handle.write(b"\0")
-                handle.flush()
+            # Windows permits a byte-range lock past EOF. Locking the empty
+            # file avoids a sentinel read that a current exclusive holder
+            # would reject through this second handle before we can contend.
             while True:
                 handle.seek(0)
                 try:

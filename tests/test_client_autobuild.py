@@ -531,10 +531,13 @@ def test_matching_path_node_without_sibling_npm_falls_back_to_nodeenv(
     node = path_bin / "node"
     node.write_text("")
     env = client / ".nodeenv"
-    env_bin = env / "bin"
+    if autobuild.sys.platform == "win32":
+        env_bin, npm_name = env / "Scripts", "npm.cmd"
+    else:
+        env_bin, npm_name = env / "bin", "npm"
     env_bin.mkdir(parents=True)
     (env / ".leika-node").write_text("20.0.0")
-    (env_bin / "npm").write_text("")
+    (env_bin / npm_name).write_text("")
     monkeypatch.setattr(autobuild.shutil, "which", lambda _: str(node))
     monkeypatch.setattr(autobuild, "_installed_node_version", lambda _: "20.0.0")
 
@@ -717,6 +720,31 @@ def test_snapshot_flushes_marker_before_renames_and_each_terminal_entry(
     assert autobuild._is_complete_generation(output)
     assert not autobuild._snapshot_backup_dir(output).exists()
     assert not autobuild._snapshot_transaction_path(output).exists()
+
+
+def test_file_fsync_uses_a_writable_descriptor_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "payload"
+    opened: list[tuple[Path, int]] = []
+    fsynced: list[int] = []
+    closed: list[int] = []
+
+    def open_file(candidate: Path, flags: int) -> int:
+        opened.append((candidate, flags))
+        return 17
+
+    monkeypatch.setattr(autobuild.os, "name", "nt")
+    monkeypatch.setattr(autobuild.os, "open", open_file)
+    monkeypatch.setattr(autobuild.os, "fsync", fsynced.append)
+    monkeypatch.setattr(autobuild.os, "close", closed.append)
+
+    autobuild._fsync_file(path)
+
+    expected_flags = autobuild.os.O_RDWR | getattr(autobuild.os, "O_BINARY", 0)
+    assert opened == [(path, expected_flags)]
+    assert fsynced == [17]
+    assert closed == [17]
 
 
 def test_directory_fsync_is_an_explicit_noop_on_windows(

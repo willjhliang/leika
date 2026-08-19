@@ -263,6 +263,20 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush one completed regular file through a platform-valid descriptor."""
+    # Windows' CRT rejects ``fsync``/``_commit`` on a read-only descriptor.
+    # These are transaction-owned build outputs, so open them read/write there;
+    # POSIX only needs read access to flush an already completed file.
+    flags = os.O_RDWR if os.name == "nt" else os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _fsync_tree(directory: Path) -> None:
     """Flush a completed generation before publishing its directory entry."""
     directories: list[Path] = []
@@ -273,8 +287,7 @@ def _fsync_tree(directory: Path) -> None:
             path = root_path / filename
             if path.is_symlink():
                 continue
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
+            _fsync_file(path)
     for path in reversed(directories):
         _fsync_directory(path)
 
@@ -575,11 +588,9 @@ def _file_lock(path: Path) -> Iterator[None]:
         if os.name == "nt":
             import msvcrt
 
-            handle.seek(0)
-            if not handle.read(1):
-                handle.seek(0)
-                handle.write(b"\0")
-                handle.flush()
+            # Windows permits a byte-range lock past EOF. Locking the empty
+            # file avoids a sentinel read that a current exclusive holder
+            # would reject through this second handle before we can contend.
             while True:
                 handle.seek(0)
                 try:

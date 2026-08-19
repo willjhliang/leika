@@ -180,8 +180,14 @@ def test_high_level_stop_from_sync_connection_callback_returns_promptly(
 
     assert failures == []
     assert elapsed and elapsed[0] < 1.0
-    assert server._websock_server._server_thread is not None
-    assert not server._websock_server._server_thread.is_alive()
+    server_thread = server._websock_server._server_thread
+    assert server_thread is not None
+    # callback_returned is set by the callback itself, just before the event
+    # loop releases callback ownership. The repeat stop() in finally may
+    # therefore still take the deliberately asynchronous callback-safe path.
+    # Synchronize with the terminal worker state before asserting it.
+    server_thread.join(timeout=2.0)
+    assert not server_thread.is_alive()
 
 
 def test_stop_finalizer_start_failure_can_be_retried_while_callback_is_active(
