@@ -9,6 +9,23 @@ import leika
 def _assert_inside_viewport(page: Page) -> None:
     panel = page.get_by_test_id("control-panel")
     expect(panel).to_be_visible(timeout=5_000)
+    panel_handle = panel.element_handle()
+    assert panel_handle is not None
+    # A viewport resize reaches the panel through ResizeObserver and a React
+    # commit, both of which may follow Playwright's viewport protocol reply.
+    # Poll the user-visible contract rather than sampling that transient frame.
+    page.wait_for_function(
+        """element => {
+          if (!element.isConnected) return false;
+          const bounds = element.getBoundingClientRect();
+          return bounds.left >= -0.5 &&
+            bounds.top >= -0.5 &&
+            bounds.right <= window.innerWidth + 0.5 &&
+            bounds.bottom <= window.innerHeight + 0.5;
+        }""",
+        arg=panel_handle,
+        timeout=5_000,
+    )
     bounds = panel.bounding_box()
     viewport = page.viewport_size
     assert bounds is not None and viewport is not None

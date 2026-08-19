@@ -1,7 +1,7 @@
-// Shared low-level helpers for pointer-driven gestures (drag, resize). Kept
-// here so the docking library has no dependency back on control-panel code.
+import { bindPointerGesture, tryCapture, tryRelease } from "../pointerGesture";
 
 export { motionExceedsThreshold } from "../dragUtils";
+export { bindPointerGesture, tryCapture, tryRelease } from "../pointerGesture";
 
 /** Coordinates every pointer gesture owned by one DockManager. Starting a new
  * gesture cancels the previous one before taking ownership. The unregister
@@ -33,52 +33,6 @@ export function createGestureCoordinator(): GestureCoordinator {
         if (active === token) active = null;
       };
     },
-  };
-}
-
-/** Bind a pointer gesture's move/end/cancel listeners on `window` and return a
- * detach function. Gestures capture the pointer on an element but listen on
- * `window` so the gesture survives the cursor leaving that element; this shares
- * the move + (up/cancel -> end) wiring.
- *
- * When `pointerId` is given, events from any OTHER pointer are ignored -- so on
- * a multi-touch surface a second finger can't drive or end the first finger's
- * gesture (a second finger's `pointerup` must not commit finger A's drop). This
- * mirrors the scene-pointer subsystem (pointer/gestures.ts). The end callback
- * receives the triggering event so callers can release the right pointer, plus
- * a first-class `cancelled` flag: true for anything that is NOT a real release
- * (pointercancel from a browser-stolen touch, or Escape) -- consumers abort
- * their commit on it (a drag drops nothing, a reorder snaps back) instead of
- * sniffing event types. */
-export function bindPointerGesture(
-  onMove: (event: PointerEvent) => void,
-  onEnd: (event: PointerEvent, cancelled: boolean) => void,
-  pointerId?: number,
-): () => void {
-  const handleMove = (event: PointerEvent) => {
-    if (pointerId !== undefined && event.pointerId !== pointerId) return;
-    onMove(event);
-  };
-  const handleEnd = (event: PointerEvent) => {
-    if (pointerId !== undefined && event.pointerId !== pointerId) return;
-    onEnd(event, event.type === "pointercancel");
-  };
-  const handleKey = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
-    onEnd(
-      new PointerEvent("pointercancel", { pointerId: pointerId ?? undefined }),
-      true,
-    );
-  };
-  window.addEventListener("pointermove", handleMove);
-  window.addEventListener("pointerup", handleEnd);
-  window.addEventListener("pointercancel", handleEnd);
-  window.addEventListener("keydown", handleKey);
-  return () => {
-    window.removeEventListener("pointermove", handleMove);
-    window.removeEventListener("pointerup", handleEnd);
-    window.removeEventListener("pointercancel", handleEnd);
-    window.removeEventListener("keydown", handleKey);
   };
 }
 
@@ -184,23 +138,4 @@ export function dragGesture(opts: {
   unregister = coordinator?.register(() => cancel(true)) ?? unregister;
   onStart?.();
   return () => cancel(true);
-}
-
-/** Try to capture the pointer on an element; swallow the error if the pointer
- * is already gone. */
-export function tryCapture(el: Element, pointerId: number): void {
-  try {
-    el.setPointerCapture(pointerId);
-  } catch {
-    // Pointer may already be released; ignore.
-  }
-}
-
-/** Release a captured pointer, ignoring "already released" errors. */
-export function tryRelease(el: Element, pointerId: number): void {
-  try {
-    el.releasePointerCapture(pointerId);
-  } catch {
-    // Already released; ignore.
-  }
 }

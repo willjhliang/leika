@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MAX_GUI_COLLECTION_ITEMS } from "../guiLimits";
 import { prefersReducedMotion } from "../utils/motion";
+import {
+  createEntryStackDragController,
+  entryStackDragPosition,
+  moveEntryStackItem,
+  settleEntryStackDrag,
+  type EntryStackDrag,
+  type EntryStackDragController,
+} from "./entryStackDrag";
 import { EntryRow } from "./entryStackStyles";
 
 /** How long a row takes to travel, stepping aside or landing. */
@@ -32,38 +40,6 @@ const CONTROL = cn(
   "disabled:pointer-events-none disabled:opacity-50",
 );
 
-/** An entry held by the pointer. Rows are uniform and the list does not move
- * under a drag, so the geometry is read once, when the grip goes down. */
-type Drag = {
-  /** The entry in hand, by its place in the list. */
-  entry: number;
-  /** The middle of the first row, and the distance from one row to the next
-   * (not the row height: hugging rows overlap by the border they share). */
-  origin: number;
-  stride: number;
-  /** Where the pointer is, and where in the row it took hold -- so the entry
-   * travels with the cursor instead of jumping its middle up to meet it. */
-  pointerY: number;
-  grab: number;
-};
-
-/** How far the entry is drawn from where its row rests, and the place it
- * would take if let go now. Both follow from one number, clamped to the ends
- * of the list, so the two can never disagree. */
-function carriedTo(drag: Drag, count: number) {
-  const restingAt = (place: number) => drag.origin + place * drag.stride;
-  const middle = Math.min(
-    Math.max(drag.pointerY - drag.grab, restingAt(0)),
-    restingAt(count - 1),
-  );
-  return {
-    entry: drag.entry,
-    stride: drag.stride,
-    landing: Math.round((middle - drag.origin) / drag.stride),
-    lift: middle - restingAt(drag.entry),
-  };
-}
-
 /** Where the rows sit, read off the document. */
 function geometryOf(rows: HTMLElement[]) {
   const first = rows[0].getBoundingClientRect();
@@ -72,14 +48,6 @@ function geometryOf(rows: HTMLElement[]) {
     origin: first.top + first.height / 2,
     stride: next === undefined ? first.height : next.top - first.top,
   };
-}
-
-/** Move one entry to another place, as a new array. */
-function moved<T>(entries: T[], from: number, to: number): T[] {
-  const next = [...entries];
-  const [moved] = next.splice(from, 1);
-  next.splice(to, 0, moved);
-  return next;
 }
 
 /** An id per entry, kept with the entry as the stack shuffles them.
@@ -137,7 +105,7 @@ export function EntryStack<T>({
   frozen,
   children,
 }: {
-  items: T[];
+  items: readonly T[];
   commit: (next: T[]) => void;
   /** A new entry, made when the viewer presses Add. */
   blank: () => T;
@@ -152,8 +120,8 @@ export function EntryStack<T>({
   /** Reorder, remove, add: the entries and their ids, always together. */
   const reorder = React.useCallback(
     (from: number, to: number) => {
-      follow((order) => moved(order, from, to));
-      commit(moved(items, from, to));
+      follow((order) => moveEntryStackItem(order, from, to));
+      commit(moveEntryStackItem(items, from, to));
     },
     [commit, follow, items],
   );
@@ -168,7 +136,22 @@ export function EntryStack<T>({
   };
 
   const rowsRef = React.useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = React.useState<Drag | null>(null);
+  const [drag, setDrag] = React.useState<EntryStackDrag | null>(null);
+  const dragControllerRef = React.useRef<EntryStackDragController | null>(null);
+  if (dragControllerRef.current === null) {
+    dragControllerRef.current = createEntryStackDragController(
+      { items, disabled, frozen },
+      setDrag,
+    );
+  }
+  const dragController = dragControllerRef.current;
+  // A server update can replace the indexed entries while the pointer is in
+  // flight. Invalidate before paint rather than applying an old row number to
+  // a new collection, and detach synchronously when this stack unmounts.
+  React.useLayoutEffect(() => {
+    dragController.sync({ items, disabled, frozen });
+  }, [disabled, dragController, frozen, items]);
+  React.useLayoutEffect(() => () => dragController.dispose(), [dragController]);
   // The row still on its way to where its entry now belongs. Cleared by the
   // travel itself, and only if it is still the travel in the air -- a second
   // move can start before the first has landed.
@@ -226,6 +209,19 @@ export function EntryStack<T>({
     [followEntry, slideIn],
   );
 
+  const finishDrag = React.useCallback(
+    (held: EntryStackDrag, dropped: boolean) => {
+      const { place, offset } = settleEntryStackDrag(
+        held,
+        items.length,
+        dropped,
+      );
+      if (place !== held.entry) reorder(held.entry, place);
+      land(place, offset, false);
+    },
+    [items.length, land, reorder],
+  );
+
   /** Take hold of an entry. The list is not touched until the drop. */
   const takeHold = (
     event: React.PointerEvent<HTMLButtonElement>,
@@ -237,12 +233,19 @@ export function EntryStack<T>({
     event.preventDefault();
     event.currentTarget.focus({ focusVisible: false });
     const { origin, stride } = geometryOf(rows());
-    setDrag({
+    const held: EntryStackDrag = {
       entry,
       origin,
       stride,
       pointerY: event.clientY,
       grab: event.clientY - (origin + entry * stride),
+    };
+    // Own the press before React is asked to draw it: pointer-up may be next.
+    dragController.start({
+      grip: event.currentTarget,
+      pointerId: event.pointerId,
+      drag: held,
+      finish: finishDrag,
     });
   };
 
@@ -270,35 +273,8 @@ export function EntryStack<T>({
     return () => root.classList.remove("leika-carrying");
   }, [dragging]);
 
-  // A drag is the window's to follow: it carries on off the grip and out of
-  // the panel. Listened for afresh on each move, since letting go has to read
-  // the drag and the list as they stand at that moment.
-  React.useEffect(() => {
-    if (drag === null) return;
-    const move = (event: PointerEvent) =>
-      setDrag((held) => held && { ...held, pointerY: event.clientY });
-    const release = (landed: boolean) => {
-      setDrag(null);
-      const { landing, lift } = carriedTo(drag, items.length);
-      // Cancelled is not dropped: the gesture was taken away rather than
-      // finished, so the entry goes back where it came from.
-      const place = landed ? landing : drag.entry;
-      if (place !== drag.entry) reorder(drag.entry, place);
-      land(place, lift - (place - drag.entry) * drag.stride, false);
-    };
-    const drop = () => release(true);
-    const abandon = () => release(false);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", drop);
-    window.addEventListener("pointercancel", abandon);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", drop);
-      window.removeEventListener("pointercancel", abandon);
-    };
-  }, [drag, items, land, reorder]);
-
-  const carry = drag === null ? null : carriedTo(drag, items.length);
+  const carry =
+    drag === null ? null : entryStackDragPosition(drag, items.length);
 
   /** The place a row is DRAWN in, which is not the place it holds while an
    * entry is being carried over it. */

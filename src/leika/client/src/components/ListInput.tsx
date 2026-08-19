@@ -24,7 +24,7 @@ export default function ListInputComponent({
 
   const stack = (
     <EntryStack
-      items={[...value]}
+      items={value}
       commit={commit}
       blank={() => ""}
       disabled={disabled}

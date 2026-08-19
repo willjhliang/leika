@@ -146,7 +146,7 @@ export default function RadioListComponent({
     <fieldset className="m-0 block w-full min-w-0 border-0 p-0">
       <legend className="sr-only">{groupLabel}</legend>
       <EntryStack
-        items={[...value]}
+        items={value}
         commit={commit}
         blank={(): Item => ["", false]}
         disabled={disabled}

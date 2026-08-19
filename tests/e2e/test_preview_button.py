@@ -207,6 +207,10 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     assert inline_box is not None
 
     address = preview_page.url
+    # Settle the control's own delayed hover UI before the real click. Under
+    # load, combining the pointer move and press can race WebKit's tooltip mount.
+    expand.hover()
+    expect(preview_page.locator('[data-slot="tooltip-content"]')).to_be_visible()
     expand.click()
     expect(_dialog(preview_page)).to_have_count(2)
     inner = preview_page.get_by_role("dialog", name="Validation curve", exact=True)

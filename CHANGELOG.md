@@ -5,7 +5,7 @@ versioning.
 
 ## 0.4.0 — 2026-08-19
 
-58 commits since v0.3.0. Items marked breaking need call sites updated.
+59 commits since v0.3.0. Items marked breaking need call sites updated.
 
 ### New
 

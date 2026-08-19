@@ -470,9 +470,23 @@ def test_dropping_below_a_docked_panel_splits_the_region(
     divider = page.locator("[data-dock-divider='column']")
     expect(divider).to_have_count(1)
     grip = center(divider)
-    drag(page, grip, (grip[0], grip[1] - 90.0))
+    # WebKit can truncate a stepped move after this divider follows its first
+    # substep; one endpoint event is the same valid fast-pointer resize.
+    drag(page, grip, (grip[0], grip[1] - 90.0), steps=1)
+    expected = before - 90.0
+    # The gesture flushes on rAF, then React commits the new flex weights. The
+    # input command can return between those two observable stages.
+    page.wait_for_function(
+        """expected => {
+          const leaf = document.querySelector('[data-dock-leaf]');
+          return leaf !== null &&
+            Math.abs(leaf.getBoundingClientRect().height - expected) <= 3;
+        }""",
+        arg=expected,
+        timeout=5_000,
+    )
     after = bounds(leaves.nth(0))["height"]
-    assert after == pytest.approx(before - 90.0, abs=3.0)
+    assert after == pytest.approx(expected, abs=3.0)
     assert page_errors == []
 
 

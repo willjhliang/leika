@@ -125,7 +125,7 @@ export default function ChecklistComponent({
     </div>
   ) : (
     <EntryStack
-      items={[...value]}
+      items={value}
       commit={commit}
       blank={(): Item => ["", false]}
       disabled={disabled}

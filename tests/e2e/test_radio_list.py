@@ -141,6 +141,65 @@ def test_editing_arrows_keep_the_caret_and_radio_arrows_select(
     assert page_errors == []
 
 
+def test_same_turn_drag_release_commits_the_latest_pointer_position(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    choices = leika_server.gui.add_radio_list(
+        "Density", [("Default", True), "Comfortable", "Compact"]
+    )
+    rows = leika_page.locator("[data-leika-list-item]")
+    grip = leika_page.get_by_label("Reorder entry 1")
+    expect(rows).to_have_count(3, timeout=5_000)
+    grip_box = grip.bounding_box()
+    last_box = rows.nth(2).bounding_box()
+    assert grip_box is not None and last_box is not None
+
+    # Dispatch the entire gesture in one JavaScript turn. React cannot commit
+    # a movement render between these events, so release must read event-time
+    # pointer ownership rather than a closure from the preceding render.
+    grip.evaluate(
+        """(element, point) => {
+          const pointerId = 41;
+          const common = {
+            bubbles: true,
+            pointerId,
+            pointerType: "mouse",
+            isPrimary: true,
+            button: 0,
+          };
+          element.dispatchEvent(new PointerEvent("pointerdown", {
+            ...common,
+            buttons: 1,
+            clientX: point.x,
+            clientY: point.startY,
+          }));
+          window.dispatchEvent(new PointerEvent("pointermove", {
+            ...common,
+            buttons: 1,
+            clientX: point.x,
+            clientY: point.endY,
+          }));
+          window.dispatchEvent(new PointerEvent("pointerup", {
+            ...common,
+            buttons: 0,
+            clientX: point.x,
+            clientY: point.endY,
+          }));
+        }""",
+        {
+            "x": grip_box["x"] + grip_box["width"] / 2,
+            "startY": grip_box["y"] + grip_box["height"] / 2,
+            "endY": last_box["y"] + last_box["height"] / 2,
+        },
+    )
+    wait_until(
+        lambda: choices.value == (("Comfortable", False), ("Compact", False), ("Default", True))
+    )
+    assert page_errors == []
+
+
 def test_selection_travels_with_an_editable_choice(
     leika_server: leika.Server,
     leika_page: Page,
