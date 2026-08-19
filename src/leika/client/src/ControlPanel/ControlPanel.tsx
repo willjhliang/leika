@@ -1,5 +1,6 @@
 import GeneratedGuiContainer from "./Generated";
 import { useViewer } from "../ViewerContext";
+import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 
@@ -65,16 +66,16 @@ export function PageSelector() {
   if (items.length === 0) return null;
   if (items.length === 1) {
     return (
-      <span
+      <HoverScrollText
         className={cn(
-          "inline-flex h-6 min-w-0 max-w-full shrink items-center truncate",
+          "inline-flex h-6 min-w-0 max-w-full shrink items-center",
           guiLabelClassName,
         )}
         data-dock-peek-fade
         data-leika-page-title
       >
         {items[0].label}
-      </span>
+      </HoverScrollText>
     );
   }
   const activeName =
@@ -109,7 +110,9 @@ export function PageSelector() {
           )}
           data-leika-page-selector
         >
-          <SelectValue className="block! min-w-0 truncate" />
+          <SelectValue className="block! min-w-0">
+            <HoverScrollText>{activeName}</HoverScrollText>
+          </SelectValue>
         </SelectTrigger>
         {/* A page switch should not change the menu's geometry. Item-aligned
             selects overlap the trigger when the selected row fits above it,
@@ -182,8 +185,8 @@ export default function ControlPanel() {
 }
 
 /** The panel header's contents: the active page on the left, the
- * websocket connection status on the right, and whatever the chrome around it
- * wants between the two. */
+ * connection and page-readiness status on the right, and whatever the chrome
+ * around it wants between the two. */
 export function PanelHeader({
   actions,
   badge = <ConnectionBadge />,

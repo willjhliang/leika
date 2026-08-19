@@ -65,6 +65,7 @@ make lint
 make typecheck
 make client-test
 make test
+make gallery  # After visual client or gallery-registry changes.
 python scripts/check_docs.py
 make docs
 make test-e2e
@@ -107,11 +108,15 @@ in `docs/api/`; autodoc will not discover it otherwise.
 ## Releases
 
 Before tagging, bump `__version__` in `src/leika/__init__.py`, add the dated
-entry to `CHANGELOG.md`, regenerate the protocol/version file, run the normal
-release checks, and build the canonical distributions:
+entry to `CHANGELOG.md`, regenerate the protocol/version file and component
+gallery, run the normal release checks, and build the canonical distributions.
+The gallery command owns `docs/gallery.md` and its light/dark screenshots; add
+all regenerated files to the release commit so a clean checkout has the exact
+generation the page references.
 
 ```bash
 python sync_client_server.py
+make gallery
 make lint typecheck client-test test
 npm audit --prefix src/leika/client --audit-level=moderate
 npm audit --prefix src/leika/client --omit=dev --audit-level=moderate

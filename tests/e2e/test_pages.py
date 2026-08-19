@@ -156,6 +156,53 @@ def _assert_no_empty_workspace(page: Page) -> None:
     assert min(counts) > 0, counts
 
 
+def _connection_badge_width(page: Page) -> float:
+    bounds = page.locator("[data-leika-connection-trigger]").bounding_box()
+    assert bounds is not None
+    return bounds["width"]
+
+
+def _assert_connection_badge_padding(page: Page) -> None:
+    padding = page.locator("[data-leika-connection-trigger]").evaluate(
+        "element => { const style = getComputedStyle(element); "
+        "return [style.paddingLeft, style.paddingRight]; }"
+    )
+    assert padding == ["4px", "8px"]
+
+
+def _assert_page_refreshing(page: Page, refreshing: bool) -> None:
+    connection = page.locator("[data-leika-connection-trigger]")
+    label = connection.locator("[data-leika-connection-label]")
+    spinner = connection.locator('[data-slot="spinner"]')
+    live_status = page.locator('span[role="status"][aria-live="polite"][aria-atomic="true"]')
+    workspace = page.locator("[data-viewport-workspace]")
+    canvas = page.locator("[data-viewport-grid-canvas]")
+    _assert_connection_badge_padding(page)
+    expect(page.locator("[data-viewport-page-refreshing]")).to_have_count(0)
+    expect(live_status).to_have_count(1)
+
+    if refreshing:
+        expect(connection).to_have_attribute("data-leika-page-refreshing", "true")
+        expect(connection).to_have_attribute("aria-label", "Loading page; connection details")
+        expect(label).to_have_text("Loading")
+        expect(spinner).to_have_count(1)
+        assert spinner.evaluate("element => getComputedStyle(element).color") == label.evaluate(
+            "element => getComputedStyle(element).color"
+        )
+        expect(live_status).to_have_text("Loading page")
+        expect(workspace).to_have_attribute("aria-busy", "true")
+        expect(canvas).to_have_attribute("inert", "")
+        return
+
+    expect(connection).not_to_have_attribute("data-leika-page-refreshing", "true")
+    expect(connection).to_have_attribute("aria-label", "Connected; connection details")
+    expect(label).to_have_text("Connected")
+    expect(spinner).to_have_count(0)
+    expect(live_status).to_have_text("")
+    expect(workspace).to_have_attribute("aria-busy", "false")
+    expect(canvas).not_to_have_attribute("inert", "")
+
+
 def _reset_pane_host_observations(page: Page) -> None:
     page.evaluate(
         """() => {
@@ -192,12 +239,10 @@ def test_page_switch_keeps_pixels_visible_and_revalidates_a_cached_page(
     )
 
     page.goto(leika_server.url)
-    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-    page.wait_for_function(
-        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-    )
+    page.wait_for_selector('[data-viewport-workspace][aria-busy="false"]', timeout=15_000)
     expect(page.locator('[data-viewport-pane-title="main-image"]')).to_have_text("Main image")
     assert _center_pixel(page, "main-image") == old_main_pixel
+    settled_badge_width = _connection_badge_width(page)
 
     trigger = page.locator("[data-leika-page-selector]")
     _start_pane_host_observer(page)
@@ -213,9 +258,13 @@ def test_page_switch_keeps_pixels_visible_and_revalidates_a_cached_page(
         assert _center_pixel(page, "main-image") == old_main_pixel
         _assert_no_empty_workspace(page)
 
+        _assert_page_refreshing(page, True)
+        assert _connection_badge_width(page) < settled_badge_width
+
     expect(page.locator('[data-viewport-pane-title="analysis-image"]')).to_have_text(
         "Analysis image"
     )
+    _assert_page_refreshing(page, False)
     assert _center_pixel(page, "analysis-image") == analysis_pixel
     _assert_no_empty_workspace(page)
 
@@ -233,10 +282,13 @@ def test_page_switch_keeps_pixels_visible_and_revalidates_a_cached_page(
         expect(page.locator('[data-viewport-pane-title="main-image"]')).to_have_text("Main image")
         assert _center_pixel(page, "main-image") == old_main_pixel
         _assert_no_empty_workspace(page)
+        _assert_page_refreshing(page, True)
+        assert _connection_badge_width(page) < settled_badge_width
 
     expect(page.locator('[data-viewport-pane-title="main-image"]')).to_have_text(
         "Updated main image"
     )
+    _assert_page_refreshing(page, False)
     page.wait_for_function(
         """async ([paneId, expected]) => {
             const image = document.querySelector(

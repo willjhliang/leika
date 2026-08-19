@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import contextlib
 import copy
@@ -8,7 +7,6 @@ import dataclasses
 import datetime
 import decimal
 import functools
-import inspect
 import itertools
 import json
 import math
@@ -43,7 +41,6 @@ from typing_extensions import Protocol, Self, override
 from ._assignable_props_api import AssignablePropsBase
 from ._async_errors import (
     callback_result_is_awaitable,
-    print_async_errors,
     print_async_exception,
 )
 from ._file_transfer import (
@@ -78,6 +75,7 @@ from ._messages import (
     GuiPlotlyProps,
     GuiPopupProps,
     GuiProgressBarProps,
+    GuiRadioListProps,
     GuiRemoveMessage,
     GuiRgbaProps,
     GuiRgbProps,
@@ -392,35 +390,6 @@ def _locked_gui_handle_method(method: TLockedMethod) -> TLockedMethod:
             return method(self, *args, **kwargs)
 
     return cast("TLockedMethod", wrapped)
-
-
-def _schedule_callback_result(
-    event_loop: asyncio.AbstractEventLoop, server: Server, result: object
-) -> None:
-    """Schedule any Future/Awaitable callback result on its owning loop."""
-    if not callback_result_is_awaitable(result):
-        return
-    coroutine = server._await_user_callback_result(result)
-    try:
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        if running_loop is event_loop:
-            future = event_loop.create_task(coroutine)
-        else:
-            future = asyncio.run_coroutine_threadsafe(coroutine, event_loop)
-    except Exception as error:
-        # Scheduling did not take ownership. Close both the wrapper and a raw
-        # coroutine returned by the callback so shutdown cannot leak either as
-        # an un-awaited object; concurrent/custom awaitables have no such
-        # universally safe cancellation operation.
-        coroutine.close()
-        if inspect.iscoroutine(result):
-            result.close()
-        print_async_exception(error)
-        return
-    future.add_done_callback(print_async_errors)
 
 
 def _invoke_programmatic_callbacks(
@@ -1317,6 +1286,62 @@ class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
         return self._coerce_assigned_value(value)
 
 
+def _paired_list_items(
+    value: Iterable[Any], *, control: str, state_name: str
+) -> Tuple[Tuple[str, bool], ...]:
+    """Normalize the ``(text, state)`` rows shared by checklist-like inputs."""
+    if isinstance(value, str):
+        raise ValueError(f"A {control} value must be a sequence of items, not one string.")
+    materialized = _bounded_tuple(value, control)
+    items: list[Tuple[str, bool]] = []
+    for item in materialized:
+        if isinstance(item, str):
+            _validate_collection_string(item, control)
+            items.append((item, False))
+            continue
+        try:
+            text, state = item
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"A {control} holds (text, {state_name}) pairs, so its items are strings or"
+                f" two-item pairs; got {item!r}."
+            ) from None
+        if not isinstance(text, str):
+            raise ValueError(f"A {control} item's text is a string; got {text!r}.")
+        _validate_collection_string(text, control)
+        if type(state) is not bool:
+            raise ValueError(f"A {control} item's {state_name} state is a bool; got {state!r}.")
+        items.append((text, state))
+    return tuple(items)
+
+
+def _client_paired_list_items(
+    value: Any,
+    *,
+    control: str,
+    state_name: str,
+    current: Tuple[Tuple[str, bool], ...],
+    frozen: bool,
+) -> Tuple[Tuple[str, bool], ...]:
+    """Normalize browser rows, preserving a frozen input's fixed structure."""
+    if type(value) not in (list, tuple):
+        raise TypeError(f"client {control} value must be an array of pairs")
+    rows = _bounded_tuple(value, f"client {control}")
+    for row in rows:
+        if (
+            not isinstance(row, (list, tuple))
+            or len(row) != 2
+            or not isinstance(row[0], str)
+            or type(row[1]) is not bool
+        ):
+            raise TypeError(f"client {control} rows must be [str, bool]")
+
+    items = _paired_list_items(rows, control=control, state_name=state_name)
+    if frozen and tuple(text for text, _ in items) != tuple(text for text, _ in current):
+        raise ValueError(f"client frozen {control} rows must preserve their text, count, and order")
+    return items
+
+
 def _checklist_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
     """The ``(text, checked)`` pairs a checklist holds, from what was given.
 
@@ -1325,29 +1350,7 @@ def _checklist_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
     a ``False`` per line, and it is what lets ``handle.value += ("Lights",)``
     read the way it does on a list.
     """
-    if isinstance(value, str):
-        raise ValueError("A checklist value must be a sequence of items, not one string.")
-    materialized = _bounded_tuple(value, "checklist")
-    items: list[Tuple[str, bool]] = []
-    for item in materialized:
-        if isinstance(item, str):
-            _validate_collection_string(item, "checklist")
-            items.append((item, False))
-            continue
-        try:
-            text, checked = item
-        except (TypeError, ValueError):
-            raise ValueError(
-                "A checklist holds (text, checked) pairs, so its items are strings or"
-                f" two-item pairs; got {item!r}."
-            ) from None
-        if not isinstance(text, str):
-            raise ValueError(f"A checklist item's text is a string; got {text!r}.")
-        _validate_collection_string(text, "checklist")
-        if type(checked) is not bool:
-            raise ValueError(f"A checklist item's checked state is a bool; got {checked!r}.")
-        items.append((text, checked))
-    return tuple(items)
+    return _paired_list_items(value, control="checklist", state_name="checked")
 
 
 class GuiChecklistHandle(GuiInputHandle[Tuple[Tuple[str, bool], ...]], GuiChecklistProps):
@@ -1402,18 +1405,76 @@ class GuiChecklistHandle(GuiInputHandle[Tuple[Tuple[str, bool], ...]], GuiCheckl
 
     @override
     def _coerce_client_value(self, value: Any) -> Any:
-        if type(value) not in (list, tuple):
-            raise TypeError("client checklist value must be an array of pairs")
-        rows = _bounded_tuple(value, "client checklist")
-        for row in rows:
-            if (
-                not isinstance(row, (list, tuple))
-                or len(row) != 2
-                or not isinstance(row[0], str)
-                or type(row[1]) is not bool
-            ):
-                raise TypeError("client checklist rows must be [str, bool]")
-        return tuple((row[0], row[1]) for row in rows)
+        return _client_paired_list_items(
+            value,
+            control="checklist",
+            state_name="checked",
+            current=self._impl.value,
+            frozen=cast(GuiChecklistProps, self._impl.props).frozen,
+        )
+
+
+def _validate_radio_list_selection(
+    items: Tuple[Tuple[str, bool], ...],
+) -> Tuple[Tuple[str, bool], ...]:
+    """Return valid radio rows after enforcing their single-selection rule."""
+    if sum(selected for _, selected in items) > 1:
+        raise ValueError("A radio list can have at most one selected item.")
+    return items
+
+
+def _radio_list_items(value: Iterable[Any]) -> Tuple[Tuple[str, bool], ...]:
+    """Normalize radio-list rows and enforce their single-selection rule."""
+    return _validate_radio_list_selection(
+        _paired_list_items(value, control="radio list", state_name="selected")
+    )
+
+
+class GuiRadioListHandle(GuiInputHandle[Tuple[Tuple[str, bool], ...]], GuiRadioListProps):
+    """Handle for a radio list: editable choices with at most one selected.
+
+    .. attribute:: value
+       :type: tuple[tuple[str, bool], ...]
+
+       One ``(text, selected)`` pair per choice, in display order. Bare strings
+       assigned among the pairs become unselected choices. At most one pair may
+       be selected.
+    """
+
+    @property
+    def value(self) -> Tuple[Tuple[str, bool], ...]:
+        """The choices, as ``(text, selected)`` pairs.
+
+        :meta private:
+        """
+        if self._impl.removed:
+            raise RuntimeError("Cannot read value from a removed GuiRadioListHandle.")
+        return self._impl.value
+
+    @value.setter
+    def value(self, value: Sequence[str | Tuple[str, bool]] | np.ndarray) -> None:
+        _GuiInputHandle.value.fset(self, value)  # type: ignore[attr-defined]
+
+    @property
+    def selected(self) -> str | None:
+        """The selected item's text, or ``None`` when nothing is selected."""
+        return next((text for text, selected in self.value if selected), None)
+
+    @override
+    def _coerce_assigned_value(self, value: Any) -> Any:
+        return _radio_list_items(value)
+
+    @override
+    def _coerce_client_value(self, value: Any) -> Any:
+        return _validate_radio_list_selection(
+            _client_paired_list_items(
+                value,
+                control="radio list",
+                state_name="selected",
+                current=self._impl.value,
+                frozen=cast(GuiRadioListProps, self._impl.props).frozen,
+            )
+        )
 
 
 class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):
@@ -3578,11 +3639,6 @@ def _resolve_markdown_asset(image_root: Path, url: str) -> _ResolvedMarkdownAsse
     except ValueError as error:
         raise _UnsafeMarkdownAssetPath(url) from error
     return _ResolvedMarkdownAsset(path, path.stat())
-
-
-def _resolve_markdown_asset_path(image_root: Path, url: str) -> Path:
-    """Compatibility helper returning the validated asset's canonical path."""
-    return _resolve_markdown_asset(image_root, url).path
 
 
 _MARKDOWN_INLINE_MAX_ASSET_BYTES = 8 * 1024 * 1024

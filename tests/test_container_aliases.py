@@ -35,6 +35,7 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_button": (("Button",), {}),
     "add_checkbox": (("Checkbox", True), {}),
     "add_checklist": (("Checklist", ("one", ("two", True))), {}),
+    "add_radio_list": (("Radio list", ("one", ("two", True))), {}),
     "add_divider": ((), {}),
     "add_download_button": (("Download", b"contents"), {"filename": "file.txt"}),
     "add_dropdown": (("Dropdown", ("a", "b")), {}),

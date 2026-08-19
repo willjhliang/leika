@@ -126,6 +126,41 @@ def test_the_badge_still_opens_on_a_phone(
     assert page_errors == []
 
 
+def test_connected_and_inactive_fit_their_own_labels(
+    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
+) -> None:
+    """The short connection states size the pill from their own contents."""
+    badge = leika_page.locator(TRIGGER)
+    label = badge.locator("[data-leika-connection-label]")
+    expect(label).to_have_text("Connected")
+    expect(badge).to_have_attribute("aria-label", "Connected; connection details")
+    padding = badge.evaluate(
+        "element => { const style = getComputedStyle(element); "
+        "return [style.paddingLeft, style.paddingRight]; }"
+    )
+    assert padding == ["4px", "8px"]
+    connected_bounds = badge.bounding_box()
+    assert connected_bounds is not None
+
+    # Headless Chromium reports every page as focused, even after another page
+    # is brought forward. Model the background-tab value that makes a closed
+    # connection inactive rather than retrying.
+    leika_page.evaluate(
+        """() => Object.defineProperty(document, "hasFocus", {
+            configurable: true,
+            value: () => false,
+        })"""
+    )
+    leika_server.stop()
+    expect(label).to_have_text("Inactive", timeout=15_000)
+    expect(badge).to_have_attribute("aria-label", "Inactive; connection details")
+    inactive_bounds = badge.bounding_box()
+    assert inactive_bounds is not None
+
+    assert inactive_bounds["width"] < connected_bounds["width"]
+    assert page_errors == []
+
+
 def _style(locator: Locator, prop: str) -> str:
     return locator.evaluate(f"element => getComputedStyle(element).{prop}")
 
@@ -228,7 +263,7 @@ def test_the_badge_wears_the_same_states_as_the_gear(
     open_connection(leika_page)
     away()
     assert _settled(badge, "backgroundColor") == accent
-    assert _settled(badge.get_by_text("Connected", exact=True), "color") == accent_text
+    assert _settled(badge.locator("[data-leika-connection-label]"), "color") == accent_text
 
     leika_page.keyboard.press("Escape")
     expect(badge).to_have_css("background-color", resting)

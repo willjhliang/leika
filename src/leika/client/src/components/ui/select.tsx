@@ -2,6 +2,7 @@ import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
 import * as React from "react";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 
+import { HoverScrollText } from "@/components/HoverScrollText";
 import { cn } from "@/lib/utils";
 
 const Select = SelectPrimitive.Root;
@@ -131,8 +132,8 @@ function SelectItem({
       {/* Leika: `truncate` rather than `flex ... whitespace-nowrap`. A flex box
           cannot ellipsize its own text, and `shrink-0` kept it at full width
           whatever the row could spare. */}
-      <SelectPrimitive.ItemText className="min-w-0 flex-1 truncate">
-        {children}
+      <SelectPrimitive.ItemText className="min-w-0 flex-1">
+        <HoverScrollText className="w-full">{children}</HoverScrollText>
       </SelectPrimitive.ItemText>
       <SelectPrimitive.ItemIndicator
         render={

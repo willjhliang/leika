@@ -1,18 +1,23 @@
 """Regenerate the light/dark component screenshots and gallery page.
 
-The registry below supplies both each screenshot and its displayed snippet.
+The registry supplies the live component setup and the generated API cards.
 Run ``make gallery`` after visual client changes.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
+import shutil
 import stat
 import tempfile
 import textwrap
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
+
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "docs" / "_static" / "gallery"
@@ -20,8 +25,9 @@ DEFAULT_OUT = ROOT / "docs" / "_static" / "gallery"
 VIEWPORT = {"width": 960, "height": 700}
 # Padding of page around the captured element, in CSS pixels.
 SHOT_PAD = 8
-# Retina-density captures; the page displays them at CSS size via :width:.
-SCALE = 2
+# High-density captures stay crisp when a gallery tile is enlarged or viewed
+# on a modern high-DPI display. CSS constrains them to their visual size.
+SCALE = 3
 
 
 @dataclass
@@ -32,14 +38,12 @@ class Entry:
     title: str
     ref: str  # method name on GuiApi, for the API cross-reference
     code: str
-    blurb: str = ""
-    # What to capture: a panel row, an open form popout, a dialog, a toast,
-    # or the command palette.
+    # What to capture: a panel row, an open form/popup, a dialog, a toast, or
+    # the command palette.
     kind: str = "row"
-    # Seconds to let the component settle before the shot (plotly ships its
-    # renderer to the client on first use).
+    # Brief interaction settle before explicit renderer and paint readiness
+    # checks. A zero value means the readiness condition is sufficient.
     settle: float = 0.25
-    handles: dict = field(default_factory=dict)
 
 
 ENTRIES = [
@@ -129,6 +133,24 @@ ENTRIES = [
                 ref="add_checklist",
                 code="""\
                 gui.add_checklist("Checks", (("Lint", True), ("Types", True), "Browser"), frozen=True)""",
+            ),
+            Entry(
+                slug="radio-list",
+                title="Radio list",
+                ref="add_radio_list",
+                code="""\
+                gui.add_radio_list(
+                    "Density", ("Default", ("Comfortable", True), "Compact")
+                )""",
+            ),
+            Entry(
+                slug="frozen-radio-list",
+                title="Frozen radio list",
+                ref="add_radio_list",
+                code="""\
+                gui.add_radio_list(
+                    "Density", ("Default", ("Comfortable", True), "Compact"), frozen=True
+                )""",
             ),
             Entry(
                 slug="checkbox",
@@ -238,10 +260,19 @@ ENTRIES = [
                     gui.add_slider("Speed", min=0.1, max=3.0, step=0.01, initial_value=1.0)""",
             ),
             Entry(
+                slug="popup",
+                title="Popup",
+                ref="add_popup",
+                kind="popup",
+                code="""\
+                with gui.add_popup("Render options"):
+                    gui.add_checkbox("Show axes", initial_value=True)
+                    gui.add_number("Line width", initial_value=2.0, min=0.5, max=8.0)""",
+            ),
+            Entry(
                 slug="form",
                 title="Form",
                 ref="add_form",
-                blurb="One row that opens a popout of fields with reset and submit.",
                 kind="form",
                 code="""\
                 with gui.add_form(label="Annotation"):
@@ -252,7 +283,6 @@ ENTRIES = [
                 slug="mini-form",
                 title="Mini form",
                 ref="add_mini_form",
-                blurb="A single field whose send button rides the row.",
                 code="""\
                 with gui.add_mini_form():
                     gui.add_text("Broadcast", "")""",
@@ -290,7 +320,6 @@ ENTRIES = [
                 slug="command",
                 title="Command",
                 ref="add_command",
-                blurb="Registered commands appear in the palette (Cmd/Ctrl+K).",
                 kind="palette",
                 code="""\
                 gui.add_command(
@@ -326,7 +355,7 @@ ENTRIES = [
                 fig = go.Figure(go.Scatter(y=[1.0, 2.4, 1.6, 3.1]))
                 fig.update_layout(margin=dict(l=32, r=8, t=8, b=24))
                 gui.add_plotly(fig, aspect=2.0, config={"displayModeBar": False})""",
-                settle=4.0,
+                settle=0.0,
             ),
         ],
     ),
@@ -363,6 +392,168 @@ def _atomic_write_text(path: Path, content: str) -> None:
             temporary.unlink()
 
 
+def _expected_asset_names() -> frozenset[str]:
+    slugs = [entry.slug for _, entries in ENTRIES for entry in entries]
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicates:
+        raise RuntimeError(f"duplicate gallery slugs: {', '.join(duplicates)}")
+    return frozenset(f"{slug}-{scheme}.png" for slug in slugs for scheme in ("light", "dark"))
+
+
+def _is_owned_asset_name(name: str) -> bool:
+    return any(
+        name.endswith(suffix) and len(name) > len(suffix) for suffix in ("-light.png", "-dark.png")
+    )
+
+
+def _gallery_asset_names(directory: Path, *, label: str) -> frozenset[str]:
+    """Return the files in a gallery-owned directory, rejecting unsafe contents."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError(f"{label} is not a regular directory: {directory}")
+
+    names: set[str] = set()
+    for path in directory.iterdir():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"{label} contains a non-regular entry: {path}")
+        if not _is_owned_asset_name(path.name):
+            raise RuntimeError(
+                f"{label} contains a file not owned by the gallery generator: {path}"
+            )
+        names.add(path.name)
+    return frozenset(names)
+
+
+def _validate_png(path: Path) -> None:
+    try:
+        with Image.open(path) as image:
+            image_format = image.format
+            width, height = image.size
+            image.verify()
+    except (OSError, SyntaxError) as error:
+        raise RuntimeError(f"gallery capture is not a valid image: {path}") from error
+    if image_format != "PNG":
+        raise RuntimeError(f"gallery capture is not a PNG: {path}")
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"gallery capture has invalid dimensions: {path}")
+
+
+def _validate_gallery_generation(directory: Path) -> None:
+    expected = _expected_asset_names()
+    actual = _gallery_asset_names(directory, label="staged gallery generation")
+    if actual != expected:
+        details = []
+        if missing := sorted(expected - actual):
+            details.append(f"missing {', '.join(missing)}")
+        if unexpected := sorted(actual - expected):
+            details.append(f"unexpected {', '.join(unexpected)}")
+        raise RuntimeError(f"staged gallery asset set is incomplete: {'; '.join(details)}")
+    for name in sorted(expected):
+        _validate_png(directory / name)
+
+
+def _sync_gallery_generation(directory: Path) -> None:
+    if os.name == "nt":
+        return
+    for path in directory.iterdir():
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    _fsync_directory(directory)
+
+
+def _backup_path(target: Path) -> Path:
+    return target.with_name(f".{target.name}.leika-backup")
+
+
+def _prepare_gallery_target(target: Path) -> None:
+    """Validate the output location and restore a pre-swap interrupted run."""
+    if target == target.parent:
+        raise RuntimeError(f"refusing to use a filesystem root as gallery output: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.parent.is_symlink() or not target.parent.is_dir():
+        raise RuntimeError(f"gallery output parent is not a regular directory: {target.parent}")
+
+    backup = _backup_path(target)
+    target_present = target.exists() or target.is_symlink()
+    backup_present = backup.exists() or backup.is_symlink()
+    if target_present and backup_present:
+        raise RuntimeError(
+            "an interrupted gallery publication left both the output and its backup; "
+            f"inspect {target} and {backup} before retrying"
+        )
+    if backup_present:
+        _gallery_asset_names(backup, label="gallery publication backup")
+        backup.replace(target)
+        _fsync_directory(target.parent)
+        print(f"restored interrupted gallery publication from {display_path(backup)}")
+
+    if target.exists() or target.is_symlink():
+        _gallery_asset_names(target, label="existing gallery output")
+
+
+@contextlib.contextmanager
+def _staged_gallery_directory(target: Path) -> Iterator[Path]:
+    """Yield a sibling directory and discard it unless publication consumes it."""
+    _prepare_gallery_target(target)
+    directory_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o755
+    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.leika-stage-", dir=target.parent))
+    try:
+        staging.chmod(directory_mode)
+        yield staging
+    finally:
+        if staging.is_symlink():
+            raise RuntimeError(f"refusing to clean up replaced gallery staging path: {staging}")
+        if staging.exists():
+            shutil.rmtree(staging)
+            _fsync_directory(target.parent)
+
+
+@contextlib.contextmanager
+def _published_gallery_directory(staging: Path, target: Path) -> Iterator[None]:
+    """Publish one complete generation, restoring the previous one on failure."""
+    _validate_gallery_generation(staging)
+    _sync_gallery_generation(staging)
+    _prepare_gallery_target(target)
+
+    backup = _backup_path(target)
+    had_previous = target.exists()
+    previous_moved = False
+    generation_moved = False
+    try:
+        if had_previous:
+            target.replace(backup)
+            previous_moved = True
+            _fsync_directory(target.parent)
+        staging.replace(target)
+        generation_moved = True
+        _fsync_directory(target.parent)
+        _validate_gallery_generation(target)
+        yield
+        _validate_gallery_generation(target)
+    except BaseException:
+        try:
+            if generation_moved and target.exists():
+                target.replace(staging)
+                generation_moved = False
+                _fsync_directory(target.parent)
+            if previous_moved and backup.exists():
+                backup.replace(target)
+                previous_moved = False
+                _fsync_directory(target.parent)
+        except BaseException as rollback_error:
+            raise RuntimeError(
+                "gallery publication failed and automatic rollback also failed; "
+                f"recoverable files remain under {target.parent}"
+            ) from rollback_error
+        raise
+    else:
+        if previous_moved:
+            shutil.rmtree(backup)
+            _fsync_directory(target.parent)
+
+
 def wait_for_scheme(page, scheme: str) -> None:
     page.emulate_media(color_scheme=scheme)
     page.wait_for_function(
@@ -384,15 +575,15 @@ def locate_target(page, entry: Entry):
         if count != 1:
             raise SystemExit(f"{entry.slug}: expected 1 rendered component, found {count}")
         return row.first
-    if entry.kind == "form":
-        # The popout opens over the panel, partly covering its own trigger
-        # row; capturing both keeps the row from appearing sliced.
+    if entry.kind in ("form", "popup"):
+        # A popout overlaps part of its own trigger row. Capturing both keeps
+        # the row from appearing sliced.
         row = page.locator("[data-leika-generated-gui] [data-leika-gui-container]").first.locator(
             ":scope > *:visible"
         )
         row.first.wait_for(state="visible", timeout=10_000)
-        page.locator("[data-leika-form-trigger]").click()
-        popover = page.locator("[data-leika-form-popover]")
+        page.locator(f"[data-leika-{entry.kind}-trigger]").click()
+        popover = page.locator(f"[data-leika-{entry.kind}-popover]")
         popover.wait_for(state="visible", timeout=10_000)
         return [row.first, popover]
     if entry.kind == "modal":
@@ -413,11 +604,58 @@ def locate_target(page, entry: Entry):
 
 def release_target(page, entry: Entry) -> None:
     """Dismiss whatever `locate_target` opened, so the next entry starts clean."""
-    if entry.kind in ("form", "palette"):
+    if entry.kind in ("form", "popup", "palette"):
         page.keyboard.press("Escape")
     elif entry.kind == "toast":
         page.locator('[data-slot="toast-close"]').click()
         page.locator('[data-slot="toast"]').wait_for(state="detached", timeout=10_000)
+
+
+_PLOTLY_RENDERED_JS = """
+root => {
+  const plot = root.querySelector(".js-plotly-plot");
+  if (!plot) return false;
+  const layout = plot._fullLayout;
+  const data = plot._fullData;
+  const svg = plot.querySelector("svg.main-svg");
+  const trace = plot.querySelector(".scatterlayer .trace");
+  const line = trace?.querySelector("path.js-line");
+  if (!layout || !Array.isArray(data) || data.length === 0 || !svg || !line) return false;
+  const rect = svg.getBoundingClientRect();
+  try {
+    return rect.width > 0 && rect.height > 0 && line.getTotalLength() > 0;
+  } catch {
+    return false;
+  }
+}
+"""
+
+_WAIT_FOR_PAINT_JS = """
+async () => {
+  await document.fonts.ready;
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+"""
+
+
+def wait_for_capture_ready(page, elements, entry: Entry) -> None:
+    """Wait for renderer-owned content and the current scheme to reach paint."""
+    page.evaluate(_WAIT_FOR_PAINT_JS)
+    target = elements[0] if isinstance(elements, list) else elements
+    if entry.slug == "plotly":
+        plot = target.locator(".js-plotly-plot")
+        plot.wait_for(state="visible", timeout=15_000)
+        handle = target.element_handle()
+        if handle is None:
+            raise RuntimeError("Plotly gallery target detached before capture")
+        page.wait_for_function(
+            _PLOTLY_RENDERED_JS,
+            arg=handle,
+            timeout=15_000,
+        )
+    page.evaluate(_WAIT_FOR_PAINT_JS)
 
 
 # Include overflowing descendant ink, but ignore fixed elements and cap
@@ -479,9 +717,8 @@ def display_path(path: Path) -> str:
         return str(path)
 
 
-def write_page() -> None:
-    """Write the raw-HTML gallery grid to ``docs/gallery.md``."""
-    doc = ROOT / "docs" / "gallery.md"
+def _page_content() -> str:
+    """Render the gallery page with exactly one final newline."""
     lines = [
         "% Generated by scripts/gallery.py -- edit the registry there and rerun",
         "% `make gallery` (or `--page-only` for markup changes); the",
@@ -492,8 +729,9 @@ def write_page() -> None:
         "Every GUI component, as the browser renders it; each tile links to",
         "its API reference. `gui` is `server.gui` -- or any",
         "[container](api/gui_handles.rst) such as a folder, tab, or modal,",
-        "which accepts the same calls. The figures follow the documentation's",
-        "light or dark theme.",
+        "which accepts the same calls. Leika chrome follows the documentation's",
+        "light or dark theme. Renderer-owned content is shown as configured;",
+        "the Plotly sample therefore keeps its light template in both images.",
         "",
     ]
     for group, entries in ENTRIES:
@@ -514,7 +752,13 @@ def write_page() -> None:
                 "</a>",
             ]
         lines += ["</div>", "```", ""]
-    _atomic_write_text(doc, "\n".join(lines) + "\n")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def write_page() -> None:
+    """Write the raw-HTML gallery grid to ``docs/gallery.md``."""
+    doc = ROOT / "docs" / "gallery.md"
+    _atomic_write_text(doc, _page_content())
     print(f"wrote {display_path(doc)}")
 
 
@@ -524,7 +768,7 @@ def main() -> int:
         "--out",
         type=Path,
         default=DEFAULT_OUT,
-        help="directory for the captured screenshots",
+        help="dedicated directory replaced with the complete captured screenshot set",
     )
     parser.add_argument(
         "--page-only",
@@ -536,59 +780,72 @@ def main() -> int:
         write_page()
         return 0
 
-    args.out.mkdir(parents=True, exist_ok=True)
+    output = args.out.absolute()
+    documentation_output = output.resolve() == DEFAULT_OUT.resolve()
 
-    import numpy as np
-    from playwright.sync_api import sync_playwright
+    with _staged_gallery_directory(output) as staging:
+        import numpy as np
+        from playwright.sync_api import sync_playwright
 
-    import leika
+        import leika
 
-    server = leika.Server(host="127.0.0.1", port=0, workspace_id="gallery", verbose=False)
-    gui = server.gui
-    exec_ns = {"gui": gui, "leika": leika, "np": np}
+        server = leika.Server(host="127.0.0.1", port=0, workspace_id="gallery", verbose=False)
+        gui = server.gui
+        exec_ns = {"gui": gui, "leika": leika, "np": np}
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            context = browser.new_context(
-                viewport=VIEWPORT, device_scale_factor=SCALE, reduced_motion="reduce"
-            )
-            page = context.new_page()
-            page.emulate_media(color_scheme="light")
-            page.goto(server.url)
-            page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-            page.wait_for_function(
-                "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-            )
-            # Hide panel chrome that borders the captured component.
-            page.add_style_tag(
-                content="[data-leika-panel-header] { visibility: hidden !important; }"
-            )
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                try:
+                    context = browser.new_context(
+                        viewport=VIEWPORT,
+                        device_scale_factor=SCALE,
+                        reduced_motion="reduce",
+                    )
+                    page = context.new_page()
+                    page.emulate_media(color_scheme="light")
+                    page.goto(server.url)
+                    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+                    page.wait_for_function(
+                        "() => !document.body.innerText.includes('Connecting...')",
+                        timeout=15_000,
+                    )
+                    # Hide panel chrome that borders the captured component.
+                    page.add_style_tag(
+                        content="[data-leika-panel-header] { visibility: hidden !important; }"
+                    )
 
-            for _, entries in ENTRIES:
-                for entry in entries:
-                    gui.reset()
-                    wait_for_scheme(page, "light")
-                    exec(snippet(entry), dict(exec_ns))  # noqa: S102 -- our own registry
-                    page.wait_for_timeout(int(entry.settle * 1000))
-                    # Repaint one mounted target in both themes before dismissal.
-                    target = locate_target(page, entry)
-                    for scheme in ("light", "dark"):
-                        wait_for_scheme(page, scheme)
-                        page.wait_for_timeout(150)
-                        capture(page, target, args.out / f"{entry.slug}-{scheme}.png")
-                    release_target(page, entry)
-                    print(f"captured {entry.slug}")
-            browser.close()
-    finally:
-        server.stop()
+                    for _, entries in ENTRIES:
+                        for entry in entries:
+                            gui.reset()
+                            wait_for_scheme(page, "light")
+                            exec(snippet(entry), dict(exec_ns))  # noqa: S102 -- own registry
+                            page.wait_for_timeout(int(entry.settle * 1000))
+                            # Repaint one target in both Leika themes before dismissal.
+                            capture_target = locate_target(page, entry)
+                            for scheme in ("light", "dark"):
+                                wait_for_scheme(page, scheme)
+                                wait_for_capture_ready(page, capture_target, entry)
+                                capture(
+                                    page,
+                                    capture_target,
+                                    staging / f"{entry.slug}-{scheme}.png",
+                                )
+                            release_target(page, entry)
+                            print(f"captured {entry.slug}")
+                finally:
+                    browser.close()
+        finally:
+            server.stop()
 
-    if args.out.resolve() == DEFAULT_OUT.resolve():
-        write_page()
-    else:
+        with _published_gallery_directory(staging, output):
+            if documentation_output:
+                write_page()
+
+    if not documentation_output:
         print("skipped docs/gallery.md because --out is not the documentation gallery")
     total = sum(len(entries) for _, entries in ENTRIES)
-    print(f"captured {total} components into {display_path(args.out)}")
+    print(f"captured {total} components into {display_path(output)}")
     return 0
 
 

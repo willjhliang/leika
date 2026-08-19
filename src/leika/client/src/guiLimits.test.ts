@@ -22,6 +22,7 @@ import type {
   GuiHtmlMessage,
   GuiImageMessage,
   GuiPlotlyMessage,
+  GuiRadioListMessage,
   GuiTextMessage,
   GuiUploadButtonMessage,
 } from "./WebsocketMessages";
@@ -137,6 +138,41 @@ describe("per-component collection admission", () => {
     expect(
       guiConfigWithinEntityLimits(
         dropdown(1, MAX_GUI_COLLECTION_ITEM_CODE_UNITS + 1),
+      ),
+    ).toBe(false);
+  });
+  const radioList = (
+    value: GuiRadioListMessage["value"],
+  ): GuiRadioListMessage => ({
+    type: "GuiRadioListMessage",
+    uuid: "radio-list",
+    value,
+    container_uuid: "root",
+    props: {
+      order: 0,
+      label: null,
+      hint: null,
+      visible: true,
+      disabled: false,
+      frozen: false,
+    },
+  });
+
+  it("admits zero or one radio selection and rejects more", () => {
+    expect(
+      guiConfigWithinEntityLimits(
+        radioList([
+          ["one", false],
+          ["two", true],
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      guiConfigWithinEntityLimits(
+        radioList([
+          ["one", true],
+          ["two", true],
+        ]),
       ),
     ).toBe(false);
   });

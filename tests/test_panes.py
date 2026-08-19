@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import leika
+import leika._messages as messages
 import leika._panes as panes_impl
 from leika._panes import _viser_embed_target
 
@@ -48,10 +49,12 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
         title="Camera",
         fit="fill",
         format="png",
+        loading="Loading camera",
     )
     assert pane.pane_id == "camera"
     assert pane.title == "Camera"
     assert pane.visible is True
+    assert pane.loading == "Loading camera"
     assert pane.fit == "fill"
     np.testing.assert_array_equal(pane.image, original)
     original[:] = 255
@@ -59,15 +62,18 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
     returned = pane.image
     returned[:] = 255
     assert np.all(pane.image == 0)
+    pane.loading = True
+    assert pane.loading is True
 
     next_frame = np.full((4, 6, 3), 127, dtype=np.uint8)
     pane.title = "Updated"
     pane.visible = False
     pane.fit = "fit"
-    pane.update(next_frame)
+    pane.update(next_frame, loading=False)
     assert pane.title == "Updated"
     assert pane.visible is False
     assert pane.fit == "fit"
+    assert pane.loading is False
     np.testing.assert_array_equal(pane.image, next_frame)
 
     pane.remove()
@@ -75,6 +81,7 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
         lambda: pane.image,
         lambda: pane.title,
         lambda: pane.visible,
+        lambda: pane.loading,
         lambda: pane.fit,
     ):
         with pytest.raises(RuntimeError, match="removed"):
@@ -127,6 +134,48 @@ def test_row_column_and_grid_helpers(server: leika.Server) -> None:
         server.panes.add_image(frame, relative_to="missing")
 
 
+def test_image_update_can_change_loading_in_one_message(server: leika.Server) -> None:
+    original = np.zeros((2, 3, 3), dtype=np.uint8)
+    pane = server.panes.add_image(original, pane_id="coupled", loading=True)
+    buffer = server._websock_server.get_message_buffer()
+    before_ids = set(buffer.message_from_id)
+
+    replacement = np.full((3, 4, 3), 127, dtype=np.uint8)
+    pane.update(replacement, loading=False)
+
+    queued = [
+        message
+        for message_id, message in buffer.message_from_id.items()
+        if message_id not in before_ids
+    ]
+    assert len(queued) == 1
+    assert isinstance(queued[0], messages.ViewportPaneUpdateMessage)
+    assert set(queued[0].updates) == {"_data", "_format", "loading"}
+    assert queued[0].updates["loading"] is False
+    assert pane.loading is False
+    np.testing.assert_array_equal(pane.image, replacement)
+
+
+def test_coupled_image_loading_update_rolls_back_on_queue_failure(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = np.zeros((2, 3, 3), dtype=np.uint8)
+    pane = server.panes.add_image(original, pane_id="rollback", loading="Preparing")
+    before_resources = server.panes._resource_total
+
+    def fail(_: object) -> None:
+        raise RuntimeError("update failed")
+
+    monkeypatch.setattr(server.panes._websock_interface, "queue_message_or_raise", fail)
+    with pytest.raises(RuntimeError, match="update failed"):
+        pane.update(np.ones((4, 5, 3), dtype=np.uint8), loading=False)
+
+    assert pane.loading == "Preparing"
+    np.testing.assert_array_equal(pane.image, original)
+    assert server.panes._resource_total == before_resources
+
+
 @pytest.mark.parametrize("retire", ["hide", "remove"])
 def test_grid_wrap_falls_back_when_top_column_anchor_is_not_visible(
     server: leika.Server, retire: str
@@ -155,18 +204,25 @@ def test_plotly_lifecycle(server: leika.Server) -> None:
         pane_id="metrics",
         title="Metrics",
         config={"displayModeBar": False},
+        loading=True,
     )
     assert pane.pane_id == "metrics"
     assert pane.figure is not figure
     assert tuple(pane.figure.data[0].y) == (1, 2, 1)
     replacement = go.Figure(go.Bar(y=[3, 1]))
-    pane.update(replacement)
+    pane.update(replacement, loading="Drawing chart")
     assert pane.figure is not replacement
     assert tuple(pane.figure.data[0].y) == (3, 1)
+    assert pane.loading == "Drawing chart"
     pane.visible = False
     assert pane.visible is False
     pane.remove()
-    for read in (lambda: pane.figure, lambda: pane.title, lambda: pane.visible):
+    for read in (
+        lambda: pane.figure,
+        lambda: pane.title,
+        lambda: pane.visible,
+        lambda: pane.loading,
+    ):
         with pytest.raises(RuntimeError, match="removed"):
             read()
     assert pane._impl.props._plotly_json_str == ""
@@ -181,7 +237,7 @@ def test_matplotlib_lifecycle(server: leika.Server) -> None:
     figure, axes = plt.subplots()
     axes.plot([0, 1, 2], [1, 3, 2], label="signal")
     try:
-        pane = server.panes.add_matplotlib(figure, pane_id="figure", title="Signal")
+        pane = server.panes.add_matplotlib(figure, pane_id="figure", title="Signal", loading=True)
         assert pane.pane_id == "figure"
         assert pane.title == "Signal"
         assert pane.figure is figure
@@ -191,13 +247,19 @@ def test_matplotlib_lifecycle(server: leika.Server) -> None:
 
         # matplotlib mutates figures in place, so re-passing one is normal.
         axes.set_title("Updated")
-        pane.update(figure)
+        pane.update(figure, loading="Drawing figure")
         assert "Updated" in pane._impl.props._svg
+        assert pane.loading == "Drawing figure"
 
         pane.visible = False
         assert pane.visible is False
         pane.remove()
-        for read in (lambda: pane.figure, lambda: pane.title, lambda: pane.visible):
+        for read in (
+            lambda: pane.figure,
+            lambda: pane.title,
+            lambda: pane.visible,
+            lambda: pane.loading,
+        ):
             with pytest.raises(RuntimeError, match="removed"):
                 read()
         assert pane._impl.figure_ref is None
@@ -402,15 +464,16 @@ def test_viser_minimize_hook_failures_are_nonfatal(
 
 def test_viser_lifecycle(server: leika.Server) -> None:
     fake = SimpleNamespace(get_port=lambda: 8123, get_host=lambda: "0.0.0.0")
-    pane = server.panes.add_viser(fake, pane_id="viser", title="Scene")
+    pane = server.panes.add_viser(fake, pane_id="viser", title="Scene", loading=True)
     assert pane.pane_id == "viser"
     assert pane.title == "Scene"
     assert pane.url is None
     assert pane.port == 8123
 
-    pane.update("http://viser.example.com:9000")
+    pane.update("http://viser.example.com:9000", loading="Connecting")
     assert pane.url == "http://viser.example.com:9000"
     assert pane.port is None
+    assert pane.loading == "Connecting"
     pane.update(SimpleNamespace(get_port=lambda: 8124, get_host=lambda: "0.0.0.0"))
     assert pane.url is None
     assert pane.port == 8124
@@ -447,6 +510,7 @@ def test_only_v1_pane_types_are_exposed(server: leika.Server) -> None:
     [
         ("title", 123, "title must be a string"),
         ("visible", "false", "visible must be a bool"),
+        ("loading", 1, "loading must be a bool or string"),
     ],
 )
 def test_pane_creation_rejects_primitive_coercion(
@@ -473,8 +537,11 @@ def test_pane_setters_reject_primitive_coercion(server: leika.Server) -> None:
         pane.title = 123  # type: ignore[assignment]
     with pytest.raises(TypeError, match="visible must be a bool"):
         pane.visible = "false"  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="loading must be a bool or string"):
+        pane.loading = 1  # type: ignore[assignment]
     assert pane.title == "Image"
     assert pane.visible is True
+    assert pane.loading is False
 
 
 def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactionally(

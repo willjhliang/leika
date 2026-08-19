@@ -8,6 +8,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "./components/ui/command";
+import { HoverScrollText } from "./components/HoverScrollText";
 import Fuse, { FuseResult, IFuseOptions } from "fuse.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useViewer } from "./ViewerContext";
@@ -272,7 +273,9 @@ export function CommandPalette() {
                     dangerouslySetInnerHTML={{ __html: action.iconHtml }}
                   />
                 ) : null}
-                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                <HoverScrollText className="flex-1">
+                  {action.label}
+                </HoverScrollText>
                 {action.shortcut ? (
                   <CommandShortcut>{action.shortcut}</CommandShortcut>
                 ) : null}

@@ -16,7 +16,6 @@ if __package__:
 else:
     from _artifact_metadata import validate_metadata
 
-EXPECTED_LICENSE = "Apache-2.0"
 SDIST_NAME = re.compile(r"^leika-(?P<version>[^-]+)\.tar\.gz$")
 MAX_SDIST_BYTES = 10_000_000
 MAX_SDIST_MEMBERS = 10_000
@@ -38,6 +37,10 @@ REQUIRED_BUNDLE_NOTICE_MARKERS = (
     "zstddec@",
     "Declared license: Apache-2.0",
 )
+CLIENT_BUILD_FILES = {
+    "src/leika/client/build/index.html",
+    BUNDLE_NOTICE,
+}
 WINDOWS_INVALID_CHARACTERS = frozenset('<>:"|?*')
 WINDOWS_RESERVED_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
@@ -330,6 +333,17 @@ def main() -> int:
     )
     if forbidden:
         raise SystemExit(f"source distribution contains generated files: {forbidden[0]}")
+
+    unexpected_client_build = sorted(
+        path
+        for path in relative
+        if path.startswith("src/leika/client/build/") and path not in CLIENT_BUILD_FILES
+    )
+    if unexpected_client_build:
+        raise SystemExit(
+            "source distribution contains an unexpected client build file: "
+            f"{unexpected_client_build[0]}"
+        )
 
     print(f"source distribution contents OK: {args.sdist}")
     return 0

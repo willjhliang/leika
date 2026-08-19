@@ -263,6 +263,15 @@ export function guiConfigWithinEntityLimits(
         if (text.length > MAX_GUI_COLLECTION_ITEM_CODE_UNITS) return false;
       }
       return true;
+    case "GuiRadioListMessage": {
+      if (config.value.length > MAX_GUI_COLLECTION_ITEMS) return false;
+      let selected = 0;
+      for (const [text, isSelected] of config.value) {
+        if (text.length > MAX_GUI_COLLECTION_ITEM_CODE_UNITS) return false;
+        if (isSelected && ++selected > 1) return false;
+      }
+      return true;
+    }
     case "GuiDropdownMessage":
       return (
         commonRendererStringWithinLimit(config.value) &&

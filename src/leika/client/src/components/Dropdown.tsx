@@ -22,6 +22,7 @@ import {
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiDropdownMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
+import { HoverScrollText } from "./HoverScrollText";
 
 /** The default dropdown: a plain Select, which opens with the current option
  * already under the cursor and lets the rest of the list run above the trigger
@@ -59,7 +60,9 @@ function PlainDropdown({
             against the chevron. Forced back to a block, and marked important
             because the rule losing here is the trigger's own child selector,
             which outranks a class on the child. */}
-        <SelectValue className="block! min-w-0 truncate" />
+        <SelectValue className="block! min-w-0">
+          <HoverScrollText>{value}</HoverScrollText>
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
@@ -109,7 +112,13 @@ function SearchableDropdown({
           />
         }
       >
-        <ComboboxValue placeholder="Select…" />
+        <ComboboxValue>
+          {(selected: string | null) => (
+            <HoverScrollText className="flex-1 text-left">
+              {selected ?? "Select…"}
+            </HoverScrollText>
+          )}
+        </ComboboxValue>
       </ComboboxTrigger>
       <ComboboxContent>
         <ComboboxInput

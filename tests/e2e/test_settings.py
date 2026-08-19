@@ -91,7 +91,9 @@ def test_the_gear_is_a_circle_the_size_of_the_status_pill(
 
     # Idle, it is typed like the pill: the glyph inherits the label's color.
     glyph_color = trigger.locator("svg").evaluate("e => getComputedStyle(e).color")
-    label_color = pill.get_by_text("Connected").evaluate("e => getComputedStyle(e).color")
+    label_color = pill.locator("[data-leika-connection-label]").evaluate(
+        "e => getComputedStyle(e).color"
+    )
     assert glyph_color == label_color
     assert page_errors == []
 

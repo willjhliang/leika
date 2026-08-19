@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from email.message import Message
+from email.utils import formataddr
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,17 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
-SINGLETON_FIELDS = ("Name", "Version", "Requires-Python", "License-Expression")
+METADATA_VERSION = "2.4"
+SINGLETON_FIELDS = (
+    "Metadata-Version",
+    "Name",
+    "Version",
+    "Summary",
+    "Author-email",
+    "Requires-Python",
+    "License-Expression",
+    "Description-Content-Type",
+)
 
 
 def project_metadata() -> dict[str, Any]:
@@ -79,6 +90,33 @@ def expected_project_urls(project: dict[str, Any] | None = None) -> dict[str, st
     return {label: value for label, value in project.get("urls", {}).items()}
 
 
+def expected_author_email(project: dict[str, Any] | None = None) -> str:
+    """Return the Core Metadata representation of the configured authors."""
+    project = project_metadata() if project is None else project
+    authors = project.get("authors", [])
+    if not authors or any(
+        not isinstance(author, dict)
+        or not isinstance(author.get("name"), str)
+        or not isinstance(author.get("email"), str)
+        for author in authors
+    ):
+        raise RuntimeError("pyproject authors must each declare a name and email")
+    return ", ".join(formataddr((author["name"], author["email"])) for author in authors)
+
+
+def expected_description_content_type(project: dict[str, Any] | None = None) -> str:
+    """Return the inferred content type for Leika's configured README file."""
+    project = project_metadata() if project is None else project
+    readme = project.get("readme")
+    if not isinstance(readme, str):
+        raise RuntimeError("pyproject readme must be a file path")
+    suffix = Path(readme).suffix.casefold()
+    try:
+        return {".md": "text/markdown", ".rst": "text/x-rst", ".txt": "text/plain"}[suffix]
+    except KeyError:
+        raise RuntimeError(f"pyproject readme has an unsupported suffix: {suffix!r}") from None
+
+
 def _mismatch(label: str, field: str, expected: object, actual: object) -> SystemExit:
     return SystemExit(
         f"{label} {field} does not match pyproject: expected {expected!r}, got {actual!r}"
@@ -89,10 +127,14 @@ def validate_metadata(message: Message, *, version: str, label: str) -> None:
     """Require exact dependency, extra, classifier, URL, and core field metadata."""
     project = project_metadata()
     singleton_expected = {
+        "Metadata-Version": METADATA_VERSION,
         "Name": project["name"],
         "Version": version,
+        "Summary": project["description"],
+        "Author-email": expected_author_email(project),
         "Requires-Python": project["requires-python"],
         "License-Expression": project["license"],
+        "Description-Content-Type": expected_description_content_type(project),
     }
     for field in SINGLETON_FIELDS:
         values = message.get_all(field, [])

@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 # and stretching is spelled out.
 ImageFit: TypeAlias = Literal["fit", "fill", "stretch"]
 Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
+PaneLoading: TypeAlias = bool | str
 PaneId = NewType("PaneId", str)
 
 
@@ -177,11 +178,23 @@ class _BoundedSvgBuffer(io.BytesIO):
         return super().write(data)
 
 
-def _validate_title_visible(title: object, visible: object) -> tuple[str, bool]:
+def _validate_loading(value: object) -> PaneLoading:
+    if type(value) is bool:
+        return cast(bool, value)
+    if type(value) is str:
+        return cast(str, validate_renderer_string(value, "pane loading message"))
+    raise TypeError("loading must be a bool or string")
+
+
+def _validate_title_visible_loading(
+    title: object,
+    visible: object,
+    loading: object,
+) -> tuple[str, bool, PaneLoading]:
     title = cast(str, validate_renderer_string(title, "pane title"))
     if type(visible) is not bool:
         raise TypeError("visible must be a bool")
-    return title, visible
+    return title, visible, _validate_loading(loading)
 
 
 def _raw_plotly_template_graph(template: object) -> tuple[object, ...]:
@@ -430,6 +443,7 @@ def _scrub_pane_handle_locked(handle: "PaneHandle[Any]") -> None:
     """Drop all resource-charged state after terminal pane retirement."""
     props = handle._impl.props
     props.title = ""
+    props.loading = False
     if isinstance(handle, ImagePaneHandle):
         handle._impl.image = np.empty((0,), dtype=np.uint8)
         handle._impl.requested_format = "auto"
@@ -518,6 +532,36 @@ class PaneHandle(Generic[_PaneStateT]):
                 self._impl.props.visible = old_value
                 raise
 
+    @property
+    def loading(self) -> PaneLoading:
+        """Pane loading overlay state.
+
+        False hides the overlay, True shows the default loading indicator,
+        and a string shows that text alongside the indicator. Loading covers
+        the pane's content without changing its layout or unmounting its
+        renderer.
+        """
+
+        self._check_not_removed()
+        return self._impl.props.loading
+
+    @loading.setter
+    def loading(self, value: PaneLoading) -> None:
+        self._check_not_removed()
+        value = _validate_loading(value)
+        with self._impl.api._lock:
+            self._check_not_removed()
+            if value == self._impl.props.loading:
+                return
+            old_value = self._impl.props.loading
+            self._impl.props.loading = value
+            try:
+                with self._impl.api._resource_transaction_locked(self):
+                    self._queue_update({"loading": value})
+            except BaseException:
+                self._impl.props.loading = old_value
+                raise
+
     def remove(self) -> None:
         """Permanently remove this pane from the workspace."""
 
@@ -567,7 +611,12 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
+        self._update_image(image, loading=None)
+
+    def _update_image(self, image: np.ndarray, loading: PaneLoading | None) -> None:
         self._check_not_removed()
+        if loading is not None:
+            loading = _validate_loading(loading)
         image = _validate_image(image)
         spec = _ndarray_snapshot_spec(image)
         if spec[2] > _PANE_PAYLOAD_MAX_BYTES:
@@ -584,13 +633,14 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
                     "Encoding an RGBA pane image as JPEG discards its alpha channel.",
                     stacklevel=2,
                 )
-            self._commit_image_snapshot(snapshot, resolved_format, data)
+            self._commit_image_snapshot(snapshot, resolved_format, data, loading)
 
     def _commit_image_snapshot(
         self,
         image: np.ndarray,
         resolved_format: Literal["jpeg", "png"],
         data: bytes,
+        loading: PaneLoading | None,
     ) -> None:
         """Publish one already-prepared private pane image snapshot."""
         with self._impl.api._lock:
@@ -600,22 +650,33 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             old_image = self._impl.image
             old_format = self._impl.props._format
             old_data = self._impl.props._data
+            old_loading = self._impl.props.loading
             self._impl.image = image
             self._impl.props._format = resolved_format
             self._impl.props._data = data
+            if loading is not None:
+                self._impl.props.loading = loading
+            updates: dict[str, Any] = {"_format": resolved_format, "_data": data}
+            if loading is not None:
+                updates["loading"] = loading
             try:
                 with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update({"_format": resolved_format, "_data": data})
+                    self._queue_update(updates)
             except BaseException:
                 self._impl.image = old_image
                 self._impl.props._format = old_format
                 self._impl.props._data = old_data
+                self._impl.props.loading = old_loading
                 raise
 
-    def update(self, image: np.ndarray) -> None:
-        """Replace the pane image using its configured transport encoding."""
+    def update(self, image: np.ndarray, *, loading: PaneLoading | None = None) -> None:
+        """Replace the image, optionally changing loading in the same update.
 
-        self.image = image
+        None leaves the current loading state unchanged. Pass False to reveal
+        the new image as part of the same pane update.
+        """
+
+        self._update_image(image, loading)
 
     @property
     def format(self) -> Literal["auto", "jpeg", "png"]:
@@ -671,7 +732,12 @@ class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
 
     @figure.setter
     def figure(self, figure: Any) -> None:
+        self._update_figure(figure, loading=None)
+
+    def _update_figure(self, figure: Any, loading: PaneLoading | None) -> None:
         self._check_not_removed()
+        if loading is not None:
+            loading = _validate_loading(loading)
         figure_ref = _matplotlib_figure_ref(figure)
         with self._impl.api._owner._reserve_renderer_preparation():
             svg = _matplotlib_svg(figure)
@@ -681,24 +747,33 @@ class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
             self._check_not_removed()
             old_figure_ref = self._impl.figure_ref
             old_svg = self._impl.props._svg
+            old_loading = self._impl.props.loading
             self._impl.figure_ref = figure_ref
             self._impl.props._svg = svg
+            if loading is not None:
+                self._impl.props.loading = loading
+            updates: dict[str, Any] = {"_svg": svg}
+            if loading is not None:
+                updates["loading"] = loading
             try:
                 with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update({"_svg": svg})
+                    self._queue_update(updates)
             except BaseException:
                 self._impl.figure_ref = old_figure_ref
                 self._impl.props._svg = old_svg
+                self._impl.props.loading = old_loading
                 raise
 
-    def update(self, figure: Any) -> None:
+    def update(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
         """Replace the matplotlib figure while retaining the pane configuration.
 
         Call this after redrawing to push a new frame; matplotlib mutates
-        figures in place, so re-passing the same figure is normal.
+        figures in place, so re-passing the same figure is normal. Pass a
+        loading value to change the overlay in the same pane update; None
+        leaves it unchanged.
         """
 
-        self.figure = figure
+        self._update_figure(figure, loading)
 
 
 class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
@@ -723,7 +798,12 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
 
     @figure.setter
     def figure(self, figure: go.Figure) -> None:
+        self._update_figure(figure, loading=None)
+
+    def _update_figure(self, figure: go.Figure, loading: PaneLoading | None) -> None:
         api = self._impl.api
+        if loading is not None:
+            loading = _validate_loading(loading)
         with api._lock:
             self._check_not_removed()
             source = self._impl.props._plotly_json_str
@@ -737,18 +817,28 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
             if self._impl.props._plotly_json_str != source:
                 raise RuntimeError("Plotly figure changed during serialization")
             old_json = self._impl.props._plotly_json_str
+            old_loading = self._impl.props.loading
             self._impl.props._plotly_json_str = json_str
+            if loading is not None:
+                self._impl.props.loading = loading
+            updates: dict[str, Any] = {"_plotly_json_str": json_str}
+            if loading is not None:
+                updates["loading"] = loading
             try:
                 with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update({"_plotly_json_str": json_str})
+                    self._queue_update(updates)
             except BaseException:
                 self._impl.props._plotly_json_str = old_json
+                self._impl.props.loading = old_loading
                 raise
 
-    def update(self, figure: go.Figure) -> None:
-        """Replace the Plotly figure while retaining the pane configuration."""
+    def update(self, figure: go.Figure, *, loading: PaneLoading | None = None) -> None:
+        """Replace the Plotly figure, optionally changing loading with it.
 
-        self.figure = figure
+        None leaves the current loading state unchanged.
+        """
+
+        self._update_figure(figure, loading)
 
 
 class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
@@ -773,31 +863,42 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
         self._check_not_removed()
         return self._impl.props._port
 
-    def update(self, target: str | Any) -> None:
+    def update(self, target: str | Any, *, loading: PaneLoading | None = None) -> None:
         """Re-point the pane at another viser server or URL. Accepts the
         same targets as :meth:`Panes.add_viser`, and re-applies the pane's
         creation-time ``minimize_gui`` choice to server targets — including
         the current one, so calling with the same server re-minimizes a
-        panel the viewer expanded."""
+        panel the viewer expanded. Pass a loading value to change the overlay
+        in the same pane update; None leaves it unchanged."""
 
         self._check_not_removed()
+        if loading is not None:
+            loading = _validate_loading(loading)
         url, port = _viser_embed_target(target)
         with self._impl.api._lock:
             self._check_not_removed()
             changed = url != self._impl.props._url or port != self._impl.props._port
-            if changed:
+            loading_changed = loading is not None and loading != self._impl.props.loading
+            if changed or loading_changed:
                 old_url = self._impl.props._url
                 old_port = self._impl.props._port
+                old_loading = self._impl.props.loading
                 self._impl.props._url = url
                 self._impl.props._port = port
+                if loading is not None:
+                    self._impl.props.loading = loading
                 # Both keys are always sent so the exactly-one-set invariant
                 # holds on the client after any update.
+                updates: dict[str, Any] = {"_url": url, "_port": port}
+                if loading is not None:
+                    updates["loading"] = loading
                 try:
                     with self._impl.api._resource_transaction_locked(self):
-                        self._queue_update({"_url": url, "_port": port})
+                        self._queue_update(updates)
                 except BaseException:
                     self._impl.props._url = old_url
                     self._impl.props._port = old_port
+                    self._impl.props.loading = old_loading
                     raise
         if port is not None and self._impl.minimize_gui:
             _minimize_viser_gui(target)
@@ -883,6 +984,7 @@ class PaneGroup:
         jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> ImagePaneHandle:
         """Add an image pane to the group. Accepts the same arguments as
         :meth:`Panes.add_image`, minus placement, which the group
@@ -898,6 +1000,7 @@ class PaneGroup:
                 jpeg_quality=jpeg_quality,
                 fit=fit,
                 visible=visible,
+                loading=loading,
                 placement=placement,
                 relative_to=relative_to,
                 equalize_group=equalize_group,
@@ -912,6 +1015,7 @@ class PaneGroup:
         pane_id: str | None = None,
         title: str = "Figure",
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> MatplotlibPaneHandle:
         """Add a matplotlib pane to the group. Accepts the same arguments as
         :meth:`Panes.add_matplotlib`, minus placement, which the group
@@ -924,6 +1028,7 @@ class PaneGroup:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
                 placement=placement,
                 relative_to=relative_to,
                 equalize_group=equalize_group,
@@ -939,6 +1044,7 @@ class PaneGroup:
         pane_id: str | None = None,
         title: str = "Plotly",
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> PlotlyPaneHandle:
         """Add a Plotly pane to the group. Accepts the same arguments as
         :meth:`Panes.add_plotly`, minus placement, which the group
@@ -952,6 +1058,7 @@ class PaneGroup:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
                 placement=placement,
                 relative_to=relative_to,
                 equalize_group=equalize_group,
@@ -966,6 +1073,7 @@ class PaneGroup:
         pane_id: str | None = None,
         title: str = "viser",
         visible: bool = True,
+        loading: PaneLoading = False,
         minimize_gui: bool = True,
     ) -> ViserPaneHandle:
         """Add a viser pane to the group. Accepts the same arguments as
@@ -979,6 +1087,7 @@ class PaneGroup:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
                 minimize_gui=minimize_gui,
                 placement=placement,
                 relative_to=relative_to,
@@ -1044,6 +1153,7 @@ class PaneGrid:
         jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> ImagePaneHandle:
         """Add an image pane to the grid's next cell. Accepts the same
         arguments as :meth:`Panes.add_image`, minus placement, which
@@ -1059,6 +1169,7 @@ class PaneGrid:
                 jpeg_quality=jpeg_quality,
                 fit=fit,
                 visible=visible,
+                loading=loading,
             )
             self._track(group, handle)
         return handle
@@ -1070,6 +1181,7 @@ class PaneGrid:
         pane_id: str | None = None,
         title: str = "Figure",
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> MatplotlibPaneHandle:
         """Add a matplotlib pane to the grid's next cell. Accepts the same
         arguments as :meth:`Panes.add_matplotlib`, minus placement, which
@@ -1082,6 +1194,7 @@ class PaneGrid:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
             )
             self._track(group, handle)
         return handle
@@ -1094,6 +1207,7 @@ class PaneGrid:
         pane_id: str | None = None,
         title: str = "Plotly",
         visible: bool = True,
+        loading: PaneLoading = False,
     ) -> PlotlyPaneHandle:
         """Add a Plotly pane to the grid's next cell. Accepts the same
         arguments as :meth:`Panes.add_plotly`, minus placement, which
@@ -1107,6 +1221,7 @@ class PaneGrid:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
             )
             self._track(group, handle)
         return handle
@@ -1118,6 +1233,7 @@ class PaneGrid:
         pane_id: str | None = None,
         title: str = "viser",
         visible: bool = True,
+        loading: PaneLoading = False,
         minimize_gui: bool = True,
     ) -> ViserPaneHandle:
         """Add a viser pane to the grid's next cell. Accepts the same
@@ -1131,6 +1247,7 @@ class PaneGrid:
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
+                loading=loading,
                 minimize_gui=minimize_gui,
             )
             self._track(group, handle)
@@ -1322,6 +1439,7 @@ class Panes:
         jpeg_quality: int | None = None,
         fit: ImageFit | None = None,
         visible: bool = True,
+        loading: PaneLoading = False,
         placement: Placement = "right",
         relative_to: str | None = None,
     ) -> ImagePaneHandle:
@@ -1343,6 +1461,8 @@ class Panes:
             fit: Image sizing policy within the pane. By default the viewer's
                 own "Image fit" setting decides; pass a value to override it.
             visible: Initial visibility.
+            loading: Initial loading overlay. True shows the default indicator;
+                a string shows that text alongside it.
             placement: Initial split edge relative to relative_to.
             relative_to: Visible pane used for initial placement.
 
@@ -1358,6 +1478,7 @@ class Panes:
             jpeg_quality=jpeg_quality,
             fit=fit,
             visible=visible,
+            loading=loading,
             placement=placement,
             relative_to=relative_to,
             equalize_group=(),
@@ -1373,6 +1494,7 @@ class Panes:
         jpeg_quality: int | None,
         fit: ImageFit | None,
         visible: bool,
+        loading: PaneLoading,
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
@@ -1382,7 +1504,7 @@ class Panes:
         spec = _ndarray_snapshot_spec(image)
         if spec[2] > _PANE_PAYLOAD_MAX_BYTES:
             raise RuntimeError("Image source exceeds the 256 MiB pane retained payload budget.")
-        title, visible = _validate_title_visible(title, visible)
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
         fit = _validate_fit(fit)
         relative_to = self._resolve_relative_to(relative_to)
@@ -1399,6 +1521,7 @@ class Panes:
                 _format=resolved_format,
                 title=title,
                 visible=visible,
+                loading=loading,
                 fit=fit,
             )
             handle = ImagePaneHandle(
@@ -1433,6 +1556,7 @@ class Panes:
         pane_id: str | None = None,
         title: str = "Figure",
         visible: bool = True,
+        loading: PaneLoading = False,
         placement: Placement = "right",
         relative_to: str | None = None,
     ) -> MatplotlibPaneHandle:
@@ -1468,6 +1592,8 @@ class Panes:
                 pane's position after a server restart.
             title: Pane corner-label title.
             visible: Initial visibility.
+            loading: Initial loading overlay. True shows the default indicator;
+                a string shows that text alongside it.
             placement: Initial split edge relative to relative_to.
             relative_to: Visible pane used for initial placement.
 
@@ -1480,6 +1606,7 @@ class Panes:
             pane_id=pane_id,
             title=title,
             visible=visible,
+            loading=loading,
             placement=placement,
             relative_to=relative_to,
             equalize_group=(),
@@ -1492,11 +1619,12 @@ class Panes:
         pane_id: str | None,
         title: str,
         visible: bool,
+        loading: PaneLoading,
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
     ) -> MatplotlibPaneHandle:
-        title, visible = _validate_title_visible(title, visible)
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
 
         figure_ref = _matplotlib_figure_ref(figure)
@@ -1506,6 +1634,7 @@ class Panes:
             _svg=svg,
             title=title,
             visible=visible,
+            loading=loading,
         )
         handle = MatplotlibPaneHandle(
             _MatplotlibPaneHandleState(
@@ -1539,6 +1668,7 @@ class Panes:
         pane_id: str | None = None,
         title: str = "Plotly",
         visible: bool = True,
+        loading: PaneLoading = False,
         placement: Placement = "right",
         relative_to: str | None = None,
     ) -> PlotlyPaneHandle:
@@ -1575,6 +1705,8 @@ class Panes:
                 pane's position after a server restart.
             title: Pane corner-label title.
             visible: Initial visibility.
+            loading: Initial loading overlay. True shows the default indicator;
+                a string shows that text alongside it.
             placement: Initial split edge relative to relative_to.
             relative_to: Visible pane used for initial placement.
 
@@ -1588,6 +1720,7 @@ class Panes:
             pane_id=pane_id,
             title=title,
             visible=visible,
+            loading=loading,
             placement=placement,
             relative_to=relative_to,
             equalize_group=(),
@@ -1601,11 +1734,12 @@ class Panes:
         pane_id: str | None,
         title: str,
         visible: bool,
+        loading: PaneLoading,
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
     ) -> PlotlyPaneHandle:
-        title, visible = _validate_title_visible(title, visible)
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
 
         with self._owner._reserve_renderer_preparation():
@@ -1616,6 +1750,7 @@ class Panes:
             _theme_templates=theme_templates,
             title=title,
             visible=visible,
+            loading=loading,
         )
         handle = PlotlyPaneHandle(
             _PlotlyPaneHandleState(
@@ -1648,6 +1783,7 @@ class Panes:
         pane_id: str | None = None,
         title: str = "viser",
         visible: bool = True,
+        loading: PaneLoading = False,
         minimize_gui: bool = True,
         placement: Placement = "right",
         relative_to: str | None = None,
@@ -1697,6 +1833,8 @@ class Panes:
                 pane's position after a server restart.
             title: Pane corner-label title.
             visible: Initial visibility.
+            loading: Initial loading overlay. True shows the default indicator;
+                a string shows that text alongside it.
             minimize_gui: Dock viser's own control panel to the right edge
                 and minimize it to a rail. Applies to server-object targets
                 on viser versions with ``gui.main_panel``; ignored for URL
@@ -1713,6 +1851,7 @@ class Panes:
             pane_id=pane_id,
             title=title,
             visible=visible,
+            loading=loading,
             minimize_gui=minimize_gui,
             placement=placement,
             relative_to=relative_to,
@@ -1726,12 +1865,13 @@ class Panes:
         pane_id: str | None,
         title: str,
         visible: bool,
+        loading: PaneLoading,
         minimize_gui: bool,
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
     ) -> ViserPaneHandle:
-        title, visible = _validate_title_visible(title, visible)
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         if type(minimize_gui) is not bool:
             raise TypeError("minimize_gui must be a bool")
         pane_id = self._validate_pane_declaration(pane_id, placement)
@@ -1742,6 +1882,7 @@ class Panes:
             _port=port,
             title=title,
             visible=visible,
+            loading=loading,
         )
         handle = ViserPaneHandle(
             _ViserPaneHandleState(

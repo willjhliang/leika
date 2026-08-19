@@ -139,6 +139,32 @@
   }
 }
 
+/* A clipped label keeps its ellipsis until the shared hover-scroll cycle is
+   active. The component supplies the measured transform; this rule only lets
+   the full line occupy its natural width while it travels. */
+[data-leika-hover-scroll] {
+  overflow: hidden;
+}
+
+[data-leika-hover-scroll-content] {
+  flex: 1 1 auto;
+}
+
+/* Native inputs keep their idle ellipsis, but it must not be painted over the
+   value while its text viewport is travelling. */
+[data-leika-hover-scroll-input][data-leika-hover-scroll-active] {
+  text-overflow: clip;
+}
+
+[data-leika-hover-scroll][data-leika-hover-scroll-overflow][data-leika-hover-scroll-active]
+  > [data-leika-hover-scroll-content] {
+  width: max-content;
+  min-width: 100%;
+  flex: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 /* Generated GUI rows pack many controls into a narrow panel, so the controls
    they hold run one step tighter than the default form sizing. Defined as a
    utility (not a component class) so it outranks each control's own height,
@@ -168,6 +194,7 @@
       [data-slot="button"],
       [data-slot="combobox-trigger"],
       [data-slot="popover-trigger"],
+      [data-slot="toggle"],
       [data-slot="toggle-group-item"]
     ) {
     @apply h-6;

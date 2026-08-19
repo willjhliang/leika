@@ -12,6 +12,7 @@ import NumberInputComponent from "../components/NumberInput";
 import TextInputComponent from "../components/TextInput";
 import ListInputComponent from "../components/ListInput";
 import ChecklistComponent from "../components/Checklist";
+import RadioListComponent from "../components/RadioList";
 import CheckboxComponent from "../components/Checkbox";
 import Vector2Component from "../components/Vector2";
 import Vector3Component from "../components/Vector3";
@@ -140,6 +141,8 @@ function GeneratedInput(props: { guiUuid: string }) {
       return <ListInputComponent {...conf} />;
     case "GuiChecklistMessage":
       return <ChecklistComponent {...conf} />;
+    case "GuiRadioListMessage":
+      return <RadioListComponent {...conf} />;
     case "GuiCheckboxMessage":
       return <CheckboxComponent {...conf} />;
     case "GuiVector2Message":

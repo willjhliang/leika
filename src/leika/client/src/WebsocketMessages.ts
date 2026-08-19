@@ -423,6 +423,24 @@ export interface GuiChecklistMessage {
     frozen: boolean;
   };
 }
+/** GuiRadioListMessage(uuid: 'str', value: 'Tuple[Tuple[str, bool], ...]', container_uuid: 'str', props: 'GuiRadioListProps')
+ *
+ * (automatically generated)
+ */
+export interface GuiRadioListMessage {
+  type: "GuiRadioListMessage";
+  uuid: string;
+  value: [string, boolean][];
+  container_uuid: string;
+  props: {
+    order: number;
+    label: string | null;
+    hint: string | null;
+    visible: boolean;
+    disabled: boolean;
+    frozen: boolean;
+  };
+}
 /** GuiDropdownMessage(uuid: 'str', value: 'str', container_uuid: 'str', props: 'GuiDropdownProps')
  *
  * (automatically generated)
@@ -664,6 +682,7 @@ export interface ViewportImageMessage {
     _format: "jpeg" | "png";
     title: string;
     visible: boolean;
+    loading: boolean | string;
     fit: "fit" | "fill" | "stretch" | null;
   };
 }
@@ -678,7 +697,12 @@ export interface ViewportMatplotlibMessage {
   placement: "left" | "right" | "top" | "bottom";
   relative_to: string;
   equalize_group: string[];
-  props: { _svg: string; title: string; visible: boolean };
+  props: {
+    _svg: string;
+    title: string;
+    visible: boolean;
+    loading: boolean | string;
+  };
 }
 /** Create a native Plotly pane in the pane workspace.
  *
@@ -696,6 +720,7 @@ export interface ViewportPlotlyMessage {
     _theme_templates: string;
     title: string;
     visible: boolean;
+    loading: boolean | string;
   };
 }
 /** Create an embedded viser pane in the pane workspace.
@@ -714,6 +739,7 @@ export interface ViewportViserMessage {
     _port: number | null;
     title: string;
     visible: boolean;
+    loading: boolean | string;
   };
 }
 /** Update one or more properties of a pane.
@@ -1026,6 +1052,7 @@ export type Message =
   | GuiTextMessage
   | GuiListMessage
   | GuiChecklistMessage
+  | GuiRadioListMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage
   | GuiRemoveMessage
@@ -1094,6 +1121,7 @@ export type GuiComponentMessage =
   | GuiTextMessage
   | GuiListMessage
   | GuiChecklistMessage
+  | GuiRadioListMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage;
 const typeSetGuiComponentMessage = new Set([
@@ -1121,6 +1149,7 @@ const typeSetGuiComponentMessage = new Set([
   "GuiTextMessage",
   "GuiListMessage",
   "GuiChecklistMessage",
+  "GuiRadioListMessage",
   "GuiDropdownMessage",
   "GuiButtonGroupMessage",
 ]);
@@ -1344,7 +1373,7 @@ function isProtocolStruct8(value: unknown): boolean {
     Object.hasOwn(value, "_tabs") &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "visible") &&
-    isProtocolArray(value["_tabs"], (item) => isProtocolStruct32(item)) &&
+    isProtocolArray(value["_tabs"], (item) => isProtocolStruct33(item)) &&
     typeof value["order"] === "number" &&
     Number.isFinite(value["order"]) &&
     typeof value["visible"] === "boolean"
@@ -1437,7 +1466,7 @@ function isProtocolStruct11(value: unknown): boolean {
     Number.isFinite(value["step"]) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["show_value"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct33(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct34(item)) ||
       value["_marks"] === null)
   );
 }
@@ -1475,7 +1504,7 @@ function isProtocolStruct12(value: unknown): boolean {
       value["min_range"] === null) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["fixed_endpoints"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct33(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct34(item)) ||
       value["_marks"] === null)
   );
 }
@@ -1771,6 +1800,26 @@ function isProtocolStruct23(value: unknown): boolean {
 function isProtocolStruct24(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
+    Object.keys(value).length === 6 &&
+    Object.hasOwn(value, "order") &&
+    Object.hasOwn(value, "label") &&
+    Object.hasOwn(value, "hint") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "disabled") &&
+    Object.hasOwn(value, "frozen") &&
+    typeof value["order"] === "number" &&
+    Number.isFinite(value["order"]) &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
+    (typeof value["hint"] === "string" || value["hint"] === null) &&
+    typeof value["visible"] === "boolean" &&
+    typeof value["disabled"] === "boolean" &&
+    typeof value["frozen"] === "boolean"
+  );
+}
+
+function isProtocolStruct25(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
     Object.keys(value).length === 7 &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "label") &&
@@ -1790,7 +1839,7 @@ function isProtocolStruct24(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct25(value: unknown): boolean {
+function isProtocolStruct26(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 8 &&
@@ -1817,7 +1866,7 @@ function isProtocolStruct25(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct26(value: unknown): boolean {
+function isProtocolStruct27(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -1836,19 +1885,22 @@ function isProtocolStruct26(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct27(value: unknown): boolean {
+function isProtocolStruct28(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
-    Object.keys(value).length === 5 &&
+    Object.keys(value).length === 6 &&
     Object.hasOwn(value, "_data") &&
     Object.hasOwn(value, "_format") &&
     Object.hasOwn(value, "title") &&
     Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "loading") &&
     Object.hasOwn(value, "fit") &&
     value["_data"] instanceof Uint8Array &&
     (value["_format"] === "jpeg" || value["_format"] === "png") &&
     typeof value["title"] === "string" &&
     typeof value["visible"] === "boolean" &&
+    (typeof value["loading"] === "boolean" ||
+      typeof value["loading"] === "string") &&
     (value["fit"] === "fit" ||
       value["fit"] === "fill" ||
       value["fit"] === "stretch" ||
@@ -1856,50 +1908,59 @@ function isProtocolStruct27(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct28(value: unknown): boolean {
-  return (
-    isProtocolRecord(value) &&
-    Object.keys(value).length === 3 &&
-    Object.hasOwn(value, "_svg") &&
-    Object.hasOwn(value, "title") &&
-    Object.hasOwn(value, "visible") &&
-    typeof value["_svg"] === "string" &&
-    typeof value["title"] === "string" &&
-    typeof value["visible"] === "boolean"
-  );
-}
-
 function isProtocolStruct29(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
-    Object.hasOwn(value, "_plotly_json_str") &&
-    Object.hasOwn(value, "_theme_templates") &&
+    Object.hasOwn(value, "_svg") &&
     Object.hasOwn(value, "title") &&
     Object.hasOwn(value, "visible") &&
-    typeof value["_plotly_json_str"] === "string" &&
-    typeof value["_theme_templates"] === "string" &&
+    Object.hasOwn(value, "loading") &&
+    typeof value["_svg"] === "string" &&
     typeof value["title"] === "string" &&
-    typeof value["visible"] === "boolean"
+    typeof value["visible"] === "boolean" &&
+    (typeof value["loading"] === "boolean" ||
+      typeof value["loading"] === "string")
   );
 }
 
 function isProtocolStruct30(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
-    Object.keys(value).length === 4 &&
-    Object.hasOwn(value, "_url") &&
-    Object.hasOwn(value, "_port") &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "_plotly_json_str") &&
+    Object.hasOwn(value, "_theme_templates") &&
     Object.hasOwn(value, "title") &&
     Object.hasOwn(value, "visible") &&
-    (typeof value["_url"] === "string" || value["_url"] === null) &&
-    (Number.isSafeInteger(value["_port"]) || value["_port"] === null) &&
+    Object.hasOwn(value, "loading") &&
+    typeof value["_plotly_json_str"] === "string" &&
+    typeof value["_theme_templates"] === "string" &&
     typeof value["title"] === "string" &&
-    typeof value["visible"] === "boolean"
+    typeof value["visible"] === "boolean" &&
+    (typeof value["loading"] === "boolean" ||
+      typeof value["loading"] === "string")
   );
 }
 
 function isProtocolStruct31(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.hasOwn(value, "_url") &&
+    Object.hasOwn(value, "_port") &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "loading") &&
+    (typeof value["_url"] === "string" || value["_url"] === null) &&
+    (Number.isSafeInteger(value["_port"]) || value["_port"] === null) &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean" &&
+    (typeof value["loading"] === "boolean" ||
+      typeof value["loading"] === "string")
+  );
+}
+
+function isProtocolStruct32(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 6 &&
@@ -1977,7 +2038,7 @@ function isProtocolStruct31(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct32(value: unknown): boolean {
+function isProtocolStruct33(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -1992,7 +2053,7 @@ function isProtocolStruct32(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct33(value: unknown): boolean {
+function isProtocolStruct34(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 2 &&
@@ -2505,6 +2566,33 @@ const messageValidators = new Map<
       isProtocolStruct23(message["props"]),
   ],
   [
+    "GuiRadioListMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "value") &&
+      Object.hasOwn(message, "container_uuid") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "GuiRadioListMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolArray(
+        message["value"],
+        (item) =>
+          Array.isArray(item) &&
+          item.length === 2 &&
+          typeof item[0] === "string" &&
+          typeof item[1] === "boolean",
+      ) &&
+      typeof message["container_uuid"] === "string" &&
+      (typeof message["container_uuid"] !== "string" ||
+        isProtocolIdentifier(message["container_uuid"])) &&
+      isProtocolStruct24(message["props"]),
+  ],
+  [
     "GuiDropdownMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -2522,7 +2610,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct24(message["props"]),
+      isProtocolStruct25(message["props"]),
   ],
   [
     "GuiButtonGroupMessage",
@@ -2542,7 +2630,7 @@ const messageValidators = new Map<
       typeof message["container_uuid"] === "string" &&
       (typeof message["container_uuid"] !== "string" ||
         isProtocolIdentifier(message["container_uuid"])) &&
-      isProtocolStruct25(message["props"]),
+      isProtocolStruct26(message["props"]),
   ],
   [
     "GuiRemoveMessage",
@@ -2588,7 +2676,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct26(message["props"]),
+      isProtocolStruct27(message["props"]),
   ],
   [
     "NotificationUpdateMessage",
@@ -2602,7 +2690,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct26(message["props"]),
+      isProtocolStruct27(message["props"]),
   ],
   [
     "RemoveNotificationMessage",
@@ -2802,7 +2890,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct27(message["props"]),
+      isProtocolStruct28(message["props"]),
   ],
   [
     "ViewportMatplotlibMessage",
@@ -2834,7 +2922,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct28(message["props"]),
+      isProtocolStruct29(message["props"]),
   ],
   [
     "ViewportPlotlyMessage",
@@ -2866,7 +2954,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct29(message["props"]),
+      isProtocolStruct30(message["props"]),
   ],
   [
     "ViewportViserMessage",
@@ -2898,7 +2986,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct30(message["props"]),
+      isProtocolStruct31(message["props"]),
   ],
   [
     "ViewportPaneUpdateMessage",
@@ -3194,7 +3282,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct31(message["props"]),
+      isProtocolStruct32(message["props"]),
   ],
   [
     "CommandUpdateMessage",
@@ -3255,4 +3343,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "15fca17f59a4";
+export const LEIKA_PROTOCOL = "f99a6f68d931";

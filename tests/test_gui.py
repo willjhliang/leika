@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import gc
-import inspect
 import json
 import sys
 import threading
@@ -438,19 +437,23 @@ def test_programmatic_callbacks_schedule_every_awaitable_result(
     assert sorted(seen) == ["dropdown", "form", "input", "text"]
 
 
-def test_programmatic_callback_result_rejected_by_closed_loop_is_closed_and_reported(
+def test_programmatic_callback_schedule_rejected_by_closed_loop_is_released_and_reported(
     server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    async def returned_coroutine() -> None:
-        return None
-
-    result = returned_coroutine()
     closed_loop = asyncio.new_event_loop()
     closed_loop.close()
-    gui_handles_impl._schedule_callback_result(closed_loop, server, result)
+    monkeypatch.setattr(server.gui, "_event_loop", closed_loop)
+    invoked: list[object] = []
 
-    assert inspect.getcoroutinestate(result) == inspect.CORO_CLOSED
+    event = SimpleNamespace(value="retained")
+    server.gui._schedule_programmatic_callbacks((invoked.append,), event)
+
+    assert invoked == []
+    assert server.gui._programmatic_callback_queue == deque()
+    assert server.gui._programmatic_callback_retained_bytes == 0
+    assert server.gui._programmatic_callback_scheduled is False
     assert "RuntimeError: Event loop is closed" in capsys.readouterr().err
 
 
@@ -2205,6 +2208,123 @@ def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
         server.gui.add_checklist("Bad", [(3, True)])  # type: ignore[list-item]
 
 
+def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> None:
+    choices = server.gui.add_radio_list("Density", ["Default", ("Comfortable", True), "Compact"])
+    assert choices.value == (
+        ("Default", False),
+        ("Comfortable", True),
+        ("Compact", False),
+    )
+    assert choices.selected == "Comfortable"
+    assert choices.frozen is False
+
+    choices.value += ("Spacious",)
+    assert choices.value[-1] == ("Spacious", False)
+
+    choices.value = [("Default", True), "Comfortable", "Compact"]
+    assert choices.selected == "Default"
+    assert server.gui.add_radio_list().selected is None
+
+    frozen = server.gui.add_radio_list("Fixed", (("Default", True), "Compact"), frozen=True)
+    assert frozen.frozen is True
+    frozen.frozen = False
+    assert frozen.frozen is False
+
+    with pytest.raises(ValueError, match="at most one selected"):
+        server.gui.add_radio_list("Invalid", [("one", True), ("two", True)])
+
+    before = choices.value
+    with pytest.raises(ValueError, match="at most one selected"):
+        choices.value = [("one", True), ("two", True)]
+    assert choices.value == before
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("one", "value must be a sequence"),
+        ([3], "holds (text, selected) pairs"),
+        ([(3, True)], "item's text is a string"),
+        ([("one", "yes")], "selected state is a bool"),
+    ],
+)
+def test_radio_list_validation_uses_radio_specific_vocabulary(
+    server: leika.Server, value: Any, message: str
+) -> None:
+    with pytest.raises(ValueError) as raised:
+        server.gui.add_radio_list("Invalid", value)
+    assert message in str(raised.value)
+    assert "checklist" not in str(raised.value)
+
+
+@pytest.mark.parametrize("factory", ["add_checklist", "add_radio_list"])
+def test_frozen_pair_lists_only_accept_client_state_changes(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+    factory: str,
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    handle = getattr(server.gui, factory)(
+        "Frozen",
+        [("First", False), ("Second", True)],
+        frozen=True,
+    )
+
+    def update(value: object) -> None:
+        asyncio.run(
+            server.gui._handle_gui_updates(
+                ClientId(12),
+                _messages.GuiUpdateMessage(
+                    handle.id,
+                    {"value": value},
+                ),
+            )
+        )
+
+    update(
+        [
+            ["First", True],
+            ["Second", False],
+        ]
+    )
+    expected = (("First", True), ("Second", False))
+    assert handle.value == expected
+
+    tampered_values = (
+        [["Renamed", True], ["Second", False]],
+        [["First", True]],
+        [
+            ["First", True],
+            ["Second", False],
+            ["Third", False],
+        ],
+        [["Second", False], ["First", True]],
+    )
+    for tampered in tampered_values:
+        update(tampered)
+        assert handle.value == expected
+
+
+def test_radio_list_rejects_multiple_client_selections(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    choices = server.gui.add_radio_list("Density", [("Default", True), "Compact"])
+
+    asyncio.run(
+        server.gui._handle_gui_updates(
+            ClientId(12),
+            _messages.GuiUpdateMessage(
+                choices.id,
+                {"value": [["Default", True], ["Compact", True]]},
+            ),
+        )
+    )
+
+    assert choices.value == (("Default", True), ("Compact", False))
+    assert choices.selected == "Default"
+
+
 @pytest.mark.parametrize(
     ("factory", "initial", "bad"),
     [
@@ -3335,6 +3455,7 @@ def test_client_array_controls_reject_mapping_payloads(
     controls = (
         server.gui.add_list("List", ("one",)),
         server.gui.add_checklist("Checklist", (("one", False),)),
+        server.gui.add_radio_list("Radio list", (("one", False),)),
         server.gui.add_toggle(("one", "two"), multiple=True),
         server.gui.add_multi_slider("Range", (0.25, 0.75), min=0.0, max=1.0, step=0.1),
     )

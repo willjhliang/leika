@@ -7,6 +7,7 @@ import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { MAX_GUI_TEXT_VALUE_CODE_UNITS } from "../guiLimits";
 import { GuiTextMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
+import { HoverScrollText } from "./HoverScrollText";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 /** How tall an editable box is when no height was asked for. Fixed rather than
@@ -103,7 +104,7 @@ export default function TextInputComponent({
             // `text-overflow` does nothing on one -- so the ellipsis this row
             // promises has to be asked for on a box inside it. See
             // `ButtonLabel`, which is the same fix on a button's face.
-            <span className="min-w-0 truncate">{value}</span>
+            <HoverScrollText className="w-full">{value}</HoverScrollText>
           )}
         </div>
       </GuiInputRow>

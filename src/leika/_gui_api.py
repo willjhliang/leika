@@ -80,6 +80,7 @@ from ._gui_handles import (
     GuiPopupHandle,
     GuiPreviewButtonHandle,
     GuiProgressBarHandle,
+    GuiRadioListHandle,
     GuiRgbaHandle,
     GuiRgbHandle,
     GuiSliderHandle,
@@ -113,6 +114,7 @@ from ._gui_handles import (
     _ndarray_snapshot_spec,
     _plotly_json_and_config,
     _private_ndarray_snapshot,
+    _radio_list_items,
     _retire_gui_handle_without_queue_locked,
     _string_options,
     _tab_subtree_uuids,
@@ -3297,6 +3299,69 @@ class GuiApi(GuiContainer):
                     uuid=uuid,
                     container_uuid=self._get_container_uuid(),
                     props=_messages.GuiChecklistProps(
+                        order=order,
+                        label=label,
+                        hint=hint,
+                        disabled=disabled,
+                        visible=visible,
+                        frozen=frozen,
+                    ),
+                ),
+            )
+        )
+
+    def add_radio_list(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiRadioListHandle:
+        """Add a radio list to the GUI: choices of which at most one is selected.
+
+        Like :meth:`add_checklist`, the value is one ``(text, selected)`` pair
+        per item and bare strings start unselected. Unlike a checklist, choosing
+        one item clears the previous selection::
+
+            mode = server.gui.add_radio_list(
+                "Mode", ("Default", ("Comfortable", True), "Compact")
+            )
+            mode.selected  # "Comfortable"
+
+        Editing, adding, removing, and reordering report the whole tuple, and a
+        selection travels with its text. An empty list and a list with no
+        selection are both valid.
+
+        Args:
+            label: Optional label for the row. Left unset, the radio list takes
+                the whole panel width.
+            initial_value: Choices as strings or ``(text, selected)`` pairs.
+                At most one pair may be selected.
+            frozen: Fix the choices' words, number, and order while leaving the
+                viewer able to select one. Use ``disabled`` to stop selection.
+            disabled: Whether the radio list is disabled.
+            visible: Whether the radio list is visible.
+            hint: Optional hint to display on hover.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
+        items = _radio_list_items(initial_value)
+        uuid = _make_uuid()
+        order = self._apply_default_order(order)
+        return GuiRadioListHandle(
+            self._create_gui_input(
+                items,
+                message=_messages.GuiRadioListMessage(
+                    value=items,
+                    uuid=uuid,
+                    container_uuid=self._get_container_uuid(),
+                    props=_messages.GuiRadioListProps(
                         order=order,
                         label=label,
                         hint=hint,

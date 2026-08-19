@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { HoverScrollText } from "./HoverScrollText";
 
 /** One tab, however it is being drawn: a GUI tab group's own tab, or a panel
  * the dock is holding in a group. */
@@ -148,7 +149,7 @@ export function TabStrip({
             {/* A tab is not worth widening the strip for: past `max-w-56` the
                 label gives way. `TabsTrigger` is a flex box, so the ellipsis
                 has to be asked for on a box inside it. */}
-            <span className="truncate">{tab.label}</span>
+            <HoverScrollText>{tab.label}</HoverScrollText>
           </TabsTrigger>
         );
       })}

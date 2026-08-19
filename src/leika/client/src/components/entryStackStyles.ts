@@ -32,7 +32,9 @@ export type EntryRow = {
 export function entryBoxClassName({ slot, aloft, count }: EntryRow) {
   return cn(
     // Focused, it draws its own border over its neighbours'.
-    "relative w-full focus-visible:z-10",
+    // A label changes an entry's available width, never its compact height.
+    // Keep the full-width, unlabelled collection on the same 24px rhythm.
+    "relative h-6 w-full focus-visible:z-10",
     // A cut-off entry ends in an ellipsis -- except while the box has the
     // caret, when the browser rightly shows where the typing is going instead.
     "text-ellipsis",

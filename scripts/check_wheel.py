@@ -25,7 +25,6 @@ MAX_WHEEL_BYTES = 5_000_000
 MAX_WHEEL_MEMBERS = 10_000
 MAX_WHEEL_MEMBER_BYTES = 10_000_000
 MAX_WHEEL_UNCOMPRESSED_BYTES = 50_000_000
-EXPECTED_LICENSE = "Apache-2.0"
 WHEEL_NAME = re.compile(r"^leika-(?P<version>[^-]+)-py3-none-any\.whl$")
 # Browser-client notices that must ship with the wheel. A truncated or
 # placeholder file is treated as missing.
@@ -42,12 +41,15 @@ REQUIRED_NOTICES = (
     "leika/_licenses/cmdk-next-themes-MIT-LICENSE.txt",
     "leika/_licenses/zstddec-LICENSE.txt",
 )
+CLIENT_BUILD_FILES = {
+    "leika/client/build/THIRD_PARTY_NOTICES.txt",
+    "leika/client/build/index.html",
+}
 REQUIRED_PACKAGE_FILES = {
     "leika/__init__.py",
     "leika/_server.py",
     "leika/py.typed",
-    "leika/client/build/index.html",
-}
+} | CLIENT_BUILD_FILES
 BUNDLE_NOTICES = "leika/client/build/THIRD_PARTY_NOTICES.txt"
 MIN_BUNDLE_NOTICE_BYTES = 20_000
 REQUIRED_BUNDLE_NOTICE_MARKERS = (
@@ -219,6 +221,15 @@ def _validate_structure(archive: zipfile.ZipFile, wheel: Path) -> tuple[list[str
     unexpected_roots = [name for name in names if not name.startswith(("leika/", f"{dist_info}/"))]
     if unexpected_roots:
         raise SystemExit(f"wheel member is outside package namespaces: {unexpected_roots[0]}")
+    unexpected_client_files = sorted(
+        name
+        for name in names
+        if name.startswith("leika/client/") and name not in CLIENT_BUILD_FILES
+    )
+    if unexpected_client_files:
+        raise SystemExit(
+            "wheel contains unexpected client files: " + ", ".join(unexpected_client_files)
+        )
     record_path = f"{dist_info}/RECORD"
     wheel_metadata_path = f"{dist_info}/WHEEL"
     entry_points_path = f"{dist_info}/entry_points.txt"
@@ -341,15 +352,6 @@ def main() -> int:
             raise SystemExit(
                 "wheel browser bundle notices are incomplete: " + ", ".join(missing_markers)
             )
-    if not any(name.endswith("leika/client/build/index.html") for name in names):
-        raise SystemExit("wheel does not contain the built browser client")
-    unexpected_client_files = [
-        name for name in names if name.startswith("leika/client/") and "/client/build/" not in name
-    ]
-    if unexpected_client_files:
-        raise SystemExit(
-            "wheel contains raw client-development files: " + ", ".join(unexpected_client_files)
-        )
     forbidden = [
         name for name in names if any(part in FORBIDDEN_PARTS for part in PurePosixPath(name).parts)
     ]

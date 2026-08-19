@@ -33,6 +33,7 @@ export interface ViewportImageProps {
   _format: "jpeg" | "png";
   title: string;
   visible: boolean;
+  loading: boolean | string;
   /** `null` defers to the viewer's own "Image fit" setting. */
   fit: ImageFit | null;
 }
@@ -42,6 +43,7 @@ export interface ViewportMatplotlibProps {
   _svg: string;
   title: string;
   visible: boolean;
+  loading: boolean | string;
 }
 
 export interface ViewportPlotlyProps {
@@ -51,6 +53,7 @@ export interface ViewportPlotlyProps {
   _theme_templates: string;
   title: string;
   visible: boolean;
+  loading: boolean | string;
 }
 
 export interface ViewportViserProps {
@@ -61,6 +64,7 @@ export interface ViewportViserProps {
   _port: number | null;
   title: string;
   visible: boolean;
+  loading: boolean | string;
 }
 
 export interface ViewportRootPane {
@@ -126,6 +130,20 @@ export interface ViewportState {
   catalogReady: boolean;
   pageStream: ViewportPageStream | null;
   interactionEpoch: number;
+}
+
+/** Whether the active page's complete live generation may accept interaction. */
+export function isViewportPageReady(state: ViewportState): boolean {
+  const pageId = state.displayPageId;
+  const stream = state.pageStream;
+  return (
+    pageId !== null &&
+    state.transitionPage === null &&
+    state.activePageId === pageId &&
+    stream !== null &&
+    stream.pageId === pageId &&
+    stream.ready
+  );
 }
 
 export interface ViewportImageDeclaration {
@@ -312,13 +330,15 @@ function contentPaneFromMessage(message: Message): ViewportContentPane | null {
 function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
   if (
     typeof pane.props.title !== "string" ||
-    typeof pane.props.visible !== "boolean"
+    typeof pane.props.visible !== "boolean" ||
+    (typeof pane.props.loading !== "boolean" &&
+      typeof pane.props.loading !== "string")
   )
     return false;
   if (pane.kind === "image") {
     const props = pane.props;
     return (
-      Object.keys(props).length === 5 &&
+      Object.keys(props).length === 6 &&
       (props._data === null || props._data instanceof Uint8Array) &&
       (props._format === "jpeg" || props._format === "png") &&
       (props.fit === null ||
@@ -329,19 +349,19 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
   }
   if (pane.kind === "matplotlib") {
     const props = pane.props;
-    return Object.keys(props).length === 3 && typeof props._svg === "string";
+    return Object.keys(props).length === 4 && typeof props._svg === "string";
   }
   if (pane.kind === "plotly") {
     const props = pane.props;
     return (
-      Object.keys(props).length === 4 &&
+      Object.keys(props).length === 5 &&
       typeof props._plotly_json_str === "string" &&
       typeof props._theme_templates === "string"
     );
   }
   const props = pane.props;
   return (
-    Object.keys(props).length === 4 &&
+    Object.keys(props).length === 5 &&
     (props._url === null || typeof props._url === "string") &&
     (props._port === null || Number.isSafeInteger(props._port)) &&
     (props._url === null) !== (props._port === null)
@@ -1381,17 +1401,9 @@ export function useViewportState(
 
       commitUserLayout: (rawLayout) => {
         const state = store.get();
-        const stream = state.pageStream;
-        if (
-          state.activePageId === null ||
-          state.displayPageId !== state.activePageId ||
-          state.transitionPage !== null ||
-          stream === null ||
-          stream.pageId !== state.activePageId ||
-          !stream.ready
-        )
-          return;
-        const page = state.pages[state.activePageId];
+        const pageId = state.activePageId;
+        if (pageId === null || !isViewportPageReady(state)) return;
+        const page = state.pages[pageId];
         if (page === undefined) return;
         const layout = reconcilePaneLayout(
           normalizeViewportLayout(rawLayout),

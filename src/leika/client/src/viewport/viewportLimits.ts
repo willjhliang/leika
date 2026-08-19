@@ -44,6 +44,11 @@ export function viewportPaneWithinEntityLimits(
   pane: ViewportContentPane,
 ): boolean {
   if (!commonRendererStringWithinLimit(pane.props.title)) return false;
+  if (
+    typeof pane.props.loading === "string" &&
+    !commonRendererStringWithinLimit(pane.props.loading)
+  )
+    return false;
   if (pane.kind === "matplotlib") {
     return matplotlibSvgSourceError(pane.props._svg) === null;
   }

@@ -7,6 +7,7 @@ import { LEIKA_VERSION } from "../VersionInfo";
 import { useViewer } from "../ViewerContext";
 import { usePeekHold } from "../dock/DockContext";
 import { ColorRow } from "../components/ColorPicker";
+import { HoverScrollText } from "../components/HoverScrollText";
 import {
   guiLabelClassName,
   guiRowGridClassName,
@@ -59,10 +60,10 @@ function SettingsRow({
     <div className={cn(guiRowGridClassName, "gap-2")} data-leika-settings-row>
       <Label
         htmlFor={htmlFor}
-        className={cn("w-full min-w-0 truncate", guiLabelClassName)}
+        className={cn("w-full min-w-0", guiLabelClassName)}
         title={label}
       >
-        {label}
+        <HoverScrollText className="w-full">{label}</HoverScrollText>
       </Label>
       {children}
     </div>
@@ -121,7 +122,11 @@ function SettingsSelectRow<T extends string>({
           onValueChange={(next) => next !== null && onValueChange(next)}
         >
           <SelectTrigger id={id} className="w-full" {...attrs}>
-            <SelectValue />
+            <SelectValue className="min-w-0">
+              <HoverScrollText>
+                {items.find((item) => item.value === value)?.label ?? value}
+              </HoverScrollText>
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>

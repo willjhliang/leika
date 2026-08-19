@@ -914,22 +914,25 @@ function ConnectionPopoutSpecimen() {
           <Status
             status="online"
             variant={open ? "default" : "secondary"}
-            className={
+            className={cn(
+              "pl-1 pr-2",
               open
                 ? "hover:bg-primary/80"
-                : "hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]"
-            }
+                : "hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]",
+            )}
             render={
               <button
                 ref={badge}
                 type="button"
-                aria-label="Connection details"
+                aria-label="Connected; connection details"
               />
             }
           />
         }
       >
-        <StatusIndicator />
+        <span aria-hidden="true" className="flex shrink-0">
+          <StatusIndicator />
+        </span>
         <StatusLabel className={open ? "text-primary-foreground" : undefined}>
           Connected
         </StatusLabel>

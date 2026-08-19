@@ -75,7 +75,7 @@ nitpick_ignore_regex = [
     ("py:class", r"_.*"),
     (
         "py:class",
-        r"(?:GuiEvent\[Any\]|IntOrFloat|NoneOrCoroutine|Placement|StringType|TGuiHandle|go\.Figure)",
+        r"(?:GuiEvent\[Any\]|IntOrFloat|NoneOrCoroutine|PaneLoading|Placement|StringType|TGuiHandle|go\.Figure)",
     ),
 ]
 # These two references are real APIs, but Sphinx's Python inventory names them

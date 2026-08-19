@@ -84,13 +84,14 @@ Preparation charges four times the source buffer against a server-wide 512 MiB
 envelope, so one ndarray source is effectively capped at 128 MiB. Convert
 high-byte-depth arrays to `uint8` when necessary.
 
-Leika checks an image before browser decoding and admits only static PNG, JPEG,
-GIF, or WebP through 16,384 pixels per side and 33,554,432 decoded pixels.
-Animated, malformed, oversized, and unsupported rasters are offered as an
-explicit link or download instead of being rendered inline. The same policy
-protects GUI images and file previews. Markdown additionally avoids fetching
-external image URLs; validated Leika assets carry their measured dimensions in
-their registered URL.
+Direct pane and GUI ndarray calls validate dimensions before encoding and raise
+`ValueError` above 16,384 pixels per side or 33,554,432 decoded pixels.
+
+Received file-preview, Markdown, and registered-asset images reach the browser
+decoder only after verification as a static PNG, JPEG, GIF, or WebP. Animated,
+malformed, oversized, and unsupported files remain downloadable instead of
+rendering inline. Markdown avoids external image URLs; validated Leika assets
+carry their measured dimensions in their registered URL.
 
 ### matplotlib figures
 
@@ -106,9 +107,9 @@ the axes do not reflow to the pane's shape. Reach for `add_plotly` when the
 viewer needs to interact, or rasterize into `add_image` when a figure holds so
 many marks that one SVG element per mark gets expensive.
 
-Browser SVG rendering is limited to 16,777,216 UTF-16 code units
-(16 Mi-characters). A larger figure is rejected before image parsing; simplify
-or rasterize it before sending.
+Matplotlib SVG source is limited to 16,777,216 UTF-16 code units
+(16 Mi-characters). Creation or update raises `ValueError` before publishing a
+larger figure; simplify or rasterize it before sending.
 
 Leika keeps only a weak reference to the source figure. Retain the figure
 yourself while you need to read or update it through the handle; if it is
@@ -125,9 +126,10 @@ A figure that never had a template assigned picks up one matched to the
 viewer's light or dark theme; an explicit template is left alone. For large
 scatters, Plotly's own `scattergl` traces render on the GPU.
 
-Browser Plotly parsing is limited to 16,777,216 serialized UTF-16 code units
-(16 Mi-characters), including the figure and theme template. Downsample or
-simplify a larger figure before sending it.
+Serialized Plotly source is limited to 16,777,216 UTF-16 code units
+(16 Mi-characters), including the figure and theme template. Creation or update
+raises `ValueError` before publishing a larger figure; downsample or simplify it
+before sending.
 
 Plotly figures and configuration are trusted server-authored input to Plotly
 itself. They can intentionally refer to external maps or images through
@@ -181,6 +183,28 @@ pane = server.panes.add_image(render(0.0))
 while True:
     pane.update(render(phase))
 ```
+
+Every pane also has a loading overlay. `True` shows the standard indicator, a
+string adds status text, and `False` hides it. Set `loading` directly when only
+the status changes:
+
+```python
+pane.loading = "Rendering next frame"
+```
+
+When new content and its loading state belong together, publish both through
+one `update()` call. This keeps the previous renderer mounted behind the opaque
+overlay, then reveals the replacement without an intermediate frame:
+
+```python
+pane = server.panes.add_image(placeholder, loading="Rendering first frame")
+frame = render(phase)
+pane.update(frame, loading=False)
+```
+
+The same `loading=` creation and update arguments are available on image,
+matplotlib, Plotly, and Viser panes. Passing `None` to `update(..., loading=)`
+leaves the current loading state unchanged.
 
 Updates apply whether or not the pane's page is currently selected. Switching
 back shows the handle's latest retained content without creating another pane.

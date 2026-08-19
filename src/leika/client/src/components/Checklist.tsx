@@ -6,6 +6,7 @@ import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
 import { GuiChecklistMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
+import { HoverScrollText } from "./HoverScrollText";
 import { ENTRY_BOX_CONTROLS, entryBoxClassName } from "./entryStackStyles";
 
 /** One item: what it says, and whether it has been ticked. */
@@ -111,13 +112,13 @@ export default function ChecklistComponent({
           <label
             htmlFor={`${uuid}-${place}`}
             className={cn(
-              "min-w-0 truncate text-sm",
+              "min-w-0 flex-1 text-sm",
               disabled ? "opacity-50" : "cursor-pointer",
             )}
             title={item[0]}
             data-leika-checklist-entry
           >
-            {item[0]}
+            <HoverScrollText>{item[0]}</HoverScrollText>
           </label>
         </div>
       ))}

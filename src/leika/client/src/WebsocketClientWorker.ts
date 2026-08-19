@@ -16,6 +16,11 @@ import {
 } from "./websocketBatchOrdering";
 import { FatalWorkerEvent, WorkerFailureController } from "./workerFailure";
 import { WorkerBatchReceiptGate } from "./workerBatchReceipt";
+import {
+  classifySocketClose,
+  closeRejectedConnection,
+  type WebsocketCloseKind,
+} from "./websocketClose";
 import { sendWithWebsocketBudget } from "./websocketSendBudget";
 
 export type WsWorkerIncoming =
@@ -29,7 +34,7 @@ export type WsWorkerOutgoing =
   | { type: "connected" }
   | {
       type: "closed";
-      versionMismatch: boolean;
+      closeKind: WebsocketCloseKind;
       closeReason: string;
     }
   | {
@@ -239,7 +244,7 @@ const workerScope = self as unknown as WorkerScope;
     } catch (error) {
       postOutgoing({
         type: "closed",
-        versionMismatch: false,
+        closeKind: "socket",
         closeReason:
           error instanceof Error ? error.message : "Invalid WebSocket URL",
       });
@@ -284,17 +289,17 @@ const workerScope = self as unknown as WorkerScope;
       if (connectionReceiptGate === receiptGate) connectionReceiptGate = null;
       if (connectionFrameBudget === frameBudget) connectionFrameBudget = null;
       try {
-        socket.close(1011, reason);
+        closeRejectedConnection(socket, reason);
       } catch (error) {
         failure.fail(
-          "Connection worker could not close a rejected connection",
+          `Connection worker could not close a rejected connection after: ${reason}`,
           error,
         );
         return;
       }
       postOutgoing({
         type: "closed",
-        versionMismatch: false,
+        closeKind: "worker_rejection",
         closeReason: reason,
       });
     }
@@ -331,18 +336,17 @@ const workerScope = self as unknown as WorkerScope;
       if (connectionBatchTasks === batchTasks) connectionBatchTasks = null;
       if (connectionReceiptGate === receiptGate) connectionReceiptGate = null;
       if (connectionFrameBudget === frameBudget) connectionFrameBudget = null;
-      // Code 1002 is the server's protocol/version rejection.
-      const versionMismatch = event.code === 1002;
+      const closeKind = classifySocketClose(event.code);
 
       counters.connectedSinceMs = null;
 
       postOutgoing({
         type: "closed",
-        versionMismatch,
+        closeKind,
         closeReason: event.reason || "Connection closed",
       });
 
-      if (versionMismatch) {
+      if (closeKind === "version_mismatch") {
         console.warn(
           `Connection rejected: ${event.reason}. Client version: ${LEIKA_VERSION},` +
             ` protocol: ${LEIKA_PROTOCOL}`,

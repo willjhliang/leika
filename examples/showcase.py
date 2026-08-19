@@ -296,6 +296,18 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         pane_id="distribution",
         title="matplotlib distribution",
     )
+    # Synchronous GUI callbacks run on worker threads while the animation loop
+    # owns the same timeline and Plotly figure. One lock makes every snapshot
+    # and paired publication coherent; server.atomic() groups transport only.
+    state_lock = threading.RLock()
+    state: dict[str, Any] = {
+        "phase": 0.0,
+        "start": time.monotonic(),
+        "signal": [],
+        "distribution_revision": 0,
+    }
+    history_t: deque[float] = deque(maxlen=240)
+    history_y: deque[float] = deque(maxlen=240)
 
     with server.gui.add_folder("Playback and signal"):
         animate = server.gui.add_checkbox("Animate", initial_value=True)
@@ -405,8 +417,10 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
 
         def signal_csv(event: leika.GuiEvent[Any]) -> bytes:
             buffer = io.StringIO()
+            with state_lock:
+                samples = tuple(zip(history_t, history_y))
             buffer.write("time,signal\n")
-            buffer.writelines(f"{x},{y}\n" for x, y in zip(history_t, history_y))
+            buffer.writelines(f"{x},{y}\n" for x, y in samples)
             return buffer.getvalue().encode()
 
         server.gui.add_download_button(
@@ -429,9 +443,11 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         )
 
         def field_png(event: leika.GuiEvent[Any]) -> bytes:
+            with state_lock:
+                phase = state["phase"]
             return png_bytes(
                 render_field(
-                    state["phase"],
+                    phase,
                     float(frequency.value),
                     palette.value[0],
                     offset.value,
@@ -475,48 +491,66 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
             ("Warm up the source", ("Zero the offset", True), "Clear the log"),
             frozen=True,
         )
+        server.gui.add_radio_list(
+            "Density",
+            ("Compact", ("Comfortable", True), "Spacious"),
+            hint="Choose one density or edit and reorder the choices.",
+        )
+        server.gui.add_radio_list(
+            "Quality",
+            (("Draft", True), "Balanced", "Maximum"),
+            frozen=True,
+        )
         progress = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
 
-    state: dict[str, Any] = {
-        "phase": 0.0,
-        "start": time.monotonic(),
-        "signal": [],
-    }
-    history_t: deque[float] = deque(maxlen=240)
-    history_y: deque[float] = deque(maxlen=240)
+    def publish_plot_locked() -> None:
+        """Publish both copies while state_lock protects the shared figure."""
+
+        plot_pane.update(plot_figure)
+        gui_plot.figure = plot_figure
 
     @plotly_theme.on_update
     def _(_) -> None:
-        plot_figure.update_layout(template=plotly_theme.value)
-        plot_pane.update(plot_figure)
-        gui_plot.figure = plot_figure
+        with state_lock:
+            plot_figure.update_layout(template=plotly_theme.value)
+            with server.atomic():
+                publish_plot_locked()
 
     @plot_overlays.on_update
     def _(_) -> None:
-        overlays = plot_overlays.value
-        plot_figure.update_xaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
-        plot_figure.update_yaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
-        plot_pane.update(plot_figure)
-        gui_plot.figure = plot_figure
+        with state_lock:
+            overlays = plot_overlays.value
+            plot_figure.update_xaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
+            plot_figure.update_yaxes(showgrid="Grid" in overlays, zeroline="Zero line" in overlays)
+            with server.atomic():
+                publish_plot_locked()
 
     @plot_color.on_update
     def _(_) -> None:
-        red, green, blue = plot_color.value
-        plot_figure.update_traces(
-            line={"color": f"rgb({red},{green},{blue})"},
-            fillcolor=f"rgba({red},{green},{blue},0.12)",
-        )
-        plot_pane.update(plot_figure)
-        gui_plot.figure = plot_figure
+        with state_lock:
+            red, green, blue = plot_color.value
+            plot_figure.update_traces(
+                line={"color": f"rgb({red},{green},{blue})"},
+                fillcolor=f"rgba({red},{green},{blue},0.12)",
+            )
+            with server.atomic():
+                publish_plot_locked()
 
     @reset.on_click
     def _(_) -> None:
-        state["phase"] = 0.0
-        state["start"] = time.monotonic()
-        history_t.clear()
-        history_y.clear()
+        with state_lock:
+            state["phase"] = 0.0
+            state["start"] = time.monotonic()
+            history_t.clear()
+            history_y.clear()
+            state["signal"] = []
+            plot_figure.data[0].x = []
+            plot_figure.data[0].y = []
+            with server.atomic():
+                publish_plot_locked()
+            state["distribution_revision"] += 1
         server.gui.add_notification(
-            "Timeline reset", "Image and chart history were cleared.", auto_close_seconds=2.0
+            "Timeline reset", "Chart history was cleared and phase reset.", auto_close_seconds=2.0
         )
 
     @panel_actions.on_click
@@ -549,12 +583,13 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         colors = np.tile(np.asarray(cloud_color.value, dtype=np.uint8), (len(points), 1))
         # Re-adding under the same name replaces the node, and the handle it
         # returns is what the loop below spins.
-        state["cloud"] = viser_server.scene.add_point_cloud(
-            "/cloud",
-            points=points,
-            colors=colors,
-            point_size=float(cloud_size.value),
-        )
+        with state_lock:
+            state["cloud"] = viser_server.scene.add_point_cloud(
+                "/cloud",
+                points=points,
+                colors=colors,
+                point_size=float(cloud_size.value),
+            )
 
     cloud_shape.on_update(rebuild_cloud)
     cloud_count.on_update(rebuild_cloud)
@@ -574,7 +609,9 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
     def _(_) -> None:
         title = note_title.value.strip() or "Untitled"
         body = note_body.value.strip()
-        at = time.monotonic() - state["start"]
+        with state_lock:
+            started = state["start"]
+        at = time.monotonic() - started
         entries.appendleft(
             f"- `t={at:5.1f}s` **{title}** ({note_level.value[0]})"
             + (f" -- {body}" if body else "")
@@ -643,70 +680,88 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
     # at 30 fps. A matplotlib pane is a picture, not a live chart.
     stopping = lifetime.stopping
 
+    # A paused reset gets one cleared snapshot; otherwise paused charts stay still.
     def refresh_distribution() -> None:
+        last_revision = -1
         while not stopping.is_set():
-            draw_distribution(distribution_figure, state["signal"])
-            distribution_pane.update(distribution_figure)
+            animating = animate.value
+            with state_lock:
+                revision = int(state["distribution_revision"])
+                values = list(state["signal"]) if animating or revision != last_revision else None
+            if values is not None:
+                draw_distribution(distribution_figure, values)
+                distribution_pane.update(distribution_figure)
+                last_revision = revision
             stopping.wait(1.0)
 
     threading.Thread(target=refresh_distribution, daemon=True).start()
 
     print(f"Open {server.url}")
-    frame_interval = 1.0 / 30.0
+    simulation_interval = 1.0 / 30.0
+    # Viser keeps its smooth simulation cadence, while Leika publishes one
+    # coherent image/Plotly state below a busy browser's sustained capacity.
+    publish_interval = 1.0 / 15.0
     last_tick = time.monotonic()
-    next_frame = last_tick
+    next_simulation = last_tick
+    next_publish = last_tick
     try:
         while True:
             now = time.monotonic()
             dt = min(now - last_tick, 0.1)
             last_tick = now
-            if animate.value:
-                state["phase"] += dt * float(speed.value) * 2.2
+            animating = animate.value
+            with state_lock:
+                if animating:
+                    state["phase"] += dt * float(speed.value) * 2.2
+                    elapsed = now - state["start"]
+                    signal = float(np.sin(state["phase"]))
+                    history_t.append(elapsed)
+                    history_y.append(signal)
+                if animating and spin.value:
+                    # Only the node's rotation changes, so the points themselves
+                    # are not resent: a quaternion about z, wxyz as viser wants it.
+                    half = state["phase"] * 0.5
+                    state["cloud"].wxyz = (float(np.cos(half)), 0.0, 0.0, float(np.sin(half)))
 
-            elapsed = now - state["start"]
-            signal = float(np.sin(state["phase"]))
-            history_t.append(elapsed)
-            history_y.append(signal)
-
-            if animate.value:
-                frame = render_field(
-                    state["phase"],
-                    float(frequency.value),
-                    palette.value[0],
-                    offset.value,
-                    tint.value,
-                )
-                with server.atomic():
-                    field_pane.update(frame)
-                    gui_preview.image = frame[::4, ::4]
-
-            if spin.value:
-                # Only the node's rotation changes, so the points themselves
-                # are not resent: a quaternion about z, wxyz as viser wants it.
-                half = state["phase"] * 0.5
-                state["cloud"].wxyz = (float(np.cos(half)), 0.0, 0.0, float(np.sin(half)))
-
-            kept = max(2, round(len(history_t) * float(trail.value)))
-            trail_t = list(history_t)[-kept:]
-            trail_y = list(history_y)[-kept:]
-            plot_figure.data[0].x = trail_t
-            plot_figure.data[0].y = trail_y
-            plot_figure.update_yaxes(range=list(plot_range.value))
-            plot_pane.update(plot_figure)
-            gui_plot.figure = plot_figure
-            # Published for the distribution thread. Building the list here
-            # keeps the deque's iteration on the thread that appends to it.
-            state["signal"] = list(history_y)
+            if animating and now >= next_publish:
+                with state_lock:
+                    frame = render_field(
+                        state["phase"],
+                        float(frequency.value),
+                        palette.value[0],
+                        offset.value,
+                        tint.value,
+                    )
+                    kept = max(2, round(len(history_t) * float(trail.value)))
+                    trail_t = list(history_t)[-kept:]
+                    trail_y = list(history_y)[-kept:]
+                    plot_figure.data[0].x = trail_t
+                    plot_figure.data[0].y = trail_y
+                    plot_figure.update_yaxes(range=list(plot_range.value))
+                    with server.atomic():
+                        field_pane.update(frame)
+                        gui_preview.image = frame[::4, ::4]
+                        publish_plot_locked()
+                    # Published for the distribution thread. Building the list
+                    # here keeps deque iteration on the thread that appends to it.
+                    state["signal"] = list(history_y)
+                next_publish += publish_interval
+                after_publish = time.monotonic()
+                if next_publish <= after_publish:
+                    next_publish = after_publish + publish_interval
+            elif not animating:
+                # Resume with one current frame, never a catch-up burst.
+                next_publish = now
 
             # Sleep to the next 30 Hz deadline rather than for a fixed
             # interval, so frame work does not subtract from the frame rate.
             # After an overrun, restart the schedule instead of bursting.
-            next_frame += frame_interval
-            delay = next_frame - time.monotonic()
+            next_simulation += simulation_interval
+            delay = next_simulation - time.monotonic()
             if delay > 0:
                 time.sleep(delay)
             else:
-                next_frame = time.monotonic()
+                next_simulation = time.monotonic()
     except KeyboardInterrupt:
         pass
 

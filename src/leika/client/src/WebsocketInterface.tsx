@@ -13,6 +13,7 @@ import { resetFilePreviewState } from "./filePreview";
 import { resetFileTransferFailureToast } from "./fileDownloadHandler";
 import { retainedDownloads } from "./retainedDownloadBudget";
 import { WorkerEventGate } from "./workerFailure";
+import { connectionStateForEvent } from "./websocketClose";
 import { plotlyBootstrap } from "./plotlyBootstrap";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
 import type { PageSubscribeMessage } from "./WebsocketMessages";
@@ -185,12 +186,16 @@ export function WebsocketMessageProducer() {
         return;
       }
       if (data.type === "connected") {
+        const connectionState = connectionStateForEvent(
+          viewer.useGui.get().connectionError,
+          data,
+        );
         isConnected = true;
-        retryAllowed = true;
+        retryAllowed = connectionState.retry;
         resetConnectionState();
         viewer.useGui.set({
           websocketState: "connected",
-          connectionError: null,
+          connectionError: connectionState.connectionError,
         });
         updateRetryInterval();
         installConnectionBoundSender(viewer.mutable.current, (message) =>
@@ -199,11 +204,13 @@ export function WebsocketMessageProducer() {
         return;
       }
       if (data.type === "closed") {
+        const connectionState = connectionStateForEvent(
+          viewer.useGui.get().connectionError,
+          data,
+        );
         markDisconnected({
-          retry: !data.versionMismatch,
-          error: data.versionMismatch
-            ? "Connection rejected: " + data.closeReason
-            : null,
+          retry: connectionState.retry,
+          error: connectionState.connectionError,
         });
         return;
       }

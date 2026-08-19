@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -11,7 +12,7 @@ from leika._gui_handles import (
     _get_data_url,
     _link_markdown_assets,
     _parse_markdown,
-    _resolve_markdown_asset_path,
+    _resolve_markdown_asset,
 )
 
 
@@ -28,6 +29,20 @@ def _png_header(width: int = 1, height: int = 1) -> bytes:
     )
 
 
+def test_markdown_asset_resolver_captures_canonical_identity(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    path = docs / "figure.png"
+    payload = b"image"
+    path.write_bytes(payload)
+
+    resolved = _resolve_markdown_asset(docs, "figure.png")
+
+    assert resolved.path == path.resolve()
+    assert os.path.samestat(resolved.metadata, path.stat())
+    assert resolved.metadata.st_size == len(payload)
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -40,7 +55,7 @@ def _png_header(width: int = 1, height: int = 1) -> bytes:
 )
 def test_markdown_asset_paths_cannot_leave_their_root(tmp_path: Path, url: str) -> None:
     with pytest.raises(ValueError):
-        _resolve_markdown_asset_path(tmp_path / "docs", url)
+        _resolve_markdown_asset(tmp_path / "docs", url)
 
 
 def test_markdown_asset_symlinks_cannot_leave_their_root(tmp_path: Path) -> None:
@@ -51,7 +66,7 @@ def test_markdown_asset_symlinks_cannot_leave_their_root(tmp_path: Path) -> None
     docs.joinpath("linked.png").symlink_to(secret)
 
     with pytest.raises(ValueError):
-        _resolve_markdown_asset_path(docs, "linked.png")
+        _resolve_markdown_asset(docs, "linked.png")
 
 
 def test_http_backed_markdown_keeps_refused_reference(tmp_path: Path) -> None:
@@ -257,8 +272,6 @@ def test_http_backed_markdown_keeps_asset_when_registration_rejects_size(
 def test_inline_markdown_snapshot_rejects_same_size_in_place_rewrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import os
-
     docs = tmp_path / "docs"
     docs.mkdir()
     source = docs / "image.png"

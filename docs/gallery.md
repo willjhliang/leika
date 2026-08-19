@@ -7,8 +7,9 @@
 Every GUI component, as the browser renders it; each tile links to
 its API reference. `gui` is `server.gui` -- or any
 [container](api/gui_handles.rst) such as a folder, tab, or modal,
-which accepts the same calls. The figures follow the documentation's
-light or dark theme.
+which accepts the same calls. Leika chrome follows the documentation's
+light or dark theme. Renderer-owned content is shown as configured;
+the Plotly sample therefore keeps its light template in both images.
 
 ## Controls
 
@@ -122,6 +123,26 @@ light or dark theme.
 <span class="gallery-caption">
 <span>Frozen checklist</span>
 <code>add_checklist()</code>
+</span>
+</a>
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_radio_list">
+<span class="gallery-media">
+<img class="only-light" src="_static/gallery/radio-list-light.png" alt="Radio list" loading="lazy">
+<img class="only-dark" src="_static/gallery/radio-list-dark.png" alt="Radio list" loading="lazy">
+</span>
+<span class="gallery-caption">
+<span>Radio list</span>
+<code>add_radio_list()</code>
+</span>
+</a>
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_radio_list">
+<span class="gallery-media">
+<img class="only-light" src="_static/gallery/frozen-radio-list-light.png" alt="Frozen radio list" loading="lazy">
+<img class="only-dark" src="_static/gallery/frozen-radio-list-dark.png" alt="Frozen radio list" loading="lazy">
+</span>
+<span class="gallery-caption">
+<span>Frozen radio list</span>
+<code>add_radio_list()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_checkbox">
@@ -279,6 +300,16 @@ light or dark theme.
 <span class="gallery-caption">
 <span>Folder</span>
 <code>add_folder()</code>
+</span>
+</a>
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_popup">
+<span class="gallery-media">
+<img class="only-light" src="_static/gallery/popup-light.png" alt="Popup" loading="lazy">
+<img class="only-dark" src="_static/gallery/popup-dark.png" alt="Popup" loading="lazy">
+</span>
+<span class="gallery-caption">
+<span>Popup</span>
+<code>add_popup()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_form">

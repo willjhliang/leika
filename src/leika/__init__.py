@@ -25,6 +25,7 @@ from ._gui_handles import GuiPlotlyHandle as GuiPlotlyHandle
 from ._gui_handles import GuiPopupHandle as GuiPopupHandle
 from ._gui_handles import GuiPreviewButtonHandle as GuiPreviewButtonHandle
 from ._gui_handles import GuiProgressBarHandle as GuiProgressBarHandle
+from ._gui_handles import GuiRadioListHandle as GuiRadioListHandle
 from ._gui_handles import GuiRgbaHandle as GuiRgbaHandle
 from ._gui_handles import GuiRgbHandle as GuiRgbHandle
 from ._gui_handles import GuiSliderHandle as GuiSliderHandle
@@ -51,6 +52,7 @@ from ._panes import PaneGrid as PaneGrid
 from ._panes import PaneGroup as PaneGroup
 from ._panes import PaneHandle as PaneHandle
 from ._panes import PaneId as PaneId
+from ._panes import PaneLoading as PaneLoading
 from ._panes import Panes as Panes
 from ._panes import Placement as Placement
 from ._panes import PlotlyPaneHandle as PlotlyPaneHandle

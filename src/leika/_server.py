@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 
 from . import _client_autobuild, _messages, infra
 from ._async_errors import (
-    await_callback_result,
     await_user_callback,
     in_sync_user_callback,
     print_async_errors,
@@ -839,6 +838,8 @@ class Server:
 
     @property
     def url(self) -> str:
+        """Browser URL for the server, rendering wildcard binds as ``localhost``."""
+
         canonical_host = _canonical_hostname(self.host)
         if canonical_host is None:
             raise RuntimeError("server host became invalid after construction")
@@ -1175,10 +1176,6 @@ class Server:
     async def _await_user_callback(self, callback: Callable[..., Any], *args: Any) -> None:
         with self._active_user_callback():
             await await_user_callback(self._thread_executor, callback, *args)
-
-    async def _await_user_callback_result(self, result: object) -> None:
-        with self._active_user_callback():
-            await await_callback_result(result)
 
     def _shutdown_callback_executor(self) -> None:
         """Cancel queued callbacks once, after websocket teardown is done."""

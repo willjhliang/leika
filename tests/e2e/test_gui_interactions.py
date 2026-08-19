@@ -994,7 +994,7 @@ def test_plotly_invalid_payload_is_visible_and_recovers(
     leika_server.gui._websock_interface.queue_message_or_raise(
         _messages.GuiUpdateMessage(handle.id, {"_plotly_json_str": "{"})
     )
-    error = leika_page.get_by_role("status")
+    error = leika_page.get_by_role("status").filter(has_text="Plotly data contains invalid JSON.")
     expect(error).to_have_text("Plotly data contains invalid JSON.", timeout=5_000)
     expect(error).to_be_visible()
     expect(plot).to_have_count(0)
@@ -1027,7 +1027,7 @@ def test_plotly_rejection_recovers_and_does_not_outlive_unmount(
         }"""
     )
     handle.figure = go.Figure(go.Bar(y=[2, 3, 1]))
-    render_error = leika_page.get_by_role("status")
+    render_error = leika_page.get_by_role("status").filter(has_text="Plotly failed to render.")
     expect(render_error).to_have_text("Plotly failed to render.", timeout=5_000)
     expect(render_error).to_be_visible()
 
@@ -1408,25 +1408,29 @@ def test_button_and_toggle_colorways_are_roles(
     assert page_errors == []
 
 
-def test_a_label_sets_a_buttons_row_and_its_height(
+def test_a_label_sets_a_button_shaped_controls_row_and_its_height(
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """Unlabelled -- the default -- a button or a group is the row, at its
-    standalone 32px. Given a label it becomes a control in one: the label
-    takes the left column, and the button drops to the 24px every other row
+    """Unlabelled -- the default -- a button-shaped control is the row, at
+    its standalone 32px. Given a label it becomes a control in one: the label
+    takes the left column, and the control drops to the 24px every other row
     control runs at."""
     leika_server.gui.add_text("Text", initial_value="x")
     leika_server.gui.add_button("Run")
     leika_server.gui.add_button("Stop", label="Playback")
     leika_server.gui.add_button(("A", "B", "C"))
     leika_server.gui.add_button(("X", "Y", "Z"), label="Channel")
+    leika_server.gui.add_toggle("Arm")
+    leika_server.gui.add_toggle("Loop", label="Transport")
 
     plain_button = leika_page.get_by_role("button", name="Run", exact=True)
     labelled_button = leika_page.get_by_role("button", name="Stop", exact=True)
     plain_group = leika_page.get_by_role("button", name="A", exact=True)
     labelled_option = leika_page.get_by_role("button", name="X", exact=True)
+    plain_toggle = leika_page.get_by_role("button", name="Arm", exact=True)
+    labelled_toggle = leika_page.get_by_role("button", name="Loop", exact=True)
     expect(plain_button).to_be_visible(timeout=5_000)
 
     # The label is what puts a row around it, so an unlabelled control has none.
@@ -1455,10 +1459,10 @@ def test_a_label_sets_a_buttons_row_and_its_height(
         return box["height"]
 
     row_input = find_gui_row(leika_page, "Text").get_by_role("textbox")
-    for control in (labelled_button, labelled_option):
+    for control in (labelled_button, labelled_option, labelled_toggle):
         assert height(control) == pytest.approx(height(row_input), abs=0.5)
         assert height(control) == pytest.approx(24.0, abs=0.5)
-    for control in (plain_button, plain_group):
+    for control in (plain_button, plain_group, plain_toggle):
         assert height(control) == pytest.approx(32.0, abs=0.5)
     assert page_errors == []
 
@@ -1732,6 +1736,31 @@ def _showing_controls(page: Page) -> list[str]:
                 row.querySelector("[data-leika-list-controls]")).opacity === "1")
             .map((row) => row.querySelector("[data-leika-list-entry]").value)"""
     )
+
+
+def test_unlabelled_collection_entries_stay_at_the_compact_height(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """A collection gets the full panel width without gaining row height."""
+    leika_server.gui.add_list(None, ("List entry",))
+    leika_server.gui.add_checklist(None, ("Checklist entry",))
+    leika_server.gui.add_radio_list(None, ("Radio entry",))
+
+    selectors = (
+        "[data-leika-list-entry]",
+        "[data-leika-checklist-entry]",
+        "[data-leika-radio-list-entry]",
+    )
+    for selector in selectors:
+        entry = leika_page.locator(selector)
+        expect(entry).to_have_count(1, timeout=5_000)
+        bounds = entry.bounding_box()
+        assert bounds is not None
+        assert bounds["height"] == pytest.approx(24.0, abs=0.5), (selector, bounds)
+
+    assert page_errors == []
 
 
 def test_a_list_is_edited_added_to_removed_from_and_reordered(

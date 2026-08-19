@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { HoverScrollText } from "./HoverScrollText";
 import { guiLabelClassName, guiRowGridClassName } from "./guiLabelStyles";
 import { finiteNumberOrNull } from "./numberInputUtils";
 
@@ -114,7 +115,7 @@ export function GuiInputRow({
             label was cut through the middle of a letter with no sign that
             anything was missing. As a flex ITEM this span is blockified, which
             is the box `truncate` needs. */}
-        <span className="min-w-0 truncate">{label}</span>
+        <HoverScrollText className="w-full">{label}</HoverScrollText>
       </FieldLabel>
       {hint === undefined || hint === null ? (
         content
@@ -135,7 +136,7 @@ export function GuiInputRow({
  * over the panel. Wrapped, the label is an item the button can shrink, and it
  * ends in an ellipsis at the border instead of ignoring it. */
 export function ButtonLabel({ children }: { children: React.ReactNode }) {
-  return <span className="min-w-0 truncate">{children}</span>;
+  return <HoverScrollText>{children}</HoverScrollText>;
 }
 
 /** Server-rendered icon markup, sized to sit inline before a control's text. */

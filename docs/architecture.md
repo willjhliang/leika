@@ -142,20 +142,23 @@ through 1 MiB to bound parse and DOM expansion. The Blob remains available to
 download when inline rendering is declined.
 
 Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
-code units (16 Mi-characters). Larger figures remain valid Python objects but
-are declined with a visible browser status instead of expanding into an
-unbounded JavaScript object graph.
+code units (16 Mi-characters). Public creation, update, and assignment preflight
+that bound and raise `ValueError` before publication. The bundled client repeats
+the check and shows a visible status if a custom low-level sender bypasses the
+Python boundary.
 
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
-matplotlib SVG through 16,777,216 (16 Mi-characters). Larger sources are
-declined before DOM, Blob, or image parsing and produce a visible status in the
-affected control or pane.
+Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update
+raise `ValueError` before publishing a larger source. The bundled client also
+declines an oversized custom low-level payload before DOM, Blob, or image
+parsing and shows a status in the affected control or pane.
 
-Leika-owned image surfaces decode only verified, static PNG, JPEG, GIF, or WebP
-rasters. Each side is limited to 16,384 pixels and the image to 33,554,432
-decoded pixels. Animated, malformed, oversized, and unsupported files remain
-available through an explicit link or download fallback rather than reaching
-the browser image decoder. Markdown does not fetch external images; only a
+Direct GUI and pane ndarray APIs limit each side to 16,384 pixels and the image
+to 33,554,432 decoded pixels, raising before encoding an oversized source. A
+received file-preview, Markdown, or registered-asset image reaches the decoder
+only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
+animated, oversized, and unsupported files remain available through an explicit
+link or download fallback. Markdown does not fetch external images; only a
 bounded data image or the exact hash-and-dimensions URL emitted for a validated
 Leika asset can render inline.
 

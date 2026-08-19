@@ -15,6 +15,7 @@ import {
 import { MAX_LAYOUT_ID_CODE_UNITS } from "../persistenceLimits";
 import {
   activeViewportPageStorageKey,
+  isViewportPageReady,
   ViewportActions,
   ViewportImageDeclaration,
   ViewportLayoutStorage,
@@ -139,6 +140,7 @@ function imageDeclaration(
       _format: "png",
       title: paneId,
       visible: true,
+      loading: false,
       fit: "fit",
     },
     placement: "right",
@@ -160,6 +162,7 @@ function viserDeclaration(
       _port: 8080,
       title: paneId,
       visible: true,
+      loading: false,
     },
     placement: "right",
     relative_to: VIEWPORT_ROOT_PANE_ID,
@@ -245,12 +248,19 @@ describe("useViewportState hidden root lifecycle", () => {
     const { actions, getState } = createViewportHarness();
     actions.addImagePane(imageDeclaration("image"));
     const layout = getState().layout;
-    actions.updatePane("image", { title: "updated", fit: "fill" });
+    actions.updatePane("image", {
+      title: "updated",
+      fit: "fill",
+      loading: "Indexing ABC · 129k episodes",
+    });
     const pane = getState().panes.image;
     expect(pane?.kind === "image" ? pane.props.title : undefined).toBe(
       "updated",
     );
     expect(pane?.kind === "image" ? pane.props.fit : undefined).toBe("fill");
+    expect(pane?.kind === "image" ? pane.props.loading : undefined).toBe(
+      "Indexing ABC · 129k episodes",
+    );
     expect(getState().layout).toBe(layout);
   });
 
@@ -265,6 +275,7 @@ describe("useViewportState hidden root lifecycle", () => {
           _format: "png",
           title: "image",
           visible: false,
+          loading: false,
           fit: "fit",
         },
       }),
@@ -513,6 +524,7 @@ describe("useViewportState snapshot reconciliation", () => {
         _theme_templates: "",
         title: "x",
         visible: false,
+        loading: false,
       },
     });
     actions.addPlotlyPane(declaration("first"));
@@ -582,6 +594,7 @@ describe("useViewportState pages", () => {
 
   it("promotes a matching ready stream into a displayable cached model", () => {
     const { viewportActions, getViewportState } = createViewportHarness();
+    expect(isViewportPageReady(getViewportState())).toBe(false);
     viewportActions.beginPageSubscription(DEFAULT_PAGE_ID, 7);
     viewportActions.beginPageStream(DEFAULT_PAGE_ID, 7);
     viewportActions.addImagePane(imageDeclaration("main"));
@@ -593,6 +606,7 @@ describe("useViewportState pages", () => {
     });
 
     viewportActions.finishPageStream(DEFAULT_PAGE_ID, 7);
+    expect(isViewportPageReady(getViewportState())).toBe(true);
 
     const state = getViewportState();
     expect(state.displayPageId).toBe(DEFAULT_PAGE_ID);
@@ -615,8 +629,10 @@ describe("useViewportState pages", () => {
     viewportActions.beginPageStream(DEFAULT_PAGE_ID, 1);
     viewportActions.addImagePane(imageDeclaration("main"));
     viewportActions.finishPageStream(DEFAULT_PAGE_ID, 1);
+    expect(isViewportPageReady(getViewportState())).toBe(true);
 
     viewportActions.setActivePage("analysis");
+    expect(isViewportPageReady(getViewportState())).toBe(false);
     expect(getViewportState()).toMatchObject({
       activePageId: "analysis",
       displayPageId: DEFAULT_PAGE_ID,
@@ -631,8 +647,10 @@ describe("useViewportState pages", () => {
     expect(transitioning.transitionPage?.pageId).toBe(DEFAULT_PAGE_ID);
     expect(transitioning.transitionPage?.panes.main?.kind).toBe("image");
     expect(transitioning.pages.default.panes.main).toBeUndefined();
+    expect(isViewportPageReady(transitioning)).toBe(false);
 
     viewportActions.finishPageStream("analysis", 2);
+    expect(isViewportPageReady(getViewportState())).toBe(true);
     const ready = getViewportState();
     expect(ready.activePageId).toBe("analysis");
     expect(ready.displayPageId).toBe("analysis");
@@ -657,6 +675,7 @@ describe("useViewportState pages", () => {
       imageDeclaration("chart", { page_id: "analysis" }),
     );
     viewportActions.finishPageStream("analysis", 2);
+    expect(isViewportPageReady(getViewportState())).toBe(true);
 
     viewportActions.setActivePage(DEFAULT_PAGE_ID);
     expect(getViewportState()).toMatchObject({
@@ -664,10 +683,12 @@ describe("useViewportState pages", () => {
       displayPageId: DEFAULT_PAGE_ID,
     });
     expect(getViewportState().pageStream).toBeNull();
+    expect(isViewportPageReady(getViewportState())).toBe(false);
 
     viewportActions.beginPageSubscription(DEFAULT_PAGE_ID, 3);
     viewportActions.beginPageStream(DEFAULT_PAGE_ID, 3);
     const refreshing = getViewportState();
+    expect(isViewportPageReady(refreshing)).toBe(false);
     expect(refreshing.displayPageId).toBe(DEFAULT_PAGE_ID);
     expect(refreshing.transitionPage?.pageId).toBe(DEFAULT_PAGE_ID);
     expect(refreshing.transitionPage?.panes.main?.kind).toBe("image");
@@ -675,6 +696,9 @@ describe("useViewportState pages", () => {
     expect(refreshing.warmPage?.panes.chart?.kind).toBe("image");
     expect(refreshing.pages.default.panes.main).toBeUndefined();
     expect(refreshing.pages.analysis.panes.chart).toBeUndefined();
+
+    viewportActions.finishPageStream(DEFAULT_PAGE_ID, 3);
+    expect(isViewportPageReady(getViewportState())).toBe(true);
   });
 
   it("evicts an older warm model for a cold third page", () => {
@@ -780,6 +804,7 @@ describe("useViewportState pages", () => {
       accepting: false,
       ready: false,
     });
+    expect(isViewportPageReady(getViewportState())).toBe(false);
 
     viewportActions.beginPageStream(DEFAULT_PAGE_ID, 7);
     viewportActions.finishPageStream(DEFAULT_PAGE_ID, 6);
@@ -790,6 +815,7 @@ describe("useViewportState pages", () => {
       accepting: true,
       ready: false,
     });
+    expect(isViewportPageReady(getViewportState())).toBe(false);
 
     viewportActions.finishPageStream(DEFAULT_PAGE_ID, 7);
     expect(getViewportState().pageStream).toEqual({
@@ -798,6 +824,7 @@ describe("useViewportState pages", () => {
       accepting: true,
       ready: true,
     });
+    expect(isViewportPageReady(getViewportState())).toBe(true);
   });
 
   it("scopes identical pane IDs, updates, removals, and snapshots by page", () => {

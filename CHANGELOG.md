@@ -3,172 +3,150 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning.
 
-## 0.4.0 — 2026-08-12
+## 0.4.0 — 2026-08-19
 
-Leika 0.4.0 remains an alpha release while its pre-1.0 API and workspace
-model continue to mature.
+56 commits since v0.3.0. Items marked breaking need call sites updated.
 
-### Highlights
+### New
 
-- Reworked the browser workspace and controls around the current shadcn/Base UI
-  stack, with more reliable panes, previews, Plotly rendering, and uploads.
-- Added generated, complete third-party notices for the production browser
-  bundle and strengthened wheel/source-distribution validation.
-- Added leika.NotificationHandle to the top-level public API.
+- Pages: `server.pages`, `Page`, and `Pages` add named canvases with independent
+  layouts. Every server starts with a default page named by `Server(label=...)`;
+  `server.panes` remains an exact alias for `server.pages.default.panes`.
+- Radio lists: `GuiApi.add_radio_list()` and `GuiRadioListHandle` add editable or
+  frozen, optionally labeled choices with at most one selection.
+- Popups: `GuiApi.add_popup()` and `GuiPopupHandle` add a folder-like container
+  whose controls stay behind one compact row until a viewer opens it.
+- Pane loading: image, Matplotlib, Plotly, and Viser panes accept `loading=True`
+  or status text, and `update(..., loading=False)` can reveal new content
+  atomically.
 
-### Security and robustness
+### Improvements
 
-- Added Host/Origin validation against DNS rebinding. A wildcard bind now
-  accepts localhost spellings and IP-literal Host values only. DNS, mDNS, and
-  Tailscale names must be listed with Server(allowed_hosts=[...]); entries are
-  hostnames or IP literals without schemes, ports, paths, or wildcards.
-- Added Server(allow_embedding=False). The default sends
-  Content-Security-Policy: frame-ancestors 'none'; notebook show() callers
-  must opt in with allow_embedding=True.
-- Restricted trusted forwarded headers to the exact generated Cloudflare
-  tunnel origin, and added nosniff and no-referrer response policies.
-- Limited each server to 128 active WebSocket clients. The bundled Leika client
-  still negotiates an exact version/protocol fingerprint; low-level
-  `infra.WebsockServer` custom-message roots remain compatible with ordinary
-  clients that do not offer a Leika subprotocol.
-- Bounded each `GuiApi` scope to 4,096 live components, 1,024 commands,
-  32 modals, 128 notifications, 16,384 aggregate collection entries and tab
-  descriptors, 16 Mi UTF-16 text, 128 MiB retained payload, 64 Mi-pixels, and
-  graph depth 64. One browser combines two such GUI scopes, with corresponding
-  8,192/2,048/64/256 owner ceilings, 32,768 collection entries and tabs,
-  32 Mi text, and 256 MiB retained payload. Notifications use separate 2 Mi
-  per-scope and 4 Mi per-page text ledgers.
-- Bounded a workspace to 128 retained panes (including hidden or minimized),
-  16 Viser panes, 32 Mi UTF-16 source, 256 MiB retained payload, and
-  64 Mi-pixels. Server-wide GUI state is limited to 256 MiB and 128 Mi-pixels;
-  `server.gui` and workspace panes share a 64 Mi-pixel ledger. Mounted browser
-  rasters share 128 Mi-pixels, counting every rendered copy.
-- Added a 512 MiB server-wide image-preparation envelope that charges four
-  times an ndarray's source bytes, for an effective 128 MiB per-call source
-  ceiling. High-byte-depth arrays may need conversion to `uint8`.
-- Limited browser-to-server protocol messages to 4 MiB. Server-to-browser
-  hybrid frames are limited to 512 MiB, 256 MiB metadata, 128 messages,
-  16,384 binary buffers, 500,000 decoded values, and depth 128. The browser
-  validates the complete envelope before applying any frame side effect.
-  Outbound browser queues also close on overflow instead of dropping state.
-- Bounded uploads to 64 MiB per file and 256 MiB of combined in-progress,
-  conversion, and retained `UploadedFile` memory, with acknowledged flow
-  control and explicit cancellation. Bounded queued downloads to 8 MiB per
-  client. Runtime HTTP assets are capped at 64 MiB each; their immutable
-  snapshot cache is capped at 128 MiB and
-  1,024 entries. Static files are capped at 32 MiB each, while their cache is
-  capped at 32 MiB and 128 entries. Live HTTP response bodies share a 128 MiB
-  and 256-owner per-server budget; overload receives `503 Service Unavailable`
-  with `Retry-After: 1`.
-- Bounded browser-assembled downloads to 256 MiB and 65,536 parts each, with
-  at most 128 active assemblies. One page-wide 512 MiB budget now covers both
-  declared bytes under assembly and completed Blobs retained by saves, links,
-  previews, and the warm cache. Admission or cache/link eviction keeps that
-  combined ownership bounded; a 512-owner and 65,536 aggregate received-part
-  cap also covers zero-byte and fragmented transfers. Browser save/link flows
-  still require the complete file as one Blob.
-- Plain-text, prose, and source previews render through 16 MiB; Markdown renders
-  through 1 MiB to bound parse and DOM expansion. The received Blob remains
-  available to download when inline rendering is declined.
-- Plotly figures and theme templates are parsed through 16,777,216 serialized
-  UTF-16 code units. Larger payloads show a browser limit status before JSON
-  parsing instead of expanding into an unbounded object graph.
-- GUI HTML DOM source is capped at 1,048,576 UTF-16 code units and matplotlib
-  SVG source at 16,777,216. Larger sources show a visible browser status before
-  DOM, Blob, or image parsing.
-- Leika-owned image surfaces now admit only verified static PNG, JPEG, GIF, and
-  WebP rasters through 16,384 pixels per side and 33,554,432 decoded pixels.
-  Animated, malformed, oversized, or unsupported content remains an explicit
-  link/download fallback. Markdown no longer fetches external images and only
-  renders bounded data images or dimension-matched validated Leika assets.
-- Plotly's JavaScript runtime is loaded as a stable regular-file snapshot,
-  requires valid UTF-8, and is capped at 32 MiB before browser delivery.
-- The limits above cover Leika-owned GUI, pane, wire, and rendered state,
-  not total Python-process memory. Registered callbacks and lazy file providers
-  remain trusted caller-owned callables and can close over arbitrary state.
-  Raw `GuiApi.add_html` remains deliberately unsanitized, and Viser clients
-  run in an unsandboxed no-referrer iframe; pass only sanitized HTML and trusted
-  Viser clients or URLs.
+- Client: the workspace, dock, controls, dialogs, panes, and previews now share
+  one compact visual language and consistent focus and drag behavior.
+- Docking: tabs reorder by their grips and can be torn into floating windows,
+  redocked, or stacked. Double-click a torn-out tab's title to return it to its
+  original group.
+- Previews: dialogs open as soon as transfer metadata arrives, can fill the
+  window, size media naturally, and remember whether each source uses full-window
+  mode and shows a contents rail.
+- Markdown: previews use GitHub-like typesetting, offer a contents rail that
+  follows the current section, defer distant sections and media in long
+  documents, and expand figures on demand.
+- Controls: clipped labels, titles, choices, and unfocused fields reveal hidden
+  text at a steady 40 pixels per second on hover. Editable fields yield to
+  focus, and reduced-motion viewers jump directly to the end.
+- Pages: each browser stores its selected page and per-page layouts locally,
+  scoped by the server URL and stable `workspace_id`, `page_id`, and `pane_id`
+  values. The default page imports a saved single-page layout from v0.3 when no
+  current layout exists.
+- Pages: pane payloads for inactive pages stay on the server, the browser keeps at
+  most one completed page warm, and the persistent connection badge reads
+  `Loading` while the selected page replays, even with the panel collapsed.
+- API: `GuiPopupHandle`, `GuiRadioListHandle`, `NotificationHandle`, `Page`,
+  `PageId`, `Pages`, and `PaneLoading` are available from the top-level `leika`
+  package.
+- Workspace chrome (breaking): the opt-in titlebar and `leika.theme`, including
+  `TitlebarButton`, `TitlebarButtonConfig`, and `TitlebarButtonImage`, are gone.
+  Compose a replacement header in the GUI; replace `control_layout="collapsible"`
+  or `"fixed"` with `"left"` or `"right"`. `GuiApi.set_panel_label()` is now a
+  compatibility alias that renames the default page, locally for `client.gui`.
+- Remote access (breaking): Host and Origin validation protects against DNS
+  rebinding. A wildcard bind trusts localhost spellings and IP-literal Host
+  values only; list DNS, mDNS, and Tailscale names with
+  `Server(allowed_hosts=[...])`. Forwarded headers are trusted only from the
+  generated Cloudflare tunnel origin, and responses add `nosniff` and
+  no-referrer policies.
+- Embedding (breaking): `Server(allow_embedding=False)` is now the default and
+  sends `Content-Security-Policy: frame-ancestors 'none'`. Notebook `show()` and
+  other framed workspaces must opt in with `allow_embedding=True`.
+- Python (breaking): Python 3.10 is now the minimum. The dependency minimums on
+  supported Python versions exclude vulnerable Pillow and Pygments releases that
+  older Python versions can no longer replace.
+- Validation (breaking): public Python APIs stop silently coercing primitive
+  values; booleans, strings, numbers, enums, and relevant NumPy arrays must have
+  the documented types. Workspace, page, and pane IDs must be nonempty valid
+  Unicode, at most 1,024 UTF-16 code units, and not `__proto__`, `prototype`, or
+  `constructor`. A mini form requires exactly one direct editable field.
+- Ports (breaking): a requested port is bound exactly instead of probing up to
+  1,000 higher ports. Pass `port=0` for race-free automatic allocation and read
+  the selected port from the running server.
+- Resource limits (breaking): Leika-owned GUI, page, pane, raster, and protocol
+  state is bounded at every scope instead of growing without limit. Headline caps
+  are 128 active WebSocket clients per server, 4,096 live components per GUI,
+  128 named pages and 128 panes per workspace, 16 Viser panes, and an effective
+  128 MiB ndarray source per image-preparation call. The Architecture guide
+  carries the complete table.
+- Callbacks (breaking): callback lists and the programmatic callback queue are
+  bounded. Button holds accept up to 64 requested rates, capped at 60 Hz; hold
+  and client-connect/disconnect callbacks can now be removed explicitly.
+- Notifications (breaking): auto-close now retires the server handle when the
+  toast expires, and a successful update restarts its timer. Set `loading=True`
+  or `auto_close_seconds=None` or `0` to suppress expiry.
+- File providers (breaking): providers passed to `add_download_button()` and
+  `add_preview_button()` must be synchronous. Complete asynchronous work before
+  the press and return `bytes` or a `Path`; an awaitable result is rejected.
+- Transfers (breaking): uploads are capped at 64 MiB per file, paced with
+  acknowledgements, and cancellable. Downloads use an 8 MiB queued budget per
+  client; browser assemblies are capped at 256 MiB, 65,536 parts, and 128 active
+  assemblies. `chunk_size` is at most 8 MiB, filenames are validated, path
+  sources must be regular files, and HTTP bodies have explicit server budgets.
+  Sends made on the server event loop or inside `atomic()` are deferred and
+  report path or transfer failures asynchronously.
+- Rendering limits (breaking): Python rejects Plotly JSON and Matplotlib SVG above
+  16 Mi UTF-16 code units, GUI HTML above 1 Mi UTF-16 code units, and oversized
+  GUI or pane rasters before publication. Text, prose, and source previews render
+  through 16 MiB and Markdown through 1 MiB. Refused file-preview and Markdown
+  images remain downloadable, while Markdown no longer fetches external image
+  URLs.
+- Handles (breaking): removed GUI, pane, command, modal, and notification handles
+  are terminal. Stable IDs remain readable; other synchronized operations raise,
+  descendants retire recursively, and a repeated removal warns and does nothing.
+- Batches (breaking): messages queued inside `server.atomic()` wait until the
+  outermost context exits and keep their order, but may split into browser-safe
+  windows. This is not a transaction or a delivery or rendering acknowledgment;
+  `flush()` only bypasses the batching delay.
+- Snapshots (breaking): successful ndarray and Plotly assignments store detached,
+  bounded snapshots. Do not mutate those inputs concurrently during the call;
+  Plotly getters return independent figures. Matplotlib sources are now weakly
+  held, so retain the figure while using its pane handle.
 
-### Compatibility and migration
+### Fixes
 
-- Removed the opt-in titlebar and the leika.theme module
-  (TitlebarButton, TitlebarButtonConfig, and TitlebarButtonImage). Remove
-  titlebar_content= and compose any replacement header inside the GUI.
-- GuiApi.configure_theme(control_layout=...) keeps "floating"; replace the old
-  "collapsible" and "fixed" values with "left" or "right" to choose the initial
-  dock position.
-- Hostnames used to open a wildcard-bound server are no longer implicitly
-  trusted. For example:
+- Connections: worker-local connection safety rejections now close cleanly; the
+  client retries and keeps their diagnostic in connection details until it
+  reconnects. Malformed browser messages are confined to the offending
+  connection, while routine network closes remain silent.
+- Pages: rapid switching no longer displays a stale page generation; reconnecting
+  or refreshing restores the selected page and its layout.
+- Images: live viewport, GUI, preview, and Matplotlib updates keep the previous
+  frame visible until its replacement is decoded and admitted, eliminating blank
+  flashes.
+- Previews: an open preview follows its source file without reopening, scrolling
+  no longer reloads it, and long Markdown documents keep headings and figures
+  stable as deferred content settles.
+- Lifecycle: disconnects release mounted GUI and pane resources before their
+  shared browser budgets. Discarded preview jobs return their busy reservations,
+  removed roots unlink from their registries, and shutdown retires cached assets
+  and wakes blocked registrations.
+- Panel: the collapsed page selector remains visible after selection, and the
+  header keeps a stable row height while its status and controls change.
+- Collections: frozen checklist and radio-list updates can change only check or
+  selection state, not fixed labels, item counts, or ordering. In editable radio
+  lists, arrow keys stay with the text caret; on a focused radio they navigate
+  and select choices normally.
+- Pane loading: opaque overlays stay above renderer controls and make underlying
+  content inert.
 
-  ```python
-  server = leika.Server(
-      host="0.0.0.0",
-      allowed_hosts=["demo.tailnet-name.ts.net", "camera.local"],
-  )
-  ```
+### Misc
 
-  Existing localhost and direct IP-literal URLs continue to work without an
-  allowlist. An explicit DNS bind accepts its own hostname.
-
-- Python 3.10 is now the minimum supported version. Python 3.8 and 3.9 are
-  end-of-life upstream and their final compatible Pillow/Pygments resolutions
-  carry known vulnerabilities; Leika now declares the audited secure floors
-  directly.
-
-- Embedding a workspace in a notebook or other frame now requires
-  allow_embedding=True.
-- `workspace_id` and explicit `pane_id` values must now be nonempty valid
-  Unicode, at most 1,024 UTF-16 code units, and not exactly `__proto__`,
-  `prototype`, or `constructor`.
-- A requested server port is now bound exactly. Earlier releases silently
-  probed up to 1,000 higher ports when it was occupied; callers that want
-  race-free automatic allocation should pass `port=0` and read the selected
-  port from the running server.
-- Uploads larger than 64 MiB are rejected instead of being retained
-  unboundedly in server memory.
-- Downloads exceeding the per-file, part-count, active-assembly, or combined
-  memory caps are now rejected by the browser rather than retained unboundedly.
-- A path-backed download now documents its live-descriptor semantics: atomic
-  path replacement does not affect an open transfer, but in-place writes can
-  affect unread bytes. Pass immutable `bytes` for a fixed eager snapshot.
-- Plotly figures whose serialized JSON exceeds 16,777,216 UTF-16 code units no
-  longer render in the browser; reduce/downsample the figure before sending it.
-- GUI HTML above 1,048,576 UTF-16 code units and matplotlib SVG above
-  16,777,216 no longer render in the browser. Simplify or rasterize oversized
-  content before sending it.
-- Static raster images above 16,384 pixels on either side or 33,554,432 decoded
-  pixels, and animated PNG/GIF/WebP images, no longer render inline. Their safe
-  link/download fallback remains available. Plotly stays a trusted
-  server-authored third-party renderer and may fetch resources named by a
-  figure; this direct-image policy does not sanitize Plotly schemas.
-- Removed GUI, pane, command, modal, and notification handles are now
-  terminal. Stable IDs remain readable, while other synchronized reads,
-  updates, and new callbacks raise `RuntimeError`; recursive descendants are
-  retired and retained payloads scrubbed. Repeated removal warns and is a
-  harmless no-op.
-- `server.atomic()` now explicitly guarantees only that queued messages wait
-  for the outermost context to exit and retain order. It may split them into
-  multiple browser-safe windows and is not transactional or a delivery/render
-  acknowledgement. `flush()` only bypasses the batching delay.
-- Mini forms require exactly one direct editable field. Sibling display rows,
-  nested containers, and a second field are rejected before publication.
-- Successful ndarray and Plotly assignments detach bounded snapshots; callers
-  must not mutate those inputs concurrently during the synchronous operation.
-  Plotly getters reconstruct independent figures and ignore later global
-  template changes. Matplotlib pane sources are held weakly, so callers must
-  retain the original figure.
-- Tab groups now use an explicit flat create/update/remove lifecycle for
-  prefix-safe replay. This is an internal bundled-client protocol change, not a
-  compatibility promise for custom low-level protocol consumers.
-
-### Release engineering
-
-- Release artifacts now come from one hash-constrained builder, use a tracked
-  universal Python lock, and are checked for metadata, integrity, provenance,
-  and installability before publication.
-- Added a validation-only Hatch build hook. It never invokes Node, npm, or
-  the network: a normal checkout wheel requires a current bundle and points to
-  `leika-build-client --force` or `make package`; editable and sdist builds
-  remain clean-checkout capable, and wheel-from-sdist validates its bundled
-  client without a checkout stamp.
+- Examples: the showcase keeps its simulation and Viser motion at 30 Hz while
+  publishing coherent image and Plotly batches to Leika at 15 Hz.
+- Docs: guides now cover pages, pane loading, and bounded state. The component
+  gallery adds popups and radio lists and captures every component at 3× density.
+- Notices: the production browser bundle carries complete generated third-party
+  notices, and package validation requires them.
+- Releases: one hash-constrained builder uses the tracked universal Python lock,
+  builds twice for byte-for-byte reproducibility, and validates metadata,
+  contents, provenance, and installation. Its validation-only Hatch hook never
+  invokes Node, npm, or the network.

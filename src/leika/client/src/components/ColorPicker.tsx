@@ -37,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { HoverScrollText } from "./HoverScrollText";
 import { POPOUT_WIDTH_CLASS } from "../ControlPanel/controlWidth";
 import {
   type ColorFormat,
@@ -623,7 +624,9 @@ function ColorPickerPopover({
           className="size-4 shrink-0 rounded-sm"
           style={{ backgroundColor: value }}
         />
-        <span className="truncate">{text ?? colorDisplayString(value)}</span>
+        <HoverScrollText className="flex-1 text-left">
+          {text ?? colorDisplayString(value)}
+        </HoverScrollText>
       </PopoverTrigger>
       <PopoverContent
         align="end"

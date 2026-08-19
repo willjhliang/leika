@@ -21,24 +21,27 @@ def _record_row(name: str, payload: bytes) -> list[str]:
 
 
 def _metadata(
-    module: object,
     version: str,
     license_headers: str,
     *,
     duplicate_name: bool = False,
     omit_first_requirement: bool = False,
+    wrong_summary: bool = False,
 ) -> bytes:
     project = _artifact_metadata.project_metadata()
     requirements = _artifact_metadata.expected_requires_dist(project)
     if omit_first_requirement:
         requirements = requirements[1:]
     fields = [
-        "Metadata-Version: 2.4",
+        f"Metadata-Version: {_artifact_metadata.METADATA_VERSION}",
         "Name: leika",
         *(["Name: leika"] if duplicate_name else []),
         f"Version: {version}",
+        f"Summary: {'wrong' if wrong_summary else project['description']}",
+        f"Author-email: {_artifact_metadata.expected_author_email(project)}",
         f"Requires-Python: {project['requires-python']}",
-        f"License-Expression: {module.EXPECTED_LICENSE}",
+        f"License-Expression: {project['license']}",
+        f"Description-Content-Type: {_artifact_metadata.expected_description_content_type(project)}",
         *(f"Project-URL: {name}, {url}" for name, url in project["urls"].items()),
         *(f"Classifier: {value}" for value in project["classifiers"]),
         *(f"Requires-Dist: {value}" for value in requirements),
@@ -54,6 +57,8 @@ def _minimal_wheel(
     *,
     bad_hash: bool = False,
     missing_core_file: bool = False,
+    wrong_summary: bool = False,
+    extra_members: tuple[str, ...] = (),
     missing_license_metadata: bool = False,
     duplicate_name: bool = False,
     omit_first_requirement: bool = False,
@@ -69,11 +74,11 @@ def _minimal_wheel(
         else "".join(f"License-File: {name}\n" for name in license_files)
     )
     metadata = _metadata(
-        check_wheel,
         version,
         license_headers,
         duplicate_name=duplicate_name,
         omit_first_requirement=omit_first_requirement,
+        wrong_summary=wrong_summary,
     )
     wheel_metadata = b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
     entry_points = (
@@ -89,6 +94,7 @@ def _minimal_wheel(
         },
         **{f"{dist_info}/licenses/{name}": b"license" for name in license_files},
     }
+    members.update({name: b"unexpected" for name in extra_members})
     if missing_core_file:
         del members["leika/_server.py"]
     rows = [_record_row(name, payload) for name, payload in members.items()]
@@ -112,16 +118,17 @@ def _minimal_sdist(
     duplicate_name: bool = False,
     omit_first_requirement: bool = False,
     extra_members: tuple[str, ...] = (),
+    wrong_summary: bool = False,
 ) -> None:
     root = "leika-0.4.0"
     license_files = sorted(check_sdist._expected_license_files())
     license_headers = "".join(f"License-File: {name}\n" for name in license_files)
     pkg_info = _metadata(
-        check_sdist,
         "0.4.0",
         license_headers,
         duplicate_name=duplicate_name,
         omit_first_requirement=omit_first_requirement,
+        wrong_summary=wrong_summary,
     )
     members = {
         "PKG-INFO": pkg_info,
@@ -149,6 +156,26 @@ def _minimal_sdist(
             info = tarfile.TarInfo(f"{root}/{directory_member}")
             info.type = tarfile.DIRTYPE
             archive.addfile(info)
+
+
+@pytest.mark.parametrize("authors", [[], [{"name": "Missing email"}], [{"email": "x@y.z"}]])
+def test_metadata_author_policy_requires_name_and_email(authors: list[dict[str, str]]) -> None:
+    project = _artifact_metadata.project_metadata()
+    project["authors"] = authors
+
+    with pytest.raises(RuntimeError, match="authors must each declare a name and email"):
+        _artifact_metadata.expected_author_email(project)
+
+
+@pytest.mark.parametrize("readme", [None, {"file": "README.md"}, "README.adoc"])
+def test_metadata_readme_policy_requires_a_supported_file_path(readme: object) -> None:
+    project = _artifact_metadata.project_metadata()
+    project["readme"] = readme
+
+    with pytest.raises(
+        RuntimeError, match="readme (must be a file path|has an unsupported suffix)"
+    ):
+        _artifact_metadata.expected_description_content_type(project)
 
 
 def test_wheel_rejects_duplicate_member(tmp_path: Path) -> None:
@@ -326,11 +353,21 @@ def test_wheel_rejects_missing_core_file(tmp_path: Path) -> None:
             check_wheel._validate_structure(archive, wheel)
 
 
+def test_wheel_rejects_unexpected_client_build_file(tmp_path: Path) -> None:
+    wheel = tmp_path / "leika-0.4.0-py3-none-any.whl"
+    _minimal_wheel(wheel, extra_members=("leika/client/build/index.html.map",))
+
+    with zipfile.ZipFile(wheel) as archive:
+        with pytest.raises(SystemExit, match="unexpected client files"):
+            check_wheel._validate_structure(archive, wheel)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error"),
     [
         ({"duplicate_name": True}, "exactly one Name"),
         ({"omit_first_requirement": True}, "Requires-Dist does not match pyproject"),
+        ({"wrong_summary": True}, "Summary does not match pyproject"),
     ],
 )
 def test_wheel_rejects_metadata_drift(tmp_path: Path, kwargs: dict[str, bool], error: str) -> None:
@@ -512,6 +549,7 @@ def test_sdist_raw_tar_preflight_bounds_hidden_longname_payload(
     [
         ({"duplicate_name": True}, "exactly one Name"),
         ({"omit_first_requirement": True}, "Requires-Dist does not match pyproject"),
+        ({"wrong_summary": True}, "Summary does not match pyproject"),
     ],
 )
 def test_sdist_rejects_metadata_drift(
@@ -594,6 +632,17 @@ def test_sdist_rejects_generated_transaction_debris(
 
     monkeypatch.setattr(sys, "argv", ["check_sdist.py", str(sdist)])
     with pytest.raises(SystemExit, match="contains generated files"):
+        check_sdist.main()
+
+
+def test_sdist_rejects_unexpected_client_build_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdist = tmp_path / "leika-0.4.0.tar.gz"
+    _minimal_sdist(sdist, extra_members=("src/leika/client/build/index.html.map",))
+
+    monkeypatch.setattr(sys, "argv", ["check_sdist.py", str(sdist)])
+    with pytest.raises(SystemExit, match="unexpected client build file"):
         check_sdist.main()
 
 

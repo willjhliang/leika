@@ -10,7 +10,7 @@ function pane(svg: string): ViewportMatplotlibPane {
   return {
     kind: "matplotlib",
     paneId: "figure",
-    props: { _svg: svg, title: "Figure", visible: true },
+    props: { _svg: svg, title: "Figure", visible: true, loading: false },
   };
 }
 

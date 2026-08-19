@@ -959,6 +959,23 @@ class GuiChecklistMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiRadioListProps(GuiBaseProps):
+    frozen: bool
+    """Whether the ITEMS are fixed: their words, their number, and their order.
+    Frozen, a row is the words rather than a box to type them in, and what the
+    viewer does with the list is select one. Separate from ``disabled``, which
+    stops selection too."""
+
+
+@dataclasses.dataclass
+class GuiRadioListMessage(_CreateGuiComponentMessage):
+    value: Tuple[Tuple[str, bool], ...]
+    """One (text, selected) pair per item, with at most one selected."""
+    container_uuid: str
+    props: GuiRadioListProps
+
+
+@dataclasses.dataclass
 class GuiDropdownProps(GuiBaseProps):
     # This will actually be manually overridden for better types.
     options: Tuple[str, ...]
@@ -1016,6 +1033,9 @@ class ViewportImageProps:
     _format: Literal["jpeg", "png"]
     title: str
     visible: bool
+    loading: bool | str
+    """False hides the loading overlay, True shows its default treatment, and
+    a string shows that text with the loading indicator."""
     fit: Optional[Literal["fit", "fill", "stretch"]]
     """How the image is sized in its pane. None defers to the viewer's own
     "Image fit" setting, which is where an app that has no opinion leaves it."""
@@ -1062,6 +1082,7 @@ class ViewportPlotlyProps:
     the client when the figure does not specify a template."""
     title: str
     visible: bool
+    loading: bool | str
 
 
 @dataclasses.dataclass
@@ -1073,6 +1094,7 @@ class ViewportMatplotlibProps:
     pane scales it without asking Python to redraw."""
     title: str
     visible: bool
+    loading: bool | str
 
 
 @dataclasses.dataclass
@@ -1100,6 +1122,7 @@ class ViewportViserProps:
     None for URL-based targets. Exactly one of _url/_port is set."""
     title: str
     visible: bool
+    loading: bool | str
 
 
 @dataclasses.dataclass

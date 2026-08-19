@@ -245,6 +245,24 @@ def test_local_workflow_action_references_exist() -> None:
     assert local_references, "expected at least one repository-local workflow action"
 
 
+def test_external_workflow_actions_are_commit_pinned() -> None:
+    """Keep executable third-party workflow code on immutable revisions."""
+    workflow_files = sorted((ROOT / ".github").rglob("*.yml")) + sorted(
+        (ROOT / ".github").rglob("*.yaml")
+    )
+    pattern = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?([^'\"\s#]+)", re.MULTILINE)
+    external_references = []
+    for source in workflow_files:
+        for reference in pattern.findall(source.read_text(encoding="utf-8")):
+            if reference.startswith("./"):
+                continue
+            external_references.append((source, reference))
+            assert re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", reference), (
+                f"{source}: external action is not pinned to a full commit SHA: {reference}"
+            )
+    assert external_references, "expected at least one external workflow action"
+
+
 def test_pre_commit_ruff_matches_the_locked_ci_version() -> None:
     with (ROOT / "uv.lock").open("rb") as source:
         lock = tomllib.load(source)

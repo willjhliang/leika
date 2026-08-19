@@ -46,9 +46,9 @@ export interface GuiState {
   /** Server-provided namespace for browser-owned workspace state. */
   workspaceId: string | null;
   websocketState: "connected" | "reconnecting" | "inactive";
-  /** Fatal reason the server refused this client (e.g. a version mismatch),
-   * shown in place of the connection status. Null whenever the connection is
-   * merely down and retrying. */
+  /** A terminal connection error or a retryable local-safety diagnostic,
+   * shown in place of the connection status. Routine socket losses do not set
+   * one; a successful connection clears any diagnostic left by a retry. */
   connectionError: string | null;
   guiUuidSetFromContainerUuid: {
     [containerUuid: string]: { [uuid: string]: true } | undefined;

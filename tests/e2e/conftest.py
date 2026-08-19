@@ -62,8 +62,5 @@ def page_errors(page: Page) -> list[str]:
 def leika_page(page: Page, leika_server: leika.Server, page_errors: list[str]) -> Page:
     del page_errors
     page.goto(leika_server.url)
-    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-    page.wait_for_function(
-        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-    )
+    page.wait_for_selector('[data-viewport-workspace][aria-busy="false"]', timeout=15_000)
     return page

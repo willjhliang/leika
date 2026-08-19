@@ -6,6 +6,7 @@ import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
 
 import { IMAGE_FIT_OBJECT_FIT } from "../ClientSettings";
+import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { RejectedImageStatus } from "../components/SafeImage";
 import {
@@ -59,6 +60,7 @@ import {
 import { Spinner } from "../components/ui/spinner";
 import {
   initialViewportLayout,
+  isViewportPageReady,
   ViewportImagePane,
   ViewportPane,
   ViewportPlotlyPane,
@@ -233,18 +235,7 @@ export function ViewportWorkspace() {
       return EMPTY_VIEWPORT_LAYOUT;
     return state.pages[pageId]?.layout ?? EMPTY_VIEWPORT_LAYOUT;
   });
-  const interactive = viewer.useViewport((state) => {
-    const pageId = state.displayPageId;
-    const stream = state.pageStream;
-    return (
-      pageId !== null &&
-      state.transitionPage === null &&
-      state.activePageId === pageId &&
-      stream !== null &&
-      stream.pageId === pageId &&
-      stream.ready
-    );
-  });
+  const interactive = viewer.useViewport(isViewportPageReady);
   const interactionEpoch = viewer.useViewport(
     (state) => state.interactionEpoch,
   );
@@ -319,16 +310,11 @@ export function ViewportWorkspace() {
     (gesture: GestureBase): boolean => {
       const state = viewer.useViewport.get();
       const pageId = state.activePageId;
-      const stream = state.pageStream;
       const page = pageId === null ? undefined : state.pages[pageId];
       return (
         state.interactionEpoch !== gesture.startInteractionEpoch ||
         pageId === null ||
-        state.displayPageId !== pageId ||
-        state.transitionPage !== null ||
-        stream === null ||
-        stream.pageId !== pageId ||
-        !stream.ready ||
+        !isViewportPageReady(state) ||
         page === undefined ||
         !sameViewportLayout(page.layout, gesture.startLayout)
       );
@@ -859,18 +845,6 @@ export function ViewportWorkspace() {
         )}
       </div>
 
-      {!interactive && (
-        <div
-          data-viewport-page-refreshing
-          className="pointer-events-none absolute top-2 right-2 z-60 flex items-center gap-1.5 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
-          role="status"
-          aria-label="Refreshing page"
-        >
-          <Spinner aria-hidden="true" className="size-3" />
-          <span>Refreshing</span>
-        </div>
-      )}
-
       {dragIndicator !== null && (
         <Card
           size="sm"
@@ -973,11 +947,14 @@ function ViewportPaneHost({
   const isHiddenRootHost = rect === null;
   const title = paneTitle(pane);
   const hasTitleBar = !hideChrome && !isHiddenRootHost;
+  const loading = pane.kind === "root" ? false : pane.props.loading;
+  const isLoading = loading !== false;
   return (
     <Card
       data-viewport-pane={isHiddenRootHost ? undefined : paneId}
       role="region"
       aria-hidden={isHiddenRootHost || undefined}
+      aria-busy={isLoading || undefined}
       className={cn(
         // Panes tile the canvas edge to edge, so they get neither rounding nor
         // a ring: Card's ring is drawn OUTSIDE its box, which put every pane's
@@ -1017,7 +994,18 @@ function ViewportPaneHost({
           overflow: "hidden",
         }}
       >
-        <ViewportPaneRenderer pane={pane} />
+        <div
+          data-viewport-pane-renderer
+          inert={isLoading || undefined}
+          // Keep renderer-owned stacking below the sibling loading surface;
+          // otherwise a high-z child such as Plotly's modebar can outrank it.
+          style={{ position: "absolute", inset: 0, zIndex: 0 }}
+        >
+          <ViewportPaneRenderer pane={pane} />
+        </div>
+        {loading === false ? null : (
+          <ViewportPaneLoadingOverlay loading={loading} />
+        )}
       </div>
 
       {hasTitleBar && (
@@ -1065,10 +1053,45 @@ function ViewportPaneHost({
             touchAction: "none",
           }}
         >
-          <span className="truncate">{title}</span>
+          <HoverScrollText>{title}</HoverScrollText>
         </button>
       )}
     </Card>
+  );
+}
+
+export function ViewportPaneLoadingOverlay({
+  loading,
+}: {
+  loading: true | string;
+}) {
+  const label =
+    typeof loading === "string" && loading.length > 0 ? loading : "Loading";
+  return (
+    <div
+      data-viewport-pane-loading
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      aria-label={label}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "0.5rem",
+        padding: "1rem",
+        color: "var(--muted-foreground)",
+        fontSize: "var(--text-sm)",
+        textAlign: "center",
+        background: "var(--background)",
+      }}
+    >
+      <Spinner aria-hidden="true" />
+      {typeof loading === "string" ? <span>{loading}</span> : null}
+    </div>
   );
 }
 

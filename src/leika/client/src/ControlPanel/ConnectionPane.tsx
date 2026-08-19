@@ -14,6 +14,7 @@ import {
   formatLatency,
   formatRate,
 } from "../connectionStats";
+import { HoverScrollText } from "../components/HoverScrollText";
 import {
   guiLabelClassName,
   guiRowGridClassName,
@@ -26,19 +27,22 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "../components/ui/popover";
+import { Spinner } from "../components/ui/spinner";
 import { Status, StatusIndicator, StatusLabel } from "../components/ui/status";
+import { isViewportPageReady } from "../viewport/ViewportState";
 import { cn } from "@/lib/utils";
 import { POPOUT_WIDTH_CLASS } from "./controlWidth";
 
 /** Websocket states, as the Status component's vocabulary. Leika has nothing
  * that maps to "maintenance", which the server would have to be up to report.
- * The wording is load-bearing: the browser tests wait for "Connecting..." to
- * leave the page before they touch anything. */
+ * These are connection-only labels; page readiness is represented separately
+ * by the viewport's busy state. */
 const CONNECTION_STATUS = {
   connected: { status: "online", text: "Connected" },
   reconnecting: { status: "degraded", text: "Connecting..." },
   inactive: { status: "offline", text: "Inactive" },
 } as const;
+const LOADING_TEXT = "Loading";
 
 /** One measurement: what it is on the left, what it reads on the right.
  *
@@ -55,19 +59,22 @@ function StatRow({
 }) {
   return (
     <div className={cn(guiRowGridClassName, "gap-2")} data-leika-connection-row>
-      <span className={cn("truncate text-sm", guiLabelClassName)} title={label}>
+      <HoverScrollText
+        className={cn("text-sm", guiLabelClassName)}
+        title={label}
+      >
         {label}
-      </span>
+      </HoverScrollText>
       {/* Typed like the value in a text field, which is what these are: the
           same size and color a row's own control would read at. Lining the
           figures up is the one addition -- a rate that reflows its digits
           every second is harder to read than one that does not. */}
-      <span className="gui-row-controls min-w-0 truncate text-sm tabular-nums">
+      <HoverScrollText className="gui-row-controls text-sm tabular-nums">
         {value}
         {detail !== undefined && (
           <span className="text-muted-foreground"> {detail}</span>
         )}
-      </span>
+      </HoverScrollText>
     </div>
   );
 }
@@ -179,11 +186,18 @@ function ConnectionRows() {
  * `watch` is what tells the worker to start, and dropping it is what stops it.
  */
 export function ConnectionBadge() {
-  const { useGui } = useViewer();
+  const { useGui, useViewport } = useViewer();
   const websocketState = useGui((state) => state.websocketState);
+  const pageReady = useViewport(isViewportPageReady);
+  const refreshing = websocketState === "connected" && !pageReady;
   const { status, text } = CONNECTION_STATUS[websocketState];
+  const badgeText = refreshing ? LOADING_TEXT : text;
+  const accessibleBadgeText = refreshing ? "Loading page" : text;
   const [open, setOpen] = React.useState(false);
   const badge = React.useRef<HTMLButtonElement>(null);
+  const statusForegroundClassName = open
+    ? "text-primary-foreground"
+    : "text-muted-foreground";
 
   React.useEffect(() => (open ? connectionStats.watch() : undefined), [open]);
   // Reaching for the popout means leaving the panel, which is what folds a
@@ -207,6 +221,7 @@ export function ConnectionBadge() {
             // header say "mine is the popout that is up" the same way.
             variant={open ? "default" : "secondary"}
             className={cn(
+              "pl-1 pr-2",
               // The hovers `Button` gives these same two variants. The Badge
               // base has its own, but they are scoped to anchors: a badge is
               // not usually something to press, and this one is.
@@ -223,23 +238,48 @@ export function ConnectionBadge() {
                 // `pointerdown`, so the gesture that opens this must not also
                 // reach it.
                 onPointerDown={(event) => event.stopPropagation()}
-                aria-label="Connection details"
+                aria-label={`${accessibleBadgeText}; connection details`}
                 // Collapsed, the floating panel fades down to this one thing,
                 // so the peek marker rides on it.
                 data-dock-peek
                 data-leika-connection-trigger
+                data-leika-page-refreshing={refreshing ? "true" : undefined}
               />
             }
           />
         }
       >
-        {/* The dot keeps saying what the connection is -- that is the badge's
-            job, and it is legible on either fill. */}
-        <StatusIndicator />
-        <StatusLabel className={open ? "text-primary-foreground" : undefined}>
-          {text}
+        {/* Page replay borrows this one persistent status surface only while
+            the connection itself is healthy; link failures keep their colored
+            connection indicator and wording. The decorative mark retains its
+            intrinsic width, so each state sizes the pill from its contents. */}
+        <span
+          aria-hidden="true"
+          className="flex shrink-0"
+          data-leika-connection-indicator
+        >
+          {refreshing ? (
+            <Spinner className={cn("size-3", statusForegroundClassName)} />
+          ) : (
+            <StatusIndicator />
+          )}
+        </span>
+        <StatusLabel
+          className={statusForegroundClassName}
+          data-leika-connection-label
+        >
+          {badgeText}
         </StatusLabel>
       </PopoverTrigger>
+      {/* Live regions announce changes most reliably when already mounted. */}
+      <span
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {refreshing ? "Loading page" : ""}
+      </span>
       <PopoverContent
         align="end"
         // Aligned to the header rather than to the badge, for the reason the
