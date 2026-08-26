@@ -11,6 +11,7 @@
 import * as React from "react";
 
 import { InlineMediaSurface, MediaPreview } from "./MediaPreview";
+import { observeMarkdownImageViewport } from "./markdownImageViewport";
 import { mediaPreviewWidth, type MediaSize } from "./mediaPreviewSize";
 import { inspectMarkdownImageSource } from "./markdownMediaSafety";
 import {
@@ -192,6 +193,86 @@ function anchorAround(
   );
 }
 
+function useMarkdownImageViewport(): {
+  near: boolean;
+  observed: boolean;
+  ref: React.RefObject<HTMLSpanElement | null>;
+} {
+  const observed = typeof IntersectionObserver !== "undefined";
+  const ref = React.useRef<HTMLSpanElement | null>(null);
+  const [near, setNear] = React.useState(!observed);
+
+  React.useEffect(() => {
+    if (!observed || ref.current === null) return;
+    return observeMarkdownImageViewport(ref.current, setNear);
+  }, [observed]);
+
+  return { near, observed, ref };
+}
+
+function InertMarkdownImage({
+  linkedBy,
+  measured,
+  ...sourceProps
+}: AdmittedMarkdownImageProps) {
+  const placeholderProps = {
+    ...sourceProps,
+    onError: undefined,
+    src: undefined,
+    srcSet: undefined,
+    sourceKind: undefined,
+  };
+  return anchorAround(
+    <img
+      {...placeholderProps}
+      width={measured.width}
+      height={measured.height}
+    />,
+    linkedBy,
+  );
+}
+
+function ViewportMarkdownImage(props: AdmittedMarkdownImageProps) {
+  const viewport = useMarkdownImageViewport();
+  const pixels = useRasterPixelLease(
+    props.src ?? null,
+    props.measured,
+    viewport.near,
+  );
+  let contents: React.ReactNode = null;
+
+  if (viewport.observed && (!viewport.near || pixels.pending)) {
+    contents = <InertMarkdownImage {...props} />;
+  } else if (!pixels.pending && !pixels.admitted) {
+    const title = props.alt?.trim() || "Image";
+    contents = (
+      <span role="status" className="text-muted-foreground text-sm">
+        {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
+        <a
+          href={props.src}
+          download={props.sourceKind === "data" ? title : undefined}
+          rel="noreferrer noopener"
+        >
+          Open image: {title}
+        </a>
+      </span>
+    );
+  } else if (pixels.admitted) {
+    contents = <AdmittedMarkdownImage {...props} />;
+  }
+
+  if (!viewport.observed) return contents;
+  return (
+    <span
+      ref={viewport.ref}
+      className="block w-fit max-w-full"
+      data-leika-markdown-image-viewport
+    >
+      {contents}
+    </span>
+  );
+}
+
 /** An image made by Markdown, optionally interactive when a controller owns it. */
 export function MarkdownImage({
   linkedBy,
@@ -199,7 +280,6 @@ export function MarkdownImage({
 }: MarkdownImageProps) {
   const inspected = inspectMarkdownImageSource(sourceProps.src);
   const measured = inspected.admission.ok ? inspected.admission.size : null;
-  const pixels = useRasterPixelLease(sourceProps.src ?? null, measured);
   if (sourceProps.src === undefined) {
     return (
       <span role="status" className="text-muted-foreground text-sm">
@@ -224,24 +304,8 @@ export function MarkdownImage({
   }
   // From here admission succeeded, so the size passed to the hook is exact.
   if (measured === null) return null;
-  if (!pixels.pending && !pixels.admitted) {
-    const title = sourceProps.alt?.trim() || "Image";
-    return (
-      <span role="status" className="text-muted-foreground text-sm">
-        {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
-        <a
-          href={sourceProps.src}
-          download={inspected.sourceKind === "data" ? title : undefined}
-          rel="noreferrer noopener"
-        >
-          Open image: {title}
-        </a>
-      </span>
-    );
-  }
-  if (!pixels.admitted) return null;
   return (
-    <AdmittedMarkdownImage
+    <ViewportMarkdownImage
       {...sourceProps}
       linkedBy={linkedBy}
       measured={measured}
