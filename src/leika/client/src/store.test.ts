@@ -119,3 +119,56 @@ it("merges an own __proto__ state key without mutating the prototype", () => {
     (Object.getPrototypeOf(state) as Record<string, unknown>).polluted,
   ).toBeUndefined();
 });
+
+describe("createStore snapshots", () => {
+  it("keeps allocating selectors stable across reads of unchanged state", () => {
+    const store = createStore({ value: 1 });
+    const select = (state: { value: number }) => ({ doubled: state.value * 2 });
+    const snapshots: { doubled: number }[] = [];
+
+    function Harness() {
+      const [rendered, setRendered] = React.useState(false);
+      snapshots.push(store(select));
+      if (!rendered) setRendered(true);
+      return null;
+    }
+
+    renderToStaticMarkup(React.createElement(Harness));
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+    expect(snapshots.at(-1)).toBe(snapshots[0]);
+  });
+
+  it("recomputes a selection when its closure changes without a state update", () => {
+    const store = createStore({ value: 2 });
+
+    function Harness() {
+      const [factor, setFactor] = React.useState(1);
+      const selected = store((state) => state.value * factor);
+      if (factor === 1) setFactor(3);
+      return String(selected);
+    }
+
+    expect(renderToStaticMarkup(React.createElement(Harness))).toBe("6");
+  });
+
+  it("invalidates a cached selection when the store changes", () => {
+    const store = createStore({ value: 1 });
+    const select = (state: { value: number }) => ({ doubled: state.value * 2 });
+    const snapshots: { doubled: number }[] = [];
+
+    function Harness() {
+      const [updated, setUpdated] = React.useState(false);
+      snapshots.push(store(select));
+      if (!updated) {
+        store.set({ value: 3 });
+        setUpdated(true);
+      }
+      return null;
+    }
+
+    renderToStaticMarkup(React.createElement(Harness));
+    expect(snapshots[0]).toEqual({ doubled: 2 });
+    expect(snapshots.at(-1)).toEqual({ doubled: 6 });
+    expect(snapshots.at(-1)).not.toBe(snapshots[0]);
+  });
+});

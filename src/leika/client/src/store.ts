@@ -58,25 +58,41 @@ export function createStore<T extends object>(initialState: T): Store<T> {
   ): T | U {
     // Cache the last selected value to avoid unnecessary re-renders when
     // the selector returns a structurally-equal result.
-    const cache = useRef<{ value: U; initialized: boolean }>({
+    const cache = useRef<{
+      value: U;
+      state: T | undefined;
+      selector: typeof selector;
+      equalityFn: typeof equalityFn;
+      initialized: boolean;
+    }>({
       value: undefined as U,
+      state: undefined,
+      selector: undefined,
+      equalityFn: undefined,
       initialized: false,
     });
 
     const getSnapshot = () => {
       if (!selector) return state as T | U;
-      const next = selector(state);
+      const previous = cache.current;
+      // React may read a snapshot repeatedly without a store update. Even a
+      // selector that allocates an object must return the same snapshot for
+      // identical inputs, or useSyncExternalStore can render indefinitely.
       if (
-        cache.current.initialized &&
-        (equalityFn
-          ? equalityFn(cache.current.value, next)
-          : Object.is(cache.current.value, next))
-      ) {
-        return cache.current.value;
-      }
-      cache.current.value = next;
-      cache.current.initialized = true;
-      return next;
+        previous.initialized &&
+        previous.state === state &&
+        previous.selector === selector &&
+        previous.equalityFn === equalityFn
+      )
+        return previous.value;
+
+      const next = selector(state);
+      const value =
+        previous.initialized && (equalityFn ?? Object.is)(previous.value, next)
+          ? previous.value
+          : next;
+      cache.current = { value, state, selector, equalityFn, initialized: true };
+      return value;
     };
     return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   }
