@@ -140,6 +140,49 @@ describe("decodeHybridMessage", () => {
     expect(message.updates.ordinary).toEqual({ dtype: "description" });
   });
 
+  it("moves metadata bytes and raw ndarray bytes without cloning either buffer", () => {
+    const frameBuffer = frame(
+      payload({
+        messages: [
+          testMessage({
+            inline: new Uint8Array([9, 8]),
+            raw: { __binary_index: 0, dtype: "|u1" },
+          }),
+        ],
+        binaryBufferLengths: [2],
+      }),
+      [new Uint8Array([3, 2])],
+    );
+    const result = decodeHybridMessage(frameBuffer, {
+      // Like zstddec, return fresh owned bytes rather than an input view.
+      decode: (data) => data.slice(),
+    });
+    expect(result.transferables).toHaveLength(2);
+    const moved = structuredClone(result.messages, {
+      transfer: result.transferables,
+    });
+    expect(
+      result.transferables.every((buffer) => buffer.byteLength === 0),
+    ).toBe(true);
+    const update = moved[0];
+    if (update.type !== "GuiUpdateMessage") throw new Error("Expected update");
+    expect(update.updates.inline).toEqual(new Uint8Array([9, 8]));
+    expect(update.updates.raw).toEqual(new Uint8Array([3, 2]));
+  });
+
+  it("deduplicates a decoder buffer shared with its input frame", () => {
+    const result = decodeHybridMessage(
+      frame(
+        payload({ messages: [testMessage({ inline: new Uint8Array([7]) })] }),
+      ),
+      identityDecoder,
+    );
+    expect(result.transferables).toEqual([result.buffer]);
+    expect(() =>
+      structuredClone(result.messages, { transfer: result.transferables }),
+    ).not.toThrow();
+  });
+
   it.each(["|O", "|V3", ">f4", "<c8", "<i8", "<M8", "mystery"])(
     "rejects the unsupported or non-native dtype %s",
     (dtype) => {

@@ -424,9 +424,9 @@ const workerScope = self as unknown as WorkerScope;
 
           counters.messagesReceived += data.messages.length;
           const messages = takePongs(data.messages, jsReceivedMs);
-          // All typed array views point into the original WebSocket
-          // ArrayBuffer. Transfer just that buffer instead of walking the
-          // entire message tree.
+          // Ndarray views use the raw frame; msgpack binary values (images
+          // and file parts) use the decompressed metadata. Transfer both owned
+          // buffers without walking the message tree or cloning binary bytes.
           const handOffBatch = () => {
             if (failure.hasFailed || ws !== socket) return false;
             const batchId = nextBatchId;
@@ -441,7 +441,7 @@ const workerScope = self as unknown as WorkerScope;
                   frameBytes: frameLease.sizeBytes,
                   metadataBytes: data.metadataBytes,
                 },
-                [data.buffer],
+                data.transferables,
               ),
             );
           };

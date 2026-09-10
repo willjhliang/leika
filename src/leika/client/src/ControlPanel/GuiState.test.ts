@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as guiProjection from "./guiLifecycleProjection";
 
 import {
   GuiFolderMessage,
@@ -919,6 +920,66 @@ describe("createGuiState", () => {
     expect(retained.props._data).not.toBe(oneByte);
     expect(retained.props._data.byteLength).toBe(1);
     expect(retained.props._data.buffer.byteLength).toBe(1);
+
+    gui.actions.updateGuiProps("image", { label: "renamed", visible: false });
+    const renamed = gui.configStore.get("image") as GuiImageMessage;
+    expect(renamed.props._data).toBe(retained.props._data);
+    oneByte[0] = 99;
+    expect(renamed.props._data[0]).toBe(0);
+
+    gui.actions.updateGuiProps("image", { _data: oneByte });
+    const replaced = gui.configStore.get("image") as GuiImageMessage;
+    expect(replaced.props._data).not.toBe(retained.props._data);
+    expect(replaced.props._data).not.toBe(oneByte);
+    expect(replaced.props._data.buffer.byteLength).toBe(1);
+    expect(replaced.props._data[0]).toBe(99);
+    oneByte[0] = 42;
+    expect(replaced.props._data[0]).toBe(99);
+  });
+
+  it("skips retained GUI snapshots for file-transfer-only frames", () => {
+    const gui = createGuiStateHarness();
+    gui.actions.addGui(component("folder", "root", 0));
+    const values = vi.spyOn(gui.configStore, "values");
+    expect(
+      gui.actions.preflightMessageBatch([
+        {
+          type: "FileTransferPart",
+          source_component_uuid: null,
+          transfer_uuid: "transfer",
+          part_index: 0,
+          content: new Uint8Array([1]),
+        },
+      ]),
+    ).toBeNull();
+    expect(values).not.toHaveBeenCalled();
+    values.mockRestore();
+  });
+
+  it("checks a property-update frame graph once and rechecks lifecycle prefixes", () => {
+    const gui = createGuiStateHarness();
+    gui.actions.addGui(component("folder", "root", 0));
+    const graph = vi.spyOn(guiProjection, "guiContainerGraphIsValid");
+    try {
+      const updates: Message[] = Array.from({ length: 128 }, (_, order) => ({
+        type: "GuiUpdateMessage",
+        uuid: "folder",
+        updates: { order },
+      }));
+      expect(gui.actions.preflightMessageBatch(updates)).toBeNull();
+      expect(graph).toHaveBeenCalledOnce();
+      graph.mockClear();
+      expect(
+        gui.actions.preflightMessageBatch([
+          updates[0],
+          component("child", "folder", 1),
+          updates[1],
+        ]),
+      ).toBeNull();
+      expect(graph).toHaveBeenCalledTimes(2);
+    } finally {
+      graph.mockRestore();
+    }
   });
 
   it("keeps upload progress scoped to the transfer that owns the control", () => {

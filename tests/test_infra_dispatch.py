@@ -814,3 +814,11 @@ def test_low_level_callback_registries_are_bounded_removable_and_terminal(
     assert server._incoming_handlers == {}
     assert server._client_connect_cb == []
     assert server._client_disconnect_cb == []
+
+
+@pytest.mark.parametrize("character", ["a", "é", "漢", "😀"])
+def test_metadata_utf8_preflight_across_chunk_boundaries(character: str) -> None:
+    payload = character * (64 * 1024 + 1)
+    encoded_size = len(payload.encode("utf-8"))
+    assert not infra_impl._metadata_payload_exceeds(payload, encoded_size)
+    assert infra_impl._metadata_payload_exceeds(payload, encoded_size - 1)

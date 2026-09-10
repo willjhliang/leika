@@ -17,7 +17,8 @@ type QueuedBatch = {
 };
 
 export class BoundedMessageQueue {
-  private readonly batches: QueuedBatch[] = [];
+  private readonly batches: (QueuedBatch | undefined)[] = [];
+  private head = 0;
   private frameBytesValue = 0;
   private metadataBytesValue = 0;
   private messageCountValue = 0;
@@ -71,15 +72,37 @@ export class BoundedMessageQueue {
     return messages;
   }
 
+  /** Release just one complete frame; pending frames keep their byte budget.
+   * An advancing head avoids shifting the entire queue on every dispatch. */
+  dequeueBatch(): readonly Message[] | undefined {
+    const batch = this.batches[this.head];
+    if (batch === undefined) return undefined;
+    this.batches[this.head] = undefined;
+    this.head += 1;
+    this.frameBytesValue -= batch.frameBytes;
+    this.metadataBytesValue -= batch.metadataBytes;
+    this.messageCountValue -= batch.messages.length;
+    if (this.head === this.batches.length) {
+      this.batches.length = 0;
+      this.head = 0;
+    } else if (this.head >= 1024 && this.head * 2 >= this.batches.length) {
+      this.batches.splice(0, this.head);
+      this.head = 0;
+    }
+    return batch.messages;
+  }
+
   /** Release accounting while preserving original websocket frame windows. */
   drainBatches(): readonly (readonly Message[])[] {
-    const batches = this.batches.map((batch) => batch.messages);
-    this.reset();
+    const batches: (readonly Message[])[] = [];
+    let batch: readonly Message[] | undefined;
+    while ((batch = this.dequeueBatch()) !== undefined) batches.push(batch);
     return batches;
   }
 
   reset(): void {
     this.batches.length = 0;
+    this.head = 0;
     this.frameBytesValue = 0;
     this.metadataBytesValue = 0;
     this.messageCountValue = 0;

@@ -44,10 +44,13 @@ export function WebsocketMessageProducer() {
     let requestedPageId: string | null = null;
     let pageSubscriptionGeneration = 0;
     let retryIntervalId: ReturnType<typeof setInterval> | null = null;
-    const postToWorker = (data: WsWorkerIncoming) => {
+    const postToWorker = (
+      data: WsWorkerIncoming,
+      transferables: Transferable[] = [],
+    ) => {
       if (!workerEvents.acceptsEvents) return;
       try {
-        worker.postMessage(data);
+        worker.postMessage(data, transferables);
       } catch (error) {
         failWorker(
           error instanceof Error && error.message.length > 0
@@ -198,8 +201,10 @@ export function WebsocketMessageProducer() {
           connectionError: connectionState.connectionError,
         });
         updateRetryInterval();
-        installConnectionBoundSender(viewer.mutable.current, (message) =>
-          postToWorker({ type: "send", message }),
+        installConnectionBoundSender(
+          viewer.mutable.current,
+          (message, transferables) =>
+            postToWorker({ type: "send", message }, transferables),
         );
         return;
       }

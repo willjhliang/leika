@@ -1,10 +1,12 @@
+import * as React from "react";
+
 import { useViewer } from "../ViewerContext";
 import {
   GUI_MESSAGE_THROTTLE_MS,
   useThrottledMessageSender,
 } from "../WebsocketUtils";
 import { GuiComponentContext } from "./GuiComponentContext";
-import { shallowObjectKeysEqual } from "../utils/shallowObjectKeysEqual";
+import { createGuiContainerOrderSelector } from "./guiContainerOrder";
 
 import ButtonComponent from "../components/Button";
 import SliderComponent from "../components/Slider";
@@ -35,7 +37,7 @@ import HtmlComponent from "../components/Html";
 import DividerComponent from "../components/Divider";
 
 /** Root of generated inputs. */
-export default function GeneratedGuiContainer({
+export default React.memo(function GeneratedGuiContainer({
   containerUuid,
 }: {
   containerUuid: string;
@@ -44,28 +46,29 @@ export default function GeneratedGuiContainer({
   const updateGuiProps = viewer.guiActions.updateGuiProps;
   const messageSender = useThrottledMessageSender(GUI_MESSAGE_THROTTLE_MS).send;
 
-  function setValue(uuid: string, value: NonNullable<unknown>) {
-    updateGuiProps(uuid, { value });
-    messageSender({
-      type: "GuiUpdateMessage",
-      uuid,
-      updates: { value },
-    });
-  }
+  const setValue = React.useCallback(
+    (uuid: string, value: NonNullable<unknown>) => {
+      updateGuiProps(uuid, { value });
+      messageSender({
+        type: "GuiUpdateMessage",
+        uuid,
+        updates: { value },
+      });
+    },
+    [updateGuiProps, messageSender],
+  );
+  const context = React.useMemo(
+    () => ({ GuiContainer, messageSender, setValue }),
+    [messageSender, setValue],
+  );
   return (
-    <GuiComponentContext.Provider
-      value={{
-        GuiContainer,
-        messageSender,
-        setValue,
-      }}
-    >
+    <GuiComponentContext.Provider value={context}>
       <GuiContainer containerUuid={containerUuid} />
     </GuiComponentContext.Provider>
   );
-}
+});
 
-function GuiContainer({
+const GuiContainer = React.memo(function GuiContainer({
   containerUuid,
   unwrapped = false,
 }: {
@@ -74,15 +77,14 @@ function GuiContainer({
   unwrapped?: boolean;
 }) {
   const viewer = useViewer();
-  const guiIdSet = viewer.useGui(
-    (state) => state.guiUuidSetFromContainerUuid[containerUuid] ?? {},
-    shallowObjectKeysEqual,
+  const selectOrder = React.useMemo(
+    () => createGuiContainerOrderSelector(containerUuid),
+    [containerUuid],
   );
-  const guiOrderFromId = viewer.useGui((state) => state.guiOrderFromUuid);
-  const children = Object.keys(guiIdSet)
-    .map((uuid) => ({ uuid, order: guiOrderFromId[uuid] }))
-    .sort((a, b) => a.order - b.order)
-    .map(({ uuid }) => <GeneratedInput key={uuid} guiUuid={uuid} />);
+  const guiIds = viewer.useGui(selectOrder);
+  const children = guiIds.map((uuid) => (
+    <GeneratedInput key={uuid} guiUuid={uuid} />
+  ));
 
   if (unwrapped) return <>{children}</>;
   return (
@@ -93,10 +95,13 @@ function GuiContainer({
       {children}
     </div>
   );
-}
+});
 
-/** A single generated GUI element. */
-function GeneratedInput(props: { guiUuid: string }) {
+/** A single generated GUI element. The keyed config subscription updates this
+ * control independently; inserting or reordering siblings need not render it. */
+const GeneratedInput = React.memo(function GeneratedInput(props: {
+  guiUuid: string;
+}) {
   const viewer = useViewer();
   const conf = viewer.useGuiConfig(props.guiUuid);
   if (conf === undefined) {
@@ -166,7 +171,7 @@ function GeneratedInput(props: { guiUuid: string }) {
     default:
       assertNeverType(conf);
   }
-}
+});
 
 function assertNeverType(x: never): never {
   throw new Error(`Unexpected GUI component: ${JSON.stringify(x)}`);

@@ -125,13 +125,18 @@ export async function sendFileUpload(
       transferredBytes += buffer.byteLength;
       const partAck = upload.waitForAck(transferredBytes, ackTimeoutMs);
       void partAck.catch(() => undefined);
-      session.sendMessage({
-        type: "FileTransferPart",
-        source_component_uuid: componentUuid,
-        transfer_uuid: transferUuid,
-        part_index: index,
-        content: new Uint8Array(buffer),
-      });
+      // This slice belongs exclusively to the upload. Moving it into the
+      // worker avoids cloning every chunk on the UI thread.
+      session.sendMessage(
+        {
+          type: "FileTransferPart",
+          source_component_uuid: componentUuid,
+          transfer_uuid: transferUuid,
+          part_index: index,
+          content: new Uint8Array(buffer),
+        },
+        [buffer],
+      );
       await partAck;
     }
     upload.complete();

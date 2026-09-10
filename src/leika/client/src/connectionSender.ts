@@ -1,6 +1,11 @@
 import type { Message } from "./WebsocketMessages";
 
-export type MessageSender = (message: Message) => void;
+/** Explicit transfers hand ownership to the worker; callers must stop using
+ * the listed buffers after sending. Ordinary control messages keep their data. */
+export type MessageSender = (
+  message: Message,
+  transferables?: Transferable[],
+) => void;
 
 type MessageSenderSlot = {
   sendMessage: MessageSender;
@@ -30,8 +35,11 @@ export function installConnectionBoundSender(
   slot: MessageSenderSlot,
   sendToConnection: MessageSender,
 ): MessageSender {
-  const boundSender: MessageSender = (message) => {
-    if (slot.sendMessage === boundSender) sendToConnection(message);
+  const boundSender: MessageSender = (message, transferables) => {
+    if (slot.sendMessage === boundSender) {
+      if (transferables === undefined) sendToConnection(message);
+      else sendToConnection(message, transferables);
+    }
   };
   slot.sendMessage = boundSender;
   return boundSender;

@@ -383,11 +383,12 @@ def test_failed_persistent_send_keeps_tombstone_until_disconnect() -> None:
     asyncio.run(run())
 
 
-def test_sparse_persistent_history_jumps_to_retained_ids() -> None:
+@pytest.mark.parametrize("persistent", [False, True])
+def test_sparse_message_history_jumps_to_retained_ids(persistent: bool) -> None:
     async def run() -> None:
         buffer = AsyncMessageBuffer(
             asyncio.get_running_loop(),
-            persistent_messages=True,
+            persistent_messages=persistent,
             max_window_size=2,
             window_duration_sec=0,
         )
@@ -396,6 +397,7 @@ def test_sparse_persistent_history_jumps_to_retained_ids() -> None:
         second = _messages.RunJavascriptMessage("second")
         buffer.message_counter = 10_000_001
         buffer.message_from_id = {9_999_998: first, 10_000_000: second}
+        buffer._message_ids = list(buffer.message_from_id)
         buffer._serialized_size_from_id = {
             message_id: message.serialized_size_upper_bound()
             for message_id, message in buffer.message_from_id.items()
@@ -1363,7 +1365,7 @@ def test_nested_tab_tombstones_purge_lifecycle_without_expanding_component_list(
     )
 
 
-def test_large_subtree_purge_scans_each_retained_entry_once() -> None:
+def test_large_subtree_purge_does_not_scan_unrelated_retained_entries() -> None:
     class CountingDict(dict[int, _messages.Message]):
         items_calls = 0
         item_visits = 0
@@ -1393,11 +1395,10 @@ def test_large_subtree_purge_scans_each_retained_entry_once() -> None:
     )
     assert buffer.push(remove)
 
-    # One purge scan visits the old backlog; tombstone GC then examines only
-    # the surviving removal. The number of scans is independent of the 1,025
-    # distinct purge keys in the message.
-    assert retained.items_calls == 2
-    assert retained.item_visits == tab_count + 1
+    # Entity and tombstone indexes avoid walking unrelated retained payloads,
+    # even when one removal names a large subtree.
+    assert retained.items_calls == 0
+    assert retained.item_visits == 0
     assert tuple(buffer.message_from_id.values()) == (remove,)
     (remove_id,) = buffer.message_from_id
     assert buffer.id_from_redundancy_key == {remove.redundancy_key(): remove_id}
@@ -1633,3 +1634,89 @@ def test_message_preparation_reentrancy_fails_without_deadlock_and_recovers() ->
         buffer.push(_ReentrantMessage(1))
     assert buffer._preparation_owners == 0
     assert buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
+
+
+def test_ordinary_push_and_ack_do_not_scan_retained_payloads() -> None:
+    class NoScanDict(dict[int, _messages.Message]):
+        def items(self) -> Any:
+            raise AssertionError("ordinary transport work scanned the retained scene")
+
+    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
+    buffer.register_client(1)
+    for index in range(256):
+        assert buffer.push(_messages.GuiTabMessage(str(index), "tabs", str(index), None))
+    buffer.message_from_id = NoScanDict(buffer.message_from_id)
+    # A pending remove must not make every later update scan the backlog.
+    assert buffer.push(_messages.GuiRemoveMessage("0"))
+    assert buffer.push(_messages.GuiTabMessage("new", "tabs", "New", None))
+    buffer.mark_messages_sent(1, buffer.message_counter - 1)
+    assert len(buffer.message_from_id) == 256
+    assert not buffer._tombstone_ids
+
+
+def test_lifecycle_indexes_rollback_after_partial_batch_purge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(buffer_impl, "_PERSISTENT_MESSAGE_BUFFER_MAX", 3)
+    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
+    buffer.register_client(1)
+    original = (
+        _messages.GuiTabMessage("target", "tabs", "Target", None),
+        _messages.GuiUpdateMessage("target", {"label": "Changed"}),
+        _messages.GuiTabMessage("keep", "tabs", "Keep", None),
+    )
+    assert buffer.push_many(original)
+    remove = _messages.GuiRemoveMessage("target")
+    with pytest.raises(RuntimeError, match="persistent message backlog"):
+        buffer.push_many(
+            (
+                remove,
+                _messages.GuiTabMessage("first", "tabs", "First", None),
+                _messages.GuiTabMessage("second", "tabs", "Second", None),
+            )
+        )
+    assert tuple(buffer.message_from_id.values()) == original
+    with buffer.buffer_lock:
+        assert tuple(message for _, message in buffer._messages_after_locked(-1, 10)) == original
+    assert buffer.push(remove)
+    assert tuple(buffer.message_from_id.values()) == (original[2], remove)
+    buffer.mark_messages_sent(1, buffer.message_counter - 1)
+    assert tuple(buffer.message_from_id.values()) == (original[2],)
+    assert not buffer._tombstone_ids
+    buffer.set_done()
+    assert not buffer._entity_from_id
+    assert not buffer._message_ids_from_entity
+    assert not buffer._message_ids
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_message_index_compacts_replacements_and_delivers_new_tail_once(persistent: bool) -> None:
+    async def run() -> None:
+        buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(),
+            persistent_messages=persistent,
+            max_window_size=16,
+            window_duration_sec=0,
+        )
+        for index in range(128):
+            assert buffer.push(_messages.GuiTabMessage(str(index), "tabs", str(index), None))
+        for revision in range(1_000):
+            assert buffer.push(_messages.GuiTabMessage("0", "tabs", str(revision), None))
+        assert len(buffer._message_ids) <= 2 * len(buffer.message_from_id) + 1
+        expected = tuple(buffer.message_from_id.values())
+        generator = buffer.window_generator(1)
+        received: list[_messages.Message] = []
+        for _ in range(8):
+            window = await _next_sent_window(buffer, generator, 1)
+            received.extend(window.messages)
+        assert tuple(received) == expected
+
+        update = _messages.GuiTabMessage("0", "tabs", "live", None)
+        assert buffer.push(update)
+        window = await _next_sent_window(buffer, generator, 1)
+        assert window.messages == (update,)
+        assert window.last_message_id == buffer.message_counter - 1
+        await generator.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())

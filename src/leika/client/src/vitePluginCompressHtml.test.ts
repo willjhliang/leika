@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { gunzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
@@ -55,5 +56,129 @@ describe("compressInlineHtml", () => {
     expect(() =>
       compressInlineHtml('<script type="module">start()</script>'),
     ).toThrow(/<\/head>/);
+  });
+});
+
+type LoaderElement = {
+  tagName: string;
+  textContent: string;
+  type: string;
+  removed: boolean;
+  listeners: Map<string, () => void>;
+  addEventListener: (event: string, listener: () => void) => void;
+  remove: () => void;
+  setAttribute: (name: string, value: string) => void;
+};
+
+async function runLoader(html: string, moduleFails = false) {
+  const match = /<script( data-[^>]+)>([\s\S]*?)<\/script>/.exec(html);
+  if (match === null) throw new Error("Missing loader script");
+  const dataset = Object.fromEntries(
+    [...match[1].matchAll(/data-([sc])="([^"]+)"/g)].map((entry) => [
+      entry[1],
+      entry[2],
+    ]),
+  );
+  const appended: LoaderElement[] = [];
+  let loaderRemoved = false;
+  let alert: LoaderElement | undefined;
+  const errors: unknown[] = [];
+  const document = {
+    currentScript: {
+      dataset,
+      remove: () => {
+        loaderRemoved = true;
+      },
+    },
+    readyState: "complete",
+    createElement: (tagName: string): LoaderElement => {
+      const element: LoaderElement = {
+        tagName,
+        textContent: "",
+        type: "",
+        removed: false,
+        listeners: new Map(),
+        addEventListener(event, listener) {
+          this.listeners.set(event, listener);
+        },
+        remove() {
+          this.removed = true;
+        },
+        setAttribute() {},
+      };
+      return element;
+    },
+    head: {
+      appendChild: (element: LoaderElement) => {
+        appended.push(element);
+        if (element.tagName === "script") {
+          element.listeners.get(moduleFails ? "error" : "load")?.();
+        }
+      },
+    },
+    body: {
+      replaceChildren: (element: LoaderElement) => {
+        alert = element;
+      },
+    },
+  };
+  await runInNewContext(match[2], {
+    document,
+    Blob,
+    Response,
+    DecompressionStream,
+    atob,
+    console: { error: (...args: unknown[]) => errors.push(args) },
+  });
+  return { appended, loaderRemoved, alert, errors };
+}
+
+describe("compressed startup execution", () => {
+  const css = "body { color: red; }";
+  const code = "globalThis.started = true;";
+  const html = () =>
+    compressInlineHtml(
+      "<html><head><style>" +
+        css +
+        '</style><script type="module">' +
+        code +
+        "</script></head><body></body></html>",
+    );
+
+  it("decompresses the real payloads and releases both temporary script tags", async () => {
+    const result = await runLoader(html());
+    expect(result.loaderRemoved).toBe(true);
+    const style = result.appended.find(
+      (element) => element.tagName === "style",
+    );
+    const script = result.appended.find(
+      (element) => element.tagName === "script",
+    );
+    expect(style?.textContent).toBe(css);
+    expect(style?.removed).toBe(false);
+    expect(script?.textContent).toBe(code);
+    expect(script?.type).toBe("module");
+    expect(script?.removed).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.alert).toBeUndefined();
+  });
+
+  it("still displays a startup failure and releases a failed module", async () => {
+    const result = await runLoader(html(), true);
+    expect(result.alert?.textContent).toContain("Leika could not start.");
+    expect(result.errors).toHaveLength(1);
+    expect(
+      result.appended.find((element) => element.tagName === "script")?.removed,
+    ).toBe(true);
+  });
+
+  it("reports corrupt compressed data without installing an application script", async () => {
+    const result = await runLoader(
+      html().replace(/data-c="[^"]+"/, 'data-c="AAAA"'),
+    );
+    expect(result.alert?.textContent).toContain("Leika could not start.");
+    expect(
+      result.appended.some((element) => element.tagName === "script"),
+    ).toBe(false);
   });
 });

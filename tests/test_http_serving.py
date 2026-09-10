@@ -1310,3 +1310,48 @@ def test_ordinary_http_forces_close_and_sequential_client_requests_reconnect(
     finally:
         connection.close()
         server.stop()
+
+
+def test_static_cache_retains_both_encodings_and_invalidates_both_on_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "index.html"
+    original_payload = b"original content" * 200
+    source.write_bytes(original_payload)
+    reads = 0
+    compressions = 0
+    real_read = http_impl.read_regular_file_snapshot
+    real_compress = http_impl.gzip.compress
+
+    def record_read(path: Path, limit: int, **kwargs: object) -> bytes:
+        nonlocal reads
+        reads += 1
+        return real_read(path, limit, **kwargs)
+
+    def record_compress(payload: bytes, **kwargs: object) -> bytes:
+        nonlocal compressions
+        compressions += 1
+        return real_compress(payload, **kwargs)
+
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", record_read)
+    monkeypatch.setattr(http_impl.gzip, "compress", record_compress)
+    cache = http_impl._StaticFileCache(tmp_path)
+    for _ in range(4):
+        raw, raw_etag = cache.read(source, False)
+        compressed, compressed_etag = cache.read(source, True)
+        assert raw == gzip.decompress(compressed) == original_payload
+        assert raw_etag != compressed_etag
+    assert reads == 2
+    assert compressions == 1
+    assert cache._bytes == len(raw) + len(compressed)
+
+    replacement = b"replacement content" * 200
+    source.write_bytes(replacement)
+    new_compressed, new_compressed_etag = cache.read(source, True)
+    new_raw, new_raw_etag = cache.read(source, False)
+    assert new_raw == gzip.decompress(new_compressed) == replacement
+    assert new_raw_etag != raw_etag
+    assert new_compressed_etag != compressed_etag
+    assert reads == 4
+    assert compressions == 2
+    assert cache._bytes == len(new_raw) + len(new_compressed)

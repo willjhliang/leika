@@ -370,8 +370,13 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
 
 function detachViewportPaneBinary(
   pane: ViewportContentPane,
+  previous?: ViewportPane,
 ): ViewportContentPane {
   if (pane.kind !== "image" || pane.props._data === null) return pane;
+  // Reuse bytes already detached from their wire frame when only title,
+  // visibility, loading or fit changes. New incoming buffers still get copied.
+  if (previous?.kind === "image" && pane.props._data === previous.props._data)
+    return pane;
   return {
     ...pane,
     props: { ...pane.props, _data: pane.props._data.slice() },
@@ -620,7 +625,7 @@ export function createViewportState(
 
     authoritativePaneIds?.add(paneId);
     const panes = copyPaneRecord(page.panes);
-    panes[paneId] = detachViewportPaneBinary(pane);
+    panes[paneId] = detachViewportPaneBinary(pane, page.panes[paneId]);
     if (!alreadyDeclared) contentPaneCount += 1;
 
     let layout = page.layout;
@@ -663,6 +668,17 @@ export function createViewportState(
     includeWarmPage: boolean,
     includeTransitionPage: boolean,
   ): string | null => {
+    // Control updates and file transfers leave page ownership unchanged.
+    // Skip copying the complete retained page/pane projection for them.
+    if (
+      !messages.some(
+        (message) =>
+          message.type.startsWith("Viewport") ||
+          message.type.startsWith("Page") ||
+          message.type === "WorkspaceConfigurationMessage",
+      )
+    )
+      return null;
     const current = store.get();
     const retainedPages = [
       ...(includeWarmPage && current.warmPage !== null
@@ -1290,11 +1306,20 @@ export function createViewportState(
       const pane = page?.panes[paneId];
       if (page === undefined || pane === undefined || pane.kind === "root")
         return;
+      if (
+        Object.entries(updates).every(([key, value]) =>
+          Object.is(Reflect.get(pane.props, key), value),
+        )
+      )
+        return;
       const panes = copyPaneRecord(page.panes);
-      const updatedPane = detachViewportPaneBinary({
-        ...pane,
-        props: { ...pane.props, ...updates },
-      } as ViewportContentPane);
+      const updatedPane = detachViewportPaneBinary(
+        {
+          ...pane,
+          props: { ...pane.props, ...updates },
+        } as ViewportContentPane,
+        pane,
+      );
       panes[paneId] = updatedPane;
       let layout = page.layout;
       if (updatedPane.props.visible !== pane.props.visible) {

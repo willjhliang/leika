@@ -40,20 +40,25 @@ function makeLoaderScript(): string {
   return `
 (async()=>{
   if(typeof DecompressionStream!=="function")throw new Error("DecompressionStream is unavailable");
-  const d=document.currentScript.dataset;
+  const loader=document.currentScript;
+  const d={...loader.dataset};
+  loader.remove();
   const dec=async(b64)=>{
     const b=atob(b64);const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
     const stream=new Blob([a]).stream().pipeThrough(new DecompressionStream("gzip"));
     return new Response(stream).text();
   };
-  const [css,code]=await Promise.all([d.s?dec(d.s):null,d.c?dec(d.c):null]);
-  if(css!==null){const e=document.createElement("style");e.textContent=css;document.head.appendChild(e);}
+  const cssReady=d.s?dec(d.s).then(css=>{
+    const e=document.createElement("style");e.textContent=css;document.head.appendChild(e);
+  }):Promise.resolve();
+  const [,code]=await Promise.all([cssReady,d.c?dec(d.c):null]);
+  delete d.s;delete d.c;
   if(code!==null){
     await new Promise((resolve,reject)=>{
       const run=()=>{
         const e=document.createElement("script");e.type="module";e.textContent=code;
-        e.addEventListener("load",resolve,{once:true});
-        e.addEventListener("error",()=>reject(new Error("Application module failed to load")),{once:true});
+        e.addEventListener("load",()=>{e.remove();resolve();},{once:true});
+        e.addEventListener("error",()=>{e.remove();reject(new Error("Application module failed to load"));},{once:true});
         document.head.appendChild(e);
       };
       if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",run,{once:true});}else{run();}

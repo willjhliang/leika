@@ -998,14 +998,14 @@ async def _run_callbacks_until_stopped(
 
 
 def _utf8_size(value: str) -> int:
-    """Return UTF-8 byte length without allocating an encoded copy."""
-    size = 0
-    for char in value:
-        codepoint = ord(char)
-        size += (
-            1 if codepoint < 0x80 else 2 if codepoint < 0x800 else 3 if codepoint < 0x10000 else 4
-        )
-    return size
+    """Count UTF-8 bytes with bounded native conversions instead of Python loops."""
+    if value.isascii():
+        return len(value)
+    chunk_size = 64 * 1024
+    return sum(
+        len(value[start : start + chunk_size].encode("utf-8", errors="surrogatepass"))
+        for start in range(0, len(value), chunk_size)
+    )
 
 
 def _metadata_payload_exceeds(value: object, limit: int) -> bool:
@@ -1024,6 +1024,8 @@ def _metadata_payload_exceeds(value: object, limit: int) -> bool:
         elif isinstance(item, float):
             remaining -= 9
         elif isinstance(item, str):
+            if len(item) > remaining:
+                return True
             remaining -= _utf8_size(item)
         elif isinstance(item, (bytes, bytearray, memoryview)):
             remaining -= len(item)

@@ -283,8 +283,16 @@ function removalTombstonesAreValid(message: Message): boolean {
 
 function detachGuiConfigBinary(
   config: GuiComponentMessage,
+  previous?: GuiComponentMessage,
 ): GuiComponentMessage {
   if (config.type !== "GuiImageMessage") return config;
+  // Property-only updates already hold an exact, independently owned copy.
+  // Keep its identity so image hooks do not recreate URLs and decode it again.
+  if (
+    previous?.type === "GuiImageMessage" &&
+    config.props._data === previous.props._data
+  )
+    return config;
   return {
     ...config,
     props: { ...config.props, _data: config.props._data.slice() },
@@ -369,7 +377,10 @@ export function createGuiState(initialServer: string) {
       }
       membersForWrite(guiConfig.container_uuid)[guiConfig.uuid] = true;
       guiOrderFromUuid[guiConfig.uuid] = guiConfig.props.order;
-      configUpdates[guiConfig.uuid] = detachGuiConfigBinary(guiConfig);
+      configUpdates[guiConfig.uuid] = detachGuiConfigBinary(
+        guiConfig,
+        previous,
+      );
       nextCost = candidateCost;
     }
     for (const containerUuid of touchedContainers) {
@@ -621,7 +632,7 @@ export function createGuiState(initialServer: string) {
       if (!guiConfigCostWithinBrowserLimits(candidateCost)) {
         throw new Error("GUI update preflight/commit invariant failed");
       }
-      configUpdates[uuid] = detachGuiConfigBinary(updated);
+      configUpdates[uuid] = detachGuiConfigBinary(updated, current);
       if (typeof updates.order === "number") {
         orderUpdates[uuid] = updates.order;
       }
@@ -644,6 +655,18 @@ export function createGuiState(initialServer: string) {
   const preflightMessageBatch = (
     messages: readonly Message[],
   ): string | null => {
+    // Image streams, downloads and connection bookkeeping do not change GUI
+    // owners. Avoid cloning and walking every control for those frames.
+    if (
+      !messages.some(
+        (message) =>
+          message.type.startsWith("Gui") ||
+          message.type === "RegisterCommandMessage" ||
+          message.type === "CommandUpdateMessage" ||
+          message.type === "RemoveCommandMessage",
+      )
+    )
+      return null;
     const projection = createGuiProjection(
       configStore.values().map((config) => [config.uuid, config] as const),
       tabOwnerFromUuid,
@@ -655,13 +678,20 @@ export function createGuiState(initialServer: string) {
     const commands = new Map(Object.entries(store.get().commands));
     const reject = (detail: string) =>
       "Connection frame violates browser GUI safety limits: " + detail;
-    const graphIsValid = () =>
-      guiContainerGraphIsValid(
+    // Property/value updates cannot change container edges. Once validated,
+    // reuse the result until a lifecycle message changes graph ownership.
+    let graphDirty = true;
+    const graphIsValid = () => {
+      if (!graphDirty) return true;
+      const valid = guiContainerGraphIsValid(
         projection.configs,
         modals,
         projection.tabOwnerFromUuid,
         MAX_GUI_CONTAINER_DEPTH,
       );
+      if (valid) graphDirty = false;
+      return valid;
+    };
     type BatchKind = "gui" | "modal" | "command" | "tab";
     const batchKind = (message: Message): BatchKind | null => {
       if (isGuiComponentMessage(message)) return "gui";
@@ -689,6 +719,14 @@ export function createGuiState(initialServer: string) {
         );
       }
       pendingBatchKind = nextBatchKind;
+      if (
+        nextBatchKind === "gui" ||
+        nextBatchKind === "modal" ||
+        nextBatchKind === "tab" ||
+        message.type === "GuiRemoveMessage" ||
+        message.type === "GuiCloseModalMessage"
+      )
+        graphDirty = true;
       if (isGuiComponentMessage(message)) {
         const previous = projection.configs.get(message.uuid);
         if (

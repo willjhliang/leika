@@ -6,9 +6,10 @@ type SchedulerEnvironment<FrameHandle, TimerHandle> = {
   clearTimer(handle: TimerHandle): void;
 };
 
-/** Coalesce queue work and keep its pending callback valid across tab changes. */
+/** Coalesce queue work and keep its callback valid across tab changes.
+ * Returning true from run schedules the next slice without polling when idle. */
 export function makeMessageQueueScheduler<FrameHandle, TimerHandle>(
-  run: () => void,
+  run: () => boolean | void,
   environment: SchedulerEnvironment<FrameHandle, TimerHandle>,
 ) {
   let stopped = false;
@@ -18,7 +19,8 @@ export function makeMessageQueueScheduler<FrameHandle, TimerHandle>(
   const tick = () => {
     frame = null;
     timer = null;
-    run();
+    if (stopped) return;
+    if (run() === true) schedule();
   };
 
   const schedule = () => {

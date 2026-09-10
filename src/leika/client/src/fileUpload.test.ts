@@ -82,6 +82,49 @@ async function nextTurn() {
 describe("sendFileUpload", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("transfers exclusive chunk ownership and keeps ACK pacing after detachment", async () => {
+    const size = FILE_UPLOAD_CHUNK_SIZE_BYTES + 1;
+    const file = testFile(size);
+    const broker = new FileUploadAckBroker();
+    const slot = { sendMessage: () => undefined };
+    const sent: Message[] = [];
+    const movedBuffers: ArrayBuffer[] = [];
+    installConnectionBoundSender(slot, (message, transferables) => {
+      const moved = structuredClone(message, { transfer: transferables });
+      sent.push(moved);
+      if (message.type === "FileTransferPart") {
+        expect(transferables).toEqual([message.content.buffer]);
+        expect(message.content.byteLength).toBe(0);
+        movedBuffers.push(message.content.buffer as ArrayBuffer);
+      } else expect(transferables).toBeUndefined();
+    });
+    const upload = sendFileUpload(
+      file,
+      "upload-button",
+      "transfer",
+      captureSendSession(slot),
+      broker,
+      { ackTimeoutMs: 100 },
+    );
+    ack(broker, 0, size);
+    await nextTurn();
+    expect(file.reads).toBe(1);
+    expect(sent.at(-1)).toMatchObject({
+      type: "FileTransferPart",
+      part_index: 0,
+    });
+    ack(broker, FILE_UPLOAD_CHUNK_SIZE_BYTES, size);
+    await nextTurn();
+    expect(file.reads).toBe(2);
+    const last = sent.at(-1);
+    expect(
+      last?.type === "FileTransferPart" ? last.content.byteLength : null,
+    ).toBe(1);
+    ack(broker, size, size);
+    await upload;
+    expect(movedBuffers).toHaveLength(2);
+  });
+
   it("waits for authorization and every cumulative ACK before reading again", async () => {
     const size = FILE_UPLOAD_CHUNK_SIZE_BYTES + 1;
     const file = testFile(size);

@@ -84,6 +84,15 @@ export class ServerNotificationRegistry {
   }
 
   preflight(messages: readonly Message[]): string | null {
+    if (
+      !messages.some(
+        (message) =>
+          message.type === "NotificationShowMessage" ||
+          message.type === "NotificationUpdateMessage" ||
+          message.type === "RemoveNotificationMessage",
+      )
+    )
+      return null;
     const owners = new Map(
       [...this.owners].map(([uuid, owner]) => [uuid, owner.props]),
     );

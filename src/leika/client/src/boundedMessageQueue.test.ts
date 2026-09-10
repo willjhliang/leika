@@ -65,6 +65,44 @@ describe("BoundedMessageQueue", () => {
     ).toBe(false);
   });
 
+  it("releases only a dispatched frame and keeps pending frame budgets enforced", () => {
+    const queue = new BoundedMessageQueue();
+    const first = [message(1), message(2)];
+    const second = [message(3)];
+    queue.enqueue(first, 10, 20);
+    queue.enqueue(second, MAX_QUEUED_MESSAGE_FRAME_BYTES - 10, 40);
+    expect(queue.dequeueBatch()).toBe(first);
+    expect(queue.messageCount).toBe(1);
+    expect(queue.frameBytes).toBe(MAX_QUEUED_MESSAGE_FRAME_BYTES - 10);
+    expect(queue.metadataBytes).toBe(40);
+    expect(queue.enqueue([message(4)], 11, 1)).toBe(false);
+    expect(queue.enqueue([message(4)], 10, 1)).toBe(true);
+    expect(queue.dequeueBatch()).toBe(second);
+    expect(queue.drain()).toEqual([message(4)]);
+    expect(queue.frameBytes).toBe(0);
+    expect(queue.metadataBytes).toBe(0);
+  });
+
+  it("preserves FIFO across queue compaction, appended frames, and reset", () => {
+    const queue = new BoundedMessageQueue();
+    for (let index = 0; index < 3000; index += 1)
+      queue.enqueue([message(index)], 1, 2);
+    for (let index = 0; index < 2000; index += 1)
+      expect(queue.dequeueBatch()).toEqual([message(index)]);
+    queue.enqueue([message(3000)], 1, 2);
+    expect(queue.messageCount).toBe(1001);
+    expect(queue.frameBytes).toBe(1001);
+    expect(queue.metadataBytes).toBe(2002);
+    expect(queue.drain()).toEqual(
+      Array.from({ length: 1001 }, (_, i) => message(i + 2000)),
+    );
+    queue.enqueue([message(4000)], 1, 2);
+    queue.reset();
+    expect(queue.dequeueBatch()).toBeUndefined();
+    queue.enqueue([message(4001)], 1, 2);
+    expect(queue.dequeueBatch()).toEqual([message(4001)]);
+  });
+
   it("does not retain an empty worker batch", () => {
     const queue = new BoundedMessageQueue();
     expect(

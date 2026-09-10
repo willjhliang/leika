@@ -271,6 +271,28 @@ describe("createViewportState hidden root lifecycle", () => {
     expect(pane.props._data).not.toBe(oneByte);
     expect(pane.props._data.byteLength).toBe(1);
     expect(pane.props._data.buffer.byteLength).toBe(1);
+
+    actions.updatePane("image", { title: "renamed", fit: "fill" });
+    const renamed = getState().panes.image;
+    if (renamed?.kind !== "image") throw new Error("Expected image");
+    expect(renamed.props._data).toBe(pane.props._data);
+    oneByte[0] = 99;
+    expect(renamed.props._data?.[0]).toBe(0);
+
+    const unchangedPage = getState();
+    actions.updatePane("image", { title: "renamed", fit: "fill" });
+    expect(getState()).toBe(unchangedPage);
+
+    actions.updatePane("image", { _data: oneByte });
+    const replaced = getState().panes.image;
+    if (replaced?.kind !== "image" || replaced.props._data === null)
+      throw new Error("Expected image bytes");
+    expect(replaced.props._data).not.toBe(pane.props._data);
+    expect(replaced.props._data).not.toBe(oneByte);
+    expect(replaced.props._data.buffer.byteLength).toBe(1);
+    expect(replaced.props._data[0]).toBe(99);
+    oneByte[0] = 42;
+    expect(replaced.props._data[0]).toBe(99);
   });
 
   it("re-points a viser pane between port and URL targets", () => {

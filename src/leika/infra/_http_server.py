@@ -282,8 +282,12 @@ class _StaticFileCache:
                 # Discard raw and compressed variants from older metadata
                 # or a different generation. A long-lived server must not
                 # retain the old bundle after the atomic swap completes.
+                # Keep both encodings of the current generation: mixed gzip
+                # and identity requests must not evict each other's work.
                 for stale_key in tuple(self._entries):
-                    if stale_key[0] == source and stale_key != key:
+                    if stale_key[0] == source and (
+                        stale_key[1] != candidate or stale_key[3:] != key[3:]
+                    ):
                         stale_payload, _ = self._entries.pop(stale_key)
                         self._bytes -= len(stale_payload)
 

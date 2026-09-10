@@ -12,12 +12,13 @@ import decimal
 import itertools
 import json
 import math
+import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
-from ._validation import utf16_code_unit_length_exceeds
+from ._validation import utf16_code_unit_length_exceeds, validate_unicode_string
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -39,23 +40,31 @@ def _validate_plotly_json_size(json_str: str) -> str:
     return json_str
 
 
+_JSON_ASCII_ESCAPES = re.compile(r'["\\\x00-\x1f\x7f]')
+_JSON_STRING_CHUNK_SIZE = 64 * 1024
+
+
 def _plotly_string_json_upper_bound(value: str) -> int:
-    """Conservative UTF-16 length of a JSON string without allocating it."""
+    """Conservative escaped JSON size with bounded, native-code string scans."""
+    total = len(value) + 2
+    if total > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
+        raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
+    # Numeric-array base64 and most labels need no escaping. Avoid walking
+    # every character in Python, including during each retained-state update.
+    if value.isascii() and _JSON_ASCII_ESCAPES.search(value) is None:
+        return total
+    try:
+        validate_unicode_string(value, "Plotly data")
+    except ValueError as error:
+        raise ValueError("Plotly data cannot contain unpaired Unicode surrogates") from error
+
     total = 2
-    for character in value:
-        codepoint = ord(character)
-        if character in ('"', "\\"):
-            total += 2
-        elif codepoint < 0x20:
-            total += 6
-        elif 0xD800 <= codepoint <= 0xDFFF:
-            raise ValueError("Plotly data cannot contain unpaired Unicode surrogates")
-        elif codepoint > 0xFFFF:
-            total += 12
-        elif codepoint > 0x7F:
-            total += 6
-        else:
-            total += 1
+    for start in range(0, len(value), _JSON_STRING_CHUNK_SIZE):
+        chunk = value[start : start + _JSON_STRING_CHUNK_SIZE]
+        total += len(json.dumps(chunk, ensure_ascii=True)) - 2
+        # Keep the existing conservative six-unit charge for every control
+        # character, including those JSON can represent with a short escape.
+        total += 4 * sum(chunk.count(character) for character in "\b\t\n\f\r")
         if total > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
             raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
     return total

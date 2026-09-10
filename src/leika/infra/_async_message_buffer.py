@@ -6,6 +6,9 @@ import itertools
 import math
 import threading
 from asyncio.events import AbstractEventLoop
+from bisect import bisect_right
+from collections import OrderedDict
+from collections.abc import Iterator
 from typing import Any, AsyncGenerator, Dict, List, Sequence
 
 from ._messages import Message
@@ -78,6 +81,7 @@ class _PreparedMessage:
     decoded_nodes: int
     delivery_scope: str | None
     redundancy_key: str | None
+    lifecycle_entity: tuple[str, object] | None
     purge_entities: frozenset[tuple[str, object]]
 
 
@@ -122,6 +126,18 @@ class AsyncMessageBuffer:
     _decoded_nodes_from_id: Dict[int, int] = dataclasses.field(default_factory=dict, init=False)
     _delivery_scope_from_id: Dict[int, str | None] = dataclasses.field(
         default_factory=dict, init=False
+    )
+    _message_ids: list[int] = dataclasses.field(default_factory=list, init=False)
+    """Sorted replay index, compacted when stale IDs outnumber retained state."""
+
+    _entity_from_id: Dict[int, tuple[str, object]] = dataclasses.field(
+        default_factory=dict, init=False
+    )
+    _message_ids_from_entity: Dict[tuple[str, object], set[int]] = dataclasses.field(
+        default_factory=dict, init=False
+    )
+    _tombstone_ids: OrderedDict[int, None] = dataclasses.field(
+        default_factory=OrderedDict, init=False
     )
     _batch_insert_no_close: bool = dataclasses.field(default=False, init=False)
     _batch_insert_no_schedule: bool = dataclasses.field(default=False, init=False)
@@ -288,6 +304,10 @@ class AsyncMessageBuffer:
                     self._serialized_size_from_id.copy(),
                     self._decoded_nodes_from_id.copy(),
                     self._delivery_scope_from_id.copy(),
+                    self._message_ids.copy(),
+                    self._entity_from_id.copy(),
+                    {entity: ids.copy() for entity, ids in self._message_ids_from_entity.items()},
+                    self._tombstone_ids.copy(),
                     self._file_bytes_from_id.copy(),
                     self._file_bytes_reserved,
                     self._file_parts_reserved,
@@ -325,6 +345,10 @@ class AsyncMessageBuffer:
             self._serialized_size_from_id,
             self._decoded_nodes_from_id,
             self._delivery_scope_from_id,
+            self._message_ids,
+            self._entity_from_id,
+            self._message_ids_from_entity,
+            self._tombstone_ids,
             self._file_bytes_from_id,
             self._file_bytes_reserved,
             self._file_parts_reserved,
@@ -446,16 +470,20 @@ class AsyncMessageBuffer:
         websocket send containing it succeeds, so the minimum successful-send
         cursor is the only safe collection boundary.
         """
-        if not self.persistent_messages:
+        if not self.persistent_messages or not self._tombstone_ids:
             return
         delivered_through = (
             min(self._sent_message_id_from_client.values())
             if self._sent_message_id_from_client
             else self.message_counter - 1
         )
-        for message_id, message in tuple(self.message_from_id.items()):
-            if message_id > delivered_through or message.lifecycle_phase != "remove":
-                continue
+        # Tombstones arrive in monotonically increasing message-ID order.
+        # Acknowledging or queueing ordinary state must never scan the retained
+        # scene, and a slow client stops this walk at the first pending remove.
+        while self._tombstone_ids:
+            message_id = next(iter(self._tombstone_ids))
+            if message_id > delivered_through:
+                break
             self._remove_message_locked(message_id, release_file_reservation=True)
 
     def _enter_preparation_call(self) -> None:
@@ -559,12 +587,14 @@ class AsyncMessageBuffer:
             raise ValueError("message decoded structure exceeds the client traversal limit")
 
         lifecycle_phases = ("create", "remove", "update_dict", "update_simple")
+        lifecycle_entity = None
         if (
             snapshot.lifecycle_phase in lifecycle_phases
             and snapshot.entity_type is not None
             and snapshot.entity_id_field is not None
         ):
             entity_id = snapshot.lifecycle_entity_id()
+            lifecycle_entity = snapshot.entity_type, entity_id
             try:
                 hash((snapshot.entity_type, entity_id))
             except TypeError as error:
@@ -594,6 +624,7 @@ class AsyncMessageBuffer:
             decoded_nodes,
             delivery_scope,
             snapshot.redundancy_key(),
+            lifecycle_entity,
             frozenset(purge_entities),
         )
 
@@ -602,9 +633,20 @@ class AsyncMessageBuffer:
     ) -> tuple[Message, int]:
         """Remove one retained message and update every ownership counter."""
         message = self.message_from_id.pop(message_id)
+        if len(self._message_ids) > max(128, 2 * len(self.message_from_id)):
+            # Compact lazily so replacing live state is amortized O(1), while
+            # replay storage stays bounded even after millions of updates.
+            self._message_ids = list(self.message_from_id)
         metadata, raw, _ = self._serialized_size_from_id.pop(message_id)
         self._decoded_nodes_from_id.pop(message_id)
         self._delivery_scope_from_id.pop(message_id)
+        entity = self._entity_from_id.pop(message_id, None)
+        if entity is not None:
+            entity_ids = self._message_ids_from_entity[entity]
+            entity_ids.remove(message_id)
+            if not entity_ids:
+                del self._message_ids_from_entity[entity]
+        self._tombstone_ids.pop(message_id, None)
         self._queued_metadata_bytes -= metadata
         self._queued_raw_binary_bytes -= raw
         if self._queued_metadata_bytes < 0 or self._queued_raw_binary_bytes < 0:
@@ -652,19 +694,8 @@ class AsyncMessageBuffer:
             old_message_id = self.id_from_redundancy_key.get(redundancy_key)
             if old_message_id is not None:
                 removal_ids.add(old_message_id)
-        if prepared.purge_entities:
-            for message_id, queued in self.message_from_id.items():
-                if (
-                    queued.lifecycle_phase in ("create", "remove", "update_dict", "update_simple")
-                    and queued.entity_type is not None
-                    and queued.entity_id_field is not None
-                    and (
-                        queued.entity_type,
-                        queued.lifecycle_entity_id(),
-                    )
-                    in prepared.purge_entities
-                ):
-                    removal_ids.add(message_id)
+        for entity in prepared.purge_entities:
+            removal_ids.update(self._message_ids_from_entity.get(entity, ()))
 
         removed_metadata = 0
         removed_raw = 0
@@ -703,9 +734,17 @@ class AsyncMessageBuffer:
 
         new_message_id = self.message_counter
         self.message_from_id[new_message_id] = message
+        self._message_ids.append(new_message_id)
         self._serialized_size_from_id[new_message_id] = prepared.serialized_size
         self._decoded_nodes_from_id[new_message_id] = prepared.decoded_nodes
         self._delivery_scope_from_id[new_message_id] = prepared.delivery_scope
+        if prepared.lifecycle_entity is not None:
+            self._entity_from_id[new_message_id] = prepared.lifecycle_entity
+            self._message_ids_from_entity.setdefault(prepared.lifecycle_entity, set()).add(
+                new_message_id
+            )
+        if message.lifecycle_phase == "remove":
+            self._tombstone_ids[new_message_id] = None
         self._queued_metadata_bytes += metadata
         self._queued_raw_binary_bytes += raw
         if file_bytes_reserved:
@@ -778,6 +817,10 @@ class AsyncMessageBuffer:
         self._serialized_size_from_id.clear()
         self._decoded_nodes_from_id.clear()
         self._delivery_scope_from_id.clear()
+        self._message_ids.clear()
+        self._entity_from_id.clear()
+        self._message_ids_from_entity.clear()
+        self._tombstone_ids.clear()
         self._delivery_scope_request_from_client.clear()
         self._queued_metadata_bytes = 0
         self._queued_raw_binary_bytes = 0
@@ -802,6 +845,22 @@ class AsyncMessageBuffer:
         except RuntimeError:
             # Event loop may already be closed during teardown.
             pass
+
+    def _messages_after_locked(
+        self, last_message_id: int, through_message_id: int
+    ) -> Iterator[tuple[int, Message]]:
+        """Seek into retained replay without walking already delivered history."""
+        # Removals may compact the live index while a connection-local drain
+        # iterates it. Keep this bounded index generation until that drain ends.
+        message_ids = self._message_ids
+        start = bisect_right(message_ids, last_message_id)
+        for index in range(start, len(message_ids)):
+            message_id = message_ids[index]
+            if message_id > through_message_id:
+                break
+            message = self.message_from_id.get(message_id)
+            if message is not None:
+                yield message_id, message
 
     async def _persistent_window_generator(
         self, client_id: int
@@ -877,9 +936,10 @@ class AsyncMessageBuffer:
                             replay_cutoff = high_water_message_id
                             replay_message_ids = tuple(
                                 message_id
-                                for message_id, message in self.message_from_id.items()
-                                if message_id <= replay_cutoff
-                                and message.excluded_self_client != client_id
+                                for message_id, message in self._messages_after_locked(
+                                    -1, replay_cutoff
+                                )
+                                if message.excluded_self_client != client_id
                                 and self._delivery_scope_from_id[message_id] == request.scope
                             )
                             replay_index = 0
@@ -888,11 +948,9 @@ class AsyncMessageBuffer:
                         if replay_request is not None:
                             if replay_phase == "drain":
                                 considered_through = last_sent_id
-                                for message_id, message in self.message_from_id.items():
-                                    if message_id <= last_sent_id:
-                                        continue
-                                    if message_id > replay_cutoff:
-                                        break
+                                for message_id, message in self._messages_after_locked(
+                                    last_sent_id, replay_cutoff
+                                ):
                                     if (
                                         message.excluded_self_client == client_id
                                         or self._delivery_scope_from_id[message_id] is not None
@@ -948,11 +1006,9 @@ class AsyncMessageBuffer:
                                 replay_phase = "idle"
                         else:
                             considered_through = last_sent_id
-                            for message_id, message in self.message_from_id.items():
-                                if message_id <= last_sent_id:
-                                    continue
-                                if message_id > high_water_message_id:
-                                    break
+                            for message_id, message in self._messages_after_locked(
+                                last_sent_id, high_water_message_id
+                            ):
                                 delivery_scope = self._delivery_scope_from_id[message_id]
                                 if message.excluded_self_client == client_id or (
                                     delivery_scope is not None and delivery_scope != active_scope
@@ -1033,22 +1089,14 @@ class AsyncMessageBuffer:
                         # Select, size, and remove under the same lock that
                         # atomic_start() acquires. The first individually valid
                         # message always fits; later messages defer to a window.
-                        message_id = last_sent_id + 1
-                        while (
-                            message_id <= most_recent_message_id
-                            and len(window) < self.max_window_size
+                        for message_id, message in self._messages_after_locked(
+                            last_sent_id, most_recent_message_id
                         ):
-                            message = self.message_from_id.get(message_id)
-                            if message is None:
-                                last_sent_id = message_id
-                                message_id += 1
-                                continue
                             if message.excluded_self_client == client_id:
                                 self._remove_message_locked(
                                     message_id, release_file_reservation=True
                                 )
                                 last_sent_id = message_id
-                                message_id += 1
                                 continue
                             metadata, raw, binary_count = self._serialized_size_from_id[message_id]
                             candidate_metadata = metadata_total + metadata
@@ -1080,7 +1128,10 @@ class AsyncMessageBuffer:
                             binary_buffer_total += binary_count
                             decoded_nodes_total = candidate_decoded_nodes
                             last_sent_id = message_id
-                            message_id += 1
+                            if len(window) >= self.max_window_size:
+                                break
+                        else:
+                            last_sent_id = most_recent_message_id
 
                 should_wait_for_window = not window or high_water_message_id == last_sent_id
                 if window:

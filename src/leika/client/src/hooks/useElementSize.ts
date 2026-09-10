@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { observeElementSize } from "./elementSizeObserver";
+
 /** Track an element's border-box size with a ResizeObserver.
  *
  * Returns a callback ref: attach it to the element to measure. The size only
@@ -12,19 +14,13 @@ export function useElementSize<T extends HTMLElement = HTMLDivElement>() {
 
   React.useLayoutEffect(() => {
     if (element === null) return;
-    const update = () => {
-      const rect = element.getBoundingClientRect();
+    return observeElementSize(element, (size) => {
       setSize((current) =>
-        current.width === rect.width && current.height === rect.height
+        current.width === size.width && current.height === size.height
           ? current
-          : { width: rect.width, height: rect.height },
+          : size,
       );
-    };
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
+    });
   }, [element]);
 
   return { ref, ...size };

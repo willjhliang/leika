@@ -52,7 +52,9 @@ def colors_to_uint8(colors: np.ndarray) -> npt.NDArray[np.uint8]:
         # Clip before scaling: a large but finite float16 would otherwise
         # overflow during multiplication and emit a RuntimeWarning even though
         # the documented result is simple saturation.
-        return (np.clip(colors, 0, 1) * 255.0).astype(np.uint8)
+        scaled = np.clip(colors, 0, 1)
+        np.multiply(scaled, 255.0, out=scaled)
+        return scaled.astype(np.uint8)
     if np.issubdtype(colors.dtype, np.integer):
         return np.clip(colors, 0, 255).astype(np.uint8)
     raise TypeError("Image values must use an integer or floating dtype.")

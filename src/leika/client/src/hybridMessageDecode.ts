@@ -19,6 +19,8 @@ export const MAX_HYBRID_MESSAGES_PER_BATCH = 128;
 export const MAX_HYBRID_BINARY_BUFFERS = 16_384;
 
 export interface HybridZstdDecoder {
+  /** Return independently owned bytes, not a view into reusable WASM memory.
+   * The worker transfers this buffer after decoding the metadata. */
   decode(data: Uint8Array, decompressedSize: number): Uint8Array;
 }
 
@@ -26,6 +28,9 @@ export interface DecodedHybridMessage {
   messages: Message[];
   timestampSec: number;
   buffer: ArrayBuffer;
+  /** Both raw ndarray and msgpack binary views cross the worker boundary
+   * without copying their backing buffers. */
+  transferables: ArrayBuffer[];
   /** Validated decompressed metadata bytes represented by the message tree. */
   metadataBytes: number;
 }
@@ -47,6 +52,7 @@ function validatePayload(
   buffer: ArrayBuffer,
   compressedEnd: number,
   metadataBytes: number,
+  metadataBuffer: ArrayBufferLike,
 ): DecodedHybridMessage {
   if (!isPlainRecord(decoded))
     throw new Error("decoded payload is not an object");
@@ -135,6 +141,10 @@ function validatePayload(
     messages: validatedMessages,
     timestampSec,
     buffer,
+    transferables:
+      metadataBuffer instanceof ArrayBuffer && metadataBuffer !== buffer
+        ? [buffer, metadataBuffer]
+        : [buffer],
     metadataBytes,
   };
 }
@@ -196,5 +206,11 @@ export function decodeHybridMessage(
     maxBinLength: MAX_HYBRID_METADATA_BYTES,
     maxExtLength: MAX_HYBRID_METADATA_BYTES,
   });
-  return validatePayload(decoded, buffer, compressedEnd, decompressedSize);
+  return validatePayload(
+    decoded,
+    buffer,
+    compressedEnd,
+    decompressedSize,
+    decompressed.buffer,
+  );
 }

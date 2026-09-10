@@ -207,3 +207,18 @@ def test_safe_jpeg_rejects_short_frame_that_borrows_later_bytes() -> None:
     real_frame = b"\xff\xc0\x00\x0b\x08\x20\x00\x20\x00\x01\x01\x11\x00"
     with pytest.raises(ValueError, match="recognized"):
         safe_image_pixel_size(short_frame + real_frame + b"\xff\xd9")
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_float_normalization_preserves_values_and_caller_storage(dtype: Any) -> None:
+    from leika._assignable_props_api import colors_to_uint8
+
+    source = np.linspace(-0.5, 1.5, 120, dtype=dtype).reshape(5, 8, 3)
+    before = source.copy()
+    # Include strided callers: clipping must own the destination before scaling.
+    view = source[:, ::2, :]
+    expected = (np.clip(view, 0, 1) * 255.0).astype(np.uint8)
+    result = colors_to_uint8(view)
+    np.testing.assert_array_equal(result, expected)
+    np.testing.assert_array_equal(source, before)
+    assert not np.shares_memory(result, source)

@@ -12,6 +12,7 @@ import {
 } from "./notifications";
 import { plotlyBootstrap } from "./plotlyBootstrap";
 import { makeMessageQueueScheduler } from "./messageQueueScheduler";
+import { processMessageQueueSlice } from "./messageQueueProcessor";
 import {
   dispatchMessageBatch,
   processPreflightedMessageBatches,
@@ -178,14 +179,13 @@ export function MessageHandler() {
     const processQueue = () => {
       const queue = viewer.mutable.current.messageQueue;
       if (queue.messageCount === 0) return;
-      const batches = queue.drainBatches();
-      for (const rawBatch of batches) {
+      return processMessageQueueSlice(queue, (rawBatch) => {
         const batch = filterPageStreamMessages(
           rawBatch,
           viewer.useViewport.get(),
         );
-        if (batch.length === 0) continue;
-        const accepted = processPreflightedMessageBatches(
+        if (batch.length === 0) return true;
+        return processPreflightedMessageBatches(
           [batch],
           (batch) =>
             viewer.guiActions.preflightMessageBatch(batch) ??
@@ -209,8 +209,7 @@ export function MessageHandler() {
           },
           viewer.mutable.current.failConnection,
         );
-        if (!accepted) return;
-      }
+      });
     };
 
     const scheduler = makeMessageQueueScheduler(processQueue, {
