@@ -1,5 +1,3 @@
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,17 +18,10 @@ import {
   MAX_GUI_COMMON_STRING_CODE_UNITS,
   MAX_BROWSER_GUI_TEXT_CODE_UNITS,
 } from "../guiLimits";
-import { applyGuiConfigUpdate, useGuiState } from "./GuiState";
+import { applyGuiConfigUpdate, createGuiState } from "./GuiState";
 
-function createGuiStateHarness(): ReturnType<typeof useGuiState> {
-  let gui: ReturnType<typeof useGuiState> | undefined;
-  function Harness(): React.ReactNode {
-    gui = useGuiState("ws://example.test");
-    return null;
-  }
-  renderToStaticMarkup(React.createElement(Harness));
-  if (gui === undefined) throw new Error("GUI state harness did not render");
-  return gui;
+function createGuiStateHarness(): ReturnType<typeof createGuiState> {
+  return createGuiState("ws://example.test");
 }
 
 function modal(uuid: string, order: number): GuiModalMessage {
@@ -167,7 +158,7 @@ function command(
   };
 }
 
-describe("useGuiState", () => {
+describe("createGuiState", () => {
   it("keeps modals in protocol order", () => {
     const gui = createGuiStateHarness();
     gui.actions.addModal(modal("last", 20));

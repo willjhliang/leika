@@ -1,5 +1,3 @@
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,7 +19,7 @@ import {
   ViewportLayoutStorage,
   ViewportPageState,
   ViewportViserDeclaration,
-  useViewportState,
+  createViewportState,
   viewportLayoutStorageKey,
 } from "./ViewportState";
 
@@ -63,16 +61,9 @@ function createEmptyViewportHarness(
   storage: ViewportLayoutStorage | null = null,
 ): {
   viewportActions: ViewportActions;
-  getViewportState: ReturnType<typeof useViewportState>["store"]["get"];
+  getViewportState: ReturnType<typeof createViewportState>["store"]["get"];
 } {
-  let viewport: ReturnType<typeof useViewportState> | undefined;
-  function Harness(): React.ReactNode {
-    viewport = useViewportState(storage);
-    return null;
-  }
-  renderToStaticMarkup(React.createElement(Harness));
-  if (viewport === undefined)
-    throw new Error("Viewport harness did not render");
+  const viewport = createViewportState(storage);
   return {
     viewportActions: viewport.actions,
     getViewportState: viewport.store.get,
@@ -83,16 +74,9 @@ function createViewportHarness(storage: ViewportLayoutStorage | null = null): {
   actions: HarnessActions;
   getState: () => ViewportPageState;
   viewportActions: ViewportActions;
-  getViewportState: ReturnType<typeof useViewportState>["store"]["get"];
+  getViewportState: ReturnType<typeof createViewportState>["store"]["get"];
 } {
-  let viewport: ReturnType<typeof useViewportState> | undefined;
-  function Harness(): React.ReactNode {
-    viewport = useViewportState(storage);
-    return null;
-  }
-  renderToStaticMarkup(React.createElement(Harness));
-  if (viewport === undefined)
-    throw new Error("Viewport harness did not render");
+  const viewport = createViewportState(storage);
   const viewportActions = viewport.actions;
   const addDefaultPage = () => {
     viewportActions.addPage(DEFAULT_PAGE_ID, "Main", true);
@@ -210,7 +194,7 @@ function createStagedViserPressureHarness(): ReturnType<
   return harness;
 }
 
-describe("useViewportState hidden root lifecycle", () => {
+describe("createViewportState hidden root lifecycle", () => {
   it("uses a blank root only while there are no visible content panes", () => {
     const { actions, getState } = createViewportHarness();
     expect(collectViewportPaneIds(getState().layout)).toEqual([
@@ -330,7 +314,7 @@ describe("useViewportState hidden root lifecycle", () => {
   });
 });
 
-describe("useViewportState persistence", () => {
+describe("createViewportState persistence", () => {
   it("namespaces saved layouts by server and workspace", () => {
     const storage = new MemoryStorage();
     const { actions, getState } = createViewportHarness(storage);
@@ -416,7 +400,7 @@ describe("useViewportState persistence", () => {
   });
 });
 
-describe("useViewportState snapshot reconciliation", () => {
+describe("createViewportState snapshot reconciliation", () => {
   it("treats every snapshot as exact authority", () => {
     const { actions, getState } = createViewportHarness();
     actions.addImagePane(imageDeclaration("keep"));
@@ -538,7 +522,7 @@ describe("useViewportState snapshot reconciliation", () => {
   });
 });
 
-describe("useViewportState pages", () => {
+describe("createViewportState pages", () => {
   it("keeps the first page behind the catalog barrier and restores the preferred page", () => {
     const storage = new MemoryStorage();
     storage.values.set(

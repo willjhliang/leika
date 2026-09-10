@@ -4,29 +4,18 @@ import "./index.css";
 import React from "react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 
-import { useClientSettings } from "./ClientSettings";
 import { CommandPalette } from "./CommandPalette";
 import ControlPanel from "./ControlPanel/ControlPanel";
 import {
   ControlDockState,
   ControlPanelDockSurface,
 } from "./ControlPanel/ControlPanelDock";
-import { useGuiState } from "./ControlPanel/GuiState";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
-import { BoundedMessageQueue } from "./boundedMessageQueue";
-import { FileDownloadAssembler } from "./fileDownloadAssembler";
-import { FileUploadAckBroker } from "./fileUploadAckBroker";
-import { retainedDownloads } from "./retainedDownloadBudget";
 import { LeikaModal } from "./Modal";
 import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
-import {
-  ViewerContext,
-  ViewerContextContents,
-  ViewerMutable,
-  useViewer,
-  warnDisconnectedSend,
-} from "./ViewerContext";
+import { useViewer } from "./ViewerContext";
+import { ViewerProvider } from "./ViewerProvider";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
 import { ThemeConfigurationMessage } from "./WebsocketMessages";
 import { Toaster } from "./components/ui/toast";
@@ -34,7 +23,6 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { useAccentColor } from "./hooks/useAccentColor";
 import { useMobileView, usePrefersDarkMode } from "./hooks/useMediaQuery";
 import { useThemeColor } from "./hooks/useThemeColor";
-import { useViewportState } from "./viewport/ViewportState";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
 export function Root() {
@@ -43,40 +31,12 @@ export function Root() {
   const initialServer =
     servers[0] ?? defaultWebsocketServer(window.location.href);
 
-  const mutable = React.useRef<ViewerMutable>({
-    sendMessage: warnDisconnectedSend,
-    messageQueue: new BoundedMessageQueue(),
-    notifyMessageQueue: () => undefined,
-    downloads: new FileDownloadAssembler(retainedDownloads),
-    uploads: new FileUploadAckBroker(),
-    failConnection: (reason) =>
-      console.error("Cannot fail an inactive connection:", reason),
-  });
-  const guiState = useGuiState(initialServer);
-  const viewportState = useViewportState();
-  const settingsState = useClientSettings();
-  // Memoized: a rebuilt context value would re-render every consumer in the
-  // app whenever `Root` re-renders.
-  const viewer: ViewerContextContents = React.useMemo(
-    () => ({
-      useGui: guiState.store,
-      useGuiConfig: guiState.configStore,
-      guiActions: guiState.actions,
-      useViewport: viewportState.store,
-      viewportActions: viewportState.actions,
-      useSettings: settingsState.store,
-      settingsActions: settingsState.actions,
-      mutable,
-    }),
-    [guiState, viewportState, settingsState],
-  );
-
   return (
-    <ViewerContext.Provider value={viewer}>
+    <ViewerProvider initialServer={initialServer}>
       <ViewerContents>
         <WebsocketMessageProducer />
       </ViewerContents>
-    </ViewerContext.Provider>
+    </ViewerProvider>
   );
 }
 

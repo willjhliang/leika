@@ -1,13 +1,13 @@
 import React from "react";
 
 import { useClientSettings } from "./ClientSettings";
-import { UseGui } from "./ControlPanel/GuiState";
+import type { GuiSession } from "./ControlPanel/GuiState";
 import { Message } from "./WebsocketMessages";
 import type { MessageSender } from "./connectionSender";
 import type { BoundedMessageQueue } from "./boundedMessageQueue";
 import type { FileDownloadAssembler } from "./fileDownloadAssembler";
 import type { FileUploadAckBroker } from "./fileUploadAckBroker";
-import { useViewportState } from "./viewport/ViewportState";
+import type { ViewportSession } from "./viewport/ViewportState";
 
 /** Mutable transport state for the live websocket producer. */
 export type ViewerMutable = {
@@ -27,11 +27,11 @@ export function warnDisconnectedSend(message: Message): void {
 
 /** Application context for Leika's GUI and 2D pane workspace. */
 export type ViewerContextContents = {
-  useGui: UseGui["store"];
-  useGuiConfig: UseGui["configStore"];
-  guiActions: UseGui["actions"];
-  useViewport: ReturnType<typeof useViewportState>["store"];
-  viewportActions: ReturnType<typeof useViewportState>["actions"];
+  useGui: GuiSession["store"];
+  useGuiConfig: GuiSession["configStore"];
+  guiActions: GuiSession["actions"];
+  useViewport: ViewportSession["store"];
+  viewportActions: ViewportSession["actions"];
   useSettings: ReturnType<typeof useClientSettings>["store"];
   settingsActions: ReturnType<typeof useClientSettings>["actions"];
   mutable: React.MutableRefObject<ViewerMutable>;
