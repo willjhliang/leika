@@ -149,7 +149,8 @@ from ._validation import (
 if TYPE_CHECKING:
     import plotly.graph_objects as go
 
-    from ._server import ClientHandle, Server
+    from ._client_handle import ClientHandle
+    from ._server import Server
     from .infra import ClientId
 
 GuiInputPropsType = TypeVar("GuiInputPropsType", bound=GuiBaseProps)
@@ -752,7 +753,8 @@ class GuiApi(GuiContainer):
         the client has disconnected between queuing and dispatch -- callers
         should early-return."""
         # Runtime import to break the circular edge with `_server`.
-        from ._server import ClientHandle, Server
+        from ._client_handle import ClientHandle
+        from ._server import Server
 
         with self._server._client_lock:
             connected = self._server._connected_clients.get(client_id)

@@ -24,7 +24,8 @@ import leika._messages
 import leika._pages as pages_impl
 import leika._server as server_impl
 import leika.infra._infra as infra_impl
-from leika._server import ClientHandle, _CallbackExecutor
+from leika._client_handle import ClientHandle
+from leika._executor import BoundedThreadPoolExecutor
 from leika.infra import protocol_fingerprint
 from leika.infra._http_security import _ALLOWED_HOSTS_MAX
 
@@ -276,7 +277,7 @@ def test_stop_finalizer_target_failure_clears_ownership_and_allows_retry(
 
 
 def test_callback_executor_cancels_queued_work_and_finishes_running_work() -> None:
-    executor = _CallbackExecutor(max_workers=1)
+    executor = BoundedThreadPoolExecutor(max_workers=1)
     running_started = threading.Event()
     release_running = threading.Event()
     running_finished = threading.Event()
@@ -306,7 +307,7 @@ def test_callback_executor_cancels_queued_work_and_finishes_running_work() -> No
 
 
 def test_callback_executor_bounds_pending_jobs_and_releases_admission() -> None:
-    executor = _CallbackExecutor(max_workers=1, max_pending=2)
+    executor = BoundedThreadPoolExecutor(max_workers=1, max_pending=2)
     running_started = threading.Event()
     release_running = threading.Event()
 
@@ -328,7 +329,7 @@ def test_callback_executor_bounds_pending_jobs_and_releases_admission() -> None:
 
 
 def test_transfer_executor_bounds_and_releases_retained_payload_bytes() -> None:
-    executor = _CallbackExecutor(max_workers=1, max_pending=4, max_retained_bytes=5)
+    executor = BoundedThreadPoolExecutor(max_workers=1, max_pending=4, max_retained_bytes=5)
     running_started = threading.Event()
     release_running = threading.Event()
 
@@ -352,7 +353,7 @@ def test_transfer_executor_bounds_and_releases_retained_payload_bytes() -> None:
 
 def test_client_handle_uses_the_live_connection_loop_before_server_start_returns() -> None:
     loop = asyncio.new_event_loop()
-    executor = _CallbackExecutor(max_workers=1)
+    executor = BoundedThreadPoolExecutor(max_workers=1)
     server = SimpleNamespace(
         _thread_executor=executor,
         _next_gui_order=lambda: 1.0,
@@ -613,7 +614,7 @@ def test_client_build_failure_occurs_before_executor_allocation(
             allocated = True
 
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", fail_build)
-    monkeypatch.setattr(server_impl, "_CallbackExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", ForbiddenExecutor)
     with pytest.raises(RuntimeError, match="client build failed") as captured:
         leika.Server(host="127.0.0.1", port=0, verbose=False)
     assert captured.value is failure
@@ -625,9 +626,9 @@ def test_late_constructor_failure_stops_server_and_executors(
 ) -> None:
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     servers: list[infra_impl.WebsockServer] = []
-    executors: list[_CallbackExecutor] = []
+    executors: list[BoundedThreadPoolExecutor] = []
     real_server = infra_impl.WebsockServer
-    real_executor = server_impl._CallbackExecutor
+    real_executor = server_impl.BoundedThreadPoolExecutor
 
     class RecordingServer(real_server):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -644,7 +645,7 @@ def test_late_constructor_failure_stops_server_and_executors(
         raise RuntimeError("late pane initialization failure")
 
     monkeypatch.setattr(server_impl.infra, "WebsockServer", RecordingServer)
-    monkeypatch.setattr(server_impl, "_CallbackExecutor", RecordingExecutor)
+    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
     monkeypatch.setattr(pages_impl, "Panes", fail_panes)
 
     with pytest.raises(RuntimeError, match="late pane initialization failure"):
@@ -662,8 +663,8 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
 ) -> None:
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     primary = RuntimeError("primary pane construction failure")
-    executors: list[_CallbackExecutor] = []
-    real_executor = server_impl._CallbackExecutor
+    executors: list[BoundedThreadPoolExecutor] = []
+    real_executor = server_impl.BoundedThreadPoolExecutor
 
     class FailingCleanupExecutor(real_executor):
         def __init__(self, max_workers: int, **kwargs: Any) -> None:
@@ -679,7 +680,7 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
     def fail_panes(_: Any, **__: Any) -> None:
         raise primary
 
-    monkeypatch.setattr(server_impl, "_CallbackExecutor", FailingCleanupExecutor)
+    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", FailingCleanupExecutor)
     monkeypatch.setattr(pages_impl, "Panes", fail_panes)
 
     with pytest.raises(RuntimeError, match="primary pane construction failure") as captured:
@@ -696,9 +697,9 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
 ) -> None:
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     servers: list[infra_impl.WebsockServer] = []
-    executors: list[_CallbackExecutor] = []
+    executors: list[BoundedThreadPoolExecutor] = []
     real_server = infra_impl.WebsockServer
-    real_executor = server_impl._CallbackExecutor
+    real_executor = server_impl.BoundedThreadPoolExecutor
 
     class RejectingServer(real_server):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -715,7 +716,7 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
             executors.append(self)
 
     monkeypatch.setattr(server_impl.infra, "WebsockServer", RejectingServer)
-    monkeypatch.setattr(server_impl, "_CallbackExecutor", RecordingExecutor)
+    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
 
     with pytest.raises(RuntimeError, match="closed connection"):
         leika.Server(host="127.0.0.1", port=0, verbose=False)

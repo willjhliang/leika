@@ -1,3 +1,4 @@
+from ._client_handle import ClientHandle as ClientHandle
 from ._gui_api import GuiApi as GuiApi
 from ._gui_handles import CommandEvent as CommandEvent
 from ._gui_handles import CommandHandle as CommandHandle
@@ -57,7 +58,6 @@ from ._panes import Panes as Panes
 from ._panes import Placement as Placement
 from ._panes import PlotlyPaneHandle as PlotlyPaneHandle
 from ._panes import ViserPaneHandle as ViserPaneHandle
-from ._server import ClientHandle as ClientHandle
 from ._server import Server as Server
 
 GuiTabGroup = GuiTabGroupHandle

@@ -24,10 +24,12 @@ from typing import Any, List, Tuple
 import pytest
 
 import leika
+from leika import _downloads as downloads_impl
 from leika import _file_transfer as file_transfer_impl
 from leika import _messages
 from leika import _server as server_impl
-from leika._server import ClientHandle, _download_source
+from leika._client_handle import ClientHandle
+from leika._downloads import download_source
 
 
 class _RecordingBuffer:
@@ -262,7 +264,7 @@ def test_active_outgoing_transfer_limit_releases_and_disconnect_cancels() -> Non
     stack = ExitStack()
     cancellations = [
         stack.enter_context(client._track_outgoing_file_transfer(f"transfer-{index}"))
-        for index in range(server_impl._FILE_DOWNLOAD_MAX_ACTIVE)
+        for index in range(downloads_impl.DOWNLOAD_MAX_ACTIVE)
     ]
 
     with pytest.raises(RuntimeError, match="128 active outgoing file transfers"):
@@ -296,7 +298,7 @@ def test_special_file_download_is_rejected_without_blocking(tmp_path: Path) -> N
 
     started = time.monotonic()
     with pytest.raises(ValueError, match="regular file"):
-        with _download_source(fifo, 1024):
+        with download_source(fifo, 1024):
             pass
     assert time.monotonic() - started < 1.0
 
@@ -381,7 +383,7 @@ def test_an_interrupted_send_emits_a_terminal_abort(
 
         yield 10, chunks()
 
-    monkeypatch.setattr("leika._server._download_source", interrupted_source)
+    monkeypatch.setattr("leika._downloads.download_source", interrupted_source)
     client = _Client()
     with pytest.raises(OSError) as captured:
         client._send_file("data.bin", b"ignored", 5, "preview")
@@ -419,7 +421,7 @@ def test_a_file_replaced_mid_send_is_still_sent_whole(tmp_path: Path) -> None:
     path = tmp_path / "app.log"
     path.write_bytes(b"original contents")
 
-    with _download_source(path, chunk_size=4) as (size_bytes, chunks):
+    with download_source(path, chunk_size=4) as (size_bytes, chunks):
         path.rename(tmp_path / "app.log.1")
         path.write_bytes(b"new")
         assert b"".join(chunks) == b"original contents"
@@ -435,7 +437,7 @@ def test_a_file_truncated_mid_send_says_so(tmp_path: Path) -> None:
     path = tmp_path / "app.log"
     path.write_bytes(b"x" * (1024 * 1024))
 
-    with _download_source(path, chunk_size=4096) as (_, chunks):
+    with download_source(path, chunk_size=4096) as (_, chunks):
         assert next(chunks) == b"x" * 4096
         with path.open("wb"):
             pass
@@ -629,7 +631,7 @@ def test_a_preview_limit_uses_the_source_opened_for_transfer(
         del content, chunk_size
         yield 2048, iter([b"x" * 2048])
 
-    monkeypatch.setattr("leika._server._download_source", replaced_source)
+    monkeypatch.setattr("leika._downloads.download_source", replaced_source)
     client = _Client()
     ClientHandle.send_file_preview(client, "capture.bin", b"small", max_bytes=1024)  # type: ignore[arg-type]
 
@@ -698,13 +700,13 @@ def test_maximum_chunk_size_is_a_real_boundary() -> None:
     _send(
         "empty.bin",
         b"",
-        chunk_size=server_impl._FILE_DOWNLOAD_MAX_CHUNK_BYTES,
+        chunk_size=downloads_impl.DOWNLOAD_MAX_CHUNK_BYTES,
     )
     with pytest.raises(ValueError, match="at most"):
         _send(
             "empty.bin",
             b"",
-            chunk_size=server_impl._FILE_DOWNLOAD_MAX_CHUNK_BYTES + 1,
+            chunk_size=downloads_impl.DOWNLOAD_MAX_CHUNK_BYTES + 1,
         )
 
 
@@ -717,10 +719,10 @@ class _RejectStartConnection(_RecordingConnection):
 @pytest.mark.parametrize(
     ("size_bytes", "chunk_size", "accepted"),
     [
-        (server_impl._FILE_DOWNLOAD_MAX_BYTES, 8 * 1024 * 1024, True),
-        (server_impl._FILE_DOWNLOAD_MAX_BYTES + 1, 8 * 1024 * 1024, False),
-        (server_impl._FILE_DOWNLOAD_MAX_PARTS, 1, True),
-        (server_impl._FILE_DOWNLOAD_MAX_PARTS + 1, 1, False),
+        (downloads_impl.DOWNLOAD_MAX_BYTES, 8 * 1024 * 1024, True),
+        (downloads_impl.DOWNLOAD_MAX_BYTES + 1, 8 * 1024 * 1024, False),
+        (downloads_impl.DOWNLOAD_MAX_PARTS, 1, True),
+        (downloads_impl.DOWNLOAD_MAX_PARTS + 1, 1, False),
     ],
 )
 def test_browser_download_preflight_boundaries(
@@ -735,7 +737,7 @@ def test_browser_download_preflight_boundaries(
         assert requested_chunk_size == chunk_size
         yield size_bytes, iter(())
 
-    monkeypatch.setattr(server_impl, "_download_source", advertised)
+    monkeypatch.setattr(downloads_impl, "download_source", advertised)
     client = _Client()
     client._websock_connection = _RejectStartConnection()
     if accepted:

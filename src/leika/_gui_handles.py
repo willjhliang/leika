@@ -107,8 +107,9 @@ from .infra import ClientId, Message
 if TYPE_CHECKING:
     import plotly.graph_objects as go
 
+    from ._client_handle import ClientHandle
     from ._gui_api import GuiApi
-    from ._server import ClientHandle, Server
+    from ._server import Server
 
 
 T = TypeVar("T")
