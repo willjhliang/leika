@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ViewportPaneLoadingOverlay } from "./ViewportWorkspace";
+import { ViewportPaneLoadingOverlay } from "./ViewportPaneLoadingOverlay";
 
 describe("ViewportPaneLoadingOverlay", () => {
   it("renders the default loading status as an opaque in-place overlay", () => {

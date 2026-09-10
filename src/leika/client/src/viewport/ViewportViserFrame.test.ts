@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ViewportViserFrame } from "./ViewportWorkspace";
+import { ViewportViserFrame } from "./ViewportViserRenderer";
 
 describe("ViewportViserFrame", () => {
   it("never discloses the Leika page origin as an iframe referrer", () => {
