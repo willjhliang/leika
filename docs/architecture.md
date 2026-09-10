@@ -16,6 +16,62 @@ configured. Use `host="127.0.0.1"` for same-machine access, or set `password=`
 and provide a protected transport when other machines can reach it. See
 [Remote access](remote-access.md) for the complete security model.
 
+## Code organization
+
+The public Python surface is collected in `leika/__init__.py`. Internal modules
+follow ownership boundaries so a new renderer, transport policy, or state
+transition has a clear home.
+
+| Responsibility | Python modules |
+| --- | --- |
+| Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
+| One browser's GUI, outgoing transfers, and transfer cancellation | `_client_handle.py` |
+| Download limits, validation, and descriptor-backed chunk sources | `_downloads.py` |
+| Bounded background jobs and captured-payload admission | `_executor.py` |
+| GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
+| Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
+| Renderer preparation shared by GUI controls and panes | `_array_snapshot.py`, `_plotly.py`, `_markdown.py`, `_image_encoding.py` |
+| Retained GUI/pane resource measurement | `_gui_resources.py` |
+| Typed wire schema and generated client contract | `_messages.py`, `infra/_messages.py`, `infra/_typescript_interface_gen.py` |
+| WebSocket lifecycle, dispatch, replay, and flow control | `infra/_infra.py`, `infra/_async_message_buffer.py` |
+| HTTP request policy, immutable assets, and worker-owned serving | `infra/_http_security.py`, `infra/_http_assets.py`, `infra/_http_server.py` |
+| Regular-file snapshots and display-name validation | `_file_transfer.py` |
+
+`Server` composes the public APIs and shared resources. `ClientHandle` depends
+on the server only for its instance's services and type annotations; the server
+creates and retires clients. Renderer preparation and resource measurement do
+not depend on GUI handles or pane registries. Both kinds of surface call those
+shared helpers directly. Pane property setters use one transaction that
+reserves the prospective resource cost, queues the update, and commits the
+handle; a failed admission or queue restores the previous state and cost.
+
+The HTTP asset registry owns its locks, snapshots, load reservations, and
+terminal state. The WebSocket worker creates an HTTP server that owns static
+file caching and response reservations. Request policy owns accepted host and
+proxy rules. Splitting these owners keeps socket lifecycle code independent of
+file-serving details while preserving their shared shutdown boundary.
+
+| Responsibility | Browser modules, relative to `client/src/` |
+| --- | --- |
+| Application composition and stable viewer ownership | `App.tsx`, `ViewerProvider.tsx`, `ViewerContext.ts` |
+| GUI and viewport sessions with independently callable actions | `ControlPanel/GuiState.ts`, `viewport/ViewportState.ts` |
+| Store subscriptions and React selectors | `store.ts` |
+| Worker transport, ordered frame processing, and dispatch | `WebsocketClientWorker.ts`, `WebsocketInterface.tsx`, `MessageHandler.tsx`, `messageBatch.ts` |
+| Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
+| Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
+| Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
+| Dock layout and control-panel presentation | `dock/`, `ControlPanel/` |
+
+`createGuiState()` and `createViewportState()` construct complete sessions
+without mounting React. Their hooks own one session per mounted viewer, and
+`ViewerProvider` owns the queues and transfer brokers alongside those sessions.
+Views subscribe to state and invoke actions; the state engines can be tested
+with the same actions and persistence adapters used by the application.
+
+Generated message definitions, icons, and vendored UI primitives remain under
+their existing generators. Build and release tooling remain separate from
+runtime orchestration; see [Development](development.md) for their entry points.
+
 ## State flow
 
 1. Python creates named pages, page-scoped panes, and workspace-wide GUI

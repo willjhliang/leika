@@ -226,6 +226,27 @@ refreshing it means copying from upstream again. Record any further vendored
 component in `src/leika/_licenses/shadcn-io-PROVENANCE.md`; that notice is on
 `scripts/check_wheel.py`'s required list, so the wheel must ship it.
 
+## Extending the implementation
+
+Start with the ownership map in [Architecture](architecture.md#code-organization).
+Keep `leika`'s top-level exports and documented method signatures as the public
+boundary; consumers of internal helpers should import their owning module.
+
+- For a new pane renderer, prepare and validate the source in a shared Python
+  helper, publish a typed pane message, and add the browser renderer through
+  `ViewportPaneRenderer.tsx`. Keep renderer lifecycle details out of workspace
+  gestures and use the pane property transaction for synchronized updates.
+- For GUI or viewport state transitions, add actions to the corresponding
+  session factory. Unit tests can construct `createGuiState()` or
+  `createViewportState(storage)` directly; use browser tests for mounting,
+  rendering, gestures, and connection lifecycle.
+- For HTTP changes, put host/origin decisions in `HttpRequestPolicy`, retained
+  runtime content in `HttpAssetRegistry`, and response/static-file behavior in
+  `HttpRequestHandler`. Preserve the owner's admission limits and shutdown behavior.
+- For new wire messages, update the Python schema, regenerate the bundled
+  TypeScript contract, and cover both replay and live dispatch. Resource
+  reservations must be released on rejected publication as well as removal.
+
 ## Generated protocol
 
 Run `python sync_client_server.py` after changing message dataclasses or the
