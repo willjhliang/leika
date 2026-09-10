@@ -11,7 +11,7 @@ import urllib.parse
 import uuid
 import warnings
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, NewType, TypeVar, cast
 
 import numpy as np
@@ -404,6 +404,43 @@ class PaneHandle(Generic[_PaneStateT]):
             )
         )
 
+    def _publish_update_locked(
+        self,
+        updates: dict[str, Any],
+        *,
+        state_updates: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Commit prepared props, retained state, and their resource cost together.
+
+        Callers validate values and prepare expensive content before acquiring
+        the pane registry lock. Every mutation then passes through this path,
+        so failed budget admission or publication restores the same snapshot.
+        """
+        self._check_not_removed()
+        assignments: list[tuple[object, str, Any]] = [
+            (self._impl.props, name, value) for name, value in updates.items()
+        ]
+        if state_updates is not None:
+            assignments.extend((self._impl, name, value) for name, value in state_updates.items())
+        previous = [(target, name, getattr(target, name)) for target, name, _ in assignments]
+        try:
+            for target, name, value in assignments:
+                setattr(target, name, value)
+            with self._impl.api._resource_transaction_locked(self):
+                self._queue_update(updates)
+        except BaseException:
+            for target, name, value in reversed(previous):
+                setattr(target, name, value)
+            raise
+
+    def _set_prop(self, name: str, value: Any) -> None:
+        """Publish one validated property, skipping unchanged values."""
+        with self._impl.api._lock:
+            self._check_not_removed()
+            if value == getattr(self._impl.props, name):
+                return
+            self._publish_update_locked({name: value})
+
     @property
     def pane_id(self) -> PaneId:
         """Stable identifier used to restore browser-managed layouts."""
@@ -421,18 +458,7 @@ class PaneHandle(Generic[_PaneStateT]):
     def title(self, value: str) -> None:
         self._check_not_removed()
         value = cast(str, validate_renderer_string(value, "pane title"))
-        with self._impl.api._lock:
-            self._check_not_removed()
-            if value == self._impl.props.title:
-                return
-            old_value = self._impl.props.title
-            self._impl.props.title = value
-            try:
-                with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update({"title": value})
-            except BaseException:
-                self._impl.props.title = old_value
-                raise
+        self._set_prop("title", value)
 
     @property
     def visible(self) -> bool:
@@ -446,17 +472,7 @@ class PaneHandle(Generic[_PaneStateT]):
         self._check_not_removed()
         if type(value) is not bool:
             raise TypeError("visible must be a bool")
-        with self._impl.api._lock:
-            self._check_not_removed()
-            if value == self._impl.props.visible:
-                return
-            old_value = self._impl.props.visible
-            self._impl.props.visible = value
-            try:
-                self._queue_update({"visible": value})
-            except BaseException:
-                self._impl.props.visible = old_value
-                raise
+        self._set_prop("visible", value)
 
     @property
     def loading(self) -> PaneLoading:
@@ -475,18 +491,7 @@ class PaneHandle(Generic[_PaneStateT]):
     def loading(self, value: PaneLoading) -> None:
         self._check_not_removed()
         value = _validate_loading(value)
-        with self._impl.api._lock:
-            self._check_not_removed()
-            if value == self._impl.props.loading:
-                return
-            old_value = self._impl.props.loading
-            self._impl.props.loading = value
-            try:
-                with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update({"loading": value})
-            except BaseException:
-                self._impl.props.loading = old_value
-                raise
+        self._set_prop("loading", value)
 
     def remove(self) -> None:
         """Permanently remove this pane from the workspace."""
@@ -573,27 +578,10 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             # Encoding can be expensive. Recheck after taking the lock so a
             # concurrent remove cannot queue an update for a reused pane ID.
             self._check_not_removed()
-            old_image = self._impl.image
-            old_format = self._impl.props._format
-            old_data = self._impl.props._data
-            old_loading = self._impl.props.loading
-            self._impl.image = image
-            self._impl.props._format = resolved_format
-            self._impl.props._data = data
-            if loading is not None:
-                self._impl.props.loading = loading
             updates: dict[str, Any] = {"_format": resolved_format, "_data": data}
             if loading is not None:
                 updates["loading"] = loading
-            try:
-                with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update(updates)
-            except BaseException:
-                self._impl.image = old_image
-                self._impl.props._format = old_format
-                self._impl.props._data = old_data
-                self._impl.props.loading = old_loading
-                raise
+            self._publish_update_locked(updates, state_updates={"image": image})
 
     def update(self, image: np.ndarray, *, loading: PaneLoading | None = None) -> None:
         """Replace the image, optionally changing loading in the same update.
@@ -623,17 +611,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
     def fit(self, value: ImageFit | None) -> None:
         self._check_not_removed()
         value = _validate_fit(value)
-        with self._impl.api._lock:
-            self._check_not_removed()
-            if value == self._impl.props.fit:
-                return
-            old_value = self._impl.props.fit
-            self._impl.props.fit = value
-            try:
-                self._queue_update({"fit": value})
-            except BaseException:
-                self._impl.props.fit = old_value
-                raise
+        self._set_prop("fit", value)
 
 
 class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
@@ -671,24 +649,10 @@ class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
             # Serialization can be expensive. Recheck after taking the lock so
             # a concurrent remove cannot queue an update for a reused pane ID.
             self._check_not_removed()
-            old_figure_ref = self._impl.figure_ref
-            old_svg = self._impl.props._svg
-            old_loading = self._impl.props.loading
-            self._impl.figure_ref = figure_ref
-            self._impl.props._svg = svg
-            if loading is not None:
-                self._impl.props.loading = loading
             updates: dict[str, Any] = {"_svg": svg}
             if loading is not None:
                 updates["loading"] = loading
-            try:
-                with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update(updates)
-            except BaseException:
-                self._impl.figure_ref = old_figure_ref
-                self._impl.props._svg = old_svg
-                self._impl.props.loading = old_loading
-                raise
+            self._publish_update_locked(updates, state_updates={"figure_ref": figure_ref})
 
     def update(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
         """Replace the matplotlib figure while retaining the pane configuration.
@@ -742,21 +706,10 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
             self._check_not_removed()
             if self._impl.props._plotly_json_str != source:
                 raise RuntimeError("Plotly figure changed during serialization")
-            old_json = self._impl.props._plotly_json_str
-            old_loading = self._impl.props.loading
-            self._impl.props._plotly_json_str = json_str
-            if loading is not None:
-                self._impl.props.loading = loading
             updates: dict[str, Any] = {"_plotly_json_str": json_str}
             if loading is not None:
                 updates["loading"] = loading
-            try:
-                with self._impl.api._resource_transaction_locked(self):
-                    self._queue_update(updates)
-            except BaseException:
-                self._impl.props._plotly_json_str = old_json
-                self._impl.props.loading = old_loading
-                raise
+            self._publish_update_locked(updates)
 
     def update(self, figure: go.Figure, *, loading: PaneLoading | None = None) -> None:
         """Replace the Plotly figure, optionally changing loading with it.
@@ -806,26 +759,12 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
             changed = url != self._impl.props._url or port != self._impl.props._port
             loading_changed = loading is not None and loading != self._impl.props.loading
             if changed or loading_changed:
-                old_url = self._impl.props._url
-                old_port = self._impl.props._port
-                old_loading = self._impl.props.loading
-                self._impl.props._url = url
-                self._impl.props._port = port
-                if loading is not None:
-                    self._impl.props.loading = loading
                 # Both keys are always sent so the exactly-one-set invariant
                 # holds on the client after any update.
                 updates: dict[str, Any] = {"_url": url, "_port": port}
                 if loading is not None:
                     updates["loading"] = loading
-                try:
-                    with self._impl.api._resource_transaction_locked(self):
-                        self._queue_update(updates)
-                except BaseException:
-                    self._impl.props._url = old_url
-                    self._impl.props._port = old_port
-                    self._impl.props.loading = old_loading
-                    raise
+                self._publish_update_locked(updates)
         if port is not None and self._impl.minimize_gui:
             _minimize_viser_gui(target)
 
@@ -1223,7 +1162,7 @@ class Panes:
         return old
 
     @contextlib.contextmanager
-    def _resource_transaction_locked(self, handle: PaneHandle[Any]) -> Any:
+    def _resource_transaction_locked(self, handle: PaneHandle[Any]) -> Iterator[None]:
         old = self._set_resource_locked(handle._impl.pane_id, _pane_resource_cost(handle))
         try:
             yield

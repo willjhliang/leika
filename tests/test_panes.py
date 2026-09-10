@@ -41,6 +41,66 @@ def test_image_fit_defers_to_the_viewer_until_python_names_one(
         deferred.fit = "cover"  # type: ignore[assignment]
 
 
+def test_image_fit_updates_charge_and_release_retained_text(server: leika.Server) -> None:
+    pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8))
+    before = server.panes._resource_total
+
+    pane.fit = "stretch"
+
+    assert server.panes._resource_total.text_units == before.text_units + len("stretch")
+    assert server.panes._resource_total.payload_bytes == before.payload_bytes + len("stretch")
+    assert server.panes._aggregate.resource_total == server.panes._resource_total
+
+    pane.fit = None
+
+    assert server.panes._resource_total == before
+    assert server.panes._aggregate.resource_total == before
+
+
+def test_image_fit_budget_rejection_preserves_state_and_messages(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8))
+    before = server.panes._resource_total
+    buffer = server._websock_server.get_message_buffer()
+    before_messages = dict(buffer.message_from_id)
+    monkeypatch.setattr(panes_impl, "_PANE_TEXT_MAX_UTF16_CODE_UNITS", before.text_units)
+
+    with pytest.raises(RuntimeError, match="source budget"):
+        pane.fit = "stretch"
+
+    assert pane.fit is None
+    assert server.panes._resource_total == before
+    assert server.panes._aggregate.resource_total == before
+    assert buffer.message_from_id == before_messages
+
+
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [("title", "Updated title"), ("visible", False), ("loading", "Preparing"), ("fit", "stretch")],
+)
+def test_pane_property_publication_failure_restores_state_and_resources(
+    server: leika.Server,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    replacement: object,
+) -> None:
+    pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8), title="Original")
+    before_value = getattr(pane, name)
+    before_resources = server.panes._resource_total
+
+    def reject(_: object) -> None:
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(server.panes._websock_interface, "queue_message_or_raise", reject)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        setattr(pane, name, replacement)
+
+    assert getattr(pane, name) == before_value
+    assert server.panes._resource_total == before_resources
+    assert server.panes._aggregate.resource_total == before_resources
+
+
 def test_image_lifecycle_and_validation(server: leika.Server) -> None:
     original = np.zeros((8, 12, 4), dtype=np.uint8)
     pane = server.panes.add_image(
