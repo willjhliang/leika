@@ -22,12 +22,14 @@ from ._async_errors import (
     print_async_errors,
 )
 from ._file_transfer import (
+    PREVIEW_MAX_BYTES,
     open_regular_file,
     read_regular_file_snapshot,
     validate_file_display_name,
 )
 from ._gui_api import GuiApi
-from ._gui_handles import PREVIEW_MAX_BYTES, _GuiResourceCost, _make_uuid
+from ._gui_handles import _make_uuid
+from ._gui_resources import _GuiResourceCost
 from ._notification_handle import NotificationHandle
 from ._pages import Pages, _normalize_legacy_page_label
 from ._share import CloudflaredTunnel, ShareTunnelError

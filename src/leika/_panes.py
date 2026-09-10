@@ -6,7 +6,6 @@ import contextlib
 import copy
 import dataclasses
 import io
-import json
 import threading
 import urllib.parse
 import uuid
@@ -19,17 +18,15 @@ import numpy as np
 from typing_extensions import TypeAlias
 
 from . import _messages
-from ._gui_handles import (
-    _ndarray_snapshot_spec,
-    _plotly_figure_from_json,
-    _plotly_graph_json_upper_bound,
-    _plotly_json_and_config,
-    _plotly_payload_from_json,
-    _private_ndarray_snapshot,
-    _snapshot_plotly_config,
-    _validate_plotly_json_size,
-)
+from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
+from ._gui_resources import _GuiResourceCost
 from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._plotly import (
+    _plotly_figure_from_json,
+    _plotly_json_for_pane,
+    _plotly_payload_from_json,
+    _plotly_theme_templates_json,
+)
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -55,9 +52,6 @@ Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
 PaneLoading: TypeAlias = bool | str
 PaneId = NewType("PaneId", str)
 
-
-_stock_plotly_template_json: dict[str, Any] | None = None
-_theme_templates_json: str | None = None
 
 _PANE_MAX = 128
 _VISER_PANE_MAX = 16
@@ -111,8 +105,6 @@ class _PanesAggregate:
                 raise RuntimeError("pane aggregate resource accounting underflow")
 
             # Pane rasters share the browser page allowance with server.gui.
-            from ._gui_handles import _GuiResourceCost
-
             self._owner._replace_gui_resource_cost(
                 _GuiResourceCost(decoded_pixels=old.decoded_pixels),
                 _GuiResourceCost(decoded_pixels=new.decoded_pixels),
@@ -197,57 +189,6 @@ def _validate_title_visible_loading(
     return title, visible, _validate_loading(loading)
 
 
-def _raw_plotly_template_graph(template: object) -> tuple[object, ...]:
-    """Return exact stock-template storage without invoking attribute hooks."""
-    from plotly.graph_objs.layout import Template
-
-    if type(template) is not Template:
-        raise TypeError("Plotly template must be an exact stock Template")
-    state = object.__getattribute__(template, "__dict__")
-    raw = state.get("_orphan_props", {})
-    if type(raw) is not dict:
-        raise TypeError("Plotly template properties must be an exact mapping")
-    return (raw,)
-
-
-def _bounded_plotly_template_dict(template: object) -> dict[str, Any]:
-    """Preflight and structurally snapshot one mutable global template."""
-    raw = _raw_plotly_template_graph(template)[0]
-    _plotly_graph_json_upper_bound(raw)
-    result = _snapshot_plotly_config(cast(dict[str, Any], raw))
-    if result is None:  # pragma: no cover - raw template storage is a dict
-        raise RuntimeError("Plotly template snapshot unexpectedly vanished")
-    _plotly_graph_json_upper_bound(result)
-    return result
-
-
-def _plotly_json_for_pane(
-    figure: go.Figure, config: Mapping[str, Any] | None
-) -> tuple[str, dict[str, Any] | None]:
-    """Serialize a figure for a Plotly pane and return its private config."""
-    import plotly.io as pio
-
-    global _stock_plotly_template_json
-    if _stock_plotly_template_json is None:
-        _stock_plotly_template_json = _bounded_plotly_template_dict(pio.templates["plotly"])
-
-    json_str, private_config = _plotly_json_and_config(figure, config)
-    raw_layout = _plotly_figure_layout(figure)
-    template = raw_layout.get("template") if type(raw_layout) is dict else None
-    if template is None or template == _stock_plotly_template_json:
-        plot_dict = json.loads(json_str)
-        plot_dict.get("layout", {}).pop("template", None)
-        json_str = json.dumps(plot_dict)
-    return _validate_plotly_json_size(json_str), private_config
-
-
-def _plotly_figure_layout(figure: go.Figure) -> object:
-    """Read BaseFigure raw layout storage after shared preflight."""
-    from ._gui_handles import _plotly_figure_raw_graph
-
-    return _plotly_figure_raw_graph(figure)[1]
-
-
 def _matplotlib_figure_ref(figure: Any) -> weakref.ReferenceType[Any]:
     """Require a renderer and non-owning introspection before any work."""
     if not callable(getattr(figure, "savefig", None)):
@@ -286,21 +227,6 @@ def _matplotlib_svg(figure: Any) -> str:
     if utf16_code_unit_length_exceeds(svg, _MATPLOTLIB_SVG_MAX_UTF16_CODE_UNITS):
         raise ValueError("Matplotlib figure exceeds the 16 Mi-character browser render limit.")
     return svg
-
-
-def _plotly_theme_templates_json() -> str:
-    """Themed defaults for figures that do not specify a template."""
-    import plotly.io as pio
-
-    global _theme_templates_json
-    if _theme_templates_json is None:
-        templates = {
-            "light": _bounded_plotly_template_dict(pio.templates["plotly_white"]),
-            "dark": _bounded_plotly_template_dict(pio.templates["plotly_dark"]),
-        }
-        _plotly_graph_json_upper_bound(templates)
-        _theme_templates_json = _validate_plotly_json_size(json.dumps(templates))
-    return _theme_templates_json
 
 
 def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
@@ -619,9 +545,9 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             loading = _validate_loading(loading)
         image = _validate_image(image)
         spec = _ndarray_snapshot_spec(image)
-        if spec[2] > _PANE_PAYLOAD_MAX_BYTES:
+        if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
             raise RuntimeError("Image source exceeds the 256 MiB pane retained payload budget.")
-        with self._impl.api._owner._reserve_image_preparation(spec[2]):
+        with self._impl.api._owner._reserve_image_preparation(spec.nbytes):
             snapshot = _private_ndarray_snapshot(image, spec)
             resolved_format, data = encode_image_binary(
                 snapshot,
@@ -1502,13 +1428,13 @@ class Panes:
         _validate_image_encoding_options(format, jpeg_quality)
         image = _validate_image(image)
         spec = _ndarray_snapshot_spec(image)
-        if spec[2] > _PANE_PAYLOAD_MAX_BYTES:
+        if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
             raise RuntimeError("Image source exceeds the 256 MiB pane retained payload budget.")
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
         fit = _validate_fit(fit)
         relative_to = self._resolve_relative_to(relative_to)
-        with self._owner._reserve_image_preparation(spec[2]):
+        with self._owner._reserve_image_preparation(spec.nbytes):
             snapshot = _private_ndarray_snapshot(image, spec)
             if format == "jpeg" and snapshot.shape[2] == 4:
                 warnings.warn(

@@ -6,14 +6,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from leika import _gui_handles as handles_impl
+from leika import _markdown as markdown_impl
 from leika import infra
-from leika._gui_handles import (
+from leika._markdown import (
     _get_data_url,
     _link_markdown_assets,
     _parse_markdown,
     _resolve_markdown_asset,
 )
+from leika.infra._http_assets import HttpAsset
 
 
 def _png_header(width: int = 1, height: int = 1) -> bytes:
@@ -102,7 +103,7 @@ def test_inlined_markdown_refuses_one_oversized_asset(
     docs = tmp_path / "docs"
     docs.mkdir()
     docs.joinpath("large.png").write_bytes(_png_header())
-    monkeypatch.setattr(handles_impl, "_MARKDOWN_INLINE_MAX_ASSET_BYTES", 4)
+    monkeypatch.setattr(markdown_impl, "_MARKDOWN_INLINE_MAX_ASSET_BYTES", 4)
 
     with pytest.warns(UserWarning, match="byte limit"):
         result = _get_data_url("large.png", docs)
@@ -117,7 +118,7 @@ def test_inlined_markdown_enforces_one_aggregate_output_budget(
     docs.mkdir()
     docs.joinpath("one.png").write_bytes(_png_header())
     docs.joinpath("two.png").write_bytes(_png_header())
-    monkeypatch.setattr(handles_impl, "_MARKDOWN_INLINE_MAX_TOTAL_BYTES", 100)
+    monkeypatch.setattr(markdown_impl, "_MARKDOWN_INLINE_MAX_TOTAL_BYTES", 100)
 
     with pytest.warns(UserWarning, match="byte limit"):
         result = _parse_markdown("![one](one.png) ![two](two.png)", docs)
@@ -136,9 +137,9 @@ def test_markdown_rewriter_handles_balanced_escaped_and_angle_destinations(
         (docs / filename).write_bytes(b"image")
     registered: list[Path] = []
 
-    def register(path: Path, _: object) -> handles_impl.HttpAsset:
+    def register(path: Path, _: object) -> HttpAsset:
         registered.append(path)
-        return handles_impl.HttpAsset(f"/asset/{len(registered)}", None)
+        return HttpAsset(f"/asset/{len(registered)}", None)
 
     source = (
         "![balanced](plot_(1).png)\n"
@@ -160,9 +161,9 @@ def test_markdown_rewriter_ignores_inline_and_fenced_code(tmp_path: Path) -> Non
     (docs / "image.png").write_bytes(b"image")
     calls: list[Path] = []
 
-    def register(path: Path, _: object) -> handles_impl.HttpAsset:
+    def register(path: Path, _: object) -> HttpAsset:
         calls.append(path)
-        return handles_impl.HttpAsset("/asset/image", None)
+        return HttpAsset("/asset/image", None)
 
     source = "`![inline](image.png)`\n```markdown\n![fenced](image.png)\n```\n![visible](image.png)"
     rewritten = _link_markdown_assets(source, docs, register)  # type: ignore[arg-type]
@@ -178,9 +179,9 @@ def test_markdown_rewriter_only_loads_true_relative_file_destinations(tmp_path: 
     (docs / "http-chart.png").write_bytes(b"image")
     calls: list[Path] = []
 
-    def register(path: Path, _: object) -> handles_impl.HttpAsset:
+    def register(path: Path, _: object) -> HttpAsset:
         calls.append(path)
-        return handles_impl.HttpAsset("/asset/chart", None)
+        return HttpAsset("/asset/chart", None)
 
     source = " ".join(
         (
@@ -216,7 +217,7 @@ def test_markdown_asset_identity_rejects_post_resolution_symlink_swap(
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"secret")
     displaced = tmp_path / "inside.png"
-    original_resolve = handles_impl._resolve_markdown_asset
+    original_resolve = markdown_impl._resolve_markdown_asset
     swapped = False
 
     def resolve_then_swap(root: Path, url: str) -> object:
@@ -231,14 +232,14 @@ def test_markdown_asset_identity_rejects_post_resolution_symlink_swap(
                 pytest.skip("symlink creation is unavailable on this platform")
         return resolved
 
-    monkeypatch.setattr(handles_impl, "_resolve_markdown_asset", resolve_then_swap)
+    monkeypatch.setattr(markdown_impl, "_resolve_markdown_asset", resolve_then_swap)
     with pytest.warns(UserWarning, match="Failed to read image"):
         if mode == "inline":
             rewritten = _parse_markdown("![image](image.png)", docs)
         else:
             server = infra.WebsockServer("127.0.0.1", 0, verbose=False)
 
-            def register(path: Path, metadata: object) -> handles_impl.HttpAsset:
+            def register(path: Path, metadata: object) -> HttpAsset:
                 return server.register_http_asset(
                     path,
                     _expected_metadata=metadata,  # type: ignore[arg-type]
@@ -261,7 +262,7 @@ def test_http_backed_markdown_keeps_asset_when_registration_rejects_size(
     docs.mkdir()
     (docs / "large.png").write_bytes(b"large")
 
-    def reject(_: Path, __: object) -> handles_impl.HttpAsset:
+    def reject(_: Path, __: object) -> HttpAsset:
         raise ValueError("asset too large")
 
     with pytest.warns(UserWarning, match="Failed to read image"):
@@ -278,7 +279,7 @@ def test_inline_markdown_snapshot_rejects_same_size_in_place_rewrite(
     source.write_bytes(_png_header())
     replacement = bytearray(source.read_bytes())
     replacement[-1] ^= 1
-    real_fstat = handles_impl.os.fstat
+    real_fstat = markdown_impl.os.fstat
     calls = 0
 
     def rewrite_between_descriptor_stats(descriptor: int) -> os.stat_result:
@@ -291,7 +292,7 @@ def test_inline_markdown_snapshot_rejects_same_size_in_place_rewrite(
             os.utime(source, ns=(timestamp, timestamp))
         return metadata if calls == 2 else real_fstat(descriptor)
 
-    monkeypatch.setattr(handles_impl.os, "fstat", rewrite_between_descriptor_stats)
+    monkeypatch.setattr(markdown_impl.os, "fstat", rewrite_between_descriptor_stats)
     with pytest.warns(UserWarning, match="Failed to read image"):
         assert _get_data_url("image.png", docs) == "image.png"
 

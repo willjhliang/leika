@@ -37,11 +37,12 @@ from typing_extensions import (
 )
 
 from . import _messages
+from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._async_errors import (
     print_async_errors,
     print_async_exception,
 )
-from ._file_transfer import validate_file_display_name
+from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_handles import (
     _GUI_AGGREGATE_COLLECTION_MAX,
     _GUI_AGGREGATE_PAYLOAD_MAX_BYTES,
@@ -54,7 +55,6 @@ from ._gui_handles import (
     _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX,
     _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES,
     _GUI_TEXT_MAX_UTF16_CODE_UNITS,
-    PREVIEW_MAX_BYTES,
     CommandEvent,
     CommandHandle,
     DownloadContent,
@@ -103,17 +103,12 @@ from ._gui_handles import (
     _discard_gui_subtree,
     _gui_descendant_tab_uuids,
     _gui_descendant_uuids,
-    _gui_resource_cost,
     _gui_text_source,
     _GuiFileButtonHandle,
     _GuiHandle,
     _GuiHandleState,
     _GuiInputHandle,
-    _GuiResourceCost,
     _make_uuid,
-    _ndarray_snapshot_spec,
-    _plotly_json_and_config,
-    _private_ndarray_snapshot,
     _radio_list_items,
     _retire_gui_handle_without_queue_locked,
     _string_options,
@@ -125,6 +120,7 @@ from ._gui_handles import (
     install_container_add_methods,
     not_container_scoped,
 )
+from ._gui_resources import _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import _validate_image_encoding_options, encode_image_binary
@@ -134,6 +130,7 @@ from ._notification_handle import (
     _NotificationHandleState,
     validate_auto_close_seconds,
 )
+from ._plotly import _plotly_json_and_config
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -2282,11 +2279,11 @@ class GuiApi(GuiContainer):
             raise TypeError("image must be a base numpy.ndarray")
         image_array = image
         spec = _ndarray_snapshot_spec(image_array)
-        if spec[2] > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
+        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
             raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
         container_uuid = self._get_container_uuid()
         resolved_order = self._apply_default_order(order)
-        with self._server._reserve_image_preparation(spec[2]):
+        with self._server._reserve_image_preparation(spec.nbytes):
             image_array = _private_ndarray_snapshot(image_array, spec)
             if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
                 warnings.warn(

@@ -9,6 +9,12 @@ import unicodedata
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
+PREVIEW_MAX_BYTES = 64 * 1024 * 1024
+"""Transport ceiling for one preview. The browser still applies lower
+renderer-specific limits (1 MiB Markdown and 16 MiB plain text) and retains
+the complete transported file while its dialog is open."""
+
+
 _FILE_DISPLAY_NAME_MAX_CHARS = 255
 _FILE_DISPLAY_NAME_MAX_UTF8_BYTES = 1024
 

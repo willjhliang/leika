@@ -25,6 +25,7 @@ import pytest
 import leika
 from leika import _gui_api as gui_api_impl
 from leika import _messages
+from leika._file_transfer import PREVIEW_MAX_BYTES
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
 from leika.infra import ClientId
 from leika.infra import _http_assets as asset_impl
@@ -108,7 +109,7 @@ def test_a_press_shows_the_file_rather_than_saving_it(server: leika.Server) -> N
     handle = server.gui.add_preview_button("Look", b"# Title\n", filename="notes.md")
     client = _press(handle)
 
-    assert client.previewed == [("notes.md", b"# Title\n", leika._gui_handles.PREVIEW_MAX_BYTES)]
+    assert client.previewed == [("notes.md", b"# Title\n", PREVIEW_MAX_BYTES)]
     assert client.downloaded == []
 
 
@@ -313,7 +314,7 @@ def test_a_watch_sends_the_file_again_once_it_has_changed(
     # Into the dialog that is open, rather than opening another. The file
     # itself goes, as a path streamed a chunk at a time, exactly as the press
     # would have sent it.
-    assert client.reloaded == [("notes.txt", document, leika._gui_handles.PREVIEW_MAX_BYTES)]
+    assert client.reloaded == [("notes.txt", document, PREVIEW_MAX_BYTES)]
     assert client.previewed == []
     # Stamped with what it is now, so the next watch asks about the right one.
     assert _version(client) not in (None, version)
@@ -376,8 +377,8 @@ def test_a_reload_press_asks_the_contents_afresh(server: leika.Server) -> None:
     handle._send(GuiEvent(client, 0, handle))  # type: ignore[arg-type]
     handle._reload(GuiEvent(client, 0, handle))  # type: ignore[arg-type]
 
-    assert client.previewed == [("notes.txt", b"# first\n", leika._gui_handles.PREVIEW_MAX_BYTES)]
-    assert client.reloaded == [("notes.txt", b"# second\n", leika._gui_handles.PREVIEW_MAX_BYTES)]
+    assert client.previewed == [("notes.txt", b"# first\n", PREVIEW_MAX_BYTES)]
+    assert client.reloaded == [("notes.txt", b"# second\n", PREVIEW_MAX_BYTES)]
 
 
 def test_a_callable_preview_never_runs_for_a_warm(server: leika.Server) -> None:

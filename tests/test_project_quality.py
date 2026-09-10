@@ -279,3 +279,37 @@ def test_pre_commit_ruff_matches_the_locked_ci_version() -> None:
     )
     assert match is not None
     assert {match.group(1)} == locked_versions
+
+
+def test_shared_preparation_does_not_depend_on_surface_owners() -> None:
+    """Source preparation must remain reusable by GUI controls and panes alike."""
+    owners = {
+        "_gui_api",
+        "_gui_handles",
+        "_notification_handle",
+        "_panes",
+        "_pages",
+        "_server",
+        "_client_handle",
+    }
+    shared_modules = (
+        "_array_snapshot.py",
+        "_plotly.py",
+        "_markdown.py",
+        "_image_encoding.py",
+        "_gui_resources.py",
+        "_file_transfer.py",
+        "_validation.py",
+    )
+    for name in shared_modules:
+        source = ROOT / "src/leika" / name
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            imports: list[str] = []
+            if isinstance(node, ast.Import):
+                imports = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                imports = [node.module or "", *(alias.name for alias in node.names)]
+            for imported in imports:
+                assert owners.isdisjoint(imported.split(".")), (
+                    f"{source.name}:{node.lineno}: shared preparation imports surface owner {imported}"
+                )

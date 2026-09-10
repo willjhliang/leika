@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-import base64
 import contextlib
 import copy
 import dataclasses
-import datetime
-import decimal
 import functools
 import itertools
-import json
 import math
 import os
-import re
 import time
 import uuid
 import warnings
 from collections.abc import Coroutine, Mapping, Sequence
 from numbers import Real
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -33,11 +28,11 @@ from typing import (
     cast,
     overload,
 )
-from urllib.parse import unquote, urlsplit
 
 import numpy as np
 from typing_extensions import Protocol, Self, override
 
+from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._assignable_props_api import AssignablePropsBase
 from ._async_errors import (
     callback_result_is_awaitable,
@@ -48,9 +43,11 @@ from ._file_transfer import (
     validate_file_display_name,
     validate_unchanged_file_snapshot,
 )
+from ._gui_resources import _GUI_CONTAINER_DEPTH_MAX, _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._markdown import _link_markdown_assets
 from ._messages import (
     ButtonColor,
     CommandProps,
@@ -95,14 +92,17 @@ from ._messages import (
     RemoveCommandMessage,
     _normalize_key_modifier,
 )
-from ._validation import utf16_code_unit_length, utf16_code_unit_length_exceeds
+from ._plotly import (
+    _plotly_figure_from_json,
+    _plotly_json_with_config,
+    _plotly_payload_from_json,
+)
+from ._validation import utf16_code_unit_length_exceeds
 from ._validation import validate_finite_number as _finite_number
 from ._validation import validate_positive_number as _positive_number
 from ._validation import validate_renderer_string as _validate_renderer_string
 from ._validation import validate_unicode_string as _validate_unicode_string
 from .infra import ClientId, Message
-from .infra._image_headers import safe_image_info
-from .infra._infra import HttpAsset
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -121,7 +121,6 @@ _GUI_AGGREGATE_COLLECTION_MAX = 16 * 1024
 _GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS = 16 * 1024 * 1024
 _GUI_AGGREGATE_PAYLOAD_MAX_BYTES = 128 * 1024 * 1024
 _GUI_AGGREGATE_PIXELS_MAX = 64 * 1024 * 1024
-_GUI_CONTAINER_DEPTH_MAX = 64
 _GUI_COLLECTION_ITEM_MAX_UTF16_CODE_UNITS = 16 * 1024
 _GUI_TEXT_MAX_UTF16_CODE_UNITS = 1024 * 1024
 _GUI_COMMAND_MAX = 1024
@@ -131,94 +130,6 @@ _GUI_CALLBACK_MAX = 256
 _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX = 1024
 _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES = 128 * 1024 * 1024
 _GUI_FORM_ACTION_ORDER = float.fromhex("0x1.fffffffffffffp+1023")
-
-
-@dataclasses.dataclass(frozen=True)
-class _GuiResourceCost:
-    collection_items: int = 0
-    text_units: int = 0
-    payload_bytes: int = 0
-    decoded_pixels: int = 0
-
-    def __add__(self, other: "_GuiResourceCost") -> "_GuiResourceCost":
-        return _GuiResourceCost(
-            self.collection_items + other.collection_items,
-            self.text_units + other.text_units,
-            self.payload_bytes + other.payload_bytes,
-            self.decoded_pixels + other.decoded_pixels,
-        )
-
-    def __sub__(self, other: "_GuiResourceCost") -> "_GuiResourceCost":
-        return _GuiResourceCost(
-            self.collection_items - other.collection_items,
-            self.text_units - other.text_units,
-            self.payload_bytes - other.payload_bytes,
-            self.decoded_pixels - other.decoded_pixels,
-        )
-
-
-def _gui_resource_cost(
-    value: object,
-    props: object,
-    *,
-    decoded_pixels: int = 0,
-    retained_extra_bytes: int = 0,
-) -> _GuiResourceCost:
-    """Measure a bounded retained value/props graph with browser-parity rules."""
-    collection_items = 0
-    text_units = 0
-    payload_bytes = retained_extra_bytes
-    nodes = 0
-    active: set[int] = set()
-    stack: list[tuple[object, int, bool]] = [(value, 0, False), (props, 0, False)]
-    while stack:
-        item, depth, exiting = stack.pop()
-        if exiting:
-            active.remove(id(item))
-            continue
-        nodes += 1
-        if nodes > 100_000:
-            raise ValueError("GUI retained state contains too many values")
-        if depth > _GUI_CONTAINER_DEPTH_MAX:
-            raise ValueError("GUI retained state is nested too deeply")
-        if item is None or isinstance(item, (bool, Real)):
-            continue
-        if isinstance(item, str):
-            item = _validate_unicode_string(item, "GUI string")
-            text_units += utf16_code_unit_length(item)
-            payload_bytes += len(item.encode("utf-8"))
-            continue
-        if isinstance(item, bytes):
-            payload_bytes += len(item)
-            continue
-        if isinstance(item, np.ndarray):
-            payload_bytes += int(item.nbytes)
-            continue
-
-        composite = (dataclasses.is_dataclass(item) and not isinstance(item, type)) or isinstance(
-            item, (Mapping, tuple, list)
-        )
-        if not composite:
-            raise TypeError(f"unsupported retained GUI value: {type(item).__name__}")
-        identity = id(item)
-        if identity in active:
-            raise ValueError("GUI retained state cannot contain cycles")
-        active.add(identity)
-        stack.append((item, depth, True))
-        if dataclasses.is_dataclass(item) and not isinstance(item, type):
-            children = tuple(getattr(item, field.name) for field in dataclasses.fields(item))
-        elif isinstance(item, Mapping):
-            children = (*item.keys(), *item.values())
-        else:
-            children = tuple(cast(Iterable[object], item))
-            collection_items += len(children)
-        stack.extend((child, depth + 1, False) for child in reversed(children))
-    return _GuiResourceCost(
-        collection_items,
-        text_units,
-        payload_bytes,
-        decoded_pixels,
-    )
 
 
 def _bounded_tuple(
@@ -300,42 +211,6 @@ def _string_options(options: Iterable[Any], control: str) -> tuple[str, ...]:
     if duplicates:
         raise ValueError(f"{control} options must be unique; repeated {sorted(duplicates)!r}.")
     return values
-
-
-def _ndarray_snapshot_spec(value: np.ndarray) -> tuple[tuple[int, ...], np.dtype[Any], int]:
-    """Capture the only shape and storage size an admitted copy may allocate."""
-    if type(value) is not np.ndarray:
-        raise TypeError("image must be a base numpy.ndarray")
-    shape = tuple(int(size) for size in value.shape)
-    dtype = value.dtype
-    nbytes = math.prod(shape) * int(dtype.itemsize)
-    return shape, dtype, nbytes
-
-
-def _private_ndarray_snapshot(
-    value: np.ndarray,
-    spec: tuple[tuple[int, ...], np.dtype[Any], int],
-) -> np.ndarray:
-    """Copy into fixed charged storage without trusting a later shape read.
-
-    Callers must not mutate or resize their source while an API call is in
-    progress. A buffer export blocks ordinary accidental resize; NumPy's
-    explicit ``resize(refcheck=False)`` escape hatch remains outside this
-    public contract, while the fixed destination still bounds Leika's own
-    allocation.
-    """
-    shape, dtype, nbytes = spec
-    if math.prod(shape) * int(dtype.itemsize) != nbytes:
-        raise RuntimeError("invalid ndarray snapshot specification")
-    exported = memoryview(value)
-    try:
-        snapshot = np.empty(shape, dtype=dtype, order="C")
-        np.copyto(snapshot, value, casting="no")
-    finally:
-        exported.release()
-    if value.shape != shape or value.dtype != dtype:
-        raise ValueError("image changed shape or dtype while it was snapshotted")
-    return snapshot
 
 
 @overload
@@ -2197,12 +2072,6 @@ class GuiUploadButtonHandle(_GuiInputHandle[UploadedFile], GuiUploadButtonProps)
         return func
 
 
-PREVIEW_MAX_BYTES = 64 * 1024 * 1024
-"""Transport ceiling for one preview. The browser still applies lower
-renderer-specific limits (1 MiB Markdown and 16 MiB plain text) and retains
-the complete transported file while its dialog is open."""
-
-
 def _read_preview_markdown(path: Path, max_bytes: int) -> bytes | None:
     """Read stable regular Markdown, or leave an oversized file to the sender."""
     with open_regular_file(path) as file:
@@ -3608,392 +3477,6 @@ class GuiModalHandle(GuiContainer):
         self.close()
 
 
-class _UnsafeMarkdownAssetPath(ValueError):
-    """A markdown image reference that leaves its declared asset root."""
-
-
-@dataclasses.dataclass(frozen=True)
-class _ResolvedMarkdownAsset:
-    path: Path
-    metadata: os.stat_result
-
-
-def _resolve_markdown_asset(image_root: Path, url: str) -> _ResolvedMarkdownAsset:
-    """Resolve and capture one contained local Markdown asset's identity."""
-    posix_path = PurePosixPath(url)
-    windows_path = PureWindowsPath(url)
-    if (
-        posix_path.is_absolute()
-        or windows_path.drive
-        or windows_path.root
-        or ".." in posix_path.parts
-        or ".." in windows_path.parts
-        or any(":" in part for part in windows_path.parts)
-    ):
-        raise _UnsafeMarkdownAssetPath(url)
-
-    root = image_root.resolve()
-    path = (root / Path(*posix_path.parts)).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as error:
-        raise _UnsafeMarkdownAssetPath(url) from error
-    return _ResolvedMarkdownAsset(path, path.stat())
-
-
-_MARKDOWN_INLINE_MAX_ASSET_BYTES = 8 * 1024 * 1024
-_MARKDOWN_INLINE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
-_MARKDOWN_ESCAPE = re.compile(r"\\([\\`*_[\]{}()#+\-.!<> ])")
-_MARKDOWN_FENCE = re.compile(r"^[ \t]{0,3}([`~]{3,})(.*)$")
-
-
-@dataclasses.dataclass
-class _InlineMarkdownBudget:
-    remaining_output_bytes: int
-
-
-@dataclasses.dataclass(frozen=True)
-class _MarkdownImageDestination:
-    start: int
-    end: int
-    value: str
-
-
-def _markdown_unescape(value: str) -> str:
-    return _MARKDOWN_ESCAPE.sub(r"\1", value)
-
-
-def _fenced_markdown_ranges(markdown: str) -> list[tuple[int, int]]:
-    """Return fenced-code spans, preserving offsets for the rewrite pass."""
-    ranges: list[tuple[int, int]] = []
-    fence_character: str | None = None
-    fence_length = 0
-    fence_start = 0
-    offset = 0
-    for line in markdown.splitlines(keepends=True):
-        match = _MARKDOWN_FENCE.match(line.rstrip("\r\n"))
-        if fence_character is None:
-            if match is not None:
-                marker = match.group(1)
-                fence_character = marker[0]
-                fence_length = len(marker)
-                fence_start = offset
-        elif (
-            match is not None
-            and match.group(1)[0] == fence_character
-            and len(match.group(1)) >= fence_length
-            and not match.group(2).strip()
-        ):
-            ranges.append((fence_start, offset + len(line)))
-            fence_character = None
-        offset += len(line)
-    if fence_character is not None:
-        ranges.append((fence_start, len(markdown)))
-    return ranges
-
-
-def _markdown_image_destinations(markdown: str) -> Iterator[_MarkdownImageDestination]:
-    """Yield destination spans for inline images outside code constructs."""
-    fenced = _fenced_markdown_ranges(markdown)
-    fence_index = 0
-    index = 0
-    length = len(markdown)
-    while index < length:
-        while fence_index < len(fenced) and index >= fenced[fence_index][1]:
-            fence_index += 1
-        if fence_index < len(fenced) and fenced[fence_index][0] <= index:
-            index = fenced[fence_index][1]
-            continue
-
-        if markdown[index] == "`":
-            run_end = index + 1
-            while run_end < length and markdown[run_end] == "`":
-                run_end += 1
-            delimiter = markdown[index:run_end]
-            closing = markdown.find(delimiter, run_end)
-            while closing >= 0 and (
-                (closing > 0 and markdown[closing - 1] == "`")
-                or (closing + len(delimiter) < length and markdown[closing + len(delimiter)] == "`")
-            ):
-                closing = markdown.find(delimiter, closing + len(delimiter))
-            index = closing + len(delimiter) if closing >= 0 else run_end
-            continue
-
-        if not markdown.startswith("![", index):
-            index += 1
-            continue
-        backslashes = 0
-        cursor = index - 1
-        while cursor >= 0 and markdown[cursor] == "\\":
-            backslashes += 1
-            cursor -= 1
-        if backslashes % 2:
-            index += 2
-            continue
-
-        cursor = index + 2
-        label_depth = 1
-        while cursor < length and label_depth:
-            character = markdown[cursor]
-            if character == "\\" and cursor + 1 < length:
-                cursor += 2
-                continue
-            if character == "[":
-                label_depth += 1
-            elif character == "]":
-                label_depth -= 1
-                if label_depth == 0:
-                    break
-            cursor += 1
-        if label_depth or cursor + 1 >= length or markdown[cursor + 1] != "(":
-            index += 2
-            continue
-
-        cursor += 2
-        while cursor < length and markdown[cursor].isspace():
-            cursor += 1
-        if cursor >= length:
-            return
-
-        if markdown[cursor] == "<":
-            destination_start = cursor + 1
-            cursor += 1
-            while cursor < length:
-                if markdown[cursor] == "\\" and cursor + 1 < length:
-                    cursor += 2
-                    continue
-                if markdown[cursor] == ">":
-                    break
-                if markdown[cursor] in "\r\n":
-                    break
-                cursor += 1
-            if cursor >= length or markdown[cursor] != ">":
-                index += 2
-                continue
-            destination_end = cursor
-            cursor += 1
-        else:
-            destination_start = cursor
-            depth = 0
-            destination_end = -1
-            while cursor < length:
-                character = markdown[cursor]
-                if character == "\\" and cursor + 1 < length:
-                    cursor += 2
-                    continue
-                if character == "(":
-                    depth += 1
-                elif character == ")":
-                    if depth == 0:
-                        destination_end = cursor
-                        break
-                    depth -= 1
-                elif character.isspace() and depth == 0:
-                    destination_end = cursor
-                    break
-                cursor += 1
-            if destination_end < 0:
-                index += 2
-                continue
-
-        while cursor < length and markdown[cursor].isspace():
-            cursor += 1
-        if cursor < length and markdown[cursor] in ('"', "'"):
-            quote = markdown[cursor]
-            cursor += 1
-            while cursor < length:
-                if markdown[cursor] == "\\" and cursor + 1 < length:
-                    cursor += 2
-                    continue
-                if markdown[cursor] == quote:
-                    cursor += 1
-                    break
-                cursor += 1
-            else:
-                index += 2
-                continue
-            while cursor < length and markdown[cursor].isspace():
-                cursor += 1
-        if cursor >= length or markdown[cursor] != ")":
-            index += 2
-            continue
-
-        raw_destination = markdown[destination_start:destination_end]
-        yield _MarkdownImageDestination(
-            destination_start,
-            destination_end,
-            _markdown_unescape(raw_destination),
-        )
-        index = cursor + 1
-
-
-def _rewrite_markdown_images(markdown: str, rewrite: Callable[[str], str | None]) -> str:
-    pieces: list[str] = []
-    cursor = 0
-    for destination in _markdown_image_destinations(markdown):
-        replacement = rewrite(destination.value)
-        if replacement is None:
-            continue
-        pieces.extend((markdown[cursor : destination.start], replacement))
-        cursor = destination.end
-    if not pieces:
-        return markdown
-    pieces.append(markdown[cursor:])
-    return "".join(pieces)
-
-
-def _relative_markdown_asset(url: str) -> str | None:
-    """Return a true relative file destination; leave all URI forms alone."""
-    if not url or url.startswith(("#", "//")):
-        return None
-    try:
-        parsed = urlsplit(url)
-    except ValueError:
-        return None
-    if parsed.scheme or parsed.netloc or not parsed.path:
-        return None
-    try:
-        return unquote(parsed.path, errors="strict")
-    except UnicodeDecodeError:
-        return None
-
-
-def _get_data_url(
-    url: str,
-    image_root: Path | None,
-    budget: _InlineMarkdownBudget | None = None,
-) -> str:
-    local_url = _relative_markdown_asset(url)
-    if local_url is None:
-        return url
-    if image_root is None:
-        warnings.warn(
-            (
-                "No `image_root` provided. All relative paths will be scoped to the "
-                "Leika installation path."
-            ),
-            stacklevel=2,
-        )
-        image_root = Path(__file__).parent
-    try:
-        source = _resolve_markdown_asset(image_root, local_url)
-    except _UnsafeMarkdownAssetPath:
-        warnings.warn(
-            f"Refused image {url}, which is outside image_root {image_root}.",
-            stacklevel=2,
-        )
-        return url
-    except OSError:
-        warnings.warn(
-            f"Failed to read image {url}, with image_root set to {image_root}.",
-            stacklevel=2,
-        )
-        return url
-    if budget is None:
-        budget = _InlineMarkdownBudget(_MARKDOWN_INLINE_MAX_TOTAL_BYTES)
-    try:
-        with open_regular_file(source.path, expected_metadata=source.metadata) as file:
-            before = os.fstat(file.fileno())
-            size = before.st_size
-            encoded_size = 4 * ((size + 2) // 3)
-            # ``image/png``/``image/gif`` are the shortest supported
-            # content-derived prefixes. If even this lower bound cannot fit,
-            # avoid the disk read; the exact MIME check follows validation.
-            output_size = len("data:image/png;base64,") + encoded_size
-            if (
-                size > _MARKDOWN_INLINE_MAX_ASSET_BYTES
-                or output_size > budget.remaining_output_bytes
-            ):
-                warnings.warn(
-                    f"Refused to inline image {url}: the Markdown image byte limit "
-                    "would be exceeded.",
-                    stacklevel=2,
-                )
-                return url
-            binary = file.read(_MARKDOWN_INLINE_MAX_ASSET_BYTES + 1)
-            after = os.fstat(file.fileno())
-        validate_unchanged_file_snapshot(source.path, before, after)
-        if len(binary) != size:
-            raise OSError(f"{source.path} changed size while it was being read")
-        image_kind, _ = safe_image_info(binary)
-        mime_type = "image/jpeg" if image_kind == "jpeg" else f"image/{image_kind}"
-        exact_output_size = len(f"data:{mime_type};base64,") + 4 * ((len(binary) + 2) // 3)
-        if exact_output_size > budget.remaining_output_bytes:
-            warnings.warn(
-                f"Refused to inline image {url}: the Markdown image byte limit would be exceeded.",
-                stacklevel=2,
-            )
-            return url
-        encoded = base64.b64encode(binary).decode("ascii")
-        data_url = f"data:{mime_type};base64,{encoded}"
-        budget.remaining_output_bytes -= len(data_url)
-        return data_url
-    except (OSError, ValueError):
-        warnings.warn(
-            f"Failed to read image {url}, with image_root set to {image_root}.",
-            stacklevel=2,
-        )
-        return url
-
-
-def _parse_markdown(markdown: str, image_root: Path | None) -> str:
-    budget = _InlineMarkdownBudget(_MARKDOWN_INLINE_MAX_TOTAL_BYTES)
-    return _rewrite_markdown_images(markdown, lambda url: _get_data_url(url, image_root, budget))
-
-
-def _link_markdown_assets(
-    markdown: str,
-    image_root: Path,
-    register: Callable[[Path, os.stat_result], HttpAsset],
-) -> str:
-    """Point a document's relative images at server URLs of their own.
-
-    The counterpart of :func:`_parse_markdown` for when there is a server to
-    fetch from. Inlining images works anywhere but puts every byte of them in
-    front of the text, so nothing shows until all of it has arrived;
-    registering them (:meth:`Server.register_http_asset`) leaves the document
-    the size of its writing, and the browser fetches the images alongside it.
-
-    Web addresses, fragments, protocol-relative destinations, and every URI
-    scheme are already self-contained and pass through untouched. A local
-    image that cannot be read keeps its original reference, so the document
-    renders with the same broken figure it would show anywhere else.
-    """
-
-    def linked(url: str) -> str | None:
-        local_url = _relative_markdown_asset(url)
-        if local_url is None:
-            return None
-        try:
-            source = _resolve_markdown_asset(image_root, local_url)
-        except _UnsafeMarkdownAssetPath:
-            warnings.warn(
-                f"Refused image {url}, which is outside image_root {image_root}.",
-                stacklevel=2,
-            )
-            return None
-        except OSError:
-            warnings.warn(
-                f"Failed to read image {url}, relative to {image_root}.",
-                stacklevel=2,
-            )
-            return None
-        try:
-            asset = register(source.path, source.metadata)
-        except (OSError, ValueError):
-            warnings.warn(
-                f"Failed to read image {url}, relative to {image_root}.",
-                stacklevel=2,
-            )
-            return None
-        if asset.pixel_size is None:
-            return asset.url
-        width, height = asset.pixel_size
-        return f"{asset.url}?w={width}&h={height}"
-
-    return _rewrite_markdown_images(markdown, linked)
-
-
 class GuiProgressBarHandle(_GuiInputHandle[float], GuiProgressBarProps):
     """Handle for updating and removing progress bars."""
 
@@ -4025,400 +3508,6 @@ class GuiHtmlHandle(_GuiHandle[None], GuiHtmlProps):
 
 class GuiDividerHandle(_GuiHandle[None], GuiDividerProps):
     """Handle for updating and removing dividers."""
-
-
-_PLOTLY_JSON_MAX_UTF16_CODE_UNITS = 16 * 1024 * 1024
-"""Bundled browser JSON parser limit for one Plotly payload."""
-
-_PLOTLY_PREFLIGHT_MAX_NODES = 500_000
-_PLOTLY_CONFIG_MAX_ITEMS = 4096
-
-
-def _validate_plotly_json_size(json_str: str) -> str:
-    if utf16_code_unit_length_exceeds(json_str, _PLOTLY_JSON_MAX_UTF16_CODE_UNITS):
-        raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
-    return json_str
-
-
-def _plotly_string_json_upper_bound(value: str) -> int:
-    """Conservative UTF-16 length of a JSON string without allocating it."""
-    total = 2
-    for character in value:
-        codepoint = ord(character)
-        if character in ('"', "\\"):
-            total += 2
-        elif codepoint < 0x20:
-            total += 6
-        elif 0xD800 <= codepoint <= 0xDFFF:
-            raise ValueError("Plotly data cannot contain unpaired Unicode surrogates")
-        elif codepoint > 0xFFFF:
-            total += 12
-        elif codepoint > 0x7F:
-            total += 6
-        else:
-            total += 1
-        if total > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
-            raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
-    return total
-
-
-def _plotly_graph_json_upper_bound(*roots: object) -> int:
-    """Bound an exact plain Plotly property graph before serialization.
-
-    BasePlotlyType instances are accepted only by dedicated, hook-free figure,
-    frame, and template extractors. Encountering one inside raw data/layout is
-    an unsupported injected object, not a safe serialized leaf.
-    """
-    total = 0
-    nodes = 0
-    active: set[int] = set()
-    stack: list[tuple[object, int, bool]] = [(root, 0, False) for root in reversed(roots)]
-    while stack:
-        item, depth, exiting = stack.pop()
-        if exiting:
-            active.remove(id(item))
-            continue
-        nodes += 1
-        if nodes > _PLOTLY_PREFLIGHT_MAX_NODES:
-            raise ValueError("Plotly figure contains too many values")
-        if depth > 64:
-            raise ValueError("Plotly figure is nested too deeply")
-        if item is None or type(item) is bool:
-            total += 5
-        elif type(item) is str:
-            total += _plotly_string_json_upper_bound(item)
-        elif type(item) is int:
-            total += max(1, (abs(item).bit_length() * 30103 + 99_999) // 100_000) + 1
-        elif type(item) is float:
-            total += 32
-        elif type(item) in (datetime.date, datetime.datetime):
-            total += 128
-        elif type(item) is decimal.Decimal:
-            # PlotlyJSONEncoder converts Decimal through float(), which has a
-            # fixed-size result and avoids constructing its potentially huge
-            # decimal spelling.
-            float(item)
-            total += 32
-        elif isinstance(item, np.generic):
-            scalar_dtype = np.dtype(type(item))
-            if scalar_dtype.type is not type(item):
-                raise TypeError("custom numpy scalar subclasses are not supported in Plotly data")
-            kind = scalar_dtype.kind
-            if kind == "U":
-                total += (int(scalar_dtype.itemsize) // 4) * 12 + 2
-            elif kind == "S":
-                total += int(scalar_dtype.itemsize) * 6 + 2
-            elif kind in "mM":
-                total += 128
-            elif kind in "biufc":
-                total += 128
-            else:
-                raise TypeError(f"unsupported Plotly numpy scalar dtype: {scalar_dtype}")
-        elif type(item) is np.ndarray:
-            kind = item.dtype.kind
-            element_count = int(item.size)
-            if item.ndim + depth > 64:
-                raise ValueError("Plotly figure is nested too deeply")
-            # Plotly 5.21 renders ndarrays as nested JSON lists. Charge every
-            # list container, including empty/singleton dimensions; later
-            # Plotly versions may instead use one compact base64 record.
-            container_count = 0
-            prefix = 1
-            for dimension in item.shape:
-                container_count += prefix
-                if container_count > _PLOTLY_PREFLIGHT_MAX_NODES:
-                    raise ValueError("Plotly figure contains too many values")
-                prefix *= int(dimension)
-            if element_count + container_count > _PLOTLY_PREFLIGHT_MAX_NODES - nodes:
-                raise ValueError("Plotly figure contains too many values")
-            # Brackets plus a conservative comma for every child edge.
-            list_punctuation_bound = 3 * container_count + element_count + 128
-            if item.dtype.hasobject:
-                children = tuple(item.flat)
-                nodes += container_count
-                total += list_punctuation_bound
-                identity = id(item)
-                if identity in active:
-                    raise ValueError("Plotly figure cannot contain cycles")
-                active.add(identity)
-                stack.append((item, depth, True))
-                stack.extend((child, depth + item.ndim, False) for child in reversed(children))
-                continue
-            nodes += element_count + container_count
-            if kind == "U":
-                per_item = (int(item.dtype.itemsize) // 4) * 12 + 3
-            elif kind == "S":
-                per_item = int(item.dtype.itemsize) * 6 + 3
-            elif kind in "mM":
-                per_item = 129
-            elif kind == "b":
-                per_item = 6
-            elif kind in "iu":
-                bits = int(item.dtype.itemsize) * 8
-                digits = (bits * 30103 + 99_999) // 100_000
-                per_item = digits + (2 if kind == "i" else 1)
-            elif kind == "f":
-                per_item = 33
-            elif kind == "c":
-                raise TypeError("complex Plotly ndarray values are not supported")
-            else:
-                raise TypeError(f"unsupported Plotly ndarray dtype: {item.dtype}")
-            list_bound = element_count * per_item + list_punctuation_bound
-            base64_bound = 4 * ((int(item.nbytes) + 2) // 3) + 256
-            total += max(list_bound, base64_bound)
-        else:
-            children: tuple[object, ...]
-            identity = id(item)
-            if type(item) is dict:
-                mapping = cast(dict[object, object], item)
-                item_count = len(mapping)
-                if 2 * item_count > _PLOTLY_PREFLIGHT_MAX_NODES - nodes:
-                    raise ValueError("Plotly figure contains too many values")
-                total += 2 + 2 * item_count
-                identity = id(item)
-                if identity in active:
-                    raise ValueError("Plotly figure cannot contain cycles")
-                active.add(identity)
-                stack.append((item, depth, True))
-                for key, child in reversed(tuple(mapping.items())):
-                    if type(key) is not str:
-                        raise TypeError("Plotly mappings must have string keys")
-                    stack.append((child, depth + 1, False))
-                    stack.append((key, depth + 1, False))
-                continue
-            elif type(item) in (list, tuple):
-                sequence = cast(list[object] | tuple[object, ...], item)
-                item_count = len(sequence)
-                if item_count > _PLOTLY_PREFLIGHT_MAX_NODES - nodes:
-                    raise ValueError("Plotly figure contains too many values")
-                total += 2 + item_count
-                identity = id(item)
-                if identity in active:
-                    raise ValueError("Plotly figure cannot contain cycles")
-                active.add(identity)
-                stack.append((item, depth, True))
-                for child in reversed(sequence):
-                    stack.append((child, depth + 1, False))
-                continue
-            else:
-                raise TypeError(f"unsupported Plotly value: {type(item).__name__}")
-            if identity in active:
-                raise ValueError("Plotly figure cannot contain cycles")
-            active.add(identity)
-            stack.append((item, depth, True))
-            stack.extend((child, depth + 1, False) for child in reversed(children))
-            continue
-        if total > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
-            raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
-    if total > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
-        raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
-    return total
-
-
-def _snapshot_plotly_config(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Take a bounded private JSON config snapshot."""
-    if config is None:
-        return None
-    if not isinstance(config, Mapping):
-        raise TypeError("Plotly config must be a mapping or None")
-    try:
-        reported = len(config)
-    except RuntimeError:
-        # Preserve renderer-preparation reentrancy (and explicit custom
-        # mapping RuntimeErrors) instead of disguising it as a shape error.
-        raise
-    except Exception as error:
-        raise TypeError("Plotly config must be a finite mapping") from error
-    if reported > _PLOTLY_CONFIG_MAX_ITEMS:
-        raise ValueError(f"Plotly config cannot contain more than {_PLOTLY_CONFIG_MAX_ITEMS} items")
-    try:
-        items = tuple(itertools.islice(config.items(), _PLOTLY_CONFIG_MAX_ITEMS + 1))
-    except RuntimeError:
-        raise
-    except Exception as error:
-        raise TypeError("Plotly config must provide finite key/value items") from error
-    if len(items) != reported or len(items) > _PLOTLY_CONFIG_MAX_ITEMS:
-        raise ValueError("Plotly config length does not match its finite items")
-
-    active: set[int] = set()
-    nodes = 0
-
-    def snapshot(value: object, depth: int) -> object:
-        nonlocal nodes
-        nodes += 1
-        if nodes > _PLOTLY_PREFLIGHT_MAX_NODES:
-            raise ValueError("Plotly config contains too many values")
-        if depth > 64:
-            raise ValueError("Plotly config is nested too deeply")
-        if value is None or type(value) in (bool, int, str):
-            if type(value) is str:
-                _plotly_string_json_upper_bound(value)
-            return value
-        if type(value) is float:
-            if not math.isfinite(value):
-                raise ValueError("Plotly config numbers must be finite")
-            return value
-        if type(value) not in (dict, list, tuple):
-            raise TypeError(f"unsupported Plotly config value: {type(value).__name__}")
-        identity = id(value)
-        if identity in active:
-            raise ValueError("Plotly config cannot contain cycles")
-        active.add(identity)
-        try:
-            if type(value) is dict:
-                output: dict[str, object] = {}
-                reported = len(value)
-                if reported > _PLOTLY_CONFIG_MAX_ITEMS:
-                    raise ValueError(
-                        f"Plotly config mappings cannot contain more than "
-                        f"{_PLOTLY_CONFIG_MAX_ITEMS} items"
-                    )
-                items = tuple(itertools.islice(value.items(), _PLOTLY_CONFIG_MAX_ITEMS + 1))
-                if len(items) != reported or len(items) > _PLOTLY_CONFIG_MAX_ITEMS:
-                    raise ValueError("Plotly config mapping length changed during snapshot")
-                for key, child in items:
-                    if type(key) is not str:
-                        raise TypeError("Plotly config mappings must have string keys")
-                    _plotly_string_json_upper_bound(key)
-                    output[key] = snapshot(child, depth + 1)
-                return output
-            values = cast(list[object] | tuple[object, ...], value)
-            reported = len(values)
-            if reported > _PLOTLY_CONFIG_MAX_ITEMS:
-                raise ValueError(
-                    f"Plotly config collections cannot contain more than "
-                    f"{_PLOTLY_CONFIG_MAX_ITEMS} items"
-                )
-            materialized = tuple(itertools.islice(iter(values), _PLOTLY_CONFIG_MAX_ITEMS + 1))
-            if len(materialized) != reported or len(materialized) > _PLOTLY_CONFIG_MAX_ITEMS:
-                raise ValueError("Plotly config collection length changed during snapshot")
-            copied = [snapshot(child, depth + 1) for child in materialized]
-            return copied if type(value) is list else tuple(copied)
-        finally:
-            active.remove(identity)
-
-    result: dict[str, Any] = {}
-    for key, value in items:
-        if type(key) is not str:
-            raise TypeError("Plotly config mappings must have string keys")
-        _plotly_string_json_upper_bound(key)
-        if key in result:
-            raise ValueError(f"Plotly config contains duplicate key {key!r}")
-        result[key] = snapshot(value, 1)
-    _plotly_graph_json_upper_bound(result)
-    return result
-
-
-def _plotly_figure_raw_graph(figure: go.Figure) -> tuple[object, object, object]:
-    """Return exact stock Figure storage without invoking user overrides."""
-    import plotly.graph_objects as go
-    from plotly.basedatatypes import BaseFigure
-
-    if type(figure) is not go.Figure:
-        raise TypeError("figure must be an exact plotly.graph_objects.Figure")
-    figure_type = type(figure)
-    try:
-        figure_to_json = type.__getattribute__(figure_type, "to_json")
-        figure_to_dict = type.__getattribute__(figure_type, "to_dict")
-        figure_getattribute = type.__getattribute__(figure_type, "__getattribute__")
-    except AttributeError as error:
-        raise TypeError("custom Plotly serialization overrides are not supported") from error
-    if (
-        type(figure_type) is not type
-        or figure_to_json is not BaseFigure.to_json
-        or figure_to_dict is not BaseFigure.to_dict
-        or figure_getattribute is not object.__getattribute__
-    ):
-        raise TypeError("custom Plotly serialization overrides are not supported")
-    state = object.__getattribute__(figure, "__dict__")
-    if "to_json" in state or "to_dict" in state:
-        raise TypeError("instance Plotly serialization overrides are not supported")
-    frames = state.get("_frame_objs", []) or []
-    from plotly.graph_objs import Frame
-
-    if type(frames) is not list or any(type(frame) is not Frame for frame in frames):
-        raise TypeError("custom Plotly frame objects are not supported")
-    raw_frames: list[dict[str, object]] = []
-    for frame in frames:
-        frame_state = object.__getattribute__(frame, "__dict__")
-        raw = frame_state.get("_orphan_props", {})
-        if type(raw) is not dict:
-            raise TypeError("Plotly frame properties must be an exact mapping")
-        raw_frames.append(cast(dict[str, object], raw))
-    return (
-        state.get("_data", []),
-        state.get("_layout", {}),
-        raw_frames,
-    )
-
-
-def _plotly_json_and_config(
-    figure: go.Figure, config: Mapping[str, Any] | None
-) -> tuple[str, dict[str, Any] | None]:
-    """Serialize a preflighted Plotly figure and return its private config."""
-    from plotly.basedatatypes import BaseFigure
-
-    private_config = _snapshot_plotly_config(config)
-    figure_bound = _plotly_graph_json_upper_bound(*_plotly_figure_raw_graph(figure))
-    config_bound = 0 if private_config is None else _plotly_graph_json_upper_bound(private_config)
-    if figure_bound + config_bound + 256 > _PLOTLY_JSON_MAX_UTF16_CODE_UNITS:
-        raise ValueError("Plotly figure exceeds the 16 Mi-character browser render limit.")
-
-    json_str = BaseFigure.to_json(figure)
-    if not isinstance(json_str, str):
-        raise TypeError("Plotly Figure.to_json() must return a string")
-    json_str = _validate_plotly_json_size(json_str)
-    if private_config is not None:
-        plot_dict = json.loads(json_str)
-        plot_dict["config"] = {**plot_dict.get("config", {}), **private_config}
-        json_str = json.dumps(plot_dict)
-    return _validate_plotly_json_size(json_str), private_config
-
-
-def _plotly_json_with_config(figure: go.Figure, config: Mapping[str, Any] | None) -> str:
-    """Serialize a bounded Plotly figure, merging an optional private config."""
-    return _plotly_json_and_config(figure, config)[0]
-
-
-def _plotly_payload_from_json(
-    source: str,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Decode one bounded owned wire snapshot into fresh figure/config graphs."""
-    # This is the immutable, already-admitted retained snapshot. Reapplying a
-    # mutable test/configuration limit here could make a previously valid
-    # handle unreadable; reconstruction remains serialized by the renderer
-    # preparation reservation.
-    payload = json.loads(source)
-    if type(payload) is not dict:
-        raise RuntimeError("stored Plotly payload is not a mapping")
-    config = payload.pop("config", None)
-    if config is not None and type(config) is not dict:
-        raise RuntimeError("stored Plotly config is not a mapping")
-    return cast(dict[str, Any], payload), cast(dict[str, Any] | None, config)
-
-
-def _plotly_figure_from_json(source: str) -> go.Figure:
-    """Reconstruct independently without consulting Plotly's global template."""
-    import plotly.graph_objects as go
-
-    payload, _ = _plotly_payload_from_json(source)
-    layout = payload.get("layout")
-    if layout is None:
-        layout = {}
-        payload["layout"] = layout
-    if type(layout) is not dict:
-        raise RuntimeError("stored Plotly layout is not a mapping")
-    template_was_absent = "template" not in layout
-    if template_was_absent:
-        # BaseFigure injects the mutable process-global default whenever the
-        # prospective layout has no template. A private empty template is the
-        # race-free constructor sentinel; clear it afterward so the returned
-        # Figure still represents the admitted template-free JSON exactly.
-        layout["template"] = {}
-    figure = go.Figure(payload)
-    if template_was_absent:
-        figure.layout.template = None
-    return figure
 
 
 class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
@@ -4507,7 +3596,7 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
     @image.setter
     def image(self, image: np.ndarray) -> None:
         spec = _ndarray_snapshot_spec(image)
-        if spec[2] > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
+        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
             raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
         gui_api = self._impl.gui_api
         with gui_api._lock:
@@ -4515,7 +3604,7 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
                 raise RuntimeError("Cannot update a removed GuiImageHandle.")
             user_format = self._user_format
             jpeg_quality = self._jpeg_quality
-        with gui_api._server._reserve_image_preparation(spec[2]):
+        with gui_api._server._reserve_image_preparation(spec.nbytes):
             snapshot = _private_ndarray_snapshot(image, spec)
             resolved_format, data = encode_image_binary(
                 snapshot, user_format, jpeg_quality=jpeg_quality

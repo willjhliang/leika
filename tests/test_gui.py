@@ -21,8 +21,9 @@ import pytest
 import leika
 import leika._gui_api as gui_api_impl
 import leika._gui_handles as gui_handles_impl
+import leika._gui_resources as gui_resources_impl
 import leika._notification_handle as notification_impl
-import leika._panes as panes_impl
+import leika._plotly as plotly_impl
 from leika import _messages
 from leika._server import ClientHandle
 from leika.infra import ClientId
@@ -2937,7 +2938,7 @@ def test_plotly_json_enforces_browser_utf16_limit_transactionally(
     old_json = handle._impl.props._plotly_json_str
 
     oversized = go.Figure(go.Scatter(text=["x" * 10_000], y=[1]))
-    monkeypatch.setattr(gui_handles_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 1000)
+    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 1000)
     with pytest.raises(ValueError, match="16 Mi-character"):
         handle.figure = oversized
     assert handle.figure is not initial
@@ -2947,10 +2948,10 @@ def test_plotly_json_enforces_browser_utf16_limit_transactionally(
     with pytest.raises(ValueError, match="16 Mi-character"):
         server.gui.add_plotly(oversized)
 
-    monkeypatch.setattr(gui_handles_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
-    assert gui_handles_impl._validate_plotly_json_size("\U0001f600") == "\U0001f600"
+    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
+    assert plotly_impl._validate_plotly_json_size("\U0001f600") == "\U0001f600"
     with pytest.raises(ValueError, match="16 Mi-character"):
-        gui_handles_impl._validate_plotly_json_size("\U0001f600x")
+        plotly_impl._validate_plotly_json_size("\U0001f600x")
 
 
 def test_gui_image_rejects_decoded_pixel_overflow_before_encoding(
@@ -3270,15 +3271,15 @@ def test_form_reset_baseline_is_charged_reused_and_released(
         field = server.gui.add_text("Name", "Declared baseline")
 
     baseline = server.gui._reset_baseline_resource_from_gui_uuid[field.id]
-    assert baseline == gui_handles_impl._gui_resource_cost("Declared baseline", None)
+    assert baseline == gui_resources_impl._gui_resource_cost("Declared baseline", None)
     assert server.gui._resource_from_gui_uuid[field.id] == (
-        gui_handles_impl._gui_resource_cost(field.value, field._impl.props) + baseline
+        gui_resources_impl._gui_resource_cost(field.value, field._impl.props) + baseline
     )
 
     field.value = ""
     before_reset = server.gui._resource_total
     expected = (
-        gui_handles_impl._gui_resource_cost(
+        gui_resources_impl._gui_resource_cost(
             "Declared baseline",
             dataclasses.replace(field._impl.props, _source="Declared baseline"),
         )
@@ -3624,7 +3625,7 @@ def test_gui_reset_is_one_admission_before_local_retirement(
     assert modal.closed and modal_child._impl.removed
     assert command._impl.removed and notification._impl.removed
     assert server.gui._live_component_count == 0
-    assert server.gui._resource_total == gui_handles_impl._GuiResourceCost()
+    assert server.gui._resource_total == gui_resources_impl._GuiResourceCost()
     assert server.gui._reset_baseline_resource_from_gui_uuid == {}
     assert server.gui._container_handle_from_uuid.keys() == {"root"}
     assert server.gui._command_handle_from_uuid == {}
@@ -3711,16 +3712,16 @@ def test_plotly_size_is_checked_before_config_json_parse(
     go = pytest.importorskip("plotly.graph_objects")
     from plotly.basedatatypes import BaseFigure
 
-    monkeypatch.setattr(gui_handles_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
+    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
     monkeypatch.setattr(BaseFigure, "to_json", lambda self: "xxx")
-    monkeypatch.setattr(gui_handles_impl, "_plotly_graph_json_upper_bound", lambda *roots: 0)
+    monkeypatch.setattr(plotly_impl, "_plotly_graph_json_upper_bound", lambda *roots: 0)
     monkeypatch.setattr(
-        gui_handles_impl.json,
+        plotly_impl.json,
         "loads",
         lambda _: pytest.fail("oversized Plotly JSON was parsed"),
     )
     with pytest.raises(ValueError, match="Plotly figure exceeds"):
-        gui_handles_impl._plotly_json_with_config(go.Figure(), {})
+        plotly_impl._plotly_json_with_config(go.Figure(), {})
 
 
 def test_live_multi_slider_values_are_bounded_before_materialization(
@@ -3954,16 +3955,14 @@ def test_plotly_preflight_bounds_normal_graphs_before_serializer_hooks(
 
     normal_array = np.arange(100_000, dtype=np.float64)
     normal = go.Figure(go.Scatter(x=normal_array, y=normal_array))
-    json_str, _ = gui_handles_impl._plotly_json_and_config(normal, None)
+    json_str, _ = plotly_impl._plotly_json_and_config(normal, None)
     assert '"x"' in json_str and '"y"' in json_str
 
     normal_list = list(range(100_000))
-    gui_handles_impl._plotly_graph_json_upper_bound(
-        *gui_handles_impl._plotly_figure_raw_graph(
-            go.Figure(go.Scatter(x=normal_list, y=normal_list))
-        )
+    plotly_impl._plotly_graph_json_upper_bound(
+        *plotly_impl._plotly_figure_raw_graph(go.Figure(go.Scatter(x=normal_list, y=normal_list)))
     )
-    assert gui_handles_impl._plotly_graph_json_upper_bound(np.zeros((100, 100), dtype=np.uint8)) > 0
+    assert plotly_impl._plotly_graph_json_upper_bound(np.zeros((100, 100), dtype=np.uint8)) > 0
 
     reached_serializer = False
 
@@ -3988,7 +3987,7 @@ def test_plotly_preflight_bounds_normal_graphs_before_serializer_hooks(
         oversized_nested,
     ):
         with pytest.raises(ValueError, match="too many values"):
-            gui_handles_impl._plotly_json_with_config(figure, None)
+            plotly_impl._plotly_json_with_config(figure, None)
     assert not reached_serializer
 
 
@@ -4010,7 +4009,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
     instance_shadow = go.Figure()
     instance_shadow.to_dict = hostile_hook
     with pytest.raises(TypeError, match="instance Plotly serialization overrides"):
-        gui_handles_impl._plotly_json_with_config(instance_shadow, None)
+        plotly_impl._plotly_json_with_config(instance_shadow, None)
 
     class HostileFigure(go.Figure):
         def __getattribute__(self, name: str) -> Any:
@@ -4019,7 +4018,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
             return super().__getattribute__(name)
 
     with pytest.raises(TypeError, match="exact plotly.graph_objects.Figure"):
-        gui_handles_impl._plotly_json_with_config(HostileFigure(), None)
+        plotly_impl._plotly_json_with_config(HostileFigure(), None)
 
     class HostileMeta(type):
         def __getattribute__(cls, name: str) -> Any:
@@ -4031,7 +4030,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
         pass
 
     with pytest.raises(TypeError, match="exact plotly.graph_objects.Figure"):
-        gui_handles_impl._plotly_json_with_config(HostileMetaFigure(), None)
+        plotly_impl._plotly_json_with_config(HostileMetaFigure(), None)
 
     class HostileFrame(Frame):
         def __getattribute__(self, name: str) -> Any:
@@ -4042,7 +4041,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
     framed = go.Figure()
     object.__getattribute__(framed, "__dict__")["_frame_objs"] = [HostileFrame()]
     with pytest.raises(TypeError, match="custom Plotly frame"):
-        gui_handles_impl._plotly_json_with_config(framed, None)
+        plotly_impl._plotly_json_with_config(framed, None)
 
     class HostileTemplate(Template):
         def __getattribute__(self, name: str) -> Any:
@@ -4051,7 +4050,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
             return super().__getattribute__(name)
 
     with pytest.raises(TypeError, match="exact stock Template"):
-        panes_impl._bounded_plotly_template_dict(HostileTemplate())
+        plotly_impl._bounded_plotly_template_dict(HostileTemplate())
 
     import datetime
 
@@ -4061,7 +4060,7 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
             return ""
 
     with pytest.raises(TypeError, match="unsupported Plotly value"):
-        gui_handles_impl._plotly_graph_json_upper_bound(HostileDate(2025, 1, 1))
+        plotly_impl._plotly_graph_json_upper_bound(HostileDate(2025, 1, 1))
 
     class HostileNumpyScalar(np.float64):
         def __getattribute__(self, name: str) -> Any:
@@ -4070,14 +4069,14 @@ def test_plotly_preflight_rejects_dynamic_serialization_hooks(
             return super().__getattribute__(name)
 
     with pytest.raises(TypeError, match="custom numpy scalar subclasses"):
-        gui_handles_impl._plotly_graph_json_upper_bound(HostileNumpyScalar(1.0))
+        plotly_impl._plotly_graph_json_upper_bound(HostileNumpyScalar(1.0))
     assert hook_calls == 0
 
     # Normal exact stock templates still use the same raw property snapshot.
     pio = pytest.importorskip("plotly.io")
     stock = pio.templates["plotly_white"]
     expected = stock.to_plotly_json()
-    assert panes_impl._bounded_plotly_template_dict(stock) == expected
+    assert plotly_impl._bounded_plotly_template_dict(stock) == expected
 
 
 @pytest.mark.plotly
@@ -4204,7 +4203,7 @@ def test_plotly_snapshot_getters_ignore_mutable_global_default_template(
     old_default = pio.templates.default
     pio.templates[template_name] = go.layout.Template(layout={"title": {"text": "global" * 2_000}})
     pio.templates.default = template_name
-    monkeypatch.setattr(gui_handles_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 500)
+    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 500)
     try:
         gui_read = gui.figure
         pane_read = pane.figure
@@ -4248,7 +4247,7 @@ def test_plotly_config_materialization_and_renderer_reentry_are_bounded(
     lying = LyingMapping()
     with pytest.raises(ValueError, match="length"):
         server.gui.add_plotly(go.Figure(), config=lying)
-    assert lying.yielded == gui_handles_impl._PLOTLY_CONFIG_MAX_ITEMS + 1
+    assert lying.yielded == plotly_impl._PLOTLY_CONFIG_MAX_ITEMS + 1
 
     class ReentrantMapping(Mapping[str, Any]):
         def __len__(self) -> int:
@@ -4315,8 +4314,8 @@ def test_plotly_global_templates_are_preflighted_before_copy(
     pio = pytest.importorskip("plotly.io")
     from plotly.basedatatypes import BasePlotlyType
 
-    monkeypatch.setattr(panes_impl, "_theme_templates_json", None)
-    monkeypatch.setattr(gui_handles_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 100)
+    monkeypatch.setattr(plotly_impl, "_theme_templates_json", None)
+    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 100)
     huge = pio.templates["plotly_white"]
     monkeypatch.setitem(
         huge.__dict__["_orphan_props"],
@@ -4332,7 +4331,7 @@ def test_plotly_global_templates_are_preflighted_before_copy(
 
     monkeypatch.setattr(BasePlotlyType, "to_plotly_json", forbidden)
     with pytest.raises(ValueError, match="16 Mi-character"):
-        panes_impl._plotly_theme_templates_json()
+        plotly_impl._plotly_theme_templates_json()
     assert not copied
 
 
