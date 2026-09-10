@@ -5,34 +5,20 @@ import asyncio
 import atexit
 import contextlib
 import dataclasses
-import gzip
-import hashlib
-import http
-import ipaddress
-import itertools
 import logging
-import mimetypes
 import os
-import re
 import threading
 import time
-from collections import OrderedDict
 from collections.abc import Awaitable, Coroutine, Iterable, Sequence
 from concurrent.futures import Future
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import (
     Callable,
     Generator,
-    Iterator,
-    NamedTuple,
     NewType,
-    Optional,
-    Tuple,
     TypeVar,
     cast,
 )
-from urllib.parse import unquote as _url_unquote
-from urllib.parse import urlsplit
 
 import msgspec.msgpack
 import websockets.asyncio.server
@@ -40,9 +26,7 @@ import websockets.datastructures
 import websockets.exceptions
 import zstandard
 from typing_extensions import override
-from websockets import Headers
 from websockets.asyncio.server import ServerConnection
-from websockets.http11 import Request, Response
 from websockets.typing import Subprotocol
 
 from .._async_errors import (
@@ -50,8 +34,6 @@ from .._async_errors import (
     in_sync_user_callback,
     print_async_exception,
 )
-from .._client_autobuild import _BUILD_BACKUP_DIR_NAME
-from .._file_transfer import read_regular_file_snapshot
 from ._async_message_buffer import (
     _OUTGOING_BINARY_BUFFER_LIMIT,
     _OUTGOING_FRAME_LIMIT_BYTES,
@@ -59,7 +41,9 @@ from ._async_message_buffer import (
     AsyncMessageBuffer,
 )
 from ._auth import HttpPasswordGuard
-from ._image_headers import image_pixel_size, safe_image_info
+from ._http_assets import HttpAsset, HttpAssetRegistry
+from ._http_security import HttpRequestPolicy, _canonical_hostname, _normalize_allowed_hosts
+from ._http_server import HttpRequestHandler
 from ._messages import Message
 
 
@@ -80,238 +64,6 @@ _MAX_ACTIVE_CONNECTIONS = 128
 """Maximum fully admitted websocket connections owned by one server."""
 _CALLBACK_REGISTRATION_MAX = 256
 """Maximum callbacks retained by one low-level event source."""
-_SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    # Prevent another LAN origin from embedding passwordless media/static
-    # responses through no-CORS element loads. Same-origin workspace assets
-    # and direct top-level navigation remain available.
-    "Cross-Origin-Resource-Policy": "same-origin",
-}
-
-
-def _canonical_hostname(host: str) -> str | None:
-    """Normalize one DNS or IP host without accepting authority syntax."""
-    if (
-        not host
-        or host != host.strip()
-        or any(ord(c) < 33 or ord(c) == 127 for c in host)
-        or any(c in host for c in "/?#@,[]*")
-    ):
-        return None
-    candidate = host[:-1] if host.endswith(".") else host
-    candidate = candidate.replace("%25", "%")
-    try:
-        address = ipaddress.ip_address(candidate)
-    except ValueError:
-        if ":" in candidate or "%" in candidate:
-            return None
-        try:
-            normalized = candidate.encode("idna").decode("ascii").lower()
-        except UnicodeError:
-            return None
-        labels = normalized.split(".")
-        if not normalized or len(normalized) > 253:
-            return None
-        for label in labels:
-            if (
-                not 1 <= len(label) <= 63
-                or not label[0].isalnum()
-                or not label[-1].isalnum()
-                or any(not (c.isdigit() or "a" <= c <= "z" or c == "-") for c in label)
-            ):
-                return None
-        return normalized
-    return str(address).lower()
-
-
-def _parse_authority(authority: str, scheme: str) -> tuple[str, str, int] | None:
-    """Parse a Host-style authority into a comparable origin tuple."""
-    if not authority or authority != authority.strip() or any(c.isspace() for c in authority):
-        return None
-    if "," in authority or (authority.count(":") > 1 and not authority.startswith("[")):
-        return None
-    try:
-        parsed = urlsplit(f"{scheme}://{authority}")
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.username is not None
-        or parsed.password is not None
-        or parsed.path != ""
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    host = _canonical_hostname(parsed.hostname or "")
-    if host is None:
-        return None
-    return scheme, host, port if port is not None else (443 if scheme == "https" else 80)
-
-
-def _parse_origin(origin: str) -> tuple[str, str, int] | None:
-    """Parse an HTTP browser Origin, rejecting opaque and malformed values."""
-    if not origin or origin != origin.strip() or any(c.isspace() for c in origin):
-        return None
-    try:
-        parsed = urlsplit(origin)
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme not in ("http", "https")
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path != ""
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    host = _canonical_hostname(parsed.hostname or "")
-    if host is None:
-        return None
-    return (
-        parsed.scheme,
-        host,
-        port if port is not None else (443 if parsed.scheme == "https" else 80),
-    )
-
-
-_ALLOWED_HOSTS_MAX = 256
-
-
-def _normalize_allowed_hosts(hosts: Sequence[str] | None) -> frozenset[str]:
-    if hosts is None:
-        return frozenset()
-    if isinstance(hosts, str) or not isinstance(hosts, Sequence):
-        raise TypeError("allowed_hosts must be a sequence of host names, not one string.")
-    reported_length = len(hosts)
-    if reported_length > _ALLOWED_HOSTS_MAX:
-        raise ValueError(f"allowed_hosts cannot contain more than {_ALLOWED_HOSTS_MAX} entries.")
-    materialized = tuple(itertools.islice(iter(hosts), _ALLOWED_HOSTS_MAX + 1))
-    if len(materialized) != reported_length:
-        raise ValueError("allowed_hosts length changed during validation.")
-    normalized: set[str] = set()
-    for host in materialized:
-        if not isinstance(host, str):
-            raise TypeError("allowed_hosts entries must be strings.")
-        canonical = _canonical_hostname(host)
-        if canonical is None:
-            raise ValueError(f"Invalid allowed host: {host!r}.")
-        if canonical in normalized:
-            raise ValueError(f"Duplicate allowed host: {host!r}.")
-        normalized.add(canonical)
-    return frozenset(normalized)
-
-
-def _is_ip_host(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return True
-
-
-def _is_loopback_host(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _direct_host_allowed(request_host: str, bind_host: str, allowed: frozenset[str]) -> bool:
-    if request_host in allowed:
-        return True
-    bind = _canonical_hostname(bind_host)
-    try:
-        wildcard_bind = bind is not None and ipaddress.ip_address(bind).is_unspecified
-    except ValueError:
-        wildcard_bind = False
-    if wildcard_bind:
-        return _is_ip_host(request_host) or request_host == "localhost"
-    if bind is None:
-        return False
-    if _is_loopback_host(bind):
-        return _is_loopback_host(request_host)
-    return request_host == bind
-
-
-def _first_forwarded_value(headers: Headers, name: str) -> str | None:
-    values = headers.get_all(name)
-    if len(values) != 1:
-        return None
-    if "," in values[0]:
-        return None
-    return values[0].strip() or None
-
-
-@dataclasses.dataclass(frozen=True)
-class _RequestAddress:
-    origin: tuple[str, str, int]
-    secure: bool
-
-
-def _request_address(
-    request: Request,
-    *,
-    bind_host: str,
-    allowed_hosts: frozenset[str],
-    trusted_proxy_hosts: frozenset[str],
-) -> _RequestAddress | None:
-    """Validate Host/proxy/Origin and return the browser-visible origin."""
-    hosts = request.headers.get_all("Host")
-    if len(hosts) != 1:
-        return None
-    direct = _parse_authority(hosts[0], "http")
-    if direct is None:
-        return None
-
-    forwarded_protos = request.headers.get_all("X-Forwarded-Proto")
-    forwarded_hosts = request.headers.get_all("X-Forwarded-Host")
-    if forwarded_hosts and not forwarded_protos:
-        return None
-    if forwarded_protos:
-        proto = _first_forwarded_value(request.headers, "X-Forwarded-Proto")
-        if proto != "https" or direct[1] not in trusted_proxy_hosts:
-            return None
-        if forwarded_hosts:
-            forwarded_host = _first_forwarded_value(request.headers, "X-Forwarded-Host")
-            forwarded = (
-                _parse_authority(forwarded_host, proto) if forwarded_host is not None else None
-            )
-            if (
-                forwarded is None
-                or forwarded[1] != direct[1]
-                or forwarded[1] not in trusted_proxy_hosts
-                or forwarded[2] != 443
-            ):
-                return None
-        effective = ("https", direct[1], 443)
-    else:
-        if not _direct_host_allowed(direct[1], bind_host, allowed_hosts):
-            return None
-        effective = direct
-
-    origins = request.headers.get_all("Origin")
-    if len(origins) > 1 or (origins and _parse_origin(origins[0]) != effective):
-        return None
-    return _RequestAddress(effective, secure=effective[0] == "https")
-
-
-def _add_security_headers(response: Response, *, allow_embedding: bool) -> Response:
-    # websockets serves ordinary HTTP as a rejected opening handshake and
-    # closes the transport after the response. Spell that contract explicitly
-    # so clients never attempt a second request against the same reservation.
-    if response.status_code != http.HTTPStatus.SWITCHING_PROTOCOLS:
-        response.headers["Connection"] = "close"
-    if not allow_embedding:
-        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
-    for name, value in _SECURITY_HEADERS.items():
-        response.headers.setdefault(name, value)
-    return response
 
 
 @dataclasses.dataclass
@@ -503,210 +255,6 @@ class WebsockClientConnection(WebsockMessageHandler):
         return buffer.delivery_scope_from_client(self.client_id)
 
 
-def _static_relpath(request_target: str) -> str | None:
-    """Normalize one HTTP target, rejecting POSIX and Windows escapes."""
-    path = _url_unquote(request_target.partition("?")[0]).replace("\\", "/")
-    segments = [segment for segment in path.split("/") if segment and segment != "."]
-    if any(
-        segment == ".."
-        or ":" in segment
-        or any(ord(character) < 32 or ord(character) == 127 for character in segment)
-        for segment in segments
-    ):
-        return None
-
-    relpath = "/".join(segments) if segments else "index.html"
-    # On Windows, a drive-qualified right operand discards the configured
-    # static root. The colon check above also rejects NTFS alternate streams;
-    # keep the explicit drive guard so that invariant is visible and testable.
-    if PureWindowsPath(relpath).drive:
-        return None
-    return relpath
-
-
-def _quality(parameters: Iterable[str]) -> float:
-    """Parse an encoding quality, treating malformed q-values as refusal."""
-    for parameter in parameters:
-        name, separator, raw_value = parameter.partition("=")
-        if name.strip().lower() != "q":
-            continue
-        if not separator:
-            return 0.0
-        try:
-            quality = float(raw_value.strip())
-        except ValueError:
-            return 0.0
-        return quality if 0.0 <= quality <= 1.0 else 0.0
-    return 1.0
-
-
-def _accepts_gzip(header_values: Iterable[str]) -> bool:
-    """Whether Accept-Encoding permits gzip, including wildcard semantics."""
-    gzip_quality: float | None = None
-    wildcard_quality: float | None = None
-    for value in header_values:
-        for item in value.split(","):
-            coding, *parameters = item.split(";")
-            coding = coding.strip().lower()
-            if coding not in ("gzip", "*"):
-                continue
-            quality = _quality(parameters)
-            if coding == "gzip":
-                gzip_quality = max(gzip_quality or 0.0, quality)
-            else:
-                wildcard_quality = max(wildcard_quality or 0.0, quality)
-
-    # An explicit gzip entry overrides a wildcard, including gzip;q=0.
-    if gzip_quality is not None:
-        return gzip_quality > 0.0
-    return wildcard_quality is not None and wildcard_quality > 0.0
-
-
-def _http_content_type(name: str) -> str:
-    """The Content-Type a file is served with, from its name.
-
-    Known types are answered from a table rather than from ``guess_type()``,
-    which can misname Javascript on some Windows machines. Some references:
-
-        https://bugs.python.org/issue43975
-        https://github.com/golang/go/issues/32350#issuecomment-525111557
-
-    We're assuming UTF-8 for text, which is mostly reasonable but might want
-    to be revisited.
-    """
-    mime_type = {
-        ".css": "text/css; charset=utf-8",
-        ".gif": "image/gif",
-        ".htm": "text/html; charset=utf-8",
-        ".html": "text/html; charset=utf-8",
-        ".jpg": "image/jpeg",
-        ".js": "application/javascript",
-        ".wasm": "application/wasm",
-        ".pdf": "application/pdf",
-        ".png": "image/png",
-        ".svg": "image/svg+xml",
-        ".xml": "text/xml; charset=utf-8",
-    }.get(Path(name).suffix.lower(), None)
-    if mime_type is None:
-        mime_type = mimetypes.guess_type(name)[0]
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-    return mime_type
-
-
-_HTTP_ASSET_URL_PREFIX = "/leika-assets/"
-"""Where runtime-registered files are served, apart from the static tree."""
-
-_HTTP_ASSET_MAX_BYTES = 64 * 1024 * 1024
-"""Largest runtime asset accepted into the bounded snapshot registry."""
-
-_HTTP_ASSET_CACHE_MAX_BYTES = 128 * 1024 * 1024
-"""Maximum runtime-asset bytes retained and shared by all responses."""
-
-_HTTP_ASSET_LOAD_MAX_BYTES = 128 * 1024 * 1024
-"""Maximum aggregate asset snapshots being read before registry admission."""
-
-_HTTP_ASSET_LIMIT = 1024
-"""How many registered assets are remembered. Registrations past this evict
-the oldest; a URL that has been evicted answers 404, the same as one that was
-never registered."""
-
-_HTTP_ASSET_SUFFIX_PATTERN = re.compile(r"\.[a-z0-9]{1,16}\Z")
-
-_HTTP_STATIC_CACHE_MAX_BYTES = 32 * 1024 * 1024
-"""Maximum raw and compressed static response bytes retained together."""
-
-_HTTP_STATIC_CACHE_MAX_ENTRIES = 128
-
-_HTTP_RESPONSE_IN_FLIGHT_MAX_BYTES = 128 * 1024 * 1024
-"""Maximum aggregate HTTP response bytes owned by live connections."""
-
-_HTTP_RESPONSE_IN_FLIGHT_MAX_RESPONSES = 256
-"""Maximum response owners retained while their transports remain live."""
-
-
-class _HttpResponseBudget:
-    """Admission for forced-close HTTP response bodies and owners."""
-
-    def __init__(self, max_bytes: int, max_responses: int) -> None:
-        if type(max_bytes) is not int or max_bytes < 0:
-            raise ValueError("max_bytes must be a non-negative integer")
-        if type(max_responses) is not int or max_responses < 0:
-            raise ValueError("max_responses must be a non-negative integer")
-        self._max_bytes = max_bytes
-        self._max_responses = max_responses
-        self._bytes = 0
-        self._reserved_from_connection: dict[object, int] = {}
-
-    def try_reserve(self, connection: ServerConnection, size: int) -> bool:
-        """Reserve one forced-close response until its transport closes."""
-        if type(size) is not int or size < 0:
-            raise ValueError("size must be a non-negative integer")
-        if connection in self._reserved_from_connection:
-            raise RuntimeError("HTTP connection already owns a response reservation")
-        if (
-            len(self._reserved_from_connection) >= self._max_responses
-            or self._bytes + size > self._max_bytes
-        ):
-            return False
-        self._reserved_from_connection[connection] = size
-        self._bytes += size
-
-        def release(_: object) -> None:
-            self.release(connection)
-
-        try:
-            connection.connection_lost_waiter.add_done_callback(release)
-        except BaseException:
-            self.release(connection)
-            raise
-        return True
-
-    def try_resize(self, connection: ServerConnection, size: int) -> bool:
-        """Change one admitted owner to its final response-body size."""
-        if type(size) is not int or size < 0:
-            raise ValueError("size must be a non-negative integer")
-        if connection not in self._reserved_from_connection:
-            raise RuntimeError("HTTP connection has no response reservation")
-        previous = self._reserved_from_connection[connection]
-        proposed = self._bytes - previous + size
-        if proposed > self._max_bytes:
-            return False
-        self._reserved_from_connection[connection] = size
-        self._bytes = proposed
-        return True
-
-    def release(self, connection: ServerConnection) -> None:
-        """Release one owner; safe when its transport callback runs later."""
-        reserved = self._reserved_from_connection.pop(connection, 0)
-        self._bytes -= reserved
-
-
-_MANAGED_CLIENT_BUILD_ROOT = Path(__file__).resolve().parent.parent / "client" / "build"
-"""The sole static root whose transactional build backup may be served."""
-
-
-def _read_bounded_file(
-    path: Path, max_bytes: int, *, expected_metadata: os.stat_result | None = None
-) -> bytes:
-    """Read one identity-checked regular-file descriptor within the byte limit."""
-    return read_regular_file_snapshot(path, max_bytes, expected_metadata=expected_metadata)
-
-
-class HttpAsset(NamedTuple):
-    """Where a registered file is served, and how big it is if it is a picture.
-
-    The size travels with the URL because both fall out of the same read: a
-    caller writing an ``<img>`` wants the address and the box to leave for it
-    at the same moment, and asking twice would mean reading the file twice.
-    """
-
-    url: str
-    """Root-relative URL path the file is served at."""
-    pixel_size: Optional[Tuple[int, int]]
-    """``(width, height)`` if the file's header declares one, else ``None``."""
-
-
 class WebsockServer(WebsockMessageHandler):
     """Websocket server abstraction. Communicates asynchronously with client
     applications.
@@ -781,9 +329,9 @@ class WebsockServer(WebsockMessageHandler):
         self._host = host
         self._port = port
         self._allowed_hosts = normalized_allowed_hosts
-        self._allow_embedding = allow_embedding
-        self._trusted_proxy_hosts: frozenset[str] = frozenset()
-        self._trusted_proxy_lock = threading.Lock()
+        self._http_policy = HttpRequestPolicy(
+            host, normalized_allowed_hosts, allow_embedding=allow_embedding
+        )
         self._message_class = message_class
         self._http_server_root = http_server_root
         self._auth_guard = HttpPasswordGuard(password) if password is not None else None
@@ -803,23 +351,11 @@ class WebsockServer(WebsockMessageHandler):
         self._stop_finalizer_lock = threading.Lock()
         self._stop_finalizer: threading.Thread | None = None
 
-        # Runtime assets are immutable, content-addressed byte snapshots. A
-        # bounded shared snapshot avoids repeated event-loop disk reads and
-        # makes concurrent responses reuse one payload object.
-        self._http_assets: dict[str, bytes] = {}
-        self._http_asset_bytes = 0
-        self._http_assets_lock = threading.Lock()
-        self._http_assets_terminal = False
-        self._http_asset_load_condition = threading.Condition()
-        self._http_asset_load_bytes = 0
+        self._http_asset_registry = HttpAssetRegistry()
 
     def trust_proxy_host(self, host: str) -> None:
         """Trust forwarded origin metadata only for one exact proxy hostname."""
-        canonical = _canonical_hostname(host)
-        if canonical is None:
-            raise ValueError(f"Invalid trusted proxy host: {host!r}.")
-        with self._trusted_proxy_lock:
-            self._trusted_proxy_hosts = self._trusted_proxy_hosts | {canonical}
+        self._http_policy.trust_proxy_host(host)
 
     def start(self) -> None:
         """Start this one-shot server."""
@@ -877,17 +413,6 @@ class WebsockServer(WebsockMessageHandler):
             with self._callback_activity_lock:
                 self._active_callback_dispatches -= 1
 
-    def _retire_http_assets(self) -> None:
-        """Close runtime-asset admission and release every cached snapshot."""
-        with self._http_assets_lock:
-            self._http_assets_terminal = True
-            self._http_assets.clear()
-            self._http_asset_bytes = 0
-        # Wake registrations waiting for load headroom so they can observe the
-        # terminal state instead of remaining blocked behind abandoned work.
-        with self._http_asset_load_condition:
-            self._http_asset_load_condition.notify_all()
-
     def _finish_stop(self) -> None:
         """Perform the bounded worker join and release retained callbacks."""
         try:
@@ -922,7 +447,7 @@ class WebsockServer(WebsockMessageHandler):
     def _signal_stop(self) -> None:
         """Request shutdown without waiting for the worker thread."""
         self._stop_requested.set()
-        self._retire_http_assets()
+        self._http_asset_registry.close()
 
         event_loop = self._background_event_loop
         stop_event = self._stop_event
@@ -984,7 +509,7 @@ class WebsockServer(WebsockMessageHandler):
             if self._lifecycle_state == "new":
                 self._lifecycle_state = "stopped"
                 self._stop_requested.set()
-                self._retire_http_assets()
+                self._http_asset_registry.close()
                 with self._client_callback_lock:
                     self._client_connect_cb.clear()
                     self._client_disconnect_cb.clear()
@@ -1128,80 +653,11 @@ class WebsockServer(WebsockMessageHandler):
         Raises ``OSError`` if the file cannot be read, which is also the
         moment the caller still knows what the URL was standing in for.
         """
-        if not isinstance(path, Path):
-            raise TypeError("path must be a pathlib.Path")
-        with self._http_assets_lock:
-            if self._http_assets_terminal:
-                raise RuntimeError("Cannot register HTTP assets after server shutdown.")
-        # Resolve once: HTTP requests may be served after the process changes
-        # working directory, but a registered source must keep its identity.
-        path = path.resolve()
-        # Reserve from the regular file's current size before loading. This
-        # bounds simultaneous snapshots without holding the lookup lock used by
-        # live HTTP GETs. Descriptor-based reading still verifies the source.
-        estimated_metadata = path.stat()
-        if estimated_metadata.st_size > _HTTP_ASSET_MAX_BYTES:
-            raise ValueError(f"File is larger than the {_HTTP_ASSET_MAX_BYTES}-byte limit.")
-        with self._http_asset_load_condition:
-            while self._http_asset_load_bytes + _HTTP_ASSET_MAX_BYTES > _HTTP_ASSET_LOAD_MAX_BYTES:
-                with self._http_assets_lock:
-                    if self._http_assets_terminal:
-                        raise RuntimeError("Cannot register HTTP assets after server shutdown.")
-                self._http_asset_load_condition.wait()
-            with self._http_assets_lock:
-                if self._http_assets_terminal:
-                    raise RuntimeError("Cannot register HTTP assets after server shutdown.")
-            # Charge the per-file ceiling, not the racy pre-open stat size: a
-            # concurrent writer can grow the file before descriptor reading.
-            self._http_asset_load_bytes += _HTTP_ASSET_MAX_BYTES
-        try:
-            content = _read_bounded_file(
-                path,
-                _HTTP_ASSET_MAX_BYTES,
-                expected_metadata=(
-                    _expected_metadata if _expected_metadata is not None else estimated_metadata
-                ),
-            )
-            digest = hashlib.sha256(content).hexdigest()
-            # Read from the bytes already in hand for the hash, so knowing the
-            # shape of a picture costs nothing over not knowing it. The load
-            # reservation remains owned until this immutable snapshot enters
-            # the bounded cache; hashing and image parsing may retain it too.
-            if _require_safe_image:
-                image_kind, pixel_size = safe_image_info(content)
-                width, height = pixel_size
-                # The suffix is authenticated by the same bytes as the digest and
-                # dimensions. A misleading or absent source suffix cannot change
-                # MIME interpretation under nosniff.
-                suffix = f".{image_kind}"
-                name = f"{digest}-{width}x{height}{suffix}"
-            else:
-                pixel_size = image_pixel_size(content)
-                suffix = path.suffix.lower()
-                if _HTTP_ASSET_SUFFIX_PATTERN.fullmatch(suffix) is None:
-                    suffix = ""
-                name = f"{digest}{suffix}"
-            with self._http_assets_lock:
-                if self._http_assets_terminal:
-                    raise RuntimeError("Cannot register HTTP assets after server shutdown.")
-                previous = self._http_assets.pop(name, None)
-                if previous is not None:
-                    self._http_asset_bytes -= len(previous)
-                # Re-registration refreshes this content key's eviction order.
-                self._http_assets[name] = content
-                self._http_asset_bytes += len(content)
-                while self._http_assets and (
-                    len(self._http_assets) > _HTTP_ASSET_LIMIT
-                    or self._http_asset_bytes > _HTTP_ASSET_CACHE_MAX_BYTES
-                ):
-                    oldest_name = next(iter(self._http_assets))
-                    evicted = self._http_assets.pop(oldest_name)
-                    self._http_asset_bytes -= len(evicted)
-            return HttpAsset(f"{_HTTP_ASSET_URL_PREFIX}{name}", pixel_size)
-        finally:
-            with self._http_asset_load_condition:
-                self._http_asset_load_bytes -= _HTTP_ASSET_MAX_BYTES
-                self._http_asset_load_condition.notify_all()
+        return self._http_asset_registry.register(
+            path,
+            _expected_metadata=_expected_metadata,
+            _require_safe_image=_require_safe_image,
+        )
 
     def _background_worker(self, startup: Future[None]) -> None:
         import rich
@@ -1209,15 +665,6 @@ class WebsockServer(WebsockMessageHandler):
         host = self._host
         port = self._port
         message_class = self._message_class
-        http_server_root = self._http_server_root
-        http_server_publication_backup = None
-        if (
-            http_server_root is not None
-            and http_server_root.resolve() == _MANAGED_CLIENT_BUILD_ROOT.resolve()
-        ):
-            http_server_publication_backup = http_server_root.with_name(_BUILD_BACKUP_DIR_NAME)
-        auth_guard = self._auth_guard
-
         # Need to make a new event loop for notebook compatibility.
         event_loop = asyncio.new_event_loop()
 
@@ -1248,6 +695,12 @@ class WebsockServer(WebsockMessageHandler):
             if self._stop_requested.is_set():
                 self._stop_event.set()
             count_lock = asyncio.Lock()
+            http_handler = HttpRequestHandler(
+                root=self._http_server_root,
+                assets=self._http_asset_registry,
+                policy=self._http_policy,
+                auth_guard=self._auth_guard,
+            )
         except BaseException:
             close_event_loop()
             raise
@@ -1425,264 +878,6 @@ class WebsockServer(WebsockMessageHandler):
                 async with count_lock:
                     active_client_ids.discard(client_id)
 
-        # Host client on the same port as the websocket.
-        static_cache: OrderedDict[tuple[Path, Path, bool, int, int, int], tuple[bytes, str]] = (
-            OrderedDict()
-        )
-        static_cache_bytes = 0
-        static_cache_lock = threading.Lock()
-        http_response_budget = _HttpResponseBudget(
-            _HTTP_RESPONSE_IN_FLIGHT_MAX_BYTES,
-            _HTTP_RESPONSE_IN_FLIGHT_MAX_RESPONSES,
-        )
-
-        def static_source_candidates(source: Path) -> Iterator[Path]:
-            """Yield the live file, then its old generation only during swap."""
-            yield source
-            if http_server_root is None or http_server_publication_backup is None:
-                return
-            try:
-                relative = source.relative_to(http_server_root)
-            except ValueError:
-                return
-            if not http_server_root.exists():
-                yield http_server_publication_backup / relative
-            # The new generation may have appeared while the backup was being
-            # selected or after the first live-file lookup failed. Retry it
-            # once before reporting a clean 404.
-            yield source
-
-        def cached_static_payload(source: Path, compressed: bool) -> tuple[bytes, str]:
-            """Read/compress one contained static response with bounded LRU retention."""
-            nonlocal static_cache_bytes
-            last_error: OSError | None = None
-            for candidate in static_source_candidates(source):
-                candidate_root = (
-                    http_server_publication_backup if candidate != source else http_server_root
-                )
-                if candidate_root is None:
-                    continue
-                try:
-                    resolved_root = candidate_root.resolve(strict=True)
-                    resolved_candidate = candidate.resolve(strict=True)
-                    resolved_candidate.relative_to(resolved_root)
-                    metadata = resolved_candidate.stat()
-                except (OSError, ValueError) as error:
-                    # A static root never grants access outside its configured
-                    # tree. The captured identity is checked again after open,
-                    # closing the validation-to-descriptor replacement race.
-                    last_error = OSError("static source leaves configured root")
-                    if isinstance(error, OSError):
-                        last_error = error
-                    continue
-                # Once the live root has reappeared, never answer a genuinely
-                # missing new-generation file from the old generation.
-                if candidate != source and http_server_root is not None:
-                    if http_server_root.exists():
-                        continue
-                key = (
-                    source,
-                    candidate,
-                    compressed,
-                    metadata.st_mtime_ns,
-                    metadata.st_ctime_ns,
-                    metadata.st_size,
-                )
-                # This function runs in worker threads so filesystem reads and
-                # gzip cannot block the websocket loop. Serialize the small
-                # shared LRU and byte counter; concurrent requests remain
-                # bounded rather than racing duplicate insertions.
-                with static_cache_lock:
-                    cached = static_cache.pop(key, None)
-                    if cached is not None:
-                        static_cache[key] = cached
-                        return cached
-
-                    try:
-                        raw = _read_bounded_file(
-                            resolved_candidate,
-                            _HTTP_STATIC_CACHE_MAX_BYTES,
-                            expected_metadata=metadata,
-                        )
-                    except OSError as error:
-                        last_error = error
-                        continue
-
-                    # Discard raw and compressed variants from older metadata
-                    # or a different generation. A long-lived server must not
-                    # retain the old bundle after the atomic swap completes.
-                    for stale_key in tuple(static_cache):
-                        if stale_key[0] == source and stale_key != key:
-                            stale_payload, _ = static_cache.pop(stale_key)
-                            static_cache_bytes -= len(stale_payload)
-
-                    payload = gzip.compress(raw, mtime=0) if compressed else raw
-                    etag = f'"{hashlib.sha256(payload).hexdigest()}"'
-                    if len(payload) <= _HTTP_STATIC_CACHE_MAX_BYTES:
-                        while static_cache and (
-                            len(static_cache) >= _HTTP_STATIC_CACHE_MAX_ENTRIES
-                            or static_cache_bytes + len(payload) > _HTTP_STATIC_CACHE_MAX_BYTES
-                        ):
-                            _, (evicted, _) = static_cache.popitem(last=False)
-                            static_cache_bytes -= len(evicted)
-                        static_cache[key] = (payload, etag)
-                        static_cache_bytes += len(payload)
-                    return payload, etag
-            if last_error is not None:
-                raise last_error
-            raise FileNotFoundError(source)
-
-        def server_busy_response() -> Response:
-            return Response(
-                http.HTTPStatus.SERVICE_UNAVAILABLE,
-                "SERVER BUSY",
-                Headers(**{"Retry-After": "1"}),
-                b"SERVER BUSY",
-            )
-
-        async def leika_http_server(
-            connection: ServerConnection,
-            request: Request,
-        ) -> Response | None:
-            upgrades = request.headers.get_all("Upgrade")
-            is_websocket_upgrade = len(upgrades) == 1 and upgrades[0].lower() == "websocket"
-            # Websocket connections enter their own active-client admission
-            # below. Every ordinary HTTP response owns a budget token from the
-            # start, including auth/error/zero-byte branches.
-            if not is_websocket_upgrade and not http_response_budget.try_reserve(connection, 0):
-                return server_busy_response()
-
-            # Host validation applies to every HTTP request, not only browser
-            # websocket handshakes: it is the DNS-rebinding boundary.
-            with self._trusted_proxy_lock:
-                trusted_proxy_hosts = self._trusted_proxy_hosts
-            address = _request_address(
-                request,
-                bind_host=host,
-                allowed_hosts=self._allowed_hosts,
-                trusted_proxy_hosts=trusted_proxy_hosts,
-            )
-            if address is None:
-                return Response(http.HTTPStatus.FORBIDDEN, "FORBIDDEN", Headers(), b"FORBIDDEN")
-
-            # The password gate follows Host/Origin validation so credentials
-            # are never evaluated for an untrusted browser endpoint.
-            if auth_guard is not None:
-                guard_response = auth_guard.process(request, secure=address.secure)
-                if guard_response is not None:
-                    return guard_response
-
-            # Ignore websocket packets. Header duplication is handled without
-            # the single-value Headers.get() exception path.
-            if is_websocket_upgrade:
-                return None
-
-            # Runtime-registered assets come before the static tree, and are
-            # served whether or not there is one. The lookup is an exact match
-            # against names this server handed out -- a hex digest and optional
-            # short ASCII suffix -- so there is no traversal to guard.
-            url_path = request.path.partition("?")[0]
-            if url_path.startswith(_HTTP_ASSET_URL_PREFIX):
-                with self._http_assets_lock:
-                    payload = self._http_assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
-                if payload is None:
-                    return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-                if not http_response_budget.try_resize(connection, len(payload)):
-                    return server_busy_response()
-                return Response(
-                    http.HTTPStatus.OK,
-                    "OK",
-                    Headers(
-                        **{
-                            "Content-Type": _http_content_type(url_path),
-                            "Content-Length": str(len(payload)),
-                            # The name is the content's hash, so what this URL
-                            # answers can never change; the browser may keep it
-                            # for as long as it likes and never ask again.
-                            "Cache-Control": "private, max-age=31536000, immutable",
-                            # Runtime assets may originate in an untrusted
-                            # Markdown tree. Even if one is HTML or SVG and a
-                            # user navigates to it directly, it cannot execute
-                            # with Leika's same-origin authority.
-                            "Content-Security-Policy": "sandbox; frame-ancestors 'none'",
-                        }
-                    ),
-                    payload,
-                )
-
-            # No files to serve: only the websocket (and the guard above)
-            # live on this port.
-            if http_server_root is None:
-                return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-
-            # Normalize traversal lexically before joining. The worker also
-            # resolves the selected live/backup candidate and enforces that its
-            # real target remains beneath that generation root.
-            relpath = _static_relpath(request.path)
-            if relpath is None:
-                return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-            source_path = http_server_root / relpath
-            use_gzip = _accepts_gzip(request.headers.get_all("Accept-Encoding"))
-
-            mime_type = _http_content_type(relpath)
-
-            try:
-                response_payload, etag = await event_loop.run_in_executor(
-                    None, cached_static_payload, source_path, use_gzip
-                )
-            except ValueError:
-                return Response(
-                    http.HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                    "CONTENT TOO LARGE",
-                    Headers(),
-                    b"CONTENT TOO LARGE",
-                )
-            except OSError:
-                return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-            cache_headers = {
-                "Cache-Control": "no-cache",
-                "ETag": etag,
-                "Vary": "Accept-Encoding",
-            }
-
-            etag_matches = False
-            for value in request.headers.get_all("If-None-Match"):
-                # Comma-splitting technically mis-parses entity-tags that
-                # contain commas; ours never do, and a foreign ETag can only
-                # produce a harmless 200 instead of a 304.
-                for candidate in value.split(","):
-                    candidate = candidate.strip()
-                    if candidate.startswith("W/"):
-                        candidate = candidate[2:]
-                    if candidate in ("*", etag):
-                        etag_matches = True
-                        break
-                if etag_matches:
-                    break
-            if etag_matches:
-                return Response(
-                    http.HTTPStatus.NOT_MODIFIED,
-                    "NOT MODIFIED",
-                    websockets.datastructures.Headers(**cache_headers),
-                )
-
-            response_headers = {
-                **cache_headers,
-                "Content-Type": mime_type,
-                "Content-Length": str(len(response_payload)),
-                "Content-Encoding": "gzip" if use_gzip else "identity",
-            }
-
-            if not http_response_budget.try_resize(connection, len(response_payload)):
-                return server_busy_response()
-
-            return Response(
-                http.HTTPStatus.OK,
-                "OK",
-                websockets.datastructures.Headers(**response_headers),
-                response_payload,
-            )
-
         async def start_server() -> None:
             # Bind exactly the requested port. Callers that want availability
             # without a race use port=0 and let the OS select it.
@@ -1700,10 +895,8 @@ class WebsockServer(WebsockMessageHandler):
                 compression=None,
                 # The handler also serves runtime-registered assets;
                 # keep it installed even without a static root or auth.
-                process_request=leika_http_server,
-                process_response=lambda _, __, response: _add_security_headers(
-                    response, allow_embedding=self._allow_embedding
-                ),
+                process_request=http_handler.process_request,
+                process_response=http_handler.process_response,
                 # The bundled client negotiates its private version token;
                 # custom low-level protocols use normal no-subprotocol sockets.
                 subprotocols=None,

@@ -26,6 +26,7 @@ import leika._server as server_impl
 import leika.infra._infra as infra_impl
 from leika._server import ClientHandle, _CallbackExecutor
 from leika.infra import protocol_fingerprint
+from leika.infra._http_security import _ALLOWED_HOSTS_MAX
 
 
 @pytest.mark.parametrize("interruption_type", [KeyboardInterrupt, SystemExit])
@@ -764,9 +765,9 @@ def test_allowed_hosts_sequence_is_normalized_once_before_worker_allocation(
 
 
 def test_allowed_hosts_are_bounded_even_when_a_sequence_lies_about_length() -> None:
-    exact = tuple(f"host-{index}.example" for index in range(infra_impl._ALLOWED_HOSTS_MAX))
+    exact = tuple(f"host-{index}.example" for index in range(_ALLOWED_HOSTS_MAX))
     server = infra_impl.WebsockServer(host="127.0.0.1", port=0, allowed_hosts=exact, verbose=False)
-    assert len(server._allowed_hosts) == infra_impl._ALLOWED_HOSTS_MAX
+    assert len(server._allowed_hosts) == _ALLOWED_HOSTS_MAX
 
     with pytest.raises(ValueError, match="more than 256"):
         infra_impl.WebsockServer(
@@ -784,7 +785,7 @@ def test_allowed_hosts_are_bounded_even_when_a_sequence_lies_about_length() -> N
             return f"host-{index}.example"
 
         def __iter__(self):
-            for index in range(infra_impl._ALLOWED_HOSTS_MAX + 1):
+            for index in range(_ALLOWED_HOSTS_MAX + 1):
                 yield f"host-{index}.example"
 
     with pytest.raises(ValueError, match="length changed"):

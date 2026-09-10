@@ -36,8 +36,8 @@ from ._validation import validate_nonnegative_integer as _validate_nonnegative_i
 from ._validation import validate_positive_integer as _validate_positive_integer
 from .infra._async_message_buffer import _FILE_TRANSFER_BUFFER_BYTES
 from .infra._auth import HttpPasswordGuard
-from .infra._infra import (
-    HttpAsset,
+from .infra._http_assets import HttpAsset
+from .infra._http_security import (
     _canonical_hostname,
     _is_loopback_host,
     _normalize_allowed_hosts,

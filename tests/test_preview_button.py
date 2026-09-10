@@ -27,7 +27,7 @@ from leika import _gui_api as gui_api_impl
 from leika import _messages
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
 from leika.infra import ClientId
-from leika.infra import _infra as infra_impl
+from leika.infra import _http_assets as asset_impl
 
 
 class _Client:
@@ -434,14 +434,14 @@ def test_a_pictures_size_is_learned_from_the_bytes_used_for_its_digest(
     asset.write_bytes(_one_pixel_png())
 
     reads: List[Any] = []
-    original = infra_impl._read_bounded_file
+    original = asset_impl.read_regular_file_snapshot
 
     def counted(path: Path, max_bytes: int, **kwargs: object) -> bytes:
         if path == asset:
             reads.append(path)
         return original(path, max_bytes, **kwargs)
 
-    with mock.patch.object(infra_impl, "_read_bounded_file", counted):
+    with mock.patch.object(asset_impl, "read_regular_file_snapshot", counted):
         first = server._register_http_image(asset)
         again = server._register_http_image(asset)
 

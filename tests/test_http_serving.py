@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import gzip
 import http.client
 import os
@@ -19,7 +20,9 @@ from websockets.typing import Subprotocol
 
 import leika
 import leika._messages
-import leika.infra._infra as infra_impl
+import leika.infra._http_assets as asset_impl
+import leika.infra._http_security as security_impl
+import leika.infra._http_server as http_impl
 from leika import infra
 
 
@@ -58,7 +61,7 @@ def _get(port: int, path: str, headers: dict[str, str] | None = None):
     ],
 )
 def test_static_target_rejects_cross_platform_escape_syntax(target: str) -> None:
-    assert infra_impl._static_relpath(target) is None
+    assert http_impl._static_relpath(target) is None
 
 
 @pytest.mark.parametrize(
@@ -75,7 +78,7 @@ def test_static_target_rejects_cross_platform_escape_syntax(target: str) -> None
     ],
 )
 def test_accept_encoding_gzip_quality(header: str, accepted: bool) -> None:
-    assert infra_impl._accepts_gzip([header]) is accepted
+    assert http_impl._accepts_gzip([header]) is accepted
 
 
 def test_http_root_requires_path_and_is_resolved_once(
@@ -119,7 +122,7 @@ def test_http_response_budget_is_aggregate_and_released_on_connection_close() ->
         def __init__(self) -> None:
             self.connection_lost_waiter: Future[None] = Future()
 
-    budget = infra_impl._HttpResponseBudget(7, 2)
+    budget = http_impl._HttpResponseBudget(7, 2)
     first = Connection()
     second = Connection()
     assert budget.try_reserve(first, 5)  # type: ignore[arg-type]
@@ -139,7 +142,7 @@ def test_http_response_budget_bounds_zero_byte_owners_and_releases_capacity() ->
         def __init__(self) -> None:
             self.connection_lost_waiter: Future[None] = Future()
 
-    budget = infra_impl._HttpResponseBudget(100, 2)
+    budget = http_impl._HttpResponseBudget(100, 2)
     first = Connection()
     second = Connection()
     third = Connection()
@@ -160,7 +163,7 @@ def test_http_response_owner_overload_returns_503(
     served = tmp_path / "served"
     served.mkdir()
     (served / "index.html").write_bytes(b"ok")
-    monkeypatch.setattr(infra_impl, "_HTTP_RESPONSE_IN_FLIGHT_MAX_RESPONSES", 0)
+    monkeypatch.setattr(http_impl, "_HTTP_RESPONSE_IN_FLIGHT_MAX_RESPONSES", 0)
     server = infra.WebsockServer(host="127.0.0.1", port=0, http_server_root=served, verbose=False)
     server.start()
     try:
@@ -181,7 +184,7 @@ def test_large_http_responses_share_one_aggregate_admission_budget(
     (served / "large.bin").write_bytes(b"12345")
     asset = tmp_path / "asset.bin"
     asset.write_bytes(b"abcde")
-    monkeypatch.setattr(infra_impl, "_HTTP_RESPONSE_IN_FLIGHT_MAX_BYTES", 4)
+    monkeypatch.setattr(http_impl, "_HTTP_RESPONSE_IN_FLIGHT_MAX_BYTES", 4)
     server = infra.WebsockServer(host="127.0.0.1", port=0, http_server_root=served, verbose=False)
     asset_url = server.register_http_asset(asset).url
     server.start()
@@ -299,14 +302,14 @@ def test_equal_registered_assets_share_one_snapshot(tmp_path: Path) -> None:
     first_url = server.register_http_asset(first).url
     assert server.register_http_asset(second).url == first_url
     name = first_url.rsplit("/", 1)[-1]
-    assert server._http_assets[name] == b"shared"
-    assert server._http_asset_bytes == len(b"shared")
+    assert server._http_asset_registry._snapshots[name] == b"shared"
+    assert server._http_asset_registry._bytes == len(b"shared")
 
 
 def test_registered_asset_snapshot_cache_evicts_by_aggregate_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_CACHE_MAX_BYTES", 7)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_CACHE_MAX_BYTES", 7)
     server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
     first = tmp_path / "first.txt"
     second = tmp_path / "second.txt"
@@ -316,9 +319,9 @@ def test_registered_asset_snapshot_cache_evicts_by_aggregate_bytes(
     first_url = server.register_http_asset(first).url
     second_url = server.register_http_asset(second).url
     assert first_url != second_url
-    assert first_url.rsplit("/", 1)[-1] not in server._http_assets
-    assert server._http_assets[second_url.rsplit("/", 1)[-1]] == b"next"
-    assert server._http_asset_bytes == 4
+    assert first_url.rsplit("/", 1)[-1] not in server._http_asset_registry._snapshots
+    assert server._http_asset_registry._snapshots[second_url.rsplit("/", 1)[-1]] == b"next"
+    assert server._http_asset_registry._bytes == 4
 
 
 def test_ephemeral_port_is_reported_back(monkeypatch) -> None:
@@ -352,6 +355,32 @@ def test_start_propagates_background_worker_failure(monkeypatch: pytest.MonkeyPa
     assert captured.value is failure
     assert server._server_thread is not None
     assert not server._server_thread.is_alive()
+
+
+def test_http_setup_failure_releases_worker_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    loops: list[asyncio.AbstractEventLoop] = []
+    new_event_loop = asyncio.new_event_loop
+
+    def capture_loop() -> asyncio.AbstractEventLoop:
+        loop = new_event_loop()
+        loops.append(loop)
+        return loop
+
+    def fail_static_setup(self: object, root: Path | None) -> None:
+        raise OSError("static root unavailable during setup")
+
+    monkeypatch.setattr(asyncio, "new_event_loop", capture_loop)
+    monkeypatch.setattr(http_impl._StaticFileCache, "__init__", fail_static_setup)
+    with pytest.raises(OSError, match="static root unavailable"):
+        server.start()
+
+    assert len(loops) == 1
+    assert loops[0].is_closed()
+    assert server._background_event_loop is None
+    assert server._server_thread is not None
+    assert not server._server_thread.is_alive()
+    server.stop()
 
 
 def test_failing_connect_callback_is_isolated_and_teardown_cleans_state() -> None:
@@ -412,7 +441,7 @@ def test_registered_asset_requests_do_not_reread_the_filesystem(
     def unexpected_read(path: Path, max_bytes: int) -> bytes:
         raise AssertionError(f"request reread {path} with limit {max_bytes}")
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", unexpected_read)
+    monkeypatch.setattr(asset_impl, "read_regular_file_snapshot", unexpected_read)
     server.start()
     try:
         assert _get(server._port, url)[2] == b"asset"
@@ -423,7 +452,7 @@ def test_registered_asset_requests_do_not_reread_the_filesystem(
 def test_registered_asset_rejects_oversized_and_unsafe_suffix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_MAX_BYTES", 4)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_MAX_BYTES", 4)
     server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
     oversized = tmp_path / "large.bin"
     oversized.write_bytes(b"12345")
@@ -495,7 +524,7 @@ def test_allowed_hosts_reject_duplicates_after_normalization() -> None:
 def test_authority_normalization_is_strict(
     authority: str, scheme: str, expected: tuple[str, str, int] | None
 ) -> None:
-    assert infra_impl._parse_authority(authority, scheme) == expected
+    assert security_impl._parse_authority(authority, scheme) == expected
 
 
 @pytest.mark.parametrize(
@@ -510,7 +539,7 @@ def test_authority_normalization_is_strict(
     ],
 )
 def test_origin_normalization_is_strict(origin: str, expected: tuple[str, str, int] | None) -> None:
-    assert infra_impl._parse_origin(origin) == expected
+    assert security_impl._parse_origin(origin) == expected
 
 
 def test_wildcard_bind_blocks_dns_rebinding_and_preserves_ip_access() -> None:
@@ -519,12 +548,12 @@ def test_wildcard_bind_blocks_dns_rebinding_and_preserves_ip_access() -> None:
         "allowed_hosts": frozenset(),
         "trusted_proxy_hosts": frozenset(),
     }
-    assert infra_impl._request_address(_request(("Host", "attacker.example")), **kwargs) is None
-    assert infra_impl._request_address(_request(("Host", "localhost:8080")), **kwargs)
-    assert infra_impl._request_address(_request(("Host", "192.168.1.5:8080")), **kwargs)
-    assert infra_impl._request_address(_request(("Host", "[::1]:8080")), **kwargs)
+    assert security_impl._request_address(_request(("Host", "attacker.example")), **kwargs) is None
+    assert security_impl._request_address(_request(("Host", "localhost:8080")), **kwargs)
+    assert security_impl._request_address(_request(("Host", "192.168.1.5:8080")), **kwargs)
+    assert security_impl._request_address(_request(("Host", "[::1]:8080")), **kwargs)
 
-    allowed = infra_impl._request_address(
+    allowed = security_impl._request_address(
         _request(("Host", "dashboard.tailnet.example:8080")),
         bind_host="::",
         allowed_hosts=frozenset({"dashboard.tailnet.example"}),
@@ -536,25 +565,25 @@ def test_wildcard_bind_blocks_dns_rebinding_and_preserves_ip_access() -> None:
 
 def test_explicit_and_loopback_binds_allow_only_sane_host_forms() -> None:
     common = {"allowed_hosts": frozenset(), "trusted_proxy_hosts": frozenset()}
-    assert infra_impl._request_address(
+    assert security_impl._request_address(
         _request(("Host", "dashboard.example:9000")),
         bind_host="dashboard.example",
         **common,
     )
     assert (
-        infra_impl._request_address(
+        security_impl._request_address(
             _request(("Host", "other.example:9000")),
             bind_host="dashboard.example",
             **common,
         )
         is None
     )
-    assert infra_impl._request_address(
+    assert security_impl._request_address(
         _request(("Host", "localhost:9000")),
         bind_host="127.0.0.1",
         **common,
     )
-    assert infra_impl._request_address(
+    assert security_impl._request_address(
         _request(("Host", "[::1]:9000")),
         bind_host="127.0.0.1",
         **common,
@@ -567,19 +596,19 @@ def test_browser_origin_must_match_effective_origin() -> None:
         "allowed_hosts": frozenset(),
         "trusted_proxy_hosts": frozenset(),
     }
-    assert infra_impl._request_address(
+    assert security_impl._request_address(
         _request(("Host", "127.0.0.1:8080"), ("Origin", "http://127.0.0.1:8080")),
         **common,
     )
     assert (
-        infra_impl._request_address(
+        security_impl._request_address(
             _request(("Host", "127.0.0.1:8080"), ("Origin", "https://evil.example")),
             **common,
         )
         is None
     )
     assert (
-        infra_impl._request_address(
+        security_impl._request_address(
             _request(
                 ("Host", "127.0.0.1:8080"),
                 ("Origin", "http://127.0.0.1:8080"),
@@ -597,7 +626,7 @@ def test_quick_tunnel_forwarding_is_narrow_and_exact() -> None:
         "allowed_hosts": frozenset(),
         "trusted_proxy_hosts": frozenset({"quick.trycloudflare.com"}),
     }
-    direct = infra_impl._request_address(
+    direct = security_impl._request_address(
         _request(
             ("Host", "quick.trycloudflare.com"),
             ("X-Forwarded-Proto", "https"),
@@ -608,7 +637,7 @@ def test_quick_tunnel_forwarding_is_narrow_and_exact() -> None:
     assert direct is not None and direct.secure
     assert direct.origin == ("https", "quick.trycloudflare.com", 443)
 
-    with_host = infra_impl._request_address(
+    with_host = security_impl._request_address(
         _request(
             ("Host", "quick.trycloudflare.com"),
             ("X-Forwarded-Proto", "https"),
@@ -636,7 +665,7 @@ def test_quick_tunnel_forwarding_is_narrow_and_exact() -> None:
         ),
         _request(("Host", "untrusted.example"), ("X-Forwarded-Proto", "https")),
     ]
-    assert all(infra_impl._request_address(request, **common) is None for request in refused)
+    assert all(security_impl._request_address(request, **common) is None for request in refused)
 
 
 def test_real_websocket_origin_rejection_does_not_harm_server_health() -> None:
@@ -729,9 +758,9 @@ def test_static_server_finishes_a_request_across_atomic_build_publication(
     source = served / "index.html"
     old_payload = b"complete old generation"
     source.write_bytes(old_payload)
-    backup = served.with_name(infra_impl._BUILD_BACKUP_DIR_NAME)
-    monkeypatch.setattr(infra_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
-    original = infra_impl._read_bounded_file
+    backup = served.with_name(http_impl._BUILD_BACKUP_DIR_NAME)
+    monkeypatch.setattr(http_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
+    original = http_impl.read_regular_file_snapshot
     swapped = False
 
     def swap_after_stat(path: Path, limit: int, **kwargs: object) -> bytes:
@@ -741,7 +770,7 @@ def test_static_server_finishes_a_request_across_atomic_build_publication(
             os.replace(served, backup)
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", swap_after_stat)
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", swap_after_stat)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -775,9 +804,9 @@ def test_static_server_retries_a_live_generation_published_after_read_failure(
     served.mkdir(parents=True)
     source = served / "index.html"
     source.write_bytes(b"old generation")
-    backup = served.with_name(infra_impl._BUILD_BACKUP_DIR_NAME)
-    monkeypatch.setattr(infra_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
-    original = infra_impl._read_bounded_file
+    backup = served.with_name(http_impl._BUILD_BACKUP_DIR_NAME)
+    monkeypatch.setattr(http_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
+    original = http_impl.read_regular_file_snapshot
     replaced = False
 
     def replace_during_first_read(path: Path, limit: int, **kwargs: object) -> bytes:
@@ -790,7 +819,7 @@ def test_static_server_retries_a_live_generation_published_after_read_failure(
             raise FileNotFoundError(path)
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", replace_during_first_read)
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", replace_during_first_read)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -815,10 +844,10 @@ def test_static_server_never_uses_backup_for_a_missing_live_file(
     served = client / "build"
     served.mkdir(parents=True)
     (served / "index.html").write_bytes(b"new")
-    backup = served.with_name(infra_impl._BUILD_BACKUP_DIR_NAME)
+    backup = served.with_name(http_impl._BUILD_BACKUP_DIR_NAME)
     backup.mkdir()
     (backup / "removed.js").write_bytes(b"old generation only")
-    monkeypatch.setattr(infra_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
+    monkeypatch.setattr(http_impl, "_MANAGED_CLIENT_BUILD_ROOT", served)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -841,15 +870,15 @@ def test_static_cache_evicts_by_byte_budget(
     second = served / "second.txt"
     first.write_bytes(b"first!")
     second.write_bytes(b"second")
-    monkeypatch.setattr(infra_impl, "_HTTP_STATIC_CACHE_MAX_BYTES", 10)
+    monkeypatch.setattr(http_impl, "_HTTP_STATIC_CACHE_MAX_BYTES", 10)
     calls: list[Path] = []
-    original = infra_impl._read_bounded_file
+    original = http_impl.read_regular_file_snapshot
 
     def record(path: Path, limit: int, **kwargs: object) -> bytes:
         calls.append(path)
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", record)
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", record)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -874,7 +903,7 @@ def test_static_file_disappearing_during_worker_read_is_a_clean_404(
     served.mkdir()
     source = served / "gone.txt"
     source.write_bytes(b"gone")
-    original = infra_impl._read_bounded_file
+    original = http_impl.read_regular_file_snapshot
     removed = False
 
     def remove_before_read(path: Path, limit: int, **kwargs: object) -> bytes:
@@ -884,7 +913,7 @@ def test_static_file_disappearing_during_worker_read_is_a_clean_404(
             source.unlink()
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", remove_before_read)
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", remove_before_read)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -907,7 +936,7 @@ def test_static_file_over_response_limit_is_rejected_without_harming_server(
     served.mkdir()
     (served / "large.bin").write_bytes(b"12345")
     (served / "small.bin").write_bytes(b"1234")
-    monkeypatch.setattr(infra_impl, "_HTTP_STATIC_CACHE_MAX_BYTES", 4)
+    monkeypatch.setattr(http_impl, "_HTTP_STATIC_CACHE_MAX_BYTES", 4)
     server = infra.WebsockServer(
         host="127.0.0.1",
         port=0,
@@ -975,7 +1004,7 @@ def test_static_containment_identity_survives_symlink_swap_before_open(
     outside = tmp_path / "outside.txt"
     outside.write_text("secret")
     displaced = tmp_path / "inside.txt"
-    original = infra_impl._read_bounded_file
+    original = http_impl.read_regular_file_snapshot
     swapped = False
 
     def swap_before_open(path: Path, limit: int, **kwargs: object) -> bytes:
@@ -989,7 +1018,7 @@ def test_static_containment_identity_survives_symlink_swap_before_open(
                 pytest.skip("symlink creation is unavailable on this platform")
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", swap_before_open)
+    monkeypatch.setattr(http_impl, "read_regular_file_snapshot", swap_before_open)
     server = infra.WebsockServer(host="127.0.0.1", port=0, http_server_root=served, verbose=False)
     server.start()
     try:
@@ -1009,11 +1038,11 @@ def test_runtime_asset_registration_loads_are_aggregate_bounded_without_blocking
     second = tmp_path / "second.bin"
     first.write_bytes(b"1")
     second.write_bytes(b"2")
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_MAX_BYTES", 8)
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_LOAD_MAX_BYTES", 8)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_MAX_BYTES", 8)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_LOAD_MAX_BYTES", 8)
     server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
     existing_url = server.register_http_asset(existing).url
-    original = infra_impl._read_bounded_file
+    original = asset_impl.read_regular_file_snapshot
     release = threading.Event()
     entered = threading.Event()
     active = 0
@@ -1033,7 +1062,7 @@ def test_runtime_asset_registration_loads_are_aggregate_bounded_without_blocking
             with state_lock:
                 active -= 1
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", blocked)
+    monkeypatch.setattr(asset_impl, "read_regular_file_snapshot", blocked)
     errors: list[BaseException] = []
 
     def register(path: Path) -> None:
@@ -1072,10 +1101,10 @@ def test_runtime_asset_load_reservation_covers_post_read_hashing(
     second = tmp_path / "second.bin"
     first.write_bytes(b"1")
     second.write_bytes(b"2")
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_MAX_BYTES", 8)
-    monkeypatch.setattr(infra_impl, "_HTTP_ASSET_LOAD_MAX_BYTES", 8)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_MAX_BYTES", 8)
+    monkeypatch.setattr(asset_impl, "_HTTP_ASSET_LOAD_MAX_BYTES", 8)
     server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    original = infra_impl.hashlib.sha256
+    original = asset_impl.hashlib.sha256
     release = threading.Event()
     entered = threading.Event()
     active = 0
@@ -1095,7 +1124,7 @@ def test_runtime_asset_load_reservation_covers_post_read_hashing(
             with state_lock:
                 active -= 1
 
-    monkeypatch.setattr(infra_impl.hashlib, "sha256", blocked)
+    monkeypatch.setattr(asset_impl.hashlib, "sha256", blocked)
     errors: list[BaseException] = []
 
     def register(path: Path) -> None:
@@ -1116,7 +1145,7 @@ def test_runtime_asset_load_reservation_covers_post_read_hashing(
         thread.join(2.0)
     assert errors == []
     assert peak == 1
-    assert server._http_asset_load_bytes == 0
+    assert server._http_asset_registry._load_bytes == 0
 
 
 def test_runtime_asset_cache_is_terminally_released_on_stop(tmp_path: Path) -> None:
@@ -1126,13 +1155,13 @@ def test_runtime_asset_cache_is_terminally_released_on_stop(tmp_path: Path) -> N
     server.start()
     try:
         server.register_http_asset(asset)
-        assert server._http_asset_bytes == len(b"cached")
-        assert len(server._http_assets) == 1
+        assert server._http_asset_registry._bytes == len(b"cached")
+        assert len(server._http_asset_registry._snapshots) == 1
     finally:
         server.stop()
 
-    assert server._http_assets == {}
-    assert server._http_asset_bytes == 0
+    assert server._http_asset_registry._snapshots == {}
+    assert server._http_asset_registry._bytes == 0
     with pytest.raises(RuntimeError, match="after server shutdown"):
         server.register_http_asset(asset)
 
@@ -1143,7 +1172,7 @@ def test_inflight_runtime_asset_cannot_publish_after_stop(
     asset = tmp_path / "asset.bin"
     asset.write_bytes(b"late")
     server = infra.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    original = infra_impl._read_bounded_file
+    original = asset_impl.read_regular_file_snapshot
     entered = threading.Event()
     release = threading.Event()
 
@@ -1152,7 +1181,7 @@ def test_inflight_runtime_asset_cannot_publish_after_stop(
         assert release.wait(5.0)
         return original(path, limit, **kwargs)
 
-    monkeypatch.setattr(infra_impl, "_read_bounded_file", blocked)
+    monkeypatch.setattr(asset_impl, "read_regular_file_snapshot", blocked)
     errors: list[BaseException] = []
 
     def register() -> None:
@@ -1167,8 +1196,8 @@ def test_inflight_runtime_asset_cannot_publish_after_stop(
         worker.start()
         assert entered.wait(2.0)
         server.stop()
-        assert server._http_assets == {}
-        assert server._http_asset_bytes == 0
+        assert server._http_asset_registry._snapshots == {}
+        assert server._http_asset_registry._bytes == 0
         release.set()
         worker.join(2.0)
     finally:
@@ -1180,9 +1209,9 @@ def test_inflight_runtime_asset_cannot_publish_after_stop(
     assert len(errors) == 1
     assert isinstance(errors[0], RuntimeError)
     assert "after server shutdown" in str(errors[0])
-    assert server._http_assets == {}
-    assert server._http_asset_bytes == 0
-    assert server._http_asset_load_bytes == 0
+    assert server._http_asset_registry._snapshots == {}
+    assert server._http_asset_registry._bytes == 0
+    assert server._http_asset_registry._load_bytes == 0
 
 
 def _png_header_with_size(width: int, height: int) -> bytes:
@@ -1244,7 +1273,7 @@ def test_bounded_file_snapshot_rejects_same_size_in_place_rewrite(
 ) -> None:
     source = tmp_path / "mutable.bin"
     source.write_bytes(b"before")
-    real_fstat = infra_impl.os.fstat
+    real_fstat = asset_impl.os.fstat
     calls = 0
 
     def rewrite_between_descriptor_stats(descriptor: int) -> os.stat_result:
@@ -1257,9 +1286,9 @@ def test_bounded_file_snapshot_rejects_same_size_in_place_rewrite(
             os.utime(source, ns=(timestamp, timestamp))
         return metadata if calls == 2 else real_fstat(descriptor)
 
-    monkeypatch.setattr(infra_impl.os, "fstat", rewrite_between_descriptor_stats)
+    monkeypatch.setattr(asset_impl.os, "fstat", rewrite_between_descriptor_stats)
     with pytest.raises(OSError, match="changed while it was being read"):
-        infra_impl._read_bounded_file(source, 64)
+        asset_impl.read_regular_file_snapshot(source, 64)
 
 
 def test_ordinary_http_forces_close_and_sequential_client_requests_reconnect(
