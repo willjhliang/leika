@@ -285,19 +285,9 @@ function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
     <nav
       ref={navRef}
       aria-label="Contents"
-      // Hidden until the width is there: `hidden` is the answer for every
-      // surface, and the container query is what takes it back for the ones
-      // wide enough. The 67rem is arithmetic, not taste -- the 10rem column
-      // and its gap come out of it, and what is left has to still be the 65
-      // characters the writing is set to. A contents list bought by narrowing
-      // the document would be a bad trade, and measured before this was tuned
-      // it was exactly that: the paragraphs came out 34px short.
-      //
-      // Room to spare now, where there used not to be: this layout asked for
-      // both margins while only one of them held anything, and giving up the
-      // empty one gave back 13rem. What the threshold buys at this width is a
-      // reader who widens a narrow window and sees the list appear rather
-      // than the writing shrink.
+      // Reserve the sidebar only when there is enough room for it and a
+      // full reading measure in the content section. Narrow previews keep
+      // the entire width for the document, even when contents are requested.
       className="sticky top-0 hidden max-h-[calc(100dvh-6rem)] self-start overflow-y-auto overscroll-contain pt-1 no-scrollbar @min-[67rem]/document:col-start-2 @min-[67rem]/document:row-start-1 @min-[67rem]/document:block"
       data-leika-document-contents
     >
@@ -305,26 +295,10 @@ function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
           not at the size of the document beside it. These are not part of the
           writing: they name its parts, the way a field's label names the
           field, and a column of them set as large as the prose reads as a
-          second document competing with the first.
-
-          No gaps between the entries, so the rules down their left edges meet
-          and read as one rail with the document's shape marked on it. The
-          spacing is inside each entry instead. */}
+          second document competing with the first. */}
       <ul className="text-sm">
         {headings.map((heading) => (
-          <li
-            key={heading.fragment}
-            // The rail is on the row rather than on the link, so that it stays
-            // one straight line while the text of a subsection steps in from
-            // it. Two pixels of it, in the accent, is the whole of the mark
-            // for the section being read -- the same word this app uses for
-            // the live one anywhere else: a checked box, a slider's filled
-            // track.
-            className={cn(
-              "border-l-2 transition-colors",
-              heading.fragment === current ? "border-primary" : "border-border",
-            )}
-          >
+          <li key={heading.fragment}>
             {/* An ordinary in-document link, so the click is answered by the
                 handler below exactly as a link written in the file is: the
                 document scrolls itself, and the address bar stays the app's. */}
@@ -403,14 +377,8 @@ export function MarkdownRenderer(props: {
   // is only knowable from here. A contents entry is such a link, so it sits
   // inside the same handler and needs nothing of its own.
   //
-  // One structure whether or not the list is up, and not because it reads
-  // better: the reader can put the list up and take it back down while they
-  // are half way through a file. Two branches would be two trees, and React
-  // would unmount the document to swap between them -- losing the reader
-  // their place, and the browser every figure it had already fetched. Here
-  // only the wrappers change class and the nav comes and goes; the document
-  // is the same elements in the same place, and since the measure is the same
-  // either way it does not even re-wrap.
+  // Keep the document mounted when the sidebar is toggled so loaded figures,
+  // selection, and scroll anchors survive. Only the layout classes change.
   const showing = listed.length > 0;
   return (
     <MarkdownMediaController>
@@ -425,32 +393,15 @@ export function MarkdownRenderer(props: {
           reading past the file to get to them, and last on the screen, where
           they were asked for.
 
-          The document's column is the width of the document, not the width of
-          what is left over: `fit-content` sizes it to the widest block in the
-          file -- the measure for writing, more for a table that needs it --
-          and the two columns are then centred in the frame together. So the
-          contents hang a fixed distance off the document's edge and stay
-          there, in a window or filling the screen, where a `1fr` column
-          pinned them to the frame's edge instead and let the gap grow with
-          the window: going full-window walked them another hundred pixels
-          away from the thing they are a list of.
-
-          That distance is the one the popup already uses. A block that takes
-          the full width -- a wide table -- stops 1.5rem short of the popup's
-          edge, being the dialog's padding and the reading column's together,
-          and this is the same 1.5rem: the list is inset from the writing by
-          what the writing is inset from the frame, so there is one gutter
-          width on the surface rather than a second one invented for it.
-
-          The floor is the measure, so a file of short lines still sets its
-          blocks to the column every other file uses rather than shrinking to
-          its own longest line. The cap is the space available, so a table
-          wider than the frame scrolls inside its own box, as it does
-          everywhere else, instead of widening the popup. */}
+          The content section fills the space beside the fixed-width sidebar.
+          Its blocks centre themselves within that section using equal inline
+          margins, just as they do across the whole surface when contents are
+          hidden. Wide tables may use the section's full width. Neither section
+          is sized from the blocks arriving during streaming. */}
         <div
           className={cn(
             showing &&
-              "grid @min-[67rem]/document:grid-cols-[fit-content(100%)_10rem] @min-[67rem]/document:justify-center @min-[67rem]/document:gap-x-6",
+              "grid @min-[67rem]/document:grid-cols-[minmax(0,1fr)_10rem] @min-[67rem]/document:gap-x-6",
           )}
         >
           {showing ? <DocumentContents headings={listed} /> : null}
@@ -461,7 +412,7 @@ export function MarkdownRenderer(props: {
             className={cn(
               "typeset reading-measure",
               showing &&
-                "@min-[67rem]/document:col-start-1 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-[var(--measure)]",
+                "@min-[67rem]/document:col-start-1 @min-[67rem]/document:row-start-1 @min-[67rem]/document:min-w-0",
             )}
           >
             {element}

@@ -255,9 +255,8 @@
    visited; the non-zero fallback keeps a stable scroll runway beforehand.
 
    Headings stay active because the optional contents rail measures them.
-   Width-defining table wrappers stay active so a distant table still informs
-   the document column's intrinsic width. Media keeps its existing measured
-   geometry and native lazy-loading path. */
+   Table wrappers stay active to preserve their horizontal scroll geometry.
+   Media keeps its existing measured geometry and native lazy-loading path. */
 [data-slot="file-preview-reading-frame"]
   .typeset
   > :not(

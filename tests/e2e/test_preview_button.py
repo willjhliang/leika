@@ -1297,38 +1297,47 @@ def _settle(page: Page) -> None:
         """async (el) => {
           await Promise.all(
             el.getAnimations({subtree: true})
+              .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
               .map((animation) => animation.finished.catch(() => {}))
           );
         }"""
     )
 
 
-def _group_gaps(page: Page) -> tuple[float, float]:
-    """How much room there is either side of the writing AND its list."""
+def _writing_layout(page: Page) -> dict[str, float]:
+    """Measure the writing within its section, excluding the TOC sidebar."""
     _settle(page)
-    gaps = _dialog(page).evaluate(
-        """(el) => {
-          const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
-          const text = el.querySelector('.typeset > p').getBoundingClientRect();
+    return _dialog(page).evaluate(
+        """el => {
+          const document = el.querySelector('.typeset');
+          const section = document.getBoundingClientRect();
+          const layout = document.parentElement;
+          const bounds = layout.getBoundingClientRect();
+          const text = document.querySelector(':scope > p').getBoundingClientRect();
           const list = el.querySelector('[data-leika-document-contents]')
-                         .getBoundingClientRect();
-          return [text.left - frame.left, frame.right - list.right];
+                         ?.getBoundingClientRect();
+          const sidebar = list?.width > 0
+            ? list.width + parseFloat(getComputedStyle(layout).columnGap)
+            : 0;
+          return {
+            leftGutter: text.left - section.left,
+            rightGutter: section.right - text.right,
+            sectionLeftInset: section.left - bounds.left,
+            unusedWidth: bounds.width - section.width - sidebar,
+            sectionWidth: section.width,
+            writingWidth: text.width,
+          };
         }"""
     )
-    return (gaps[0], gaps[1])
 
 
-def _writing_gaps(page: Page) -> tuple[float, float]:
-    """How much room there is either side of the column of writing."""
-    _settle(page)
-    gaps = _dialog(page).evaluate(
-        """(el) => {
-          const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
-          const text = el.querySelector('.typeset > p').getBoundingClientRect();
-          return [text.left - frame.left, frame.right - text.right];
-        }"""
-    )
-    return (gaps[0], gaps[1])
+def _assert_writing_centred_in_its_section(page: Page) -> dict[str, float]:
+    layout = _writing_layout(page)
+    assert abs(layout["leftGutter"] - layout["rightGutter"]) < 1, layout
+    assert layout["leftGutter"] > 0, layout
+    assert abs(layout["sectionLeftInset"]) < 1, layout
+    assert abs(layout["unusedWidth"]) < 1, layout
+    return layout
 
 
 def test_a_document_lists_its_own_contents_beside_it(
@@ -1385,29 +1394,30 @@ def test_a_document_lists_its_own_contents_beside_it(
     assert page_errors == []
 
 
-def test_the_writing_and_its_contents_are_centred_together(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+@pytest.mark.parametrize("fullscreen", [False, True])
+def test_the_writing_is_centred_in_its_own_section_with_or_without_contents(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    fullscreen: bool,
 ) -> None:
-    # What is being read decides what is centred. With the list down that is
-    # the writing, and it sits in the middle of the frame; with the list up it
-    # is the pair of them, so the writing steps left by half of what the list
-    # takes rather than staying put with the list hung off the edge.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
     leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
     _press(preview_page, "Show notes")
     expect(_dialog(preview_page)).to_contain_text("Training report")
-    left, right = _writing_gaps(preview_page)
-    assert abs(left - right) < 2.0, (left, right)
+    if fullscreen:
+        _dialog(preview_page).get_by_role("button", name="Fill the window").click()
+    hidden = _assert_writing_centred_in_its_section(preview_page)
 
     expect(_show_contents(preview_page)).to_be_visible()
-    outer_left, outer_right = _group_gaps(preview_page)
-    assert abs(outer_left - outer_right) < 2.0, (outer_left, outer_right)
+    shown = _assert_writing_centred_in_its_section(preview_page)
+    assert shown["sectionWidth"] < hidden["sectionWidth"] - 100, (hidden, shown)
+    assert abs(shown["writingWidth"] - hidden["writingWidth"]) < 1, (hidden, shown)
 
-    # And the writing really did move over: the list is not hanging in a
-    # margin that was already empty.
-    shifted, _ = _writing_gaps(preview_page)
-    assert shifted < left - 50.0, (shifted, left)
+    _dialog(preview_page).get_by_role("button", name="Hide contents").click()
+    restored = _assert_writing_centred_in_its_section(preview_page)
+    assert restored == hidden, (hidden, restored)
     assert page_errors == []
 
 
@@ -1425,6 +1435,7 @@ def test_a_narrow_preview_keeps_its_width_for_the_document(
     # the file's headings, and the room is a separate question that CSS
     # answers.
     expect(_show_contents(preview_page)).to_be_hidden()
+    _assert_writing_centred_in_its_section(preview_page)
 
     # Widen the window and it appears, without the preview being reopened or
     # asked again.
@@ -1484,19 +1495,20 @@ def test_the_contents_marks_the_section_being_read(
     )
     assert _marked(preview_page) == ["Setup"]
 
-    # The rule down the left of the entry is marked with it. It is the part of
-    # the mark that can be seen without reading anything.
-    rules = _contents(preview_page).evaluate(
+    # Text color identifies the active section; entries have no left rule.
+    styles = _contents(preview_page).evaluate(
         """el => {
-             const colour = (link) => getComputedStyle(
-               link.closest('li')).borderLeftColor;
+             const colour = (link) => getComputedStyle(link).color;
              return {
                marked: colour(el.querySelector('a[aria-current]')),
                rest: colour(el.querySelector('a:not([aria-current])')),
+               borderless: [...el.querySelectorAll('li')].every(
+                 row => getComputedStyle(row).borderLeftWidth === '0px'),
              };
            }"""
     )
-    assert rules["marked"] != rules["rest"], rules
+    assert styles["marked"] != styles["rest"], styles
+    assert styles["borderless"], styles
 
     # Following an entry marks the section it lands in, which is the same rule
     # answering the same question: what is at the top of the view now.
@@ -1591,41 +1603,34 @@ def _contents_offset(page: Page) -> dict[str, float]:
     )
 
 
-def test_the_contents_hang_off_the_document_not_the_window(
+def test_the_contents_keep_their_own_section_in_fullscreen(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # The list is a list of what is beside it, so it stays beside it. Sized
-    # from the frame instead, it was pinned to the frame's edge -- and filling
-    # the window walked it another hundred pixels away from the document while
-    # the reader watched.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
     leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
 
     _press(preview_page, "Show notes")
     expect(_show_contents(preview_page)).to_be_visible()
     windowed = _contents_offset(preview_page)
+    windowed_writing = _assert_writing_centred_in_its_section(preview_page)
 
     preview_page.get_by_role("button", name="Fill the window").click()
     expect(_dialog(preview_page)).to_have_attribute("data-preview-fullscreen", "true")
     full = _contents_offset(preview_page)
+    full_writing = _assert_writing_centred_in_its_section(preview_page)
 
-    assert abs(full["fromDocument"] - windowed["fromDocument"]) < 1.0, (windowed, full)
-    # And it really is a wider window: the frame's own edge moved well away.
-    assert full["fromFrame"] - windowed["fromFrame"] > 50.0, (windowed, full)
+    # The sidebar keeps its width and edge inset. Extra space belongs to the
+    # content section, where the prose remains centred with balanced gutters.
+    assert abs(full["fromDocument"] - windowed["fromDocument"]) < 1, (windowed, full)
+    assert abs(full["fromFrame"] - windowed["fromFrame"]) < 1, (windowed, full)
+    assert full_writing["sectionWidth"] > windowed_writing["sectionWidth"] + 100
     assert page_errors == []
 
 
 def test_the_contents_stand_a_gutter_off_the_writing(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
-    # The space between the writing and its list is the space the popup
-    # already uses: a block that takes the full width -- a table -- stops that
-    # same distance short of the popup's edge, being the dialog's padding and
-    # the reading column's together. One gutter width on the surface, rather
-    # than a second one invented for the list.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
-    # Wide enough that it really does take the full width: a table narrower
-    # than the measure is centred in the column and insets itself.
     row = "| " + " | ".join(f"a column heading {index}" for index in range(8)) + " |\n"
     table = row + "|" + "---|" * 8 + "\n" + row * 3
     leika_server.gui.add_preview_button(
@@ -1637,16 +1642,24 @@ def test_the_contents_stand_a_gutter_off_the_writing(
     _settle(preview_page)
     measured = _dialog(preview_page).evaluate(
         """el => {
-             const popup = el.getBoundingClientRect();
              const doc = el.querySelector('.typeset').getBoundingClientRect();
-             const table = el.querySelector('.typeset-scroll').getBoundingClientRect();
+             const table = el.querySelector('.typeset-scroll');
              const list = el.querySelector('[data-leika-document-contents]')
                             .getBoundingClientRect();
-             return {gap: list.left - doc.right, inset: table.left - popup.left};
+             return {
+               gap: list.left - doc.right,
+               gutter: 1.5 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+               tableWidth: table.clientWidth,
+               tableScrollWidth: table.scrollWidth,
+               documentWidth: doc.width,
+             };
            }"""
     )
-    assert measured["inset"] > 0, measured
-    assert abs(measured["gap"] - measured["inset"]) < 1.0, measured
+    # The gutter is constant; a wide table scrolls within the writing column
+    # instead of pushing the list sideways or widening the popup.
+    assert abs(measured["gap"] - measured["gutter"]) < 1.0, measured
+    assert abs(measured["tableWidth"] - measured["documentWidth"]) < 1.0, measured
+    assert measured["tableScrollWidth"] > measured["tableWidth"], measured
     assert page_errors == []
 
 

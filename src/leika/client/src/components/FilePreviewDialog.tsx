@@ -747,7 +747,7 @@ export function FilePreviewDialog({
             // that scroll here as well: reaching the end of a document is the
             // end of it, not a nudge passed outwards to whatever box the
             // popup happens to sit in.
-            "isolate min-h-0 overflow-auto overscroll-contain bg-popover",
+            "isolate min-h-0 overflow-auto overscroll-contain bg-popover [scrollbar-gutter:stable_both-edges]",
             // Both the full-window popup and the reading one are a definite
             // height with a title bar above the frame, so the frame fills
             // what is left of the row either way.
