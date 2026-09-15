@@ -527,7 +527,7 @@ def test_viser_lifecycle(server: leika.Server) -> None:
     pane = server.panes.add_viser(fake, pane_id="viser", title="Scene", loading=True)
     assert pane.pane_id == "viser"
     assert pane.title == "Scene"
-    assert pane.url is None
+    assert pane.url is not None and pane.url.startswith("/_leika/viser/")
     assert pane.port == 8123
 
     pane.update("http://viser.example.com:9000", loading="Connecting")
@@ -535,7 +535,7 @@ def test_viser_lifecycle(server: leika.Server) -> None:
     assert pane.port is None
     assert pane.loading == "Connecting"
     pane.update(SimpleNamespace(get_port=lambda: 8124, get_host=lambda: "0.0.0.0"))
-    assert pane.url is None
+    assert pane.url is not None and pane.url.startswith("/_leika/viser/")
     assert pane.port == 8124
 
     pane.visible = False

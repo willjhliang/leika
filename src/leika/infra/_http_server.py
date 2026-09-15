@@ -26,6 +26,7 @@ from .._file_transfer import read_regular_file_snapshot
 from ._auth import HttpPasswordGuard
 from ._http_assets import _HTTP_ASSET_URL_PREFIX, HttpAssetRegistry
 from ._http_security import HttpRequestPolicy
+from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
 
 
 def _static_relpath(request_target: str) -> str | None:
@@ -327,7 +328,9 @@ class HttpRequestHandler:
         assets: HttpAssetRegistry,
         policy: HttpRequestPolicy,
         auth_guard: HttpPasswordGuard | None,
+        viser_proxy: ViserProxy | None = None,
     ) -> None:
+        self._viser_proxy = viser_proxy
         self._assets = assets
         self._policy = policy
         self._auth_guard = auth_guard
@@ -374,6 +377,15 @@ class HttpRequestHandler:
             guard_response = self._auth_guard.process(request, secure=address.secure)
             if guard_response is not None:
                 return guard_response
+
+        if request.path.partition("?")[0].startswith(VISER_PROXY_PREFIX):
+            if self._viser_proxy is None or self._viser_proxy.match(request.path) is None:
+                return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
+            if is_websocket_upgrade:
+                return None
+            return await self._viser_proxy.http_response(
+                request, lambda size: self._response_budget.try_resize(connection, size)
+            )
 
         # Ignore websocket packets. Header duplication is handled without
         # the single-value Headers.get() exception path.

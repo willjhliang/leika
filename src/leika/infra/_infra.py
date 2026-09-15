@@ -45,6 +45,7 @@ from ._http_assets import HttpAsset, HttpAssetRegistry
 from ._http_security import HttpRequestPolicy, _canonical_hostname, _normalize_allowed_hosts
 from ._http_server import HttpRequestHandler
 from ._messages import Message
+from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
 
 
 class _WebsocketLogFilter(logging.Filter):
@@ -335,6 +336,7 @@ class WebsockServer(WebsockMessageHandler):
         self._message_class = message_class
         self._http_server_root = http_server_root
         self._auth_guard = HttpPasswordGuard(password) if password is not None else None
+        self._viser_proxy = ViserProxy(protected=password is not None)
         self._verbose = verbose
         self._background_event_loop: asyncio.AbstractEventLoop | None = None
 
@@ -700,6 +702,7 @@ class WebsockServer(WebsockMessageHandler):
                 assets=self._http_asset_registry,
                 policy=self._http_policy,
                 auth_guard=self._auth_guard,
+                viser_proxy=self._viser_proxy,
             )
         except BaseException:
             close_event_loop()
@@ -873,7 +876,12 @@ class WebsockServer(WebsockMessageHandler):
                 await connection.close(1013, "Server connection capacity reached")
                 return
             try:
-                await _serve_admitted_connection(connection, client_id)
+                if connection.request is not None and connection.request.path.startswith(
+                    VISER_PROXY_PREFIX
+                ):
+                    await self._viser_proxy.websocket(connection)
+                else:
+                    await _serve_admitted_connection(connection, client_id)
             finally:
                 async with count_lock:
                     active_client_ids.discard(client_id)
@@ -901,8 +909,13 @@ class WebsockServer(WebsockMessageHandler):
                 # custom low-level protocols use normal no-subprotocol sockets.
                 subprotocols=None,
                 select_subprotocol=(
-                    lambda _, subprotocols: (
+                    lambda connection, subprotocols: (
                         next(
+                            (Subprotocol(p) for p in subprotocols if p.startswith("viser-v")), None
+                        )
+                        if connection.request is not None
+                        and connection.request.path.startswith(VISER_PROXY_PREFIX)
+                        else next(
                             (Subprotocol(p) for p in subprotocols if p.startswith("leika-v")),
                             None,
                         )
@@ -938,7 +951,10 @@ class WebsockServer(WebsockMessageHandler):
             # Own the loop for every exit path, including a bind/setup failure
             # and an exception after readiness. No task or exception is left
             # attached to a closed worker thread.
-            close_event_loop()
+            try:
+                event_loop.run_until_complete(self._viser_proxy.close())
+            finally:
+                close_event_loop()
 
 
 # Pre-allocated padding bytes for 8-byte alignment.

@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import contextlib
+import http.client
+import threading
+from types import SimpleNamespace
+
+import msgspec
+import pytest
+from websockets import Headers
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.http11 import Response
+from websockets.sync.client import connect
+from websockets.sync.server import serve
+
+import leika
+from leika.infra._viser_proxy import VISER_PROXY_PREFIX
+
+
+@contextlib.contextmanager
+def backend():
+    requests = []
+    messages = []
+
+    def process_request(connection, request):
+        requests.append(request)
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return None
+        return Response(
+            200,
+            "OK",
+            Headers(
+                {
+                    "Content-Type": "text/plain",
+                    "Set-Cookie": "backend=must-not-escape",
+                    "Cache-Control": "public, max-age=86400",
+                }
+            ),
+            ("viser:" + request.path).encode(),
+        )
+
+    def handler(connection):
+        try:
+            for message in connection:
+                messages.append(message)
+                connection.send(message)
+        except ConnectionClosed:
+            pass
+
+    with serve(
+        handler,
+        "127.0.0.1",
+        0,
+        process_request=process_request,
+        select_subprotocol=lambda connection, protocols: next(iter(protocols), None),
+    ) as listener:
+        thread = threading.Thread(target=listener.serve_forever, daemon=True)
+        thread.start()
+        port = listener.socket.getsockname()[1]
+        try:
+            yield (
+                SimpleNamespace(get_host=lambda: "127.0.0.1", get_port=lambda: port),
+                requests,
+                messages,
+            )
+        finally:
+            listener.shutdown()
+            thread.join(timeout=5)
+
+
+def get(server, path, headers=None):
+    client = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    try:
+        client.request("GET", path, headers=headers or {})
+        response = client.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def protected(monkeypatch):
+    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+    with leika.Server(host="127.0.0.1", port=0, password="secret", verbose=False) as server:
+        yield server
+
+
+def login(server):
+    status, headers, _ = get(server, "/auth/session", {"x-leika-password": "secret"})
+    assert status == 204
+    assert "HttpOnly" in headers["Set-Cookie"]
+    return {"Cookie": headers["Set-Cookie"].split(";", 1)[0]}
+
+
+def websocket_url(server, pane):
+    return server.url.replace("http:", "ws:") + pane.url.rstrip("/")
+
+
+def test_password_protects_proxy_assets_and_both_websocket_routes(protected):
+    with backend() as (target, requests, messages):
+        pane = protected.panes.add_viser(target)
+        assert pane.url.startswith(VISER_PROXY_PREFIX)
+        for path in ("/", pane.url, pane.url + "assets/client.js"):
+            assert get(protected, path)[0] == 401
+        for path in ("/", pane.url):
+            with pytest.raises(InvalidStatus) as error:
+                connect(protected.url.replace("http:", "ws:") + path)
+            assert error.value.response.status_code == 401
+        assert requests == []
+        cookie = login(protected)
+        status, headers, body = get(protected, pane.url + "assets/client.js?x=1", cookie)
+        assert (status, body) == (200, b"viser:/assets/client.js?x=1")
+        assert headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+        assert headers["Cache-Control"] == "no-store"
+        assert headers["CDN-Cache-Control"] == "no-store"
+        assert "Set-Cookie" not in headers
+        with connect(
+            websocket_url(protected, pane), additional_headers=cookie, subprotocols=["viser-vtest"]
+        ) as ws:
+            assert ws.subprotocol == "viser-vtest"
+            payload = msgspec.msgpack.encode({"type": "Camera", "position": [1, 2, 3]})
+            ws.send(payload)
+            assert ws.recv(timeout=5) == payload
+        assert messages == [payload]
+        for request in requests:
+            assert "Cookie" not in request.headers
+            assert "x-leika-password" not in request.headers
+            assert "Origin" not in request.headers
+
+
+def test_proxy_enforces_host_origin_and_path_boundaries(protected):
+    with backend() as (target, requests, _):
+        pane = protected.panes.add_viser(target)
+        auth = {"x-leika-password": "secret"}
+        for extra in (
+            {"Host": "attacker.example"},
+            {"Origin": "https://attacker.example"},
+            {"X-Forwarded-Proto": "https"},
+        ):
+            assert get(protected, pane.url, dict(auth, **extra))[0] == 403
+        for path in (
+            pane.url + "%2e%2e/.env",
+            pane.url + "a%5c..%5csecret",
+            pane.url + "%00",
+            VISER_PROXY_PREFIX + "unregistered/",
+        ):
+            assert get(protected, path, auth)[0] == 404
+        with pytest.raises(InvalidStatus) as error:
+            connect(
+                websocket_url(protected, pane),
+                origin="https://attacker.example",
+                additional_headers=auth,
+            )
+        assert error.value.response.status_code == 403
+        assert requests == []
+
+
+def test_proxy_routes_are_retired_on_update_remove_and_failed_add(protected):
+    with backend() as (target, _, _):
+        pane = protected.panes.add_viser(target, pane_id="scene")
+        route = pane.url
+        auth = login(protected)
+        pane.update(target)
+        assert pane.url == route
+        with pytest.raises(ValueError, match="already exists"):
+            protected.panes.add_viser(target, pane_id="scene")
+        proxy = protected._websock_server._viser_proxy
+        assert len(proxy._endpoints) == 1
+        with connect(websocket_url(protected, pane), additional_headers=auth) as ws:
+            pane.update("https://external.example/scene")
+            with pytest.raises(ConnectionClosed):
+                ws.recv(timeout=5)
+        assert get(protected, route, auth)[0] == 404
+        assert len(proxy._endpoints) == 0
+        pane.update(target)
+        route = pane.url
+        pane.remove()
+        assert get(protected, route, auth)[0] == 404
+        assert len(proxy._endpoints) == 0
+
+
+def test_protected_embedding_requires_loopback_and_keeps_explicit_urls(protected):
+    for host in ("0.0.0.0", "::", "192.0.2.1", "external.example"):
+        target = SimpleNamespace(get_host=lambda: host, get_port=lambda: 8082)
+        with pytest.raises(ValueError, match="loopback"):
+            protected.panes.add_viser(target)
+    direct = protected.panes.add_viser("https://external.example/scene")
+    assert direct.url == "https://external.example/scene"
+    assert protected._websock_server._viser_proxy._endpoints == {}
+
+
+@pytest.mark.parametrize("kind", ["ShareUrlRequest", "ShareUrlDisconnect"])
+def test_embedded_client_cannot_open_an_independent_tunnel(protected, kind):
+    with backend() as (target, _, messages):
+        pane = protected.panes.add_viser(target)
+        with connect(websocket_url(protected, pane), additional_headers=login(protected)) as ws:
+            ws.send(msgspec.msgpack.encode({"type": kind}))
+            with pytest.raises(ConnectionClosed) as error:
+                ws.recv(timeout=5)
+            assert error.value.rcvd.code == 1008
+        assert messages == []
+
+
+def test_proxy_response_size_is_bounded(protected, monkeypatch):
+    monkeypatch.setattr("leika.infra._viser_proxy._MAX_HTTP_BYTES", 2)
+    with backend() as (target, _, _):
+        pane = protected.panes.add_viser(target)
+        assert get(protected, pane.url, login(protected))[0] == 503

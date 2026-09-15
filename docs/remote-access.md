@@ -162,8 +162,14 @@ What the gate guarantees, none of it depending on the code being secret:
   is what blocks DNS rebinding and cross-site websocket hijacking; the
   `HttpOnly`, `SameSite=Lax` session cookie is additional defense and is
   marked `Secure` over TLS.
-- Responses prevent MIME sniffing and suppress referrer leakage. Framing is
-  denied unless `allow_embedding=True` was explicit.
+- Responses prevent MIME sniffing and suppress referrer leakage. Protected
+  responses use `no-store`, including runtime assets. Workspace framing is
+  denied unless `allow_embedding=True` was explicit; native Viser proxy routes
+  allow framing only by the same origin.
+- `server.panes.add_viser(viser_server)` carries local Viser HTTP and WebSocket
+  traffic through this same gate. Bind Viser to `127.0.0.1`. Embedded clients
+  cannot request a separate Viser share tunnel through the proxy. Explicit URL
+  embeds have their own security policy and are not protected by this gate.
 
 What the gate cannot promise:
 

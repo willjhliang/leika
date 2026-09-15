@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, expect
 
@@ -33,12 +32,43 @@ def test_viser_pane_renders_an_iframe_and_repoints(
     handle.update(f"{leika_server.url}/other")
     expect(iframe).to_have_attribute("src", f"{leika_server.url}/other")
 
-    # Port targets: the browser derives the host from the page it loaded
-    # Leika from, so only the port comes from the (fake) viser server.
-    # Nothing listens on the port; only the derived src is asserted.
+    # Server targets use the same origin. Nothing listens on this fake
+    # backend; this assertion checks the native iframe route.
     handle.update(SimpleNamespace(get_port=lambda: 9876, get_host=lambda: "0.0.0.0"))
-    hostname = urlsplit(leika_server.url).hostname
-    expect(iframe).to_have_attribute("src", f"http://{hostname}:9876/")
+    expect(iframe).to_have_attribute("src", leika_server.url + handle.url)
 
     handle.remove()
     expect(pane).to_have_count(0)
+
+
+def test_password_protects_native_viser_embedding(page: Page) -> None:
+    import threading
+
+    import viser
+
+    from .utils import find_free_port
+
+    scene = viser.ViserServer(host="127.0.0.1", port=find_free_port())
+    clicked = threading.Event()
+    button = scene.gui.add_button("Core proxy check")
+    button.on_click(lambda event: clicked.set())
+    scene.scene.add_box("/box", dimensions=(0.1, 0.1, 0.1))
+    sockets = []
+    page.on("websocket", lambda socket: sockets.append(socket.url))
+    try:
+        with leika.Server(
+            host="127.0.0.1", port=0, password="test-password", verbose=False
+        ) as server:
+            pane = server.panes.add_viser(scene, minimize_gui=False)
+            assert page.request.get(server.url + pane.url).status == 401
+            page.goto(server.url)
+            password = page.locator("input[type=password]")
+            password.fill("test-password")
+            password.press("Enter")
+            frame = page.frame_locator("iframe")
+            frame.get_by_role("button", name="Core proxy check", exact=True).click(timeout=30000)
+            assert clicked.wait(5)
+            assert any(pane.url.rstrip("/") in socket for socket in sockets)
+            assert all(socket.startswith(server.url.replace("http:", "ws:")) for socket in sockets)
+    finally:
+        scene.stop()

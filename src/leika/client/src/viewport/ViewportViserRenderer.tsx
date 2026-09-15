@@ -22,7 +22,7 @@ export function ViewportViserRenderer({ pane }: { pane: ViewportViserPane }) {
     try {
       // Viser's darkMode flag is presence-based, so following Leika's theme
       // means removing it as well as adding it.
-      const url = new URL(base);
+      const url = new URL(base, window.location.href);
       if (colorScheme === "dark") url.searchParams.set("darkMode", "");
       else url.searchParams.delete("darkMode");
       return url.toString();

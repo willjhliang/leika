@@ -150,15 +150,22 @@ independent figure on each read.
 ### viser scenes
 
 ```python
-viser_server = viser.ViserServer()
+viser_server = viser.ViserServer(host="127.0.0.1")
 server.panes.add_viser(viser_server, title="Scene")
 ```
 
 The pane embeds viser's own client, with its orbit controls and gizmos intact.
 Build the controls with Leika's `server.gui.add_*` and mutate
 `viser_server.scene` from their callbacks, and the Leika dock drives the 3D
-scene. Because the viewer's browser connects to the viser port directly, remote
-viewers need that port reachable too -- forward both over SSH.
+scene. Server-object targets use a same-origin route through Leika. The same
+password protects the embedded client, assets, and WebSocket, and SSH or public
+tunnels need only Leika's port. Bind Viser to `127.0.0.1`; password-protected
+workspaces reject Viser objects listening on a non-loopback interface.
+
+Leika removes the route and closes its connections when the pane is removed or
+repointed. You still own the Viser server and should stop it when finished.
+Viser's independent sharing messages are blocked through the embedded route.
+Explicit URL targets remain direct embeds and keep their own access policy.
 
 The iframe is intentionally unsandboxed because the Viser client requires
 scripts, workers, and storage, and it uses a no-referrer policy. Cross-origin

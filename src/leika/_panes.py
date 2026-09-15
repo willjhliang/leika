@@ -353,6 +353,8 @@ class _ViserPaneHandleState:
     props: _messages.ViewportViserProps
     api: Panes
     minimize_gui: bool
+    proxy_path: str | None = None
+    proxy_address: tuple[str, int] | None = None
     removed: bool = False
 
 
@@ -382,6 +384,9 @@ def _scrub_pane_handle_locked(handle: "PaneHandle[Any]") -> None:
         handle._impl.props._plotly_json_str = ""
         handle._impl.props._theme_templates = ""
     elif isinstance(handle, ViserPaneHandle):
+        handle._impl.api._websock_interface._viser_proxy.unregister(handle._impl.proxy_path)
+        handle._impl.proxy_path = None
+        handle._impl.proxy_address = None
         handle._impl.props._url = None
         handle._impl.props._port = None
 
@@ -728,8 +733,8 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
 
     @property
     def url(self) -> str | None:
-        """Embed URL currently shown in the pane, or None for port-based
-        targets, where the browser derives the address itself."""
+        """Embed URL shown in the pane. A same-origin path for local servers,
+        or the explicit URL supplied by the caller."""
 
         self._check_not_removed()
         return self._impl.props._url
@@ -740,7 +745,8 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
         was pointed at an explicit URL."""
 
         self._check_not_removed()
-        return self._impl.props._port
+        address = self._impl.proxy_address
+        return address[1] if address is not None else self._impl.props._port
 
     def update(self, target: str | Any, *, loading: PaneLoading | None = None) -> None:
         """Re-point the pane at another viser server or URL. Accepts the
@@ -754,17 +760,31 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
         if loading is not None:
             loading = _validate_loading(loading)
         url, port = _viser_embed_target(target)
+        address = (cast(Any, target).get_host(), port) if port is not None else None
+        proxy = self._impl.api._websock_interface._viser_proxy
         with self._impl.api._lock:
             self._check_not_removed()
-            changed = url != self._impl.props._url or port != self._impl.props._port
-            loading_changed = loading is not None and loading != self._impl.props.loading
-            if changed or loading_changed:
-                # Both keys are always sent so the exactly-one-set invariant
-                # holds on the client after any update.
-                updates: dict[str, Any] = {"_url": url, "_port": port}
-                if loading is not None:
-                    updates["loading"] = loading
-                self._publish_update_locked(updates)
+            new_path = None
+            if address is not None:
+                url = self._impl.proxy_path if address == self._impl.proxy_address else None
+                if url is None:
+                    url = new_path = proxy.register(*address)
+            try:
+                changed = url != self._impl.props._url
+                loading_changed = loading is not None and loading != self._impl.props.loading
+                if changed or loading_changed:
+                    updates: dict[str, Any] = {"_url": url, "_port": None}
+                    if loading is not None:
+                        updates["loading"] = loading
+                    self._publish_update_locked(updates)
+            except BaseException:
+                proxy.unregister(new_path)
+                raise
+            old_path = self._impl.proxy_path
+            self._impl.proxy_path = url if address is not None else None
+            self._impl.proxy_address = address
+            if old_path != self._impl.proxy_path:
+                proxy.unregister(old_path)
         if port is not None and self._impl.minimize_gui:
             _minimize_viser_gui(target)
 
@@ -1668,7 +1688,7 @@ class Panes:
         ``server.gui.add_*`` and mutate ``viser_server.scene`` in their
         callbacks, so the Leika dock drives the 3D scene::
 
-            viser_server = viser.ViserServer()
+            viser_server = viser.ViserServer(host="127.0.0.1")
             server.panes.add_viser(viser_server)
             slider = server.gui.add_slider("Size", min=1, max=10, step=1, initial_value=3)
 
@@ -1676,13 +1696,16 @@ class Panes:
             def _(_) -> None:
                 viser_server.scene.add_icosphere("/ball", radius=slider.value)
 
-        For server-object targets, only the port is used: the viewer's
-        browser connects to that port on the same hostname it loaded the
-        Leika page from. Anyone viewing Leika remotely therefore needs the
-        viser port reachable too — over SSH, forward both ports. When that
-        doesn't hold (tunnels, reverse proxies), pass an explicit URL
-        instead. Note that a URL pane served over plain ``http://`` cannot
-        be embedded into an ``https://``-served Leika page (mixed content).
+        Server-object targets are proxied through Leika on the same origin.
+        The login protects their assets and websocket, and a share tunnel or
+        SSH forward needs only Leika's port. Bind Viser to ``127.0.0.1``;
+        password-protected workspaces reject separately exposed listeners.
+        Viser's independent share requests are blocked on this route.
+        Leika owns the proxy route, while you still own and stop Viser itself.
+
+        Explicit URL targets remain direct embeds with their own access
+        policy. An ``http://`` URL cannot be embedded into an ``https://``
+        Leika page because browsers block mixed content.
 
         The embedded client follows Leika's light/dark theme. The browser
         owns pane arrangement and persists it locally; placement and
@@ -1742,9 +1765,13 @@ class Panes:
         pane_id = self._validate_pane_declaration(pane_id, placement)
 
         url, port = _viser_embed_target(target)
+        relative_to = self._resolve_relative_to(relative_to)
+        proxy = self._websock_interface._viser_proxy
+        address = (cast(Any, target).get_host(), port) if port is not None else None
+        proxy_path = proxy.register(*address) if address is not None else None
         props = _messages.ViewportViserProps(
-            _url=url,
-            _port=port,
+            _url=proxy_path or url,
+            _port=None,
             title=title,
             visible=visible,
             loading=loading,
@@ -1755,22 +1782,27 @@ class Panes:
                 props=copy.deepcopy(props),
                 api=self,
                 minimize_gui=minimize_gui,
+                proxy_path=proxy_path,
+                proxy_address=address,
             )
         )
-        relative_to = self._resolve_relative_to(relative_to)
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportViserMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-        )
+        try:
+            self._register_pane(
+                pane_id,
+                handle,
+                _messages.ViewportViserMessage(
+                    page_id=self._page_id,
+                    pane_id=pane_id,
+                    props=props,
+                    placement=placement,
+                    relative_to=relative_to,
+                    equalize_group=equalize_group,
+                ),
+                relative_to,
+            )
+        except BaseException:
+            proxy.unregister(proxy_path)
+            raise
         # Only after registration succeeds: a failed add (duplicate pane_id,
         # bad relative_to) must leave the user's viser server untouched. The
         # placement commands replay to late-joining clients, so applying
