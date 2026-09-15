@@ -264,8 +264,10 @@ def test_malformed_envelopes_and_containers_are_rejected(mapping: object) -> Non
 @pytest.mark.parametrize(
     "mapping",
     [
-        {"type": "ThemeConfigurationMessage", "control_layout": "bottom", "dark_mode": False},
-        {"type": "ThemeConfigurationMessage", "control_layout": "left", "dark_mode": "yes"},
+        {"type": "ThemeConfigurationMessage", "control_layout": "bottom", "theme": "light"},
+        {"type": "ThemeConfigurationMessage", "control_layout": "left", "theme": "yes"},
+        {"type": "ThemeConfigurationMessage", "control_layout": "left", "theme": True},
+        {"type": "ThemeConfigurationMessage", "control_layout": "left", "theme": None},
     ],
 )
 def test_literal_and_union_values_are_restricted(mapping: object) -> None:

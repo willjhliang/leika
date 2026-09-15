@@ -64,7 +64,7 @@ def test_initial_hover_panel_preserves_right_inset(
 ) -> None:
     # The panel width is a constant, so the width the client mounts with is the
     # width it keeps once the theme message arrives -- no resize on connect.
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     leika_server.gui.add_text("Ready", initial_value="yes")
     leika_server.gui.add_command("Open command palette", lambda: None)
 
@@ -95,7 +95,7 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Nested tab"):
         leika_server.gui.add_text("Nested content", initial_value="ready")
@@ -140,7 +140,7 @@ def test_dockable_tabs_keep_inactive_panel_dom_mounted(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("First mount"):
         leika_server.gui.add_html("<span data-tab-mount-sentinel>original</span>")
@@ -176,7 +176,7 @@ def test_a_narrow_panel_wraps_its_tabs_and_its_option_rows(
     page_errors: list[str],
 ) -> None:
     # 320px is the mobile view, whose bottom sheet ignores the layout value.
-    leika_server.gui.configure_theme(dark_mode=True)
+    leika_server.gui.configure_theme(theme="dark")
     tabs = leika_server.gui.add_tab_group()
     tab_labels = (
         "Overview dashboard",
@@ -264,7 +264,7 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     with leika_server.gui.add_folder("First folder"):
         leika_server.gui.add_slider(
             "Spacing slider", min=0.0, max=1.0, step=0.01, initial_value=0.5
@@ -376,7 +376,7 @@ def test_tall_docked_panel_scrolls_internally_and_stays_inside_viewport(
     its own body rather than growing past the viewport."""
     leika_server.gui.configure_theme(
         control_layout=control_layout,  # type: ignore[arg-type]
-        dark_mode=True,
+        theme="dark",
     )
     for index in range(60):
         leika_server.gui.add_checkbox(f"Docked control {index + 1}", initial_value=index % 2 == 0)
@@ -424,7 +424,7 @@ def test_nested_sections_expand_and_collapse(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     with leika_server.gui.add_folder("Outer section"):
         leika_server.gui.add_text("Outer input", initial_value="outer")
         with leika_server.gui.add_folder("Inner section"):

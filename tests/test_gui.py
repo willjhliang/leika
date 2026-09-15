@@ -1067,8 +1067,8 @@ def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
         server.gui.add_button("Run", color=RichStr("default"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="control_layout"):
         server.gui.configure_theme(control_layout=RichStr("left"))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="dark_mode"):
-        server.gui.configure_theme(dark_mode=RichStr("auto"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="theme"):
+        server.gui.configure_theme(theme=RichStr("auto"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="hotkey"):
         server.gui.add_command("Run", hotkey=RichStr("R"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="format"):
@@ -1323,23 +1323,28 @@ def test_theme_defaults_to_following_the_browser_color_scheme(
 
     The wire value matters as much as the default: ``"auto"`` is what tells the
     client to read ``prefers-color-scheme`` rather than pin a scheme, so a
-    bool sent in its place would silently override every viewer.
+    boolean sent in its place would not name a valid Settings selection.
     """
     sent: list[Any] = []
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
 
     server.gui.configure_theme()
-    server.gui.configure_theme(dark_mode=True)
-    server.gui.configure_theme(dark_mode=False)
+    server.gui.configure_theme(theme=None)
+    server.gui.configure_theme(theme="auto")
+    server.gui.configure_theme(theme="light")
+    server.gui.configure_theme(theme="dark")
 
-    assert [message.dark_mode for message in sent] == ["auto", True, False]
+    assert [message.theme for message in sent] == ["auto", "auto", "auto", "light", "dark"]
 
 
 def test_theme_rejects_unknown_wire_values(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="control_layout"):
         server.gui.configure_theme(control_layout="wide")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="dark_mode"):
-        server.gui.configure_theme(dark_mode=1)  # type: ignore[arg-type]
+    for invalid in (True, False, 1, "system", "Dark", "", [], {}):
+        with pytest.raises(ValueError, match="theme"):
+            server.gui.configure_theme(theme=invalid)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="dark_mode"):
+        server.gui.configure_theme(dark_mode=True)  # type: ignore[call-arg]
     # The removed sidebar layouts fail with the replacement named, not as
     # anonymous typos: code written against 0.3.0 gets told where to go.
     with pytest.raises(ValueError, match="left"):
@@ -1368,7 +1373,7 @@ def test_removed_visual_customization_arguments_are_rejected(
 ) -> None:
     server.gui.configure_theme(
         control_layout="floating",
-        dark_mode=True,
+        theme="dark",
     )
     with pytest.raises(TypeError):
         server.gui.configure_theme(show_share_button=True)  # type: ignore[call-arg]

@@ -25,7 +25,7 @@ export function useMobileView(): boolean {
   return useMediaQuery(MOBILE_MEDIA_QUERY);
 }
 
-/** The OS-level preference behind the theme's `dark_mode: "auto"`. */
+/** The OS-level preference behind the Theme setting's "auto" selection. */
 export const DARK_SCHEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 export function usePrefersDarkMode(): boolean {

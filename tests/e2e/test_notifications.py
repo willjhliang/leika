@@ -22,7 +22,7 @@ def notify_page(
     page_errors: list[str],
 ) -> Page:
     del page_errors  # Registers the pageerror listener; tests assert on it.
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
     page.wait_for_function(
@@ -177,7 +177,7 @@ def test_toasts_clear_a_left_docked_panel_from_the_start(
     """Toasts anchor bottom-left, which is exactly where a left-docked panel
     stands. The inset that clears a DRAGGED-there panel has to hold when the
     panel starts there by configuration instead."""
-    leika_server.gui.configure_theme(control_layout="left", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="left", theme="dark")
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
     page.wait_for_function(

@@ -1277,9 +1277,9 @@ class ThemeConfigurationMessage(Message):
     """Where the control panel starts on desktop: floating over the canvas, or
     docked to an edge. The viewer may rearrange it afterwards."""
 
-    dark_mode: Union[bool, Literal["auto"]]
-    """``True``/``False`` pin the scheme; ``"auto"`` defers to the browser's
-    ``prefers-color-scheme``."""
+    theme: Literal["auto", "light", "dark"]
+    """Select the viewer's Theme setting, which remains editable in Settings.
+    ``"auto"`` follows the browser's ``prefers-color-scheme``."""
 
 
 @dataclasses.dataclass

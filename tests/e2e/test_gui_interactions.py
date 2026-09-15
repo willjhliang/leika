@@ -567,7 +567,7 @@ def test_controls_use_semantic_tokens_and_compact_density(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(dark_mode=True)
+    leika_server.gui.configure_theme(theme="dark")
     leika_page.wait_for_function(
         '() => document.documentElement.classList.contains("dark")',
         timeout=5_000,
@@ -1559,7 +1559,7 @@ def test_a_toggle_wears_the_button_pressed_look_in_both_themes(
 
     expect(control("Filled toggle", "toggle")).to_be_visible(timeout=5_000)
     for dark in (False, True):
-        leika_server.gui.configure_theme(dark_mode=dark)
+        leika_server.gui.configure_theme(theme="dark" if dark else "light")
         expect(leika_page.locator("html")).to_have_class(
             re.compile(r"\bdark\b") if dark else re.compile(r"^(?!.*\bdark\b).*$")
         )

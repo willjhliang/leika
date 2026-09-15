@@ -3,6 +3,13 @@
 Notable user-facing changes are recorded here. This project follows semantic
 versioning.
 
+## Unreleased
+
+- Theme (breaking): replace `configure_theme(dark_mode=True/False)` with
+  `configure_theme(theme="dark"/"light")`. The default `theme=None` is equivalent
+  to `"auto"`. The API selects the Settings **Theme** option, and viewers can
+  change it afterwards; **Auto** always follows the browser's OS preference.
+
 ## 0.4.0 — 2026-08-19
 
 59 commits since v0.3.0. Items marked breaking need call sites updated.

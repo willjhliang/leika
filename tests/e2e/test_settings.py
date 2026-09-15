@@ -300,9 +300,9 @@ def test_the_gear_reaches_the_docked_and_mobile_chromes(
     assert page_errors == []
 
 
-def choose_scheme(page: Page, pane: Locator, name: str) -> None:
-    """Pick one of Auto, Light or Dark from the color scheme dropdown."""
-    pane.locator("[data-leika-settings-color-scheme]").click()
+def choose_theme(page: Page, pane: Locator, name: str) -> None:
+    """Pick one of Auto, Light or Dark from the Theme dropdown."""
+    pane.locator("[data-leika-settings-theme]").click()
     page.get_by_role("option", name=name, exact=True).click()
 
 
@@ -312,7 +312,7 @@ def test_dark_mode_outranks_the_server_and_the_browser(
     page_errors: list[str],
 ) -> None:
     """The app asked for light and the OS agrees; the viewer still wins."""
-    leika_server.gui.configure_theme(dark_mode=False)
+    leika_server.gui.configure_theme(theme="light")
     page.emulate_media(color_scheme="light")
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -323,17 +323,16 @@ def test_dark_mode_outranks_the_server_and_the_browser(
     light_background = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
 
     pane = open_settings(page)
-    # The dropdown starts on the choice nobody has made yet, not on the scheme
-    # that choice happens to resolve to.
-    expect(pane.locator("[data-leika-settings-color-scheme]")).to_contain_text("Auto")
-    choose_scheme(page, pane, "Dark")
+    # The API and the GUI show the same selection.
+    expect(pane.get_by_role("combobox", name="Theme", exact=True)).to_contain_text("Light")
+    choose_theme(page, pane, "Dark")
 
     page.wait_for_function("() => document.documentElement.classList.contains('dark')")
     assert (
         page.evaluate("() => getComputedStyle(document.body).backgroundColor") != light_background
     )
 
-    choose_scheme(page, pane, "Light")
+    choose_theme(page, pane, "Light")
     page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
     assert page_errors == []
 
@@ -343,13 +342,8 @@ def test_auto_hands_the_scheme_back_to_the_browser(
     page: Page,
     page_errors: list[str],
 ) -> None:
-    """A pinned scheme has to be unpinnable.
-
-    Otherwise the first visit to these settings is a one-way door out of
-    `dark_mode="auto"`: whatever the viewer picks -- including the scheme the
-    page was already showing -- outranks the OS from then on, and the page
-    stops following it with nothing on screen to say why.
-    """
+    """Auto follows the OS even after Python selected an explicit theme."""
+    leika_server.gui.configure_theme(theme="light")
     page.emulate_media(color_scheme="light")
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -360,12 +354,12 @@ def test_auto_hands_the_scheme_back_to_the_browser(
     pane = open_settings(page)
     # Pin light -- the scheme it is already on, which is the case that used to
     # look like nothing had happened.
-    choose_scheme(page, pane, "Light")
+    choose_theme(page, pane, "Light")
     page.emulate_media(color_scheme="dark")
     page.wait_for_timeout(250)
     assert not is_dark(page), "a pinned scheme must ignore the OS"
 
-    choose_scheme(page, pane, "Auto")
+    choose_theme(page, pane, "Auto")
     page.wait_for_function("() => document.documentElement.classList.contains('dark')")
 
     # And it keeps following it, rather than having simply resolved once.
@@ -383,7 +377,7 @@ def test_a_scheme_choice_survives_a_reload(
 ) -> None:
     del leika_server
     was_dark = is_dark(leika_page)
-    choose_scheme(leika_page, open_settings(leika_page), "Light" if was_dark else "Dark")
+    choose_theme(leika_page, open_settings(leika_page), "Light" if was_dark else "Dark")
     leika_page.wait_for_function(
         "was => document.documentElement.classList.contains('dark') !== was",
         arg=was_dark,
@@ -724,7 +718,7 @@ def test_the_browser_chrome_is_tinted_like_the_dock(
     pane = open_settings(page)
 
     for scheme, dark in (("Dark", True), ("Light", False)):
-        choose_scheme(page, pane, scheme)
+        choose_theme(page, pane, scheme)
         page.wait_for_function(
             "dark => document.documentElement.classList.contains('dark') === dark",
             arg=dark,
@@ -741,10 +735,10 @@ def test_the_browser_chrome_is_tinted_like_the_dock(
 
     # The two schemes must not agree, or the assertions above would hold for a
     # tag nobody was updating.
-    choose_scheme(page, pane, "Dark")
+    choose_theme(page, pane, "Dark")
     page.wait_for_function("() => document.documentElement.classList.contains('dark')")
     in_dark = _theme_color(page)
-    choose_scheme(page, pane, "Light")
+    choose_theme(page, pane, "Light")
     page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
     assert in_dark != _theme_color(page)
     assert page_errors == []

@@ -871,7 +871,7 @@ export interface PageUpdateMessage {
 export interface ThemeConfigurationMessage {
   type: "ThemeConfigurationMessage";
   control_layout: "floating" | "left" | "right";
-  dark_mode: boolean | "auto";
+  theme: "auto" | "light" | "dark";
 }
 /** Signal that a file is about to be sent.
  *
@@ -3201,13 +3201,14 @@ const messageValidators = new Map<
       Object.keys(message).length === 3 &&
       Object.hasOwn(message, "type") &&
       Object.hasOwn(message, "control_layout") &&
-      Object.hasOwn(message, "dark_mode") &&
+      Object.hasOwn(message, "theme") &&
       message["type"] === "ThemeConfigurationMessage" &&
       (message["control_layout"] === "floating" ||
         message["control_layout"] === "left" ||
         message["control_layout"] === "right") &&
-      (typeof message["dark_mode"] === "boolean" ||
-        message["dark_mode"] === "auto"),
+      (message["theme"] === "auto" ||
+        message["theme"] === "light" ||
+        message["theme"] === "dark"),
   ],
   [
     "FileTransferStartUpload",
@@ -3418,4 +3419,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "78465f9f8e0e";
+export const LEIKA_PROTOCOL = "36b52f738ebf";

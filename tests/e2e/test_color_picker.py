@@ -151,7 +151,7 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.configure_theme(dark_mode=True)
+    leika_server.gui.configure_theme(theme="dark")
     leika_page.wait_for_function(
         '() => document.documentElement.classList.contains("dark")',
         timeout=5_000,
@@ -433,7 +433,7 @@ def test_the_selection_gradient_does_not_wrap_at_its_edges(
     Only dark mode shows it, since a light theme's opaque border covers the
     overhang, so the assertion needs the translucent border to see through.
     """
-    leika_server.gui.configure_theme(dark_mode=True)
+    leika_server.gui.configure_theme(theme="dark")
     leika_server.gui.add_rgb("Accent", initial_value=(20, 90, 210))
     expect(leika_page.locator("html")).to_have_class(re.compile(r"\bdark\b"))
     picker = _open_color_picker(leika_page, "Accent")

@@ -42,18 +42,11 @@ export function Root() {
 
 function ViewerContents({ children }: { children: React.ReactNode }) {
   const viewer = useViewer();
-  const configuredDarkMode = viewer.useGui((state) => state.theme.dark_mode);
   const prefersDarkMode = usePrefersDarkMode();
   const chosenDarkMode = viewer.useSettings((state) => state.darkMode);
-  // "auto" is the default the server sends, and what the store holds before it
-  // connects, so the OS preference decides unless an app opts out of it. Two
-  // viewers of the same app can legitimately land on different schemes.
-  //
-  // A viewer who has worked the settings switch outranks both: the app's
-  // choice is a default, and the reader's is a decision.
-  const darkMode =
-    chosenDarkMode ??
-    (configuredDarkMode === "auto" ? prefersDarkMode : configuredDarkMode);
+  // Settings is the single selection, whether changed by Python or the GUI.
+  // Auto always follows the browser, with no server override underneath it.
+  const darkMode = chosenDarkMode ?? prefersDarkMode;
   const controlLayout = viewer.useGui((state) => state.theme.control_layout);
   useAccentColor(viewer.useSettings((state) => state.accentColor));
   useThemeColor();

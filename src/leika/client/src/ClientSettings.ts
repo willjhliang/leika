@@ -21,13 +21,10 @@ export const IMAGE_FIT_OBJECT_FIT: Record<
 
 const IMAGE_FITS = Object.keys(IMAGE_FIT_OBJECT_FIT) as ImageFit[];
 
-/** Display preferences owned by the browser rather than by the Python app.
- *
- * These are the viewer's own choices, so they outrank what the server asked
- * for: an app that sets `dark_mode=False` still yields to a reader who turns
- * dark mode on. */
+/** Display preferences stored in the browser. Python's theme setter and
+ * the Settings GUI update the same selection; the latest change takes effect. */
 export interface ClientSettings {
-  /** `null` follows the server's `dark_mode`, which may itself be "auto". */
+  /** `null` is Auto and follows the browser's OS preference. */
   darkMode: boolean | null;
   /** Pin every pane's corner title open instead of revealing it on hover. */
   showPaneTitles: boolean;
@@ -40,9 +37,8 @@ export interface ClientSettings {
 }
 
 export interface ClientSettingsActions {
-  /** `null` hands the scheme back to the server and the OS. A viewer who has
-   * pinned one has to be able to stop, or the first flip of the switch is a
-   * one-way door out of `dark_mode="auto"`. */
+  /** Select Auto (`null`), Light (`false`), or Dark (`true`). Both the GUI
+   * and incoming theme configuration messages use this setter. */
   setDarkMode: (darkMode: boolean | null) => void;
   setShowPaneTitles: (showPaneTitles: boolean) => void;
   setAccentColor: (accentColor: string | null) => void;

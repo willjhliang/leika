@@ -53,7 +53,7 @@ function createSettingsHarness(storage: ClientSettingsStorage | null): {
 }
 
 describe("readClientSettings", () => {
-  it("defaults to following the server with no accent and hidden titles", () => {
+  it("defaults to following the browser with no accent and hidden titles", () => {
     expect(readClientSettings(new MemoryStorage())).toEqual({
       darkMode: null,
       showPaneTitles: false,
@@ -186,10 +186,7 @@ describe("useClientSettings", () => {
     expect(createSettingsHarness(storage).getState().darkMode).toBe(false);
   });
 
-  it("gives a pinned scheme back to the server and the OS", () => {
-    // The way out of a pinned scheme: what was stored is not a scheme at all
-    // but the absence of one, which is what `dark_mode: "auto"` needs to
-    // reach the browser again.
+  it("gives an explicit theme back to the browser's OS preference", () => {
     const storage = new MemoryStorage();
     const { actions, getState } = createSettingsHarness(storage);
     actions.setDarkMode(true);

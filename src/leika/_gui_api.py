@@ -1655,7 +1655,7 @@ class GuiApi(GuiContainer):
         self,
         *,
         control_layout: Literal["floating", "left", "right"] = "floating",
-        dark_mode: bool | Literal["auto"] = "auto",
+        theme: Literal["auto", "light", "dark"] | None = None,
     ) -> None:
         """Configures the visual appearance of the Leika front-end.
 
@@ -1668,10 +1668,11 @@ class GuiApi(GuiContainer):
                             collapse it by clicking its header. On a phone the
                             controls are a bottom sheet and the value is
                             ignored.
-            dark_mode: ``True`` or ``False`` to pin the scheme for every client.
-                       The default, ``"auto"``, follows each browser's own
-                       ``prefers-color-scheme`` and tracks it if the viewer
-                       changes their OS setting mid-session.
+            theme: Selects ``"auto"``, ``"light"``, or ``"dark"`` in the
+                   viewer's Theme setting. The default, ``None``, is equivalent
+                   to ``"auto"`` and follows each browser's OS preference,
+                   including changes during the session. This sets the current
+                   selection; viewers can change it afterwards in Settings.
         """
 
         if type(control_layout) is not str or control_layout not in (
@@ -1684,13 +1685,13 @@ class GuiApi(GuiContainer):
                 " 'collapsible' and 'fixed' sidebar layouts were removed; use"
                 " 'left' or 'right' to start the panel docked to that edge."
             )
-        if not (type(dark_mode) is bool or (type(dark_mode) is str and dark_mode == "auto")):
-            raise ValueError("dark_mode must be True, False, or 'auto'.")
+        if theme is not None and (type(theme) is not str or theme not in ("auto", "light", "dark")):
+            raise ValueError("theme must be None, 'auto', 'light', or 'dark'.")
 
         self._websock_interface.queue_message_or_raise(
             _messages.ThemeConfigurationMessage(
                 control_layout=control_layout,
-                dark_mode=dark_mode,
+                theme="auto" if theme is None else theme,
             ),
         )
 

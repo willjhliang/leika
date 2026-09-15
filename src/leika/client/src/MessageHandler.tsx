@@ -84,6 +84,11 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "ThemeConfigurationMessage":
           viewer.guiActions.setTheme(message);
+          // Python selects the same preference as Settings. It is a setter,
+          // so a later GUI selection (including Auto) takes effect normally.
+          viewer.settingsActions.setDarkMode(
+            message.theme === "auto" ? null : message.theme === "dark",
+          );
           return;
         case "RunJavascriptMessage":
           // Executed once before this frame dispatches, after pure preflight.

@@ -143,37 +143,30 @@ function SettingsSelectRow<T extends string>({
   );
 }
 
-/** The scheme a viewer can pin, and the choice not to.
- *
- * Three states rather than a switch, because the third is the one worth
- * having: "Auto" is the absence of a decision, which is what lets the server's
- * `dark_mode` -- itself "auto" unless an app says otherwise -- reach the
- * browser's `prefers-color-scheme`. A switch can only write a boolean, so
- * touching it once, even to put it back, pins the scheme for good and quietly
- * stops the page following the OS. */
-type ColorScheme = "auto" | "light" | "dark";
+/** Auto follows the OS; Light and Dark select an explicit theme. */
+type Theme = "auto" | "light" | "dark";
 
-const COLOR_SCHEME_ITEMS: { value: ColorScheme; label: string }[] = [
+const THEME_ITEMS: { value: Theme; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
 ];
 
-function ColorSchemeRow() {
+function ThemeRow() {
   const viewer = useViewer();
   const darkMode = viewer.useSettings((state) => state.darkMode);
   const { setDarkMode } = viewer.settingsActions;
 
   return (
     <SettingsSelectRow
-      id="leika-settings-color-scheme"
-      label="Color scheme"
-      items={COLOR_SCHEME_ITEMS}
+      id="leika-settings-theme"
+      label="Theme"
+      items={THEME_ITEMS}
       value={darkMode === null ? "auto" : darkMode ? "dark" : "light"}
       onValueChange={(next) =>
         setDarkMode(next === "auto" ? null : next === "dark")
       }
-      attrs={{ "data-leika-settings-color-scheme": "true" }}
+      attrs={{ "data-leika-settings-theme": "true" }}
     />
   );
 }
@@ -299,7 +292,7 @@ function SettingsRows() {
 
   return (
     <div className="flex flex-col gap-2" data-leika-settings-pane>
-      <ColorSchemeRow />
+      <ThemeRow />
       <SettingsRow htmlFor="leika-settings-pane-titles" label="Pane titles">
         <Switch
           id="leika-settings-pane-titles"

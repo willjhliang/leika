@@ -133,7 +133,7 @@ const cleanGuiState: GuiState = {
     control_layout: "floating",
     // Matches the server's default, so the scheme does not change under the
     // viewer when the first theme message arrives.
-    dark_mode: "auto",
+    theme: "auto",
   },
   server: "",
   workspaceId: null,

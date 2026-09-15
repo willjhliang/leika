@@ -55,7 +55,7 @@ def dock_page(
 ) -> Page:
     """The floating control panel plus a two-tab GUI group inside its area."""
     del page_errors  # Registers the pageerror listener; tests assert on it.
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Alpha"):
         leika_server.gui.add_text(None, "Alpha body", editable=False, markdown=True, multiline=True)
@@ -943,7 +943,7 @@ def test_a_tab_strip_grows_to_hold_the_tabs_that_wrap(
     be read.
     """
     del page_errors  # Registers the pageerror listener; asserted on below.
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     tabs = leika_server.gui.add_tab_group()
     labels = ("Overview dashboard", "Experiment controls", "Detailed diagnostics")
     for label in labels:
@@ -992,7 +992,7 @@ CONTROL_WIDTH_PX = 320.0
 
 def goto_docked(page: Page, leika_server: leika.Server, side: str, label: str = "Value") -> Page:
     """Load a workspace whose theme starts the control panel docked to `side`."""
-    leika_server.gui.configure_theme(control_layout=side, dark_mode=True)  # type: ignore[arg-type]
+    leika_server.gui.configure_theme(control_layout=side, theme="dark")  # type: ignore[arg-type]
     leika_server.gui.add_slider(label, min=0.0, max=1.0, step=0.01, initial_value=0.5)
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -1223,7 +1223,7 @@ def test_mid_session_theme_change_redocks_the_panel(
     """A configure_theme call mid-session re-places the panel -- once. The
     server wins at the moment it asks; a viewer who then drags the panel away
     keeps their arrangement, since an unchanged value never re-asserts."""
-    leika_server.gui.configure_theme(control_layout="floating", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     leika_server.gui.add_slider("Value", min=0.0, max=1.0, step=0.01, initial_value=0.5)
     page.goto(leika_server.url)
     page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
@@ -1233,7 +1233,7 @@ def test_mid_session_theme_change_redocks_the_panel(
     expect(control_panel(page)).to_have_attribute("data-dock-side", "none", timeout=5_000)
     assert len(window_ids(page)) == 1
 
-    leika_server.gui.configure_theme(control_layout="left", dark_mode=True)
+    leika_server.gui.configure_theme(control_layout="left", theme="dark")
     expect(control_panel(page)).to_have_attribute("data-dock-side", "left", timeout=5_000)
     assert window_ids(page) == []
 
