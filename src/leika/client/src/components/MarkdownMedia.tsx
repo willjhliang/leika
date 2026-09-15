@@ -10,6 +10,8 @@
 
 import * as React from "react";
 
+import { cn } from "@/lib/utils";
+
 import { InlineMediaSurface, MediaPreview } from "./MediaPreview";
 import { observeMarkdownImageViewport } from "./markdownImageViewport";
 import { mediaPreviewWidth, type MediaSize } from "./mediaPreviewSize";
@@ -225,6 +227,10 @@ function InertMarkdownImage({
   return anchorAround(
     <img
       {...placeholderProps}
+      className={cn(
+        "text-center text-sm text-muted-foreground",
+        sourceProps.className,
+      )}
       width={measured.width}
       height={measured.height}
     />,
@@ -351,6 +357,10 @@ export function AdmittedMarkdownImage({
     <img
       ref={imageRef}
       {...props}
+      className={cn(
+        "text-center text-sm text-muted-foreground",
+        props.className,
+      )}
       loading={canDefer ? "lazy" : props.loading}
       decoding={canDefer ? "async" : props.decoding}
       onError={decodeError.onError}
