@@ -5,6 +5,7 @@ import {
   contentsOf,
   DOCUMENT_ID_PREFIX,
   type DocumentHeading,
+  type RenderedDocument,
 } from "../markdown";
 import { renderMarkdown } from "./markdownDocument";
 import { cancelMarkdownCarry, startMarkdownCarry } from "./markdownCarry";
@@ -353,6 +354,8 @@ function DocumentContents({ headings }: { headings: DocumentHeading[] }) {
 export function MarkdownRenderer(props: {
   children?: string;
   contents?: boolean;
+  /** Reuse the preview's parse, including documents too large to cache. */
+  document?: RenderedDocument;
 }) {
   const source = props.children ?? "";
   const carryOwner = React.useRef<object>(null);
@@ -361,7 +364,10 @@ export function MarkdownRenderer(props: {
     () => () => cancelMarkdownCarry(carryOwner.current ?? undefined),
     [],
   );
-  const { element, headings } = renderMarkdown(source);
+  const { element, headings } = React.useMemo(
+    () => props.document ?? renderMarkdown(source),
+    [props.document, source],
+  );
   // Held still across renders, because it is what the marking of the current
   // section watches: a fresh array every render is a fresh set of listeners
   // every render. `headings` is already the same array for the same document,

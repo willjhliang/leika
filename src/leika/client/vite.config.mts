@@ -21,7 +21,14 @@ export default defineConfig(({ command }) => {
       ...(!isDev ? [notices.plugin] : []),
     ],
     resolve: {
-      alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+      alias: {
+        "@": fileURLToPath(new URL("./src", import.meta.url)),
+        // The browser export uses document.createElement, unavailable in a
+        // Markdown worker. The default export is the equivalent entity table.
+        "decode-named-character-reference": fileURLToPath(
+          import.meta.resolve("decode-named-character-reference"),
+        ),
+      },
     },
     server: {
       port: 3000,

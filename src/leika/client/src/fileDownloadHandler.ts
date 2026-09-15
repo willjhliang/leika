@@ -10,9 +10,10 @@ import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { installFileDownloadLink } from "./fileDownloadLink";
 import {
   abortFilePreviewTransfer,
+  acceptFilePreview,
   noteReloadStarted,
-  openFilePreview,
   previewKindFor,
+  receiveFilePreviewPart,
   reloadFilePreview,
   resolveFilePreview,
   warmedContents,
@@ -112,11 +113,9 @@ export function handleFileDownloadMessage(
 
   if (message.type === "FileTransferStartDownload") {
     if (message.disposition === "preview") {
-      // The dialog opens on the first message rather than the last: its
-      // name, viewer and size are all here, so the click is answered now
-      // and only the contents wait on the rest of the transfer -- or not
-      // even that, when a warm transfer already brought them.
-      openFilePreview({
+      // Button previews are already open locally. Metadata fills in that
+      // popup after server preparation; it cannot reopen a dismissed click.
+      acceptFilePreview({
         id: message.transfer_uuid,
         filename: message.filename,
         mimeType: message.mime_type,
@@ -135,6 +134,10 @@ export function handleFileDownloadMessage(
     ) {
       noteReloadStarted(message.source_uuid);
     }
+  }
+
+  if (message.type === "FileTransferPart" && message.part_index === 0) {
+    receiveFilePreviewPart(message.transfer_uuid, message.content);
   }
 
   if (result.status !== "complete") return;

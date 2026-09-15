@@ -19,9 +19,8 @@
  *   - **No document fails.** CommonMark has no syntax errors -- every string
  *     of characters is a valid document, and anything that is not markup is
  *     text. There is no parse-failure state left to render.
- *   - **Rendering is synchronous.** Nothing has to be compiled, so a document
- *     is a pure function of its source and appears in the first paint rather
- *     than one tick later.
+ *   - **Parsing is independent of React.** Large file previews parse in a
+ *     worker; small documents can use the same pipeline synchronously.
  */
 
 import type { Nodes, Root } from "hast";
@@ -295,37 +294,50 @@ export interface RenderedDocument {
  * The processor is built once and reused: it holds no per-document state, and
  * assembling a unified pipeline is far more work than running one.
  */
-export function createMarkdownRenderer(components: MarkdownComponents) {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(remarkRehype, { allowDangerousHtml: true })
-    .use(rehypeRaw)
-    .use(rehypeSlug)
-    .use(rehypeSanitize, schema)
-    .use(rehypeRestoreEmbeds)
-    .use(rehypeColorChips)
-    .use(rehypeCollectHeadings)
-    .use(rehypeReact, {
-      // React's own jsx-runtime types and the ones rehype-react asks for
-      // describe the same three functions with different signatures, so the
-      // handoff is asserted rather than inferred. There is nothing to get
-      // wrong here beyond passing the wrong runtime.
-      Fragment: runtime.Fragment,
-      jsx: runtime.jsx,
-      jsxs: runtime.jsxs,
-      components,
-    } as RehypeReactOptions);
+export interface ParsedDocument {
+  tree: Root;
+  headings: DocumentHeading[];
+}
 
-  return (markdown: string): RenderedDocument => {
-    const { lifted, embeds, embedPrefix } = liftEmbeds(markdown);
-    const file = processor.processSync({
-      value: lifted,
-      data: { embeds, embedPrefix },
-    });
-    return {
-      element: file.result,
-      headings: (file.data as { headings?: DocumentHeading[] }).headings ?? [],
-    };
-  };
+const parser = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkRehype, { allowDangerousHtml: true })
+  .use(rehypeRaw)
+  .use(rehypeSlug)
+  .use(rehypeSanitize, schema)
+  .use(rehypeRestoreEmbeds)
+  .use(rehypeColorChips)
+  .use(rehypeCollectHeadings);
+
+/** A structured-cloneable, sanitized tree suitable for parsing in a worker. */
+export function parseMarkdown(markdown: string): ParsedDocument {
+  const { lifted, embeds, embedPrefix } = liftEmbeds(markdown);
+  const data: {
+    embeds: typeof embeds;
+    embedPrefix: string;
+    headings?: DocumentHeading[];
+  } = { embeds, embedPrefix };
+  const file = { value: lifted, data };
+  const tree = parser.runSync(parser.parse(file), file);
+  return { tree, headings: data.headings ?? [] };
+}
+
+export function createMarkdownCompiler(components: MarkdownComponents) {
+  const compiler = unified().use(rehypeReact, {
+    Fragment: runtime.Fragment,
+    jsx: runtime.jsx,
+    jsxs: runtime.jsxs,
+    components,
+  } as RehypeReactOptions);
+  return ({ tree, headings }: ParsedDocument): RenderedDocument => ({
+    element: compiler.stringify(tree),
+    headings,
+  });
+}
+
+export function createMarkdownRenderer(components: MarkdownComponents) {
+  const compile = createMarkdownCompiler(components);
+  return (markdown: string): RenderedDocument =>
+    compile(parseMarkdown(markdown));
 }

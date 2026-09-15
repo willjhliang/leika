@@ -198,6 +198,35 @@ def test_start_precedes_every_part() -> None:
     assert len(messages) == 1 + len(_parts(messages))
 
 
+def test_oversize_button_preview_cancels_its_pending_popup() -> None:
+    client = _Client()
+    client._send_preview("report.md", b"too large", max_bytes=1, source_uuid="button")
+    assert client._websock_connection.messages == [_messages.GuiPreviewCancelMessage("button")]
+    assert client.notifications[0][0] == "Too large to preview"
+
+
+def test_preview_flushes_metadata_before_reading_contents(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _Client()
+
+    @contextmanager
+    def slow_source(content: bytes | Path, chunk_size: int):
+        del content, chunk_size
+
+        def chunks():
+            assert client.flushes == 1
+            assert len(client._websock_connection.messages) == 1
+            assert _start(client._websock_connection.messages).disposition == "preview"
+            yield b"report"
+
+        yield 6, chunks()
+
+    monkeypatch.setattr("leika._downloads.download_source", slow_source)
+    client._send_file("report.md", b"ignored", 6, "preview")
+    assert (
+        b"".join(part.content for part in _parts(client._websock_connection.messages)) == b"report"
+    )
+
+
 def test_transfer_stops_when_connection_closes_after_start() -> None:
     client = _Client()
     client._websock_connection = _CloseAfterStartConnection()
@@ -397,7 +426,7 @@ def test_an_interrupted_send_emits_a_terminal_abort(
     assert abort.reason == "The server could not complete this transfer."
     assert len(abort.reason) <= 160
     assert "/private" not in abort.reason
-    assert client.flushes == 2
+    assert client.flushes == 3
 
 
 def test_an_empty_path_sends_no_parts(tmp_path: Path) -> None:

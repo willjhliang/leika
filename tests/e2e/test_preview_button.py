@@ -5,17 +5,18 @@ from __future__ import annotations
 import base64
 import re
 import struct
+import threading
 import time
 import zlib
 from pathlib import Path
 from typing import List
 
 import pytest
-from playwright.sync_api import Locator, Page, Route, expect
+from playwright.sync_api import BrowserType, Locator, Page, Route, expect
 
 import leika
 
-from .utils import assert_stable_viewer
+from .utils import assert_stable_viewer, find_free_port
 
 
 def _png(width: int, height: int) -> bytes:
@@ -348,6 +349,217 @@ def test_markdown_is_rendered(
     assert page_errors == []
 
 
+def test_previews_work_on_an_http_hostname(browser_type: BrowserType) -> None:
+    if browser_type.name != "chromium":
+        pytest.skip("This test uses Chromium's local hostname mapping.")
+    server = leika.Server(
+        host="127.0.0.1", port=find_free_port(), allowed_hosts=["preview.test"], verbose=False
+    )
+    browser = None
+    try:
+        documents = [
+            ("Markdown", "notes.md", b"# HTTP preview", "h1"),
+            ("Plain text", "notes.txt", b"HTTP preview", "pre"),
+            ("CSV", "notes.csv", b"HTTP preview", "pre"),
+        ]
+        for label, filename, content, _ in documents:
+            server.gui.add_preview_button(label, content, filename=filename)
+        browser = browser_type.launch(
+            args=["--host-resolver-rules=MAP preview.test 127.0.0.1", "--no-proxy-server"]
+        )
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(server.url.replace("127.0.0.1", "preview.test"))
+        # HTTP on a remote hostname lacks randomUUID even though localhost
+        # offers it. Exercise the actual browser restriction, without a mock.
+        assert page.evaluate("isSecureContext") is False
+        assert page.evaluate("typeof crypto.randomUUID") == "undefined"
+        for label, filename, _, selector in documents:
+            _press(page, label)
+            dialog = _dialog(page)
+            expect(dialog.locator(selector)).to_have_text("HTTP preview")
+            expect(dialog.get_by_role("link", name=f"Download {filename}")).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(dialog).to_have_count(0)
+        assert errors == []
+    finally:
+        if browser is not None:
+            browser.close()
+        server.stop()
+
+
+def test_popup_opens_before_the_server_prepares_the_file(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    release = threading.Event()
+    calls = 0
+
+    def prepare(_):
+        nonlocal calls
+        calls += 1
+        assert release.wait(timeout=10), "test did not release file preparation"
+        return b"# Ready after preparation\n"
+
+    leika_server.gui.add_preview_button("Prepare report", prepare, filename="report.md")
+    try:
+        _press(preview_page, "Prepare report")
+        dialog = _dialog(preview_page)
+        expect(dialog).to_be_visible(timeout=1_000)
+        expect(dialog.get_by_role("status", name="Loading")).to_be_visible()
+        reload = dialog.get_by_role("button", name="Reload", exact=True)
+        # Before the server resolves the source, the local popup knows the
+        # button label but may not yet know the filename.
+        download = dialog.get_by_role("button", name=re.compile(r"^Download "))
+        for control in (reload, download):
+            expect(control).to_be_visible()
+            expect(control).to_be_disabled()
+            expect(control).to_have_css("opacity", "0.5")
+            control.evaluate("element => element.click()")
+        _settle(preview_page)
+        reload_box = reload.bounding_box()
+        download_box = download.bounding_box()
+        dialog.evaluate("element => { window.loadingPopup = element; }")
+    finally:
+        release.set()
+
+    expect(dialog.get_by_role("heading", name="Ready after preparation")).to_be_visible()
+    expect(reload).to_be_enabled()
+    download = dialog.get_by_role("link", name="Download report.md")
+    expect(download).to_be_visible()
+    expect(download).to_be_enabled()
+    assert reload.bounding_box() == reload_box
+    assert download.bounding_box() == download_box
+    assert calls == 1
+    assert dialog.evaluate("element => element === window.loadingPopup")
+    assert page_errors == []
+
+
+@pytest.mark.parametrize("size_bytes", [32 * 1024, 512 * 1024, 8 * 1024 * 1024])
+def test_first_screen_is_readable_while_the_rest_is_still_preparing(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size_bytes: int,
+) -> None:
+    report = tmp_path / "progressive.md"
+    first = b"# Read this immediately\n\nThe first screen is ready.\n\n"
+    paragraph = b"Later paragraph. " + b"More readable text. " * 50 + b"\n\n"
+    report.write_bytes(
+        first + paragraph * (size_bytes // len(paragraph)) + b"\n\n## Last streamed section\n"
+    )
+    release = threading.Event()
+    preparing = threading.Event()
+    # Callable avoids warming, exercising a cold first click.
+    handle = leika_server.gui.add_preview_button("Read progressively", lambda _: report)
+    original = handle._prepared
+
+    def prepare(client, filename, content):
+        preparing.set()
+        assert release.wait(timeout=15), "test did not release full preparation"
+        return original(client, filename, content)
+
+    monkeypatch.setattr(handle, "_prepared", prepare)
+    try:
+        _press(preview_page, "Read progressively")
+        expect(
+            _dialog(preview_page).get_by_role("heading", name="Read this immediately")
+        ).to_be_visible(timeout=1000)
+        assert preparing.is_set()
+        expect(_dialog(preview_page).get_by_role("status", name="Loading")).to_have_count(0)
+        if size_bytes <= 1024 * 1024:
+            # Even the end arrives while full-file/image preparation is held.
+            expect(
+                _dialog(preview_page).get_by_role("heading", name="Last streamed section")
+            ).to_have_count(1, timeout=10000)
+            expect(
+                _dialog(preview_page).get_by_role("link", name="Download progressive.md")
+            ).to_have_count(0)
+        assert not release.is_set()
+    finally:
+        release.set()
+    assert page_errors == []
+
+
+def test_cached_first_screen_opens_without_waiting_for_the_server(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "cached.md"
+    path.write_text("# Cached first screen\n\n" + "Paragraph.\n\n" * 2000)
+    handle = leika_server.gui.add_preview_button("Read cached", path)
+    _press(preview_page, "Read cached")
+    expect(_dialog(preview_page).get_by_role("link", name="Download cached.md")).to_be_visible()
+    preview_page.keyboard.press("Escape")
+    release = threading.Event()
+    original = handle._resolve
+
+    def resolve(event):
+        assert release.wait(timeout=15), "test did not release source resolution"
+        return original(event)
+
+    monkeypatch.setattr(handle, "_resolve", resolve)
+    try:
+        _press(preview_page, "Read cached")
+        expect(
+            _dialog(preview_page).get_by_role("heading", name="Cached first screen")
+        ).to_be_visible(timeout=1000)
+        assert not release.is_set()
+    finally:
+        release.set()
+    assert page_errors == []
+
+
+def test_large_markdown_paints_the_popup_before_decoding(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    source = "# Large report\n\n" + ("A long paragraph. " * 180 + "\n\n") * 200
+    assert 512 * 1024 < len(source.encode()) < 1024 * 1024
+    # A provider cannot warm, so this exercises the first open of an uncached
+    # document. Make decoding resolve immediately to expose work that would
+    # otherwise race with the browser's first paint.
+    leika_server.gui.add_preview_button(
+        "Show large report", lambda _: source.encode(), filename="large.md"
+    )
+    preview_page.evaluate(
+        """source => {
+          const nativeText = Blob.prototype.text;
+          const sourceBytes = new TextEncoder().encode(source).length;
+          window.previewPaint = {frames: 0, framesAtDecode: null};
+          Blob.prototype.text = function () {
+            if (this.size !== sourceBytes) return nativeText.call(this);
+            window.previewPaint.framesAtDecode = window.previewPaint.frames;
+            return Promise.resolve(source);
+          };
+          const sample = () => {
+            const popup = document.querySelector('[data-slot="dialog-content"]');
+            if (popup?.getBoundingClientRect().height > 0) {
+              window.previewPaint.frames += 1;
+            }
+            if (window.previewPaint.framesAtDecode === null) {
+              requestAnimationFrame(sample);
+            }
+          };
+          requestAnimationFrame(sample);
+        }""",
+        source,
+    )
+
+    _press(preview_page, "Show large report")
+    dialog = _dialog(preview_page)
+    expect(dialog.get_by_role("heading", name="Large report", exact=True)).to_be_visible()
+    expect(dialog.locator(".typeset > p")).to_have_count(200)
+    # Animation callbacks run before paint; reaching a second visible frame
+    # proves there was a paint opportunity before decoding began.
+    assert preview_page.evaluate("window.previewPaint.framesAtDecode") >= 2
+    assert page_errors == []
+
+
 def test_a_markdown_reader_is_a_stable_opaque_surface(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -416,7 +628,12 @@ def _columns(page: Page, *selectors: str) -> dict[str, dict]:
     contents that are still arriving is a different width from one moment to
     the next, and two widths read a call apart are not comparable.
     """
-    return _dialog(page).evaluate(
+    dialog = _dialog(page)
+    # The popup is visible before its asynchronously loaded document. Wait
+    # for the blocks being measured, not just the surrounding dialog.
+    for selector in selectors:
+        expect(dialog.locator(selector).first).to_be_attached()
+    return dialog.evaluate(
         """(dialog, selectors) => {
           const outer = dialog.getBoundingClientRect();
           return Object.fromEntries(selectors.map((selector) => {
@@ -732,9 +949,11 @@ def test_a_link_to_a_heading_finishes_flush_after_deferred_blocks_expand(
 def _settled_rect(dialog: Locator) -> dict[str, int]:
     """Where the dialog is once it has stopped moving.
 
-    A dialog opens and resizes through animations, and a rect read while one
-    is still running is a frame of it rather than the answer.
+    The loading popup precedes file metadata and image dimensions. Wait for
+    its body as well as any animation before measuring the final viewer size.
     """
+    expect(dialog).to_be_visible()
+    expect(dialog.locator('[data-slot="spinner"]')).to_have_count(0)
     return dialog.evaluate(
         """async (el) => {
           await Promise.all(
@@ -764,8 +983,8 @@ def test_a_document_preview_opens_the_same_size_whatever_the_file_holds(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
     # A document has no size of its own, so the frame is the viewer's: a
-    # one-line log and a thousand-line one open identically, and nothing
-    # resizes as the content lands. Media is the exception, and has its own
+    # one-line log and a thousand-line one have identical viewer dimensions
+    # once their type is known. Media is the exception, and has its own
     # test below.
     leika_server.gui.add_preview_button("Show one line", b"t,v\n", filename="tiny.csv")
     leika_server.gui.add_preview_button(
@@ -942,6 +1161,19 @@ def test_escape_closes_a_hinted_preview_every_time_and_focuses_nothing(
         # Closing is the end of reading, not a step somewhere: nothing is
         # focused afterwards, so no ring and no tooltip appear in the dock.
         assert preview_page.evaluate("document.activeElement === document.body")
+    assert page_errors == []
+
+
+def test_failed_preparation_closes_the_pending_popup(
+    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
+) -> None:
+    def fail(_):
+        raise OSError("test source is unavailable")
+
+    leika_server.gui.add_preview_button("Show unavailable", fail, filename="missing.md")
+    _press(preview_page, "Show unavailable")
+    expect(preview_page.locator('[data-slot="toast"]')).to_contain_text("Could not preview file")
+    expect(_dialog(preview_page)).to_have_count(0)
     assert page_errors == []
 
 
@@ -1663,6 +1895,96 @@ def test_the_contents_stand_a_gutter_off_the_writing(
     assert page_errors == []
 
 
+@pytest.mark.parametrize("fullscreen", [False, True])
+def test_contents_position_is_independent_of_file_contents_and_loading(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fullscreen: bool,
+) -> None:
+    from leika import _gui_handles
+
+    preview_page.set_viewport_size({"width": 1400, "height": 800})
+    opening = "# Report\n\n## Overview\n\nAn opening paragraph.\n\n## Details\n\n"
+    leika_server.gui.add_preview_button("Short report", opening.encode(), filename="short.md")
+    _press(preview_page, "Short report")
+    expect(_show_contents(preview_page)).to_be_visible()
+    if fullscreen:
+        _dialog(preview_page).get_by_role("button", name="Fill the window").click()
+    _settle(preview_page)
+    reference = _contents(preview_page).bounding_box()
+    assert reference is not None
+    preview_page.keyboard.press("Escape")
+    expect(_dialog(preview_page)).to_have_count(0)
+
+    # The initial chunk has only a few headings and no vertical scrollbar.
+    # Wide tables, figures, and enough prose to overflow all arrive later.
+    (tmp_path / "figure.png").write_bytes(_png(1200, 600))
+    row = "| " + " | ".join(f"a wide column heading {index}" for index in range(8)) + " |\n"
+    table = row + "|" + "---|" * 8 + "\n" + row * 3
+    source = opening + "<!--" + " padding" * 2000 + "-->\n\n" + table
+    source += "\n![Wide figure](figure.png)\n\n" + "Later paragraph.\n\n" * 500
+    source += "## End of streamed report\n"
+    report = tmp_path / "streamed.md"
+    report.write_text(source)
+    release_text = threading.Event()
+    release_images = threading.Event()
+    stream = _gui_handles.iter_preview_text
+
+    def delayed_stream(*args):
+        for part in stream(*args):
+            yield part
+            if part[2] == 0:
+                assert release_text.wait(15), "test did not release remaining text"
+
+    monkeypatch.setattr(_gui_handles, "iter_preview_text", delayed_stream)
+    handle = leika_server.gui.add_preview_button("Stream report", lambda _: report)
+    prepare = handle._prepared
+
+    def delayed_images(*args):
+        assert release_images.wait(15), "test did not release image preparation"
+        return prepare(*args)
+
+    monkeypatch.setattr(handle, "_prepared", delayed_images)
+
+    def assert_position() -> None:
+        actual = _contents(preview_page).bounding_box()
+        assert actual is not None
+        for dimension in ("x", "y", "width"):
+            assert abs(actual[dimension] - reference[dimension]) < 1, (reference, actual)
+        _assert_writing_centred_in_its_section(preview_page)
+
+    try:
+        _press(preview_page, "Stream report")
+        dialog = _dialog(preview_page)
+        expect(_show_contents(preview_page)).to_be_visible()
+        if fullscreen:
+            dialog.get_by_role("button", name="Fill the window").click()
+        _settle(preview_page)
+        assert_position()
+        reload = dialog.get_by_role("button", name="Reload", exact=True)
+        expect(reload).to_be_disabled()
+        expect(dialog.get_by_role("button", name="Download streamed.md")).to_be_disabled()
+        expect(dialog.locator("table")).to_have_count(0)
+        release_text.set()
+        expect(dialog.get_by_role("heading", name="End of streamed report")).to_have_count(1)
+        expect(dialog.locator("table")).to_have_count(1)
+        assert_position()
+        expect(reload).to_be_disabled()
+        expect(dialog.get_by_role("button", name="Download streamed.md")).to_be_disabled()
+        release_images.set()
+        expect(dialog.get_by_role("link", name="Download streamed.md")).to_be_visible()
+        expect(dialog.locator("img")).to_have_count(1)
+        expect(reload).to_be_enabled()
+        assert_position()
+    finally:
+        release_text.set()
+        release_images.set()
+    assert page_errors == []
+
+
 def test_the_contents_toggle_is_remembered_for_that_file(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -1908,10 +2230,13 @@ def test_a_document_does_not_reflow_as_its_figures_arrive(
     images = _dialog(preview_page).locator("img")
     expect(images).to_have_count(5)
 
-    # Exercise every lazy boundary while the pixel requests are held. This
-    # separates any deferred document materialization from image decode.
+    # Scroll the stable viewport owner: admission replaces an inert <img>
+    # with its live image as it approaches, potentially during Playwright's
+    # stability check. The owner reserves the same box throughout.
+    viewports = _dialog(preview_page).locator("[data-leika-markdown-image-viewport]")
+    expect(viewports).to_have_count(5)
     for index in range(5):
-        images.nth(index).scroll_into_view_if_needed()
+        viewports.nth(index).scroll_into_view_if_needed()
     deadline = time.monotonic() + 5.0
     while not held and time.monotonic() < deadline:
         preview_page.wait_for_timeout(10)
@@ -1940,4 +2265,83 @@ def test_a_document_does_not_reflow_as_its_figures_arrive(
     preview_page.wait_for_timeout(200)
 
     assert frame.evaluate(height) == reserved, "the document changed height when its figures landed"
+    assert page_errors == []
+
+
+def test_streamed_blocks_extend_the_reader_and_keep_its_scroll_anchor(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from leika import _gui_handles
+
+    (tmp_path / "figure.png").write_bytes(_png(600, 400))
+    paragraph = "A paragraph we can read while the rest arrives. " * 12 + "\n\n"
+    source = "# Streamed report\n\n![Figure](figure.png)\n\n" + paragraph * 22
+    source += "## Keep reading here\n\n" + paragraph * 300 + "## End of streamed report\n"
+    report = tmp_path / "streamed.md"
+    report.write_text(source)
+    release_text = threading.Event()
+    release_images = threading.Event()
+    stream = _gui_handles.iter_preview_text
+
+    def delayed_stream(*args):
+        for part in stream(*args):
+            yield part
+            if part[2] == 1:
+                assert release_text.wait(15), "test did not release remaining text"
+
+    monkeypatch.setattr(_gui_handles, "iter_preview_text", delayed_stream)
+    handle = leika_server.gui.add_preview_button("Stream report", lambda _: report)
+    prepare = handle._prepared
+
+    def delayed_images(*args):
+        assert release_images.wait(15), "test did not release image preparation"
+        return prepare(*args)
+
+    monkeypatch.setattr(handle, "_prepared", delayed_images)
+    try:
+        _press(preview_page, "Stream report")
+        dialog = _dialog(preview_page)
+        first = dialog.get_by_role("heading", name="Streamed report", exact=True)
+        expect(first).to_be_visible()
+        first.evaluate("node => window.firstStreamedHeading = node")
+        middle = dialog.get_by_role("heading", name="Keep reading here", exact=True)
+        # This is beyond the old 8 KiB prefix, with the rest still held.
+        expect(middle).to_have_count(1)
+        expect(dialog.get_by_role("heading", name="End of streamed report")).to_have_count(0)
+        middle.scroll_into_view_if_needed()
+        middle.evaluate(
+            "node => { window.streamAnchor = node; window.streamAnchorTop = node.getBoundingClientRect().top; }"
+        )
+        release_text.set()
+        expect(dialog.get_by_role("heading", name="End of streamed report")).to_have_count(
+            1, timeout=10000
+        )
+        assert first.evaluate("node => node === window.firstStreamedHeading")
+        assert middle.evaluate("node => node === window.streamAnchor")
+        assert (
+            middle.evaluate(
+                "node => Math.abs(node.getBoundingClientRect().top - window.streamAnchorTop)"
+            )
+            < 3
+        )
+        expect(dialog.get_by_role("link", name="Download streamed.md")).to_have_count(0)
+        release_images.set()
+        expect(dialog.locator("img")).to_have_count(1)
+        expect(dialog.get_by_role("link", name="Download streamed.md")).to_have_count(1)
+        preview_page.wait_for_timeout(300)
+        assert first.evaluate("node => node === window.firstStreamedHeading")
+        assert middle.evaluate("node => node === window.streamAnchor")
+        assert (
+            middle.evaluate(
+                "node => Math.abs(node.getBoundingClientRect().top - window.streamAnchorTop)"
+            )
+            < 3
+        )
+    finally:
+        release_text.set()
+        release_images.set()
     assert page_errors == []

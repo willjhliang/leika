@@ -5,6 +5,7 @@ import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
 import { boundedHoldCallbackFrequencies } from "../guiLimits";
+import { requestFilePreview } from "../filePreview";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 import { startPreviewWarmObservation } from "./previewWarmObserver";
 
@@ -93,7 +94,8 @@ export default function ButtonComponent({
       className="w-full"
       data-leika-button
       data-leika-button-color={color}
-      onClick={() =>
+      onClick={() => {
+        if (prefetch) requestFilePreview(uuid, text);
         // A press, not a reading: two of them inside one throttle window are
         // two presses, and a row of buttons reports every one.
         messageSender(
@@ -103,8 +105,8 @@ export default function ButtonComponent({
             updates: { value: true },
           },
           { coalesce: false },
-        )
-      }
+        );
+      }}
       onPointerDown={handlePointerDown}
       onPointerUp={stopHoldTimers}
       onPointerCancel={stopHoldTimers}

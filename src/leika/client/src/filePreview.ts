@@ -4,6 +4,7 @@ import {
   retainedDownloads,
 } from "./retainedDownloadBudget";
 import { normalizedSafeRasterMimeType } from "./imageSafety";
+import { randomUuid } from "./utils/randomUuid";
 
 // Which viewer a previewed file gets, and the reading of its size.
 //
@@ -29,6 +30,8 @@ export type PreviewKind =
 
 /** Decoding larger files to JS strings can multiply retained memory. The Blob
  * remains available through the preview's download control. */
+export const FILE_PREVIEW_LEAD_CHARS = 8192;
+
 export const FILE_TEXT_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 
 export function fileTextPreviewAllowed(sizeBytes: number): boolean {
@@ -176,22 +179,33 @@ function ensureRetained(contents: FileContents): RetainedDownload | null {
   return retained;
 }
 
+export interface PreviewTextStream {
+  id: string;
+  sourceVersion: string | null;
+  text: string;
+  nextPart: number;
+  complete: boolean;
+}
+
 /** One file the server asked this client to look at.
  *
- * Everything but the bytes is known from the transfer's first message, and
- * that is deliberately enough to open the dialog with: the name, the viewer
- * its type calls for, and so the frame's size are all settled while the file
- * is still arriving. The dialog answers a click at the speed of the metadata,
- * and only the contents wait on the transfer.
+ * Preview buttons open locally on the click with a loading body. The
+ * server's first transfer message then supplies authoritative metadata, and
+ * the contents follow. Script-initiated previews open on metadata alone.
  */
 export interface FilePreview {
-  /** The transfer's uuid, which keys the dialog. */
+  /** Stable dialog identity, allocated locally for a preview-button click. */
   id: string;
+  /** Null until a button's metadata arrives; absent for a server-opened file. */
+  transferId?: string | null;
   filename: string;
   mimeType: string;
   sizeBytes: number;
   /** The file itself, or null while its parts are still arriving. */
   contents: FileContents | null;
+  /** Bounded first screen, available before the complete file. */
+  textLead?: string;
+  textStream?: PreviewTextStream;
   /** The component this file came out of -- the preview button that was
    * pressed -- or null for a file a script sent, which has nothing to ask
    * again. What the reload and the watch are addressed to. */
@@ -386,6 +400,174 @@ export function openFilePreview(preview: FilePreview): void {
   announce();
 }
 
+/** Answer a preview-button click before the server prepares its file.
+ *
+ * Warm metadata gives the loading frame its filename and viewer immediately.
+ * A cold button uses its label until the server supplies the actual name.
+ * The last-known first screen is shown while the server checks for updates.
+ */
+export function requestFilePreview(sourceUuid: string, title: string): void {
+  const warm = warmed.get(sourceUuid);
+  const lead = textLeads.get(sourceUuid);
+  openFilePreview({
+    id: randomUuid(),
+    transferId: null,
+    filename: lead?.filename ?? warm?.filename ?? title,
+    mimeType: lead?.mimeType ?? (warm?.retained.blob.type || "text/plain"),
+    sizeBytes: lead?.sizeBytes ?? warm?.retained.blob.size ?? 0,
+    textLead: lead?.textLead,
+    textStream: textStreams.get(sourceUuid),
+    contents: null,
+    sourceUuid,
+    sourceVersion: null,
+  });
+}
+
+type TextLead = Pick<FilePreview, "filename" | "mimeType" | "sizeBytes"> & {
+  textLead: string;
+};
+const textLeads = new Map<string, TextLead>();
+
+/** Cache a small first screen; late warming must never reopen a closed popup. */
+export function receiveFilePreviewText(
+  sourceUuid: string,
+  lead: TextLead,
+): void {
+  const bounded = {
+    ...lead,
+    textLead: lead.textLead.slice(0, FILE_PREVIEW_LEAD_CHARS),
+  };
+  textLeads.delete(sourceUuid);
+  textLeads.set(sourceUuid, bounded);
+  while (textLeads.size > 8) textLeads.delete(textLeads.keys().next().value!);
+  if (current?.sourceUuid !== sourceUuid || current.transferId !== null) return;
+  current = { ...current, ...bounded };
+  announce();
+}
+
+// Keep warmed text bounded independently of the completed-Blob cache. An
+// open reader owns its stream even if cache pressure evicts that entry.
+const TEXT_STREAM_CACHE_CHARS = 2 * 1024 * 1024;
+const textStreams = new Map<string, PreviewTextStream>();
+let cachedTextChars = 0;
+
+export function receiveFilePreviewTextPart(
+  sourceUuid: string,
+  lead: TextLead,
+  part: {
+    streamId: string;
+    sourceVersion: string | null;
+    index: number;
+    done: boolean;
+  },
+): void {
+  if (lead.textLead.length > 32 * 1024) return;
+  const cached = textStreams.get(sourceUuid);
+  const previous =
+    current?.sourceUuid === sourceUuid &&
+    current.textStream?.id === part.streamId
+      ? current.textStream
+      : cached;
+  // A click revalidating an unchanged warmed file must not restart its reader.
+  if (
+    previous?.id === part.streamId &&
+    (previous.complete || part.index < previous.nextPart)
+  )
+    return;
+  if (
+    part.index !== 0 &&
+    (previous?.id !== part.streamId || previous.nextPart !== part.index)
+  )
+    return;
+  const prefix = part.index === 0 ? "" : previous!.text;
+  if (prefix.length + lead.textLead.length > FILE_TEXT_PREVIEW_MAX_BYTES)
+    return;
+  const stream: PreviewTextStream = {
+    id: part.streamId,
+    sourceVersion: part.sourceVersion,
+    text: prefix + lead.textLead,
+    nextPart: part.index + 1,
+    complete: part.done,
+  };
+  if (cached !== undefined) cachedTextChars -= cached.text.length;
+  textStreams.delete(sourceUuid);
+  textStreams.set(sourceUuid, stream);
+  cachedTextChars += stream.text.length;
+  while (textStreams.size > 8 || cachedTextChars > TEXT_STREAM_CACHE_CHARS) {
+    const oldest = textStreams.keys().next().value!;
+    cachedTextChars -= textStreams.get(oldest)!.text.length;
+    textStreams.delete(oldest);
+  }
+  if (part.index === 0) receiveFilePreviewText(sourceUuid, lead);
+  if (
+    current?.sourceUuid !== sourceUuid ||
+    (current.transferId !== null && current.textStream?.id !== part.streamId)
+  )
+    return;
+  current = { ...current, textStream: stream };
+  announce();
+}
+
+/** Use the first validated transfer chunk even for script-initiated previews. */
+export function receiveFilePreviewPart(
+  transferId: string,
+  bytes: Uint8Array,
+): void {
+  if (
+    current === null ||
+    (current.transferId ?? current.id) !== transferId ||
+    current.textLead !== undefined
+  )
+    return;
+  const kind = previewKindFor(current.mimeType, current.filename);
+  if (kind !== "markdown" && kind !== "text" && kind !== "prose") return;
+  const lead = bytes.subarray(0, FILE_PREVIEW_LEAD_CHARS);
+  current = {
+    ...current,
+    textLead: new TextDecoder().decode(lead, {
+      stream: lead.length < current.sizeBytes,
+    }),
+  };
+  announce();
+}
+
+/** A source failed before its transfer began; keep completed files intact. */
+export function cancelPendingFilePreview(sourceUuid: string): void {
+  if (current?.sourceUuid === sourceUuid && current.transferId === null) {
+    closeFilePreview(current.id);
+  }
+}
+
+/** Attach server metadata to the click that is still being previewed.
+ * A closed or superseded button preview must not be reopened by a late reply.
+ * Unsolicited script previews have no source button and keep their usual path.
+ */
+export function acceptFilePreview(preview: FilePreview): boolean {
+  if (preview.sourceUuid === null) {
+    openFilePreview(preview);
+    return true;
+  }
+  if (
+    current === null ||
+    current.sourceUuid !== preview.sourceUuid ||
+    current.transferId !== null
+  ) {
+    if (preview.contents !== null) releaseFileContents(preview.contents);
+    return false;
+  }
+  // Keep the popup mounted while its provisional title and contents settle.
+  openFilePreview({
+    ...preview,
+    textLead:
+      current.filename === preview.filename ? current.textLead : undefined,
+    textStream:
+      current.filename === preview.filename ? current.textStream : undefined,
+    id: current.id,
+    transferId: preview.id,
+  });
+  return true;
+}
+
 /** Fill in the contents of the preview `id`, once they have all arrived.
  *
  * If that preview is no longer on screen -- the reader closed the dialog
@@ -399,12 +581,12 @@ export function openFilePreview(preview: FilePreview): void {
  * reparses a long document underneath the reader.
  */
 export function resolveFilePreview(id: string, contents: FileContents): void {
-  if (current === null || current.id !== id) {
+  if (current === null || (current.transferId ?? current.id) !== id) {
     releaseFileContents(contents);
     return;
   }
   const next: CompleteFilePreview = { ...current, contents };
-  if (current.contents !== null && scrollingPreviewId === id) {
+  if (current.contents !== null && scrollingPreviewId === current.id) {
     revokeDeferredReplacement();
     deferredReplacement = next;
     ownDeferredContents(next);
@@ -446,7 +628,7 @@ export function abortFilePreviewTransfer(
   if (sourceUuid !== null) arriving.delete(sourceUuid);
   if (
     current === null ||
-    current.id !== transferUuid ||
+    (current.transferId ?? current.id) !== transferUuid ||
     current.contents !== null
   ) {
     return;
@@ -609,6 +791,9 @@ export function warmedContents(
 
 /** Clear every resource owned by the current server connection. */
 export function resetFilePreviewState(): void {
+  textLeads.clear();
+  textStreams.clear();
+  cachedTextChars = 0;
   arriving.clear();
   for (const entry of warmed.values()) entry.retained.release();
   warmed.clear();

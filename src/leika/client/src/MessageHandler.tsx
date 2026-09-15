@@ -5,6 +5,10 @@ import { DeferredObjectUrlReleaser } from "./deferredObjectUrlReleaser";
 import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { handleFileDownloadMessage } from "./fileDownloadHandler";
 import {
+  cancelPendingFilePreview,
+  receiveFilePreviewTextPart,
+} from "./filePreview";
+import {
   dismissNotification,
   preflightNotificationBatch,
   showNotification,
@@ -95,6 +99,26 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "GuiModalMessage":
           viewer.guiActions.addModal(message);
+          return;
+        case "GuiPreviewTextMessage":
+          receiveFilePreviewTextPart(
+            message.uuid,
+            {
+              filename: message.filename,
+              mimeType: message.mime_type,
+              sizeBytes: message.size_bytes,
+              textLead: message.text,
+            },
+            {
+              streamId: message.stream_uuid,
+              sourceVersion: message.source_version,
+              index: message.part_index,
+              done: message.done,
+            },
+          );
+          return;
+        case "GuiPreviewCancelMessage":
+          cancelPendingFilePreview(message.uuid);
           return;
         case "GuiUpdateMessage":
           return { uuid: message.uuid, updates: message.updates };

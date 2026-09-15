@@ -9,6 +9,7 @@
 
 import {
   createMarkdownRenderer,
+  createMarkdownCompiler,
   type MarkdownComponents,
   type RenderedDocument,
 } from "../markdown";
@@ -60,6 +61,21 @@ const components: MarkdownComponents = {
 };
 
 const render = createMarkdownRenderer(components);
+export const compileMarkdown = createMarkdownCompiler(components);
+
+// The first screen arrives before relative image URLs have been registered.
+// Keep its text readable without requesting unresolved filesystem paths.
+const leadComponents: MarkdownComponents = {
+  ...components,
+  img: ({ alt }) =>
+    alt ? (
+      <span className="block text-center text-sm text-muted-foreground">
+        {alt}
+      </span>
+    ) : null,
+};
+export const renderMarkdownLead = createMarkdownRenderer(leadComponents);
+export const compileMarkdownLead = createMarkdownCompiler(leadComponents);
 
 /** How many rendered documents are kept. Reading during a run means the same
  * report opened over and over; a handful of documents is a session's worth,
@@ -203,7 +219,9 @@ export function warmMarkdownDocument(
       if (settled) return;
       try {
         if (generation !== warmGeneration || !ownerIsActive()) return;
-        renderMarkdown(source);
+        // Idle callbacks still block the UI once started. Only preparse a
+        // bounded small document here; file previews parse larger ones in a worker.
+        if (source.length <= 8192) renderMarkdown(source);
         const urls = new Set(
           source.match(/\/leika-assets\/[\w.-]+(?:\?w=\d+&h=\d+)?/g) ?? [],
         );

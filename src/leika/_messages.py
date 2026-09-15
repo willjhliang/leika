@@ -660,6 +660,44 @@ class GuiPreviewWarmMessage(Message):
 
 
 @dataclasses.dataclass
+class GuiPreviewTextMessage(Message):
+    """Server->client: ordered text chunks, independent of image preparation.
+
+    Also sent while warming. A stream has one source revision and grows until
+    ``done``; clients keep existing document blocks while appending new ones.
+    """
+
+    uuid: str
+    filename: str
+    mime_type: str
+    size_bytes: int
+    text: str
+    stream_uuid: str
+    source_version: str | None
+    part_index: int
+    done: bool
+
+    @override
+    def redundancy_key(self) -> str:
+        return f"{type(self).__name__}:{self.stream_uuid}:{self.part_index}"
+
+
+@dataclasses.dataclass
+class GuiPreviewCancelMessage(Message):
+    """Server->client: a preview button could not produce its requested file.
+
+    Closes only a still-pending local popup for this source. The accompanying
+    notification explains the failure; completed previews remain in place.
+    """
+
+    uuid: str
+
+    @override
+    def redundancy_key(self) -> None:
+        return None
+
+
+@dataclasses.dataclass
 class GuiPreviewReloadMessage(Message):
     """Message sent from client->server when a preview's reload is pressed.
 

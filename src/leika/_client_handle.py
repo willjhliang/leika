@@ -208,6 +208,10 @@ class ClientHandle:
                 max_bytes=max_bytes,
             )
             if rejected_size is not None:
+                if disposition == "preview" and source_uuid is not None:
+                    self._websock_connection.queue_message(
+                        _messages.GuiPreviewCancelMessage(source_uuid)
+                    )
                 # Said rather than sent: the alternative is a tab that stops
                 # responding with nothing on screen to explain why.
                 self.add_notification(
@@ -289,6 +293,10 @@ class ClientHandle:
                     if queued is False or cancelled.is_set():
                         return None
                     started = True
+                    if disposition == "preview":
+                        # Open the loading dialog before disk I/O or transfer
+                        # backpressure can delay the first chunk.
+                        self.flush()
                     chunks = iter(chunks)
                     for i in range(expected_parts):
                         if cancelled.is_set():

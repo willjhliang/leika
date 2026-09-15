@@ -411,3 +411,22 @@ test("a caption under a figure is still markdown", () => {
   const drawn = html(`![Plot](${measuredAsset(8, 8)})\n*Figure 1*`);
   expect(drawn).toContain("<em>Figure 1</em>");
 });
+
+test("worker-cloned Markdown uses the same sanitation, headings, and rendering", async () => {
+  const { parseMarkdown } = await import("../markdown");
+  const { compileMarkdown, renderMarkdownLead } =
+    await import("./markdownDocument");
+  const source =
+    "# Heading\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![plot](relative.png)\n\n## Section\n\n|a|b|\n|-|-|\n|1|2|";
+  const parsed = structuredClone(parseMarkdown(source));
+  const compiled = compileMarkdown(parsed);
+  expect(renderToStaticMarkup(compiled.element)).toBe(
+    renderToStaticMarkup(renderMarkdown(source).element),
+  );
+  expect(compiled.headings).toEqual(renderMarkdown(source).headings);
+  const lead = renderToStaticMarkup(renderMarkdownLead(source).element);
+  expect(lead).toContain("Heading");
+  expect(lead).not.toContain("<img");
+  expect(lead).not.toContain("<script");
+  expect(lead).not.toContain("javascript:");
+});

@@ -14,6 +14,7 @@ import {
   filePreviewStore,
   openFilePreview,
   reloadIsOnItsWay,
+  requestFilePreview,
   resetFilePreviewState,
   resolveFilePreview,
 } from "./filePreview";
@@ -257,6 +258,7 @@ describe("handleFileDownloadMessage", () => {
         throw new Error("allocation failed");
       },
     });
+    requestFilePreview("button", "Notes");
     handleFileDownloadMessage(start(), env);
     expect(filePreviewStore.snapshot()?.contents).toBeNull();
 

@@ -19,6 +19,7 @@ import {
   filePreviewStore,
   filePreviewWatchStore,
   fileTextPreviewAllowed,
+  FILE_PREVIEW_LEAD_CHARS,
   finishFilePreviewScroll,
   formatBytes,
   isMediaKind,
@@ -31,14 +32,14 @@ import {
   type PreviewKind,
 } from "../filePreview";
 import type { ImageAdmission } from "../imageSafety";
-import { contentsOf } from "../markdown";
+import { contentsOf, type RenderedDocument } from "../markdown";
 import { HintTooltip } from "./common";
 import { LatestBlobTextReader } from "./latestBlobTextReader";
 import {
   MARKDOWN_RENDER_MAX_SOURCE_BYTES,
   markdownRenderAllowed,
-  renderMarkdown,
 } from "./markdownDocument";
+import { usePreviewMarkdown } from "./usePreviewMarkdown";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MediaPreview } from "./MediaPreview";
 import { mediaPreviewWidth } from "./mediaPreviewSize";
@@ -60,10 +61,9 @@ import {
 
 /** Read a textual blob without briefly rendering an empty document.
  *
- * The text lands as a transition: showing a document means parsing it, which
- * for a long file is real work, and work a transition lets React do after the
- * frame around the document has painted rather than before. The dialog is on
- * screen at the click, and the document arrives in it.
+ * The caller enables decoding only after the popup has had a paint. A React
+ * transition alone does not guarantee that: synchronous Markdown parsing can
+ * still run before the browser draws the loading state.
  */
 function useBlobText(
   blob: Blob | null,
@@ -135,14 +135,23 @@ function UnsupportedPreview({
  * about the file. Each is one 2rem step further in than the last, so the
  * close stays exactly where it is in every popup this app has.
  */
-function DownloadCorner({ filename, url }: { filename: string; url: string }) {
+function DownloadCorner({
+  filename,
+  url,
+}: {
+  filename: string;
+  url: string | null;
+}) {
   return (
     <HintTooltip hint="Download">
       <Button
         variant="ghost"
         size="icon-sm"
         className="absolute top-2 right-18"
-        render={<a href={url} download={filename} />}
+        disabled={url === null}
+        nativeButton={url === null}
+        role={url === null ? undefined : "link"}
+        render={url === null ? undefined : <a href={url} download={filename} />}
       >
         <DownloadIcon />
         <span className="sr-only">Download {filename}</span>
@@ -165,9 +174,11 @@ function DownloadCorner({ filename, url }: { filename: string; url: string }) {
  * read as broken exactly when it is working.
  */
 function ReloadCorner({
+  disabled,
   reloading,
   onReload,
 }: {
+  disabled: boolean;
   reloading: boolean;
   onReload: () => void;
 }) {
@@ -193,6 +204,7 @@ function ReloadCorner({
         variant="ghost"
         size="icon-sm"
         className="absolute top-2 right-26"
+        disabled={disabled}
         onClick={() => {
           setTurning(true);
           onReload();
@@ -341,24 +353,28 @@ function PreviewBody({
   contents,
   text,
   showContents,
+  document,
   imageAdmission,
 }: {
   kind: PreviewKind;
   preview: FilePreview;
-  contents: FileContents;
+  contents: FileContents | null;
   /** The file as writing, or null while it is still being read out of the
    * blob. Read by the dialog rather than here, because whether to offer the
    * contents toggle is a question about the document that has to be answered
    * outside the frame the document is drawn in. */
   text: string | null;
   showContents: boolean;
+  document: RenderedDocument | null;
   imageAdmission: ImageAdmission | null;
 }) {
   const { filename, mimeType, sizeBytes } = preview;
-  const { url } = contents;
-  const imageDecodeError = useImageDecodeError(kind === "image" ? url : null);
+  const url = contents?.url;
+  const imageDecodeError = useImageDecodeError(
+    kind === "image" ? (url ?? null) : null,
+  );
   const imagePixels = useRasterPixelLease(
-    kind === "image" ? contents.blob : null,
+    kind === "image" ? (contents?.blob ?? null) : null,
     imageAdmission?.ok === true ? imageAdmission.size : null,
   );
   const [fullscreen] = usePreviewFullscreen(previewMemoryKey(preview));
@@ -416,15 +432,18 @@ function PreviewBody({
         </object>
       );
     case "markdown":
-      // The spinner from the transfer holds until the document is ready to
-      // land whole, in one paint.
-      if (text === null) return <PendingBody />;
+      if (document === null) return <PendingBody />;
       return (
         <ReadingColumn>
           {/* The one surface with room to stand a contents list in: the
               writing keeps to its measure, and what is left over on either
               side is room a preview has and a panel row does not. */}
-          <MarkdownRenderer contents={showContents}>{text}</MarkdownRenderer>
+          <MarkdownRenderer
+            contents={showContents}
+            document={document ?? undefined}
+          >
+            {text ?? undefined}
+          </MarkdownRenderer>
         </ReadingColumn>
       );
     case "prose":
@@ -640,22 +659,47 @@ export function FilePreviewDialog({
   const textual = kind === "text" || kind === "prose" || kind === "markdown";
   const textBlob = preview.contents?.blob ?? null;
   const textContinuityKey = `${memoryKey}\0${preview.filename}\0${kind}`;
-  const text = useBlobText(
+  const [paintedTextKey, setPaintedTextKey] = React.useState<string | null>(
+    null,
+  );
+  React.useEffect(() => {
+    if (!textual || readingFrame === null) return;
+    // Start from the mounted portal, not the dialog component's first effect:
+    // Base UI can mount the popup in a later commit. Two animation frames give
+    // the browser a paint between mounting the spinner and starting text work.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setPaintedTextKey(textContinuityKey));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [readingFrame, textual, textContinuityKey]);
+  const completeText = useBlobText(
     textBlob,
     textual &&
+      paintedTextKey === textContinuityKey &&
       (kind !== "markdown" ||
         (textBlob !== null && markdownRenderAllowed(textBlob.size))),
     textContinuityKey,
   );
-  // Whether there is a list to stand up at all, which is what decides the
-  // toggle exists. This is the same cached parse the document is drawn from
-  // -- see `renderMarkdown` -- so asking costs nothing over showing it.
+  const lead =
+    preview.textLead ?? completeText?.slice(0, FILE_PREVIEW_LEAD_CHARS) ?? null;
+  const stream = preview.textStream;
+  const streamedText =
+    stream !== undefined &&
+    (preview.transferId === null ||
+      stream.sourceVersion === preview.sourceVersion)
+      ? stream.text
+      : null;
+  const text = completeText ?? streamedText ?? lead;
+  const { document, error: markdownError } = usePreviewMarkdown(
+    kind === "markdown" ? text : null,
+    kind === "markdown" ? lead : null,
+    textContinuityKey,
+    completeText !== null || stream?.complete === true,
+    completeText !== null,
+  );
   const listed = React.useMemo(
-    () =>
-      kind === "markdown" && text !== null
-        ? contentsOf(renderMarkdown(text).headings)
-        : [],
-    [kind, text],
+    () => (document === null ? [] : contentsOf(document.headings)),
+    [document],
   );
   const [contentsWanted, setContentsWanted] = usePreviewContents(memoryKey);
   // A file remembered with its list up, reopened after an edit that took the
@@ -678,22 +722,29 @@ export function FilePreviewDialog({
   }, [reloading]);
 
   const body =
-    preview.contents === null ? (
+    preview.contents === null && (!textual || text === null) ? (
       <PendingBody />
-    ) : kind === "markdown" &&
-      !markdownRenderAllowed(preview.contents.blob.size) ? (
-      <MarkdownPreviewLimit filename={preview.filename} />
-    ) : textual && !fileTextPreviewAllowed(preview.contents.blob.size) ? (
-      <TextPreviewLimit filename={preview.filename} />
     ) : (
-      <PreviewBody
-        kind={kind}
-        preview={preview}
-        contents={preview.contents}
-        text={text}
-        showContents={showContents}
-        imageAdmission={imageAdmission}
-      />
+      <>
+        <PreviewBody
+          kind={kind}
+          preview={preview}
+          contents={preview.contents}
+          text={text}
+          showContents={showContents}
+          document={document}
+          imageAdmission={imageAdmission}
+        />
+        {kind === "markdown" && !markdownRenderAllowed(preview.sizeBytes) ? (
+          <MarkdownPreviewLimit filename={preview.filename} />
+        ) : textual && !fileTextPreviewAllowed(preview.sizeBytes) ? (
+          <TextPreviewLimit filename={preview.filename} />
+        ) : markdownError !== null ? (
+          <p role="status" className="text-muted-foreground p-4 text-sm">
+            {markdownError}
+          </p>
+        ) : null}
+      </>
     );
 
   const reading = isReadingKind(kind);
@@ -711,11 +762,11 @@ export function FilePreviewDialog({
       width={media ? mediaPreviewWidth(imageSize) : DOCUMENT_WIDTH}
       height={reading ? READING_HEIGHT : undefined}
     >
-      {/* Both wait for the file. There is nothing to save before it lands,
-          and nothing to ask for again either -- the first copy is still on
-          its way. */}
-      {preview.contents !== null && onReload !== undefined && (
+      {/* Keep the file actions in place from the first paint. The shared
+          disabled-button style shows they are waiting for the complete file. */}
+      {onReload !== undefined && (
         <ReloadCorner
+          disabled={preview.contents === null}
           reloading={reloading}
           onReload={() => {
             setAsked(preview.contents);
@@ -729,12 +780,10 @@ export function FilePreviewDialog({
           onToggle={() => setContentsWanted(!showContents)}
         />
       )}
-      {preview.contents !== null && (
-        <DownloadCorner
-          filename={preview.filename}
-          url={preview.contents.url}
-        />
-      )}
+      <DownloadCorner
+        filename={preview.filename}
+        url={preview.contents?.url ?? null}
+      />
       {media ? (
         body
       ) : (

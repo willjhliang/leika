@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import inspect
 import re
 import threading
@@ -40,12 +41,17 @@ class _Client:
 
     def __init__(self, server: leika.Server | None = None) -> None:
         self._server = server
+        self.messages: list[_messages.Message] = []
+        self._websock_connection = SimpleNamespace(queue_message=self.messages.append)
         #: Every file sent to a dialog, in order: disposition, name, contents,
         #: size limit, the component it came from and the stamp it went out
         #: with. The last two are what let the dialog ask for it again.
         self.shown: List[Tuple[str, str, Any, int, str | None, str | None]] = []
         self.downloaded: List[Tuple[str, Any]] = []
         self.warmed: List[Tuple[str, Any, str | None, str | None]] = []
+
+    def flush(self) -> None:
+        pass
 
     def _cancel_all_outgoing_file_transfers(self) -> None:
         """Production-shaped disconnect cleanup; this fake has no transfers."""
@@ -794,3 +800,61 @@ def test_markdown_preview_snapshot_rejects_same_size_in_place_rewrite(
     monkeypatch.setattr(handles_impl.os, "fstat", rewrite_between_descriptor_stats)
     with pytest.raises(OSError, match="changed while it was being read"):
         handles_impl._read_preview_markdown(source, 64)
+
+
+@pytest.mark.parametrize("size_bytes", [32 * 1024, 8 * 1024 * 1024])
+def test_text_lead_reads_only_a_bounded_prefix(tmp_path: Path, size_bytes: int) -> None:
+    from leika import _file_preview
+
+    path = tmp_path / "large.md"
+    with path.open("wb") as stream:
+        stream.write(b"# First screen\n" + b"a" * 8192)
+        stream.truncate(size_bytes)
+    original_open = _file_preview.open_regular_file
+    reads = []
+
+    @contextlib.contextmanager
+    def tracked_open(path):
+        with original_open(path) as stream:
+            tracked = mock.Mock(wraps=stream)
+            try:
+                yield tracked
+            finally:
+                reads.extend(tracked.read.call_args_list)
+
+    with mock.patch.object(_file_preview, "open_regular_file", tracked_open):
+        with contextlib.closing(
+            _file_preview.iter_preview_text(path.name, path, size_bytes)
+        ) as parts:
+            lead = next(parts)
+    assert reads == [mock.call(_file_preview.PREVIEW_TEXT_LEAD_BYTES)]
+    assert lead is not None
+    assert lead[1] == size_bytes
+    assert lead[3].startswith("# First screen")
+    assert len(lead[3]) == _file_preview.PREVIEW_TEXT_LEAD_BYTES
+
+
+def test_text_lead_does_not_cut_a_utf8_character() -> None:
+    from leika._file_preview import iter_preview_text
+
+    data = b"a" * 8191 + "😀".encode()
+    lead = next(iter_preview_text("report.txt", data, len(data)))
+    assert lead is not None
+    assert lead[3] == "a" * 8191
+    assert list(iter_preview_text("report.txt", data, 10)) == []
+    assert list(iter_preview_text("image.png", data, len(data))) == []
+
+
+@pytest.mark.parametrize("path_backed", [True, False])
+def test_streamed_text_is_complete_ordered_and_utf8_safe(tmp_path: Path, path_backed: bool) -> None:
+    from leika._file_preview import iter_preview_text
+
+    content = ("a" * 8191 + "😀" + "more text\n" * 12000).encode()
+    path = tmp_path / "streamed.md"
+    path.write_bytes(content)
+    parts = list(iter_preview_text(path.name, path if path_backed else content, len(content)))
+    assert len(parts) > 3
+    assert [part[2] for part in parts] == list(range(len(parts)))
+    assert "".join(part[3] for part in parts) == content.decode()
+    assert parts[0][3] == "a" * 8191
+    assert [part[4] for part in parts] == [False] * (len(parts) - 1) + [True]

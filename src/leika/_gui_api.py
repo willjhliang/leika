@@ -963,6 +963,17 @@ class GuiApi(GuiContainer):
                 # failure was reported without preventing later submissions.
                 # Preserve that isolation inside the serialized worker.
                 print_async_exception(error)
+                if item.kind == "preview":
+                    # The click already opened a local loading popup. A
+                    # provider/preparation failure has no transfer to abort.
+                    with contextlib.suppress(Exception):
+                        item.client._websock_connection.queue_message(
+                            _messages.GuiPreviewCancelMessage(item.handle._impl.uuid)
+                        )
+                        item.client.add_notification(
+                            "Could not preview file",
+                            "The file could not be prepared. Try again after checking its source.",
+                        )
             finally:
                 if item.kind == "preview":
                     item.handle._finish_file_press()

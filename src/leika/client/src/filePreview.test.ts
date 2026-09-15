@@ -6,7 +6,9 @@ import {
 } from "./retainedDownloadBudget";
 import {
   abortFilePreviewTransfer,
+  acceptFilePreview,
   beginFilePreviewScroll,
+  cancelPendingFilePreview,
   closeFilePreview,
   filePreviewStore,
   filePreviewWatchStore,
@@ -22,6 +24,10 @@ import {
   previewMemoryKey,
   reloadFilePreview,
   reloadIsOnItsWay,
+  requestFilePreview,
+  receiveFilePreviewText,
+  receiveFilePreviewPart,
+  receiveFilePreviewTextPart,
   resetFilePreviewState,
   resolveFilePreview,
   warmedContents,
@@ -220,6 +226,102 @@ describe("the preview store", () => {
     abortFilePreviewTransfer("reload-transfer", "button");
     expect(filePreviewStore.snapshot()?.contents).toBe(arrived);
     expect(reloadIsOnItsWay("button")).toBe(false);
+  });
+
+  it("opens on the click and keeps its identity when metadata and bytes arrive", () => {
+    requestFilePreview("button", "Read notes");
+    const pending = filePreviewStore.snapshot()!;
+    expect(pending).toMatchObject({
+      filename: "Read notes",
+      contents: null,
+      transferId: null,
+      sourceVersion: null,
+    });
+    expect(acceptFilePreview(metadata("transfer"))).toBe(true);
+    const arrived = contents();
+    resolveFilePreview("transfer", arrived);
+    expect(filePreviewStore.snapshot()).toMatchObject({
+      id: pending.id,
+      transferId: "transfer",
+      filename: "notes.md",
+      contents: arrived,
+    });
+  });
+
+  it("uses warm metadata without displaying unverified warm bytes", () => {
+    const blob = new Blob(["# cached"], { type: "text/markdown" });
+    warmFilePreview("button", "notes.md", "old-version", blob);
+    requestFilePreview("button", "Read notes");
+    expect(filePreviewStore.snapshot()).toMatchObject({
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      sizeBytes: blob.size,
+      contents: null,
+      sourceVersion: null,
+    });
+    const warmed = warmedContents("button", "notes.md", "old-version");
+    expect(warmed?.blob).toBe(blob);
+    acceptFilePreview({ ...metadata("transfer"), contents: warmed });
+  });
+
+  it("does not reopen a click dismissed before its metadata arrived", () => {
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    requestFilePreview("button", "Read notes");
+    closeFilePreview(filePreviewStore.snapshot()!.id);
+    const warm = contents();
+    expect(acceptFilePreview({ ...metadata("transfer"), contents: warm })).toBe(
+      false,
+    );
+    expect(filePreviewStore.snapshot()).toBeNull();
+    expect(revoke).toHaveBeenCalledWith(warm.url);
+  });
+
+  it("cancels only an unfulfilled request for the failed source", () => {
+    requestFilePreview("button", "Read notes");
+    const pending = filePreviewStore.snapshot();
+    cancelPendingFilePreview("other");
+    expect(filePreviewStore.snapshot()).toBe(pending);
+    cancelPendingFilePreview("button");
+    expect(filePreviewStore.snapshot()).toBeNull();
+
+    requestFilePreview("button", "Read notes");
+    acceptFilePreview(metadata("started"));
+    const started = filePreviewStore.snapshot();
+    cancelPendingFilePreview("button");
+    expect(filePreviewStore.snapshot()).toBe(started);
+  });
+
+  it("drops superseded replies while keeping script previews available", () => {
+    requestFilePreview("first", "First");
+    requestFilePreview("second", "Second");
+    const pending = filePreviewStore.snapshot();
+    expect(acceptFilePreview(metadata("late", "first"))).toBe(false);
+    expect(filePreviewStore.snapshot()).toBe(pending);
+    expect(acceptFilePreview(metadata("current", "second"))).toBe(true);
+    expect(acceptFilePreview(metadata("duplicate", "second"))).toBe(false);
+    expect(filePreviewStore.snapshot()?.id).toBe(pending?.id);
+    expect(acceptFilePreview(metadata("script", null))).toBe(true);
+    expect(filePreviewStore.snapshot()?.id).toBe("script");
+  });
+
+  it("handles transfer failure and scrolling with a locally allocated dialog ID", () => {
+    requestFilePreview("button", "Read notes");
+    acceptFilePreview(metadata("failed"));
+    abortFilePreviewTransfer("failed", null);
+    expect(filePreviewStore.snapshot()).toBeNull();
+
+    requestFilePreview("button", "Read notes");
+    const id = filePreviewStore.snapshot()!.id;
+    const warm = contents();
+    acceptFilePreview({ ...metadata("fresh"), contents: warm });
+    beginFilePreviewScroll(id);
+    const fresh = contents();
+    resolveFilePreview("fresh", fresh);
+    expect(filePreviewStore.snapshot()?.contents).toBe(warm);
+    finishFilePreviewScroll(id);
+    expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
   });
 
   it("opens on metadata alone, and fills in the contents when they arrive", () => {
@@ -524,5 +626,146 @@ describe("the preview store", () => {
     openFilePreview(metadata("b"));
     expect(revoke).toHaveBeenCalledWith(first.url);
     expect(filePreviewStore.snapshot()?.id).toBe("b");
+  });
+});
+
+describe("first-screen previews", () => {
+  afterEach(resetFilePreviewState);
+  const lead = {
+    filename: "report.md",
+    mimeType: "text/markdown",
+    sizeBytes: 100_000,
+    textLead: "# First screen",
+  };
+
+  it("opens cached text locally and preserves it when transfer metadata arrives", () => {
+    receiveFilePreviewText("source", lead);
+    expect(filePreviewStore.snapshot()).toBeNull();
+    requestFilePreview("source", "Read report");
+    const pending = filePreviewStore.snapshot()!;
+    expect(pending.textLead).toBe(lead.textLead);
+    acceptFilePreview({
+      ...pending,
+      id: "transfer",
+      transferId: undefined,
+      textLead: undefined,
+    });
+    expect(filePreviewStore.snapshot()).toMatchObject({
+      id: pending.id,
+      transferId: "transfer",
+      textLead: lead.textLead,
+    });
+  });
+
+  it("does not let late prefixes reopen dismissed or replace unrelated previews", () => {
+    requestFilePreview("source", "Read report");
+    closeFilePreview(filePreviewStore.snapshot()!.id);
+    receiveFilePreviewText("source", lead);
+    expect(filePreviewStore.snapshot()).toBeNull();
+    requestFilePreview("other", "Other report");
+    receiveFilePreviewText("source", lead);
+    expect(filePreviewStore.snapshot()!.filename).toBe("Other report");
+  });
+
+  it("bounds and clears the first-screen cache", () => {
+    for (let index = 0; index < 9; index++)
+      receiveFilePreviewText(String(index), {
+        ...lead,
+        textLead: "x".repeat(20_000),
+      });
+    requestFilePreview("0", "Evicted");
+    expect(filePreviewStore.snapshot()!.textLead).toBeUndefined();
+    requestFilePreview("8", "Retained");
+    expect(filePreviewStore.snapshot()!.textLead).toHaveLength(8192);
+    resetFilePreviewState();
+    requestFilePreview("8", "Cleared");
+    expect(filePreviewStore.snapshot()!.textLead).toBeUndefined();
+  });
+
+  it("uses only the first bounded chunk of the matching transfer", () => {
+    openFilePreview({
+      id: "transfer",
+      ...lead,
+      textLead: undefined,
+      contents: null,
+      sourceUuid: null,
+      sourceVersion: null,
+    });
+    receiveFilePreviewPart("other", new TextEncoder().encode("Wrong"));
+    expect(filePreviewStore.snapshot()!.textLead).toBeUndefined();
+    receiveFilePreviewPart(
+      "transfer",
+      new TextEncoder().encode("a".repeat(8191) + "😀"),
+    );
+    expect(filePreviewStore.snapshot()!.textLead).toBe("a".repeat(8191));
+    receiveFilePreviewPart("transfer", new TextEncoder().encode("Replacement"));
+    expect(filePreviewStore.snapshot()!.textLead).toHaveLength(8191);
+  });
+});
+
+describe("continuous preview text", () => {
+  afterEach(resetFilePreviewState);
+  const metadata = {
+    filename: "stream.md",
+    mimeType: "text/markdown",
+    sizeBytes: 100000,
+    textLead: "# First\n\n",
+  };
+  const part = {
+    streamId: "stream",
+    sourceVersion: "version",
+    index: 0,
+    done: false,
+  };
+
+  it("extends one stream through metadata and ignores duplicates or out-of-order chunks", () => {
+    requestFilePreview("source", "Read stream");
+    receiveFilePreviewTextPart("source", metadata, part);
+    const pending = filePreviewStore.snapshot()!;
+    receiveFilePreviewTextPart(
+      "source",
+      { ...metadata, textLead: "wrong" },
+      { ...part, index: 2 },
+    );
+    receiveFilePreviewTextPart("source", metadata, part);
+    expect(filePreviewStore.snapshot()!.textStream!.text).toBe(
+      metadata.textLead,
+    );
+    acceptFilePreview({
+      ...pending,
+      textStream: undefined,
+      id: "transfer",
+      sourceVersion: "version",
+    });
+    receiveFilePreviewTextPart(
+      "source",
+      { ...metadata, textLead: "More content" },
+      { ...part, index: 1, done: true },
+    );
+    expect(filePreviewStore.snapshot()!.textStream).toMatchObject({
+      text: metadata.textLead + "More content",
+      complete: true,
+    });
+    expect(filePreviewStore.snapshot()!.id).toBe(pending.id);
+  });
+
+  it("caches completed text without reopening a dismissed preview or restarting unchanged text", () => {
+    receiveFilePreviewTextPart("source", metadata, part);
+    receiveFilePreviewTextPart(
+      "source",
+      { ...metadata, textLead: "More content" },
+      { ...part, index: 1, done: true },
+    );
+    expect(filePreviewStore.snapshot()).toBeNull();
+    requestFilePreview("source", "Read stream");
+    const stream = filePreviewStore.snapshot()!.textStream;
+    receiveFilePreviewTextPart("source", metadata, part);
+    expect(filePreviewStore.snapshot()!.textStream).toBe(stream);
+    closeFilePreview(filePreviewStore.snapshot()!.id);
+    receiveFilePreviewTextPart("source", metadata, {
+      ...part,
+      streamId: "new-version",
+    });
+    expect(filePreviewStore.snapshot()).toBeNull();
   });
 });

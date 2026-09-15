@@ -623,6 +623,38 @@ export interface GuiPreviewWarmMessage {
   type: "GuiPreviewWarmMessage";
   uuid: string;
 }
+/** Server->client: ordered text chunks, independent of image preparation.
+ *
+ * Also sent while warming. A stream has one source revision and grows until
+ * ``done``; clients keep existing document blocks while appending new ones.
+ *
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewTextMessage {
+  type: "GuiPreviewTextMessage";
+  uuid: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  text: string;
+  stream_uuid: string;
+  source_version: string | null;
+  part_index: number;
+  done: boolean;
+}
+/** Server->client: a preview button could not produce its requested file.
+ *
+ * Closes only a still-pending local popup for this source. The accompanying
+ * notification explains the failure; completed previews remain in place.
+ *
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewCancelMessage {
+  type: "GuiPreviewCancelMessage";
+  uuid: string;
+}
 /** Message sent from client->server when a preview's reload is pressed.
  *
  * A press, and treated as one: the file is resolved exactly the way the
@@ -1067,6 +1099,8 @@ export type Message =
   | GuiCloseModalMessage
   | GuiButtonHoldMessage
   | GuiPreviewWarmMessage
+  | GuiPreviewTextMessage
+  | GuiPreviewCancelMessage
   | GuiPreviewReloadMessage
   | GuiPreviewWatchMessage
   | GuiUpdateMessage
@@ -2821,6 +2855,47 @@ const messageValidators = new Map<
         isProtocolIdentifier(message["uuid"])),
   ],
   [
+    "GuiPreviewTextMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 10 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "filename") &&
+      Object.hasOwn(message, "mime_type") &&
+      Object.hasOwn(message, "size_bytes") &&
+      Object.hasOwn(message, "text") &&
+      Object.hasOwn(message, "stream_uuid") &&
+      Object.hasOwn(message, "source_version") &&
+      Object.hasOwn(message, "part_index") &&
+      Object.hasOwn(message, "done") &&
+      message["type"] === "GuiPreviewTextMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["filename"] === "string" &&
+      typeof message["mime_type"] === "string" &&
+      Number.isSafeInteger(message["size_bytes"]) &&
+      typeof message["text"] === "string" &&
+      typeof message["stream_uuid"] === "string" &&
+      (typeof message["source_version"] === "string" ||
+        message["source_version"] === null) &&
+      Number.isSafeInteger(message["part_index"]) &&
+      typeof message["done"] === "boolean",
+  ],
+  [
+    "GuiPreviewCancelMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 2 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      message["type"] === "GuiPreviewCancelMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])),
+  ],
+  [
     "GuiPreviewReloadMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3343,4 +3418,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "f99a6f68d931";
+export const LEIKA_PROTOCOL = "78465f9f8e0e";

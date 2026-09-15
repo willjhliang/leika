@@ -38,6 +38,7 @@ from ._async_errors import (
     callback_result_is_awaitable,
     print_async_exception,
 )
+from ._file_preview import iter_preview_text
 from ._file_transfer import (
     open_regular_file,
     validate_file_display_name,
@@ -71,6 +72,7 @@ from ._messages import (
     GuiNumberProps,
     GuiPlotlyProps,
     GuiPopupProps,
+    GuiPreviewTextMessage,
     GuiProgressBarProps,
     GuiRadioListProps,
     GuiRemoveMessage,
@@ -2308,6 +2310,29 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         object.__setattr__(self, "_max_bytes", _max_bytes)
         super().__init__(_impl=_impl, _icon=_icon, _content=_content, _filename=_filename)
 
+    def _send_text_stream(
+        self, client: ClientHandle, filename: str, content: bytes | Path, version: str | None
+    ) -> None:
+        filename = validate_file_display_name(filename)
+        stream_uuid = f"{self._impl.uuid}:{version}" if version is not None else str(uuid.uuid4())
+        for mime, size, index, text, done in iter_preview_text(filename, content, self._max_bytes):
+            queued = client._websock_connection.queue_message(
+                GuiPreviewTextMessage(
+                    self._impl.uuid,
+                    filename,
+                    mime,
+                    size,
+                    text,
+                    stream_uuid,
+                    version,
+                    index,
+                    done,
+                )
+            )
+            if queued is False:
+                return
+            client.flush()
+
     def _prepared(self, client: ClientHandle, filename: str, content: bytes | Path) -> bytes | Path:
         """The contents as the browser should receive them.
 
@@ -2387,6 +2412,8 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         would agree about a file the reader never got.
         """
         version = self._version()
+        if disposition == "preview":
+            self._send_text_stream(client, filename, content, version)
         content = self._prepared(client, filename, content)
         client._send_preview(
             filename,
@@ -2471,6 +2498,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             return
         try:
             version = self._version()
+            self._send_text_stream(client, filename, content, version)
             prepared = self._prepared(client, filename, content)
             client._send_file(
                 filename,

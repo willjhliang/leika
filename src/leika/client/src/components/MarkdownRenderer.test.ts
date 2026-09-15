@@ -1,4 +1,9 @@
-import { describe, expect, test } from "vitest";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, test, vi } from "vitest";
+
+import * as markdownDocument from "./markdownDocument";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 import { sectionAtScroll, type SectionLayout } from "./markdownSectionLayout";
 
@@ -126,5 +131,25 @@ describe("markdown current-section selection", () => {
     // Three binary searches should consume tens of cached positions, not all
     // 8,192 positions three times.
     expect(reads).toBeLessThan(100);
+  });
+});
+
+describe("prepared Markdown previews", () => {
+  test("reuses a document too large for the shared parse cache", () => {
+    const source = "# Prepared report\n\n" + "Long paragraph. ".repeat(36_000);
+    expect(source.length).toBeGreaterThan(
+      markdownDocument.MARKDOWN_CACHE_MAX_ENTRY_BYTES,
+    );
+    const document = markdownDocument.renderMarkdown(source);
+    const parse = vi.spyOn(markdownDocument, "renderMarkdown");
+    try {
+      const html = renderToStaticMarkup(
+        React.createElement(MarkdownRenderer, { document }, source),
+      );
+      expect(html).toContain('id="user-content-prepared-report"');
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
   });
 });
