@@ -467,7 +467,8 @@ def test_first_screen_is_readable_while_the_rest_is_still_preparing(
         expect(
             _dialog(preview_page).get_by_role("heading", name="Read this immediately")
         ).to_be_visible(timeout=1000)
-        assert preparing.is_set()
+        # The streamed heading can paint before the server reaches preparation.
+        assert preparing.wait(timeout=2)
         expect(_dialog(preview_page).get_by_role("status", name="Loading")).to_have_count(0)
         if size_bytes <= 1024 * 1024:
             # Even the end arrives while full-file/image preparation is held.

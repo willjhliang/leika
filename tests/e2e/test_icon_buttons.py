@@ -68,6 +68,7 @@ def test_icon_buttons_share_one_resting_color(
     expect(leika_page.locator('[data-slot="dialog-content"]')).to_be_visible()
     expect(leika_page.locator('[data-slot="toast-close"]')).to_be_visible()
 
+    expect(leika_page.locator(CHROME_ICONS["preview download"])).to_be_visible()
     colors = _colors(leika_page)
     assert "missing" not in colors.values(), colors
     assert len(set(colors.values())) == 1, colors
