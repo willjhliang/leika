@@ -5,6 +5,9 @@ versioning.
 
 ## Unreleased
 
+- Markdown previews reuse recent completed documents when reopened, while
+  checking the source and linked images for changes. Unchanged documents skip
+  another transfer, text decode, and parse; manual Reload still reads a fresh copy.
 - Theme (breaking): replace `configure_theme(dark_mode=True/False)` with
   `configure_theme(theme="dark"/"light")`. The default `theme=None` is equivalent
   to `"auto"`. The API selects the Settings **Theme** option, and viewers can

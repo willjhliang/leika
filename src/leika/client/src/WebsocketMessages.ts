@@ -610,6 +610,28 @@ export interface GuiButtonHoldMessage {
   uuid: string;
   frequency: number;
 }
+/** A preview-button press with the digest of its retained document, if any.
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewOpenMessage {
+  type: "GuiPreviewOpenMessage";
+  uuid: string;
+  request_uuid: string;
+  cached_key: string | null;
+}
+/** The prepared document's identity, or confirmation of retained contents.
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewReadyMessage {
+  type: "GuiPreviewReadyMessage";
+  uuid: string;
+  request_uuid: string | null;
+  cache_key: string | null;
+  source_version: string | null;
+  reused: boolean;
+}
 /** Message sent from client->server when a preview button scrolls into view.
  *
  * Asks the server to begin the transfer the button's press would start, so
@@ -1098,6 +1120,8 @@ export type Message =
   | GuiModalMessage
   | GuiCloseModalMessage
   | GuiButtonHoldMessage
+  | GuiPreviewOpenMessage
+  | GuiPreviewReadyMessage
   | GuiPreviewWarmMessage
   | GuiPreviewTextMessage
   | GuiPreviewCancelMessage
@@ -2843,6 +2867,46 @@ const messageValidators = new Map<
       Number.isFinite(message["frequency"]),
   ],
   [
+    "GuiPreviewOpenMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "request_uuid") &&
+      Object.hasOwn(message, "cached_key") &&
+      message["type"] === "GuiPreviewOpenMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["request_uuid"] === "string" &&
+      (typeof message["cached_key"] === "string" ||
+        message["cached_key"] === null),
+  ],
+  [
+    "GuiPreviewReadyMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 6 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "request_uuid") &&
+      Object.hasOwn(message, "cache_key") &&
+      Object.hasOwn(message, "source_version") &&
+      Object.hasOwn(message, "reused") &&
+      message["type"] === "GuiPreviewReadyMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      (typeof message["request_uuid"] === "string" ||
+        message["request_uuid"] === null) &&
+      (typeof message["cache_key"] === "string" ||
+        message["cache_key"] === null) &&
+      (typeof message["source_version"] === "string" ||
+        message["source_version"] === null) &&
+      typeof message["reused"] === "boolean",
+  ],
+  [
     "GuiPreviewWarmMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3419,4 +3483,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "36b52f738ebf";
+export const LEIKA_PROTOCOL = "9f0ff6470fea";

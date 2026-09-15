@@ -18,6 +18,8 @@ export interface MarkdownPatch {
   headings?: DocumentHeading[];
   renderedChars: number;
   complete: boolean;
+  /** Exact fully prepared source for a reusable completed document. */
+  source?: string;
 }
 
 /** Positions change when image URLs are rewritten, but the visible blocks do not. */
@@ -122,6 +124,7 @@ export class ProgressiveMarkdownParser {
         count: parsed.blocks.length,
         headings: parsed.headings,
         complete: done,
+        source: done && images ? source : undefined,
       });
       this.signatures = parsed.blocks.map((block) => block.signature);
       this.renderedSource = prefix;

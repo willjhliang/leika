@@ -516,6 +516,9 @@ class GuiApi(GuiContainer):
             _messages.GuiButtonHoldMessage, self._handle_gui_button_hold
         )
         self._websock_interface.register_handler(
+            _messages.GuiPreviewOpenMessage, self._handle_gui_preview_open
+        )
+        self._websock_interface.register_handler(
             _messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm
         )
         self._websock_interface.register_handler(
@@ -768,7 +771,11 @@ class GuiApi(GuiContainer):
         assert_never(self._owner)
 
     async def _handle_gui_updates(
-        self, client_id: ClientId, message: _messages.GuiUpdateMessage
+        self,
+        client_id: ClientId,
+        message: _messages.GuiUpdateMessage,
+        *,
+        preview_request: _messages.GuiPreviewOpenMessage | None = None,
     ) -> None:
         """Handle one browser value update as a linearized state transition."""
         client = self._resolve_client(client_id)
@@ -821,7 +828,11 @@ class GuiApi(GuiContainer):
                     client_id,
                     client,
                     handle,
-                    lambda: handle._send(event),
+                    lambda: (
+                        handle._open(event, preview_request)
+                        if preview_request is not None
+                        else handle._send(event)
+                    ),
                 )
             except BaseException:
                 handle._finish_file_press()
@@ -1018,6 +1029,18 @@ class GuiApi(GuiContainer):
         # the preview lock because release takes the canonical GUI lock.
         for handle in discarded_preview_handles:
             handle._finish_file_press()
+
+    async def _handle_gui_preview_open(
+        self, client_id: ClientId, message: _messages.GuiPreviewOpenMessage
+    ) -> None:
+        if self._preview_button_for(message.uuid, client_id) is None:
+            return
+        # Keep the normal press's busy state, ordering, and on_click callbacks.
+        await self._handle_gui_updates(
+            client_id,
+            _messages.GuiUpdateMessage(message.uuid, {"value": True}),
+            preview_request=message,
+        )
 
     async def _handle_gui_preview_warm(
         self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
@@ -2727,6 +2750,12 @@ class GuiApi(GuiContainer):
         A markdown file with headings to list them is shown with its own
         contents in the margin beside it, where the window is wide enough to
         hold a column of them without narrowing the writing.
+
+        Recent completed Markdown previews are retained in a bounded browser
+        cache. Reopening shows the cached document immediately while the server
+        rechecks the source and its linked images. Identical prepared contents
+        reuse that document without another transfer or parse. A callable is
+        still run on every press; the reload button always requests a fresh copy.
 
         An open preview follows its file. Where `content` is a path, the
         dialog checks about once a second whether what is on disk is still

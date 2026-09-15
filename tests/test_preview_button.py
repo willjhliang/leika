@@ -858,3 +858,71 @@ def test_streamed_text_is_complete_ordered_and_utf8_safe(tmp_path: Path, path_ba
     assert "".join(part[3] for part in parts) == content.decode()
     assert parts[0][3] == "a" * 8191
     assert [part[4] for part in parts] == [False] * (len(parts) - 1) + [True]
+
+
+def _open_cached(handle: GuiPreviewButtonHandle, server: leika.Server, key: str | None) -> _Client:
+    client = _Client(server)
+    handle._open(
+        GuiEvent(client, 0, handle),  # type: ignore[arg-type]
+        _messages.GuiPreviewOpenMessage(handle._impl.uuid, "request", key),
+    )
+    return client
+
+
+def _ready(client: _Client) -> _messages.GuiPreviewReadyMessage:
+    return next(m for m in client.messages if isinstance(m, _messages.GuiPreviewReadyMessage))
+
+
+def test_reopening_identical_markdown_revalidates_provider_without_resending(
+    server: leika.Server,
+) -> None:
+    calls = []
+    content = b"# First version\n"
+
+    def provide(_):
+        calls.append(True)
+        return content
+
+    handle = server.gui.add_preview_button("Report", provide, filename="report.md")
+    first = _open_cached(handle, server, None)
+    key = _ready(first).cache_key
+    assert key is not None
+    again = _open_cached(handle, server, key)
+    assert len(calls) == 2
+    assert again.shown == []
+    assert len(again.messages) == 1
+    assert _ready(again).reused is True
+
+    content = b"# Newer version\n"
+    changed = _open_cached(handle, server, key)
+    assert changed.previewed[0][1] == content
+    assert _ready(changed).reused is False
+    assert _ready(changed).cache_key != key
+
+    # A rename changes the download and document identity even with equal bytes.
+    handle.filename = "renamed.md"
+    renamed = _open_cached(handle, server, _ready(changed).cache_key)
+    assert _ready(renamed).reused is False
+
+
+def test_reopening_markdown_revalidates_images_even_when_document_is_unchanged(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    from PIL import Image
+
+    document = tmp_path / "report.md"
+    document.write_text("# Report\n\n![Figure](figure.png)\n")
+    figure = tmp_path / "figure.png"
+    Image.new("RGB", (8, 6), "red").save(figure)
+    handle = server.gui.add_preview_button("Report", document)
+    first = _open_cached(handle, server, None)
+    key = _ready(first).cache_key
+    version = _ready(first).source_version
+    assert _ready(_open_cached(handle, server, key)).reused is True
+
+    Image.new("RGB", (8, 6), "blue").save(figure)
+    changed = _open_cached(handle, server, key)
+    assert _ready(changed).source_version == version
+    assert _ready(changed).reused is False
+    assert _ready(changed).cache_key != key
+    assert changed.previewed[0][1] != first.previewed[0][1]

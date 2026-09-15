@@ -36,6 +36,10 @@ import { contentsOf, type RenderedDocument } from "../markdown";
 import { HintTooltip } from "./common";
 import { LatestBlobTextReader } from "./latestBlobTextReader";
 import {
+  cachedPreviewText,
+  rememberPreviewText,
+} from "../previewDocumentCache";
+import {
   MARKDOWN_RENDER_MAX_SOURCE_BYTES,
   markdownRenderAllowed,
 } from "./markdownDocument";
@@ -71,11 +75,17 @@ function useBlobText(
   continuityKey: string,
 ): string | null {
   const reader = React.useMemo(() => new LatestBlobTextReader(), []);
+  const cached = blob === null ? null : cachedPreviewText(blob);
   const [read, setRead] = React.useState<{
     continuityKey: string;
     text: string;
   } | null>(null);
   React.useEffect(() => {
+    if (cached !== null) {
+      // Keep this text as the continuity fallback while a later Blob decodes.
+      setRead({ continuityKey, text: cached });
+      return;
+    }
     if (!enabled || blob === null || !fileTextPreviewAllowed(blob.size)) {
       setRead(null);
       reader.clear();
@@ -88,11 +98,13 @@ function useBlobText(
       current?.continuityKey === continuityKey ? current : null,
     );
     return reader.request(blob, (value) => {
+      rememberPreviewText(blob, value);
       React.startTransition(() => setRead({ continuityKey, text: value }));
     });
-  }, [blob, continuityKey, enabled, reader]);
+  }, [blob, cached, continuityKey, enabled, reader]);
   // State retains only decoded text, never the replaced Blob. This gate hides
   // it synchronously if the same dialog changes file or viewer.
+  if (cached !== null) return cached;
   return enabled &&
     blob !== null &&
     fileTextPreviewAllowed(blob.size) &&

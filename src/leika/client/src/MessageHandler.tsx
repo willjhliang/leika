@@ -7,6 +7,7 @@ import { handleFileDownloadMessage } from "./fileDownloadHandler";
 import {
   cancelPendingFilePreview,
   receiveFilePreviewTextPart,
+  receiveFilePreviewReady,
 } from "./filePreview";
 import {
   dismissNotification,
@@ -104,6 +105,9 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "GuiModalMessage":
           viewer.guiActions.addModal(message);
+          return;
+        case "GuiPreviewReadyMessage":
+          receiveFilePreviewReady(message);
           return;
         case "GuiPreviewTextMessage":
           receiveFilePreviewTextPart(

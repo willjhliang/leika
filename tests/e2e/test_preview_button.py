@@ -2346,3 +2346,174 @@ def test_streamed_blocks_extend_the_reader_and_keep_its_scroll_anchor(
         release_text.set()
         release_images.set()
     assert page_errors == []
+
+
+@pytest.mark.parametrize("callable_source", [False, True])
+def test_reopening_markdown_reuses_transfer_decode_and_parse_but_refreshes_changes(
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    callable_source: bool,
+) -> None:
+    from leika._client_handle import ClientHandle
+
+    page.add_init_script(
+        """(() => {
+            const BrowserWorker = window.Worker;
+            window.previewWorkerStarts = 0;
+            window.Worker = class extends BrowserWorker {
+                constructor(...args) {
+                    super(...args);
+                    window.previewWorkerStarts += 1;
+                }
+            };
+            const read = Blob.prototype.text;
+            window.previewBlobReads = 0;
+            Blob.prototype.text = function(...args) {
+                window.previewBlobReads += 1;
+                return read.apply(this, args);
+            };
+        })();"""
+    )
+    document = tmp_path / "cached.md"
+    (tmp_path / "figure.png").write_bytes(_png(8, 6))
+    tail = "\n\n![Final figure](figure.png)\n"
+    # Larger than the old shared parse cache's per-document admission limit.
+    document.write_text("# Cached report\n\n" + "A readable paragraph. " * 28_000 + tail)
+    transfers = []
+    original_send = ClientHandle._send_preview
+
+    def record_send(self, *args, **kwargs):
+        transfers.append(kwargs.get("disposition", "preview"))
+        return original_send(self, *args, **kwargs)
+
+    monkeypatch.setattr(ClientHandle, "_send_preview", record_send)
+    provider_calls = []
+
+    def provide(_):
+        provider_calls.append(True)
+        return document
+
+    handle = leika_server.gui.add_preview_button(
+        "Cached report", provide if callable_source else document
+    )
+    clicks = []
+    handle.on_click(lambda _: clicks.append(True))
+    page.goto(leika_server.url)
+    _press(page, "Cached report")
+    dialog = _dialog(page)
+    expect(dialog.locator("img")).to_have_count(1, timeout=15_000)
+    expect(dialog.get_by_role("link", name="Download cached.md")).to_be_visible()
+    button = page.get_by_role("button", name="Cached report", exact=True, include_hidden=True)
+    expect(button).to_be_enabled()
+    workers = page.evaluate("window.previewWorkerStarts")
+    decodes = page.evaluate("window.previewBlobReads")
+    assert len(transfers) == 1
+    page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+
+    # Hold the server's revalidation: the entire cached document is already
+    # available, including prepared images, with no new decoder/parser work.
+    release = threading.Event()
+    checking = threading.Event()
+    original_prepare = handle._prepared
+
+    def delayed_prepare(*args):
+        checking.set()
+        assert release.wait(10), "test did not release preview revalidation"
+        return original_prepare(*args)
+
+    monkeypatch.setattr(handle, "_prepared", delayed_prepare)
+    try:
+        _press(page, "Cached report")
+        expect(dialog.get_by_role("heading", name="Cached report")).to_be_visible(timeout=1_000)
+        expect(dialog.locator("img")).to_have_count(1)
+        expect(dialog.get_by_role("link", name="Download cached.md")).to_be_visible()
+        assert checking.wait(2)
+        assert page.evaluate("window.previewWorkerStarts") == workers
+        assert page.evaluate("window.previewBlobReads") == decodes
+        assert len(transfers) == 1
+    finally:
+        release.set()
+    expect(button).to_be_enabled()
+    assert len(clicks) == 2
+    if callable_source:
+        assert len(provider_calls) == 2
+    assert len(transfers) == 1
+    assert page.evaluate("window.previewWorkerStarts") == workers
+    assert page.evaluate("window.previewBlobReads") == decodes
+
+    page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    document.write_text("# Changed while closed\n" + tail)
+    _press(page, "Cached report")
+    expect(dialog.get_by_role("heading", name="Changed while closed")).to_be_visible()
+    expect(dialog.locator("img")).to_have_count(1)
+    expect(button).to_be_enabled()
+    assert len(transfers) == 2
+
+    if not callable_source:
+        document.write_text("# Changed while open\n" + tail)
+        expect(dialog.get_by_role("heading", name="Changed while open")).to_be_visible(
+            timeout=5_000
+        )
+        expect(dialog.locator("img")).to_have_count(1)
+        assert len(transfers) == 3
+
+    # Explicit Reload remains a forced reread, including provider execution.
+    before_reload = len(transfers)
+    dialog.get_by_role("button", name="Reload", exact=True).click()
+    deadline = time.monotonic() + 5
+    while len(transfers) == before_reload and time.monotonic() < deadline:
+        page.wait_for_timeout(10)
+    assert len(transfers) == before_reload + 1
+    assert page_errors == []
+
+
+def test_refreshing_a_cached_document_keeps_the_readers_scroll_range(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+) -> None:
+    document = tmp_path / "cached-scroll.md"
+    (tmp_path / "figure.png").write_bytes(_png(8, 6))
+    body = "# Cached reading position\n\n" + ("A readable paragraph. " * 30 + "\n\n") * 200
+    tail = "\n\n![Final figure](figure.png)\n"
+    document.write_text(body + "## Original ending\n" + tail)
+    leika_server.gui.add_preview_button("Read cached scroll", document)
+    _press(preview_page, "Read cached scroll")
+    dialog = _dialog(preview_page)
+    expect(dialog.locator("img")).to_have_count(1)
+    expect(dialog.get_by_role("link", name="Download cached-scroll.md")).to_be_visible()
+    preview_page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    _press(preview_page, "Read cached scroll")
+    expect(dialog.locator("img")).to_have_count(1)
+    frame = dialog.locator("div.overflow-auto").first
+    frame.evaluate("el => { el.scrollTop = el.scrollHeight / 2; }")
+    _settle(preview_page)
+    initial = frame.evaluate(
+        """el => {
+            window.minimumCachedScroll = el.scrollTop;
+            window.sampleCachedScroll = true;
+            const sample = () => {
+                window.minimumCachedScroll = Math.min(window.minimumCachedScroll, el.scrollTop);
+                if (window.sampleCachedScroll) requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+            return el.scrollTop;
+        }"""
+    )
+    assert initial > 1000
+    document.write_text(body + "## Updated ending\n" + tail)
+    expect(dialog.get_by_role("heading", name="Updated ending")).to_have_count(1, timeout=10_000)
+    _settle(preview_page)
+    minimum = preview_page.evaluate(
+        "() => { window.sampleCachedScroll = false; return window.minimumCachedScroll; }"
+    )
+    assert minimum == pytest.approx(initial, abs=2)
+    assert frame.evaluate("el => el.scrollTop") == pytest.approx(initial, abs=2)
+    assert page_errors == []

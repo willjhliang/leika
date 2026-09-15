@@ -28,6 +28,7 @@ import {
   receiveFilePreviewText,
   receiveFilePreviewPart,
   receiveFilePreviewTextPart,
+  receiveFilePreviewReady,
   resetFilePreviewState,
   resolveFilePreview,
   warmedContents,
@@ -767,5 +768,81 @@ describe("continuous preview text", () => {
       streamId: "new-version",
     });
     expect(filePreviewStore.snapshot()).toBeNull();
+  });
+});
+
+describe("reopening retained Markdown", () => {
+  afterEach(resetFilePreviewState);
+  const ready = (
+    requestUuid: string | null,
+    key = "original",
+    reused = false,
+  ) =>
+    receiveFilePreviewReady({
+      type: "GuiPreviewReadyMessage",
+      uuid: "source",
+      request_uuid: requestUuid,
+      cache_key: key,
+      source_version: "version",
+      reused,
+    });
+  const complete = () => {
+    const request = requestFilePreview("source", "Report");
+    ready(request.requestUuid);
+    acceptFilePreview({
+      id: "transfer",
+      filename: "report.md",
+      mimeType: "text/markdown",
+      sizeBytes: 8,
+      contents: null,
+      sourceUuid: "source",
+      sourceVersion: "version",
+    });
+    const blob = new Blob(["# Report"], { type: "text/markdown" });
+    resolveFilePreview("transfer", { blob, url: URL.createObjectURL(blob) });
+    return { request, blob };
+  };
+
+  it("moves the existing byte reservation between the popup and bounded cache", () => {
+    const { request, blob } = complete();
+    const lease = filePreviewStore.snapshot()!.contents!.retained!;
+    const count = retainedDownloads.ownerCount;
+    const bytes = retainedDownloads.sizeBytes;
+    closeFilePreview(request.requestUuid);
+    expect(lease.priority).toBe(RETAINED_DOWNLOAD_PRIORITY.warm);
+    expect(retainedDownloads.ownerCount).toBe(count);
+    expect(retainedDownloads.sizeBytes).toBe(bytes);
+
+    const reopened = requestFilePreview("source", "Report");
+    expect(reopened.cachedKey).toBe("original");
+    expect(filePreviewStore.snapshot()!.contents!.blob).toBe(blob);
+    expect(filePreviewWatchStore.snapshot()!.sourceVersion).toBeNull();
+    ready(reopened.requestUuid, "original", true);
+    expect(filePreviewWatchStore.snapshot()!.sourceVersion).toBe("version");
+    expect(lease.priority).toBe(RETAINED_DOWNLOAD_PRIORITY.preview);
+    expect(retainedDownloads.ownerCount).toBe(count);
+  });
+
+  it("ignores late confirmations and never tags old bytes with an arriving revision", () => {
+    const { request, blob } = complete();
+    closeFilePreview(request.requestUuid);
+    const reopened = requestFilePreview("source", "Report");
+    ready(request.requestUuid, "original", true);
+    expect(filePreviewStore.snapshot()!.transferId).toBeNull();
+    ready(reopened.requestUuid, "changed");
+    expect(filePreviewStore.snapshot()!.cacheKey).toBe("original");
+    closeFilePreview(reopened.requestUuid);
+    const again = requestFilePreview("source", "Report");
+    expect(again.cachedKey).toBe("original");
+    expect(filePreviewStore.snapshot()!.contents!.blob).toBe(blob);
+  });
+
+  it("falls back to an ordinary open after memory-pressure eviction", () => {
+    const { request } = complete();
+    const lease = filePreviewStore.snapshot()!.contents!.retained!;
+    closeFilePreview(request.requestUuid);
+    lease.evict();
+    expect(requestFilePreview("source", "Report").cachedKey).toBeNull();
+    expect(filePreviewStore.snapshot()!.contents).toBeNull();
   });
 });

@@ -29,13 +29,18 @@ export default function ButtonComponent({
   // (`GuiPreviewWarmMessage`; the server answers with a `warm` transfer that
   // is held rather than shown). Asked once per time on screen: the observer
   // disconnects after firing, and only a remount asks again.
+  const warmedSource = useRef<string | null>(null);
   useEffect(() => {
+    if (warmedSource.current === uuid) return;
     const node = document.getElementById(uuid);
     return startPreviewWarmObservation(
       prefetch && !disabled,
       node,
       uuid,
-      messageSender,
+      (message) => {
+        warmedSource.current = uuid;
+        messageSender(message);
+      },
     );
   }, [disabled, prefetch, uuid, messageSender]);
   const holdIntervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
@@ -95,7 +100,19 @@ export default function ButtonComponent({
       data-leika-button
       data-leika-button-color={color}
       onClick={() => {
-        if (prefetch) requestFilePreview(uuid, text);
+        if (prefetch) {
+          const { requestUuid, cachedKey } = requestFilePreview(uuid, text);
+          messageSender(
+            {
+              type: "GuiPreviewOpenMessage",
+              uuid,
+              request_uuid: requestUuid,
+              cached_key: cachedKey,
+            },
+            { coalesce: false },
+          );
+          return;
+        }
         // A press, not a reading: two of them inside one throttle window are
         // two presses, and a row of buttons reports every one.
         messageSender(

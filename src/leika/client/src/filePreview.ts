@@ -5,6 +5,8 @@ import {
 } from "./retainedDownloadBudget";
 import { normalizedSafeRasterMimeType } from "./imageSafety";
 import { randomUuid } from "./utils/randomUuid";
+import { resetPreviewDocumentCache } from "./previewDocumentCache";
+import type { GuiPreviewReadyMessage } from "./WebsocketMessages";
 
 // Which viewer a previewed file gets, and the reading of its size.
 //
@@ -203,6 +205,10 @@ export interface FilePreview {
   sizeBytes: number;
   /** The file itself, or null while its parts are still arriving. */
   contents: FileContents | null;
+  /** Digest of these completed contents, confirmed by the server. */
+  cacheKey?: string | null;
+  /** Digest announced for a transfer whose bytes have not arrived yet. */
+  incomingCacheKey?: string | null;
   /** Bounded first screen, available before the complete file. */
   textLead?: string;
   textStream?: PreviewTextStream;
@@ -406,21 +412,69 @@ export function openFilePreview(preview: FilePreview): void {
  * A cold button uses its label until the server supplies the actual name.
  * The last-known first screen is shown while the server checks for updates.
  */
-export function requestFilePreview(sourceUuid: string, title: string): void {
+export function requestFilePreview(
+  sourceUuid: string,
+  title: string,
+): {
+  requestUuid: string;
+  cachedKey: string | null;
+} {
   const warm = warmed.get(sourceUuid);
   const lead = textLeads.get(sourceUuid);
+  const contents = warm?.cacheKey
+    ? warmedContents(sourceUuid, warm.filename, warm.version)
+    : null;
+  const id = randomUuid();
+  const cachedKey = contents === null ? null : (warm?.cacheKey ?? null);
   openFilePreview({
-    id: randomUuid(),
+    id,
     transferId: null,
-    filename: lead?.filename ?? warm?.filename ?? title,
-    mimeType: lead?.mimeType ?? (warm?.retained.blob.type || "text/plain"),
-    sizeBytes: lead?.sizeBytes ?? warm?.retained.blob.size ?? 0,
+    filename:
+      contents !== null
+        ? warm!.filename
+        : (lead?.filename ?? warm?.filename ?? title),
+    mimeType:
+      contents !== null
+        ? contents.blob.type
+        : (lead?.mimeType ?? (warm?.retained.blob.type || "text/plain")),
+    sizeBytes:
+      contents?.blob.size ?? lead?.sizeBytes ?? warm?.retained.blob.size ?? 0,
     textLead: lead?.textLead,
     textStream: textStreams.get(sourceUuid),
-    contents: null,
+    contents,
+    cacheKey: cachedKey,
     sourceUuid,
+    // Only the reply enables watching; the cached copy is still being checked.
     sourceVersion: null,
   });
+  return { requestUuid: id, cachedKey };
+}
+
+/** A reply belongs to one open request; old replies never reopen a dialog. */
+export function receiveFilePreviewReady(message: GuiPreviewReadyMessage): void {
+  if (
+    current?.sourceUuid !== message.uuid ||
+    (message.request_uuid !== null &&
+      (current.id !== message.request_uuid || current.transferId !== null))
+  )
+    return;
+  if (message.reused) {
+    if (
+      current.contents === null ||
+      current.cacheKey == null ||
+      current.cacheKey !== message.cache_key
+    )
+      return;
+    current = {
+      ...current,
+      transferId: current.id,
+      sourceVersion: message.source_version,
+    };
+    setWatchTarget(current.sourceUuid, current.sourceVersion);
+  } else {
+    current = { ...current, incomingCacheKey: message.cache_key };
+  }
+  announce();
 }
 
 type TextLead = Pick<FilePreview, "filename" | "mimeType" | "sizeBytes"> & {
@@ -564,6 +618,7 @@ export function acceptFilePreview(preview: FilePreview): boolean {
       current.filename === preview.filename ? current.textStream : undefined,
     id: current.id,
     transferId: preview.id,
+    incomingCacheKey: current.incomingCacheKey,
   });
   return true;
 }
@@ -585,7 +640,12 @@ export function resolveFilePreview(id: string, contents: FileContents): void {
     releaseFileContents(contents);
     return;
   }
-  const next: CompleteFilePreview = { ...current, contents };
+  const next: CompleteFilePreview = {
+    ...current,
+    contents,
+    cacheKey: current.incomingCacheKey,
+    incomingCacheKey: undefined,
+  };
   if (current.contents !== null && scrollingPreviewId === current.id) {
     revokeDeferredReplacement();
     deferredReplacement = next;
@@ -675,6 +735,8 @@ export function reloadFilePreview({
     sizeBytes,
     contents,
     sourceVersion,
+    cacheKey: current.incomingCacheKey,
+    incomingCacheKey: undefined,
   };
   setWatchTarget(sourceUuid, sourceVersion);
 
@@ -723,6 +785,7 @@ type WarmedFile = {
   filename: string;
   version: string | null;
   retained: RetainedDownload;
+  cacheKey?: string | null;
 };
 const warmed = new Map<string, WarmedFile>();
 
@@ -732,6 +795,7 @@ export function warmFilePreview(
   filename: string,
   version: string | null,
   retainedOrBlob: RetainedDownload | Blob,
+  cacheKey?: string | null,
 ): void {
   const retained =
     retainedOrBlob instanceof Blob
@@ -742,7 +806,7 @@ export function warmFilePreview(
   if (retained === null || !retained.isActive) return;
   const replaced = warmed.get(sourceUuid);
   if (replaced !== undefined) replaced.retained.release();
-  const entry = { filename, version, retained };
+  const entry = { filename, version, retained, cacheKey };
   warmed.delete(sourceUuid);
   warmed.set(sourceUuid, entry);
   retained.setOwner(RETAINED_DOWNLOAD_PRIORITY.warm, () => {
@@ -791,6 +855,7 @@ export function warmedContents(
 
 /** Clear every resource owned by the current server connection. */
 export function resetFilePreviewState(): void {
+  resetPreviewDocumentCache();
   textLeads.clear();
   textStreams.clear();
   cachedTextChars = 0;
@@ -811,7 +876,23 @@ export function closeFilePreview(id: string): void {
   arriving.clear();
   discardDeferredReplacement();
   watchTarget = null;
-  if (current.contents !== null) releaseFileContents(current.contents);
+  const { contents, sourceUuid, filename, sourceVersion, cacheKey } = current;
+  if (contents !== null) {
+    if (sourceUuid !== null && cacheKey && contents.retained?.isActive) {
+      // Move the existing reservation into the evictable warm cache. The Blob
+      // remains counted once; only this dialog's object URL is released.
+      URL.revokeObjectURL(contents.url);
+      warmFilePreview(
+        sourceUuid,
+        filename,
+        sourceVersion,
+        contents.retained,
+        cacheKey,
+      );
+    } else {
+      releaseFileContents(contents);
+    }
+  }
   current = null;
   announce();
 }

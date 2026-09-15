@@ -648,6 +648,34 @@ class GuiButtonHoldMessage(Message):
 
 
 @dataclasses.dataclass
+class GuiPreviewOpenMessage(Message):
+    """A preview-button press with the digest of its retained document, if any."""
+
+    uuid: str
+    request_uuid: str
+    cached_key: str | None
+
+    @override
+    def redundancy_key(self) -> None:
+        return None
+
+
+@dataclasses.dataclass
+class GuiPreviewReadyMessage(Message):
+    """The prepared document's identity, or confirmation of retained contents."""
+
+    uuid: str
+    request_uuid: str | None
+    cache_key: str | None
+    source_version: str | None
+    reused: bool
+
+    @override
+    def redundancy_key(self) -> None:
+        return None
+
+
+@dataclasses.dataclass
 class GuiPreviewWarmMessage(Message):
     """Message sent from client->server when a preview button scrolls into view.
 

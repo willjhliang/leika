@@ -4,6 +4,10 @@ import type { RenderedDocument } from "../markdown";
 import type { MarkdownPatch } from "../progressiveMarkdown";
 import MarkdownPreviewWorker from "../markdownPreviewWorker?worker&inline";
 import { PreviewMarkdownBlocks } from "./previewMarkdownBlocks";
+import {
+  cachedPreviewDocument,
+  rememberPreviewDocument,
+} from "../previewDocumentCache";
 
 /** Keep one parser and one block tree alive as streamed text grows. */
 export function usePreviewMarkdown(
@@ -13,12 +17,26 @@ export function usePreviewMarkdown(
   complete = true,
   images = true,
 ): { document: RenderedDocument | null; error: string | null } {
+  const cached = React.useMemo(
+    () =>
+      source !== null && complete && images
+        ? cachedPreviewDocument(source)
+        : null,
+    [source, complete, images],
+  );
+  const hasCached = cached !== null;
+  const previousCached = React.useRef<{
+    continuityKey: string;
+    document: RenderedDocument;
+  } | null>(null);
+  if (cached !== null)
+    previousCached.current = { continuityKey, document: cached };
   const initial = React.useMemo(
     () =>
-      lead === null
+      lead === null || hasCached
         ? null
         : new PreviewMarkdownBlocks(lead.slice(0, FILE_PREVIEW_LEAD_CHARS)),
-    [lead],
+    [lead, hasCached],
   );
   const initialDocument = React.useMemo(
     () => initial?.document() ?? null,
@@ -37,11 +55,14 @@ export function usePreviewMarkdown(
   initialRef.current = initial;
   React.useEffect(() => {
     setError(null);
-    if (!hasSource) return;
+    if (!hasSource || hasCached) return;
     let active = true;
     let worker: Worker | undefined;
     const blocks = initialRef.current ?? new PreviewMarkdownBlocks(null);
     let revision = 0;
+    let pendingFrame = 0;
+    const replacingCache =
+      previousCached.current?.continuityKey === continuityKey;
     const fail = () => {
       if (active)
         setError(
@@ -62,6 +83,18 @@ export function usePreviewMarkdown(
         }
         try {
           const document = blocks.apply(event.data);
+          if (event.data.complete && event.data.source !== undefined) {
+            rememberPreviewDocument(event.data.source, document);
+          }
+          if (replacingCache && !event.data.complete) {
+            // A replacement worker starts without the old block tree. Keep
+            // the complete cached view while it builds, so its partial prefix
+            // cannot collapse the reader's scroll range during refresh.
+            pendingFrame = requestAnimationFrame(() =>
+              worker?.postMessage({ type: "next" }),
+            );
+            return;
+          }
           revision += 1;
           React.startTransition(() =>
             setReady({ continuityKey, document, revision }),
@@ -76,10 +109,11 @@ export function usePreviewMarkdown(
     }
     return () => {
       active = false;
+      cancelAnimationFrame(pendingFrame);
       worker?.terminate();
       if (activeWorker.current === worker) activeWorker.current = null;
     };
-  }, [continuityKey, hasSource]);
+  }, [continuityKey, hasSource, hasCached]);
 
   React.useEffect(() => {
     if (source !== null)
@@ -102,7 +136,12 @@ export function usePreviewMarkdown(
   }, [ready, continuityKey]);
   return {
     document:
-      ready?.continuityKey === continuityKey ? ready.document : initialDocument,
+      cached ??
+      (ready?.continuityKey === continuityKey
+        ? ready.document
+        : previousCached.current?.continuityKey === continuityKey
+          ? previousCached.current.document
+          : initialDocument),
     error,
   };
 }

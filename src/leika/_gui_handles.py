@@ -4,6 +4,7 @@ import contextlib
 import copy
 import dataclasses
 import functools
+import hashlib
 import itertools
 import math
 import os
@@ -72,6 +73,8 @@ from ._messages import (
     GuiNumberProps,
     GuiPlotlyProps,
     GuiPopupProps,
+    GuiPreviewOpenMessage,
+    GuiPreviewReadyMessage,
     GuiPreviewTextMessage,
     GuiProgressBarProps,
     GuiRadioListProps,
@@ -2403,6 +2406,9 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         filename: str,
         content: bytes | Path,
         disposition: FileDisposition,
+        *,
+        request_uuid: str | None = None,
+        cached_key: str | None = None,
     ) -> None:
         """Send one file to one client's dialog, opening it or refilling it.
 
@@ -2412,9 +2418,29 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         would agree about a file the reader never got.
         """
         version = self._version()
-        if disposition == "preview":
+        if disposition == "preview" and cached_key is None:
             self._send_text_stream(client, filename, content, version)
-        content = self._prepared(client, filename, content)
+        prepared = self._prepared(client, filename, content)
+        # Hash the prepared Markdown, including its immutable image URLs.
+        # Recheck providers and image assets on every press; only identical
+        # output may reuse a browser copy. Large/other files keep streaming.
+        cache_key = None
+        if (
+            isinstance(prepared, bytes)
+            and len(prepared) <= _GUI_MARKDOWN_MAX_SOURCE_BYTES
+            and Path(filename).suffix.lower() in (".md", ".markdown")
+        ):
+            cache_key = hashlib.sha256(filename.encode() + b"\0" + prepared).hexdigest()
+        reused = cached_key is not None and cached_key == cache_key
+        client._websock_connection.queue_message(
+            GuiPreviewReadyMessage(self._impl.uuid, request_uuid, cache_key, version, reused)
+        )
+        if reused:
+            client.flush()
+            return
+        if disposition == "preview" and cached_key is not None:
+            self._send_text_stream(client, filename, content, version)
+        content = prepared
         client._send_preview(
             filename,
             content,
@@ -2427,6 +2453,23 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
     @override
     def _deliver(self, client: ClientHandle, filename: str, content: bytes | Path) -> None:
         self._show(client, filename, content, "preview")
+
+    def _open(self, event: GuiEvent[Any], request: GuiPreviewOpenMessage) -> None:
+        """Revalidate a retained preview without retransmitting unchanged Markdown."""
+        if event.client is None:
+            return
+        try:
+            filename, content = self._resolve(event)
+            self._show(
+                event.client,
+                filename,
+                content,
+                "preview",
+                request_uuid=request.request_uuid,
+                cached_key=request.cached_key,
+            )
+        finally:
+            self._finish_file_press()
 
     def _reload(self, event: GuiEvent[Any]) -> None:
         """Send the file again, because the reader asked (``GuiPreviewReloadMessage``).
