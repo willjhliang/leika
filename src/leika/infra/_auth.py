@@ -139,7 +139,11 @@ class HttpPasswordGuard:
         except CookieError:
             return False
         morsel = cookie.get(COOKIE_NAME)
-        if morsel is not None and compare_digest(morsel.value, self._session_token):
+        if (
+            morsel is not None
+            and morsel.value.isascii()
+            and compare_digest(morsel.value, self._session_token)
+        ):
             return True
         return self._password_matches(request)
 

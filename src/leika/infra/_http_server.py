@@ -340,6 +340,13 @@ class HttpRequestHandler:
     def process_response(
         self, connection: ServerConnection, request: Request, response: Response
     ) -> Response:
+        if self._auth_guard is not None:
+            # Never let a shared cache turn one authenticated response into
+            # data served to a later anonymous client, regardless of asset type.
+            for name in ("Cache-Control", "CDN-Cache-Control"):
+                if name in response.headers:
+                    del response.headers[name]
+                response.headers[name] = "no-store"
         return self._policy.secure_response(response)
 
     async def process_request(

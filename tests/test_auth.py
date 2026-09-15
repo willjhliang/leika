@@ -248,3 +248,30 @@ def test_duplicate_password_headers_and_malformed_cookies_are_cleanly_rejected()
     response = guard.process(malformed)
     assert response is not None
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("value", ['leika_session="é"', r'leika_session="\351"'])
+def test_non_ascii_session_cookie_is_rejected(value: str) -> None:
+    response = HttpPasswordGuard(PASSWORD).process(Request("/", Headers({"Cookie": value})))
+    assert response is not None
+    assert response.status_code == 401
+
+
+def test_authenticated_resources_never_enter_shared_caches(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("private workspace")
+    asset = tmp_path / "private.png"
+    asset.write_bytes(b"private asset")
+    server = infra.WebsockServer(
+        host="127.0.0.1", port=0, http_server_root=tmp_path, verbose=False, password=PASSWORD
+    )
+    server.start()
+    try:
+        cookie = _login_cookie(server._port, PASSWORD_ENCODED)
+        registered = server.register_http_asset(asset)
+        for path in ("/", registered.url, "/missing"):
+            _, headers, _ = _get(server._port, path, {"Cookie": cookie})
+            assert headers["cache-control"] == "no-store"
+            assert headers["cdn-cache-control"] == "no-store"
+            assert _get(server._port, path)[0] == 401
+    finally:
+        server.stop()
