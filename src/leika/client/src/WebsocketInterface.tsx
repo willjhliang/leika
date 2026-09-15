@@ -18,7 +18,7 @@ import { plotlyBootstrap } from "./plotlyBootstrap";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
 import type { PageSubscribeMessage } from "./WebsocketMessages";
 
-/** Live binary websocket producer with focus-aware reconnect behavior. */
+/** Live binary websocket producer with visibility-aware reconnect behavior. */
 export function WebsocketMessageProducer() {
   const viewer = useViewer();
   const server = viewer.useGui((state) => state.server);
@@ -29,16 +29,16 @@ export function WebsocketMessageProducer() {
 
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);
-    const worker = new WebsocketClientWorker();
+    let worker: Worker | null = null;
     const terminateWorker = () => {
       try {
-        worker.terminate();
+        worker?.terminate();
       } catch (error) {
         console.error("Could not terminate connection worker:", error);
       }
     };
     let active = true;
-    const workerEvents = new WorkerEventGate();
+    let workerEvents = new WorkerEventGate();
     let isConnected = false;
     let retryAllowed = true;
     let requestedPageId: string | null = null;
@@ -48,7 +48,7 @@ export function WebsocketMessageProducer() {
       data: WsWorkerIncoming,
       transferables: Transferable[] = [],
     ) => {
-      if (!workerEvents.acceptsEvents) return;
+      if (!workerEvents.acceptsEvents || worker === null) return;
       try {
         worker.postMessage(data, transferables);
       } catch (error) {
@@ -60,19 +60,29 @@ export function WebsocketMessageProducer() {
       }
     };
 
+    const retryConnection = () => {
+      if (!active) return;
+      if (workerEvents.acceptsEvents) postToWorker({ type: "retry" });
+      else startWorker();
+    };
+
     const updateRetryInterval = () => {
-      const shouldRetry = retryAllowed && !isConnected && document.hasFocus();
+      const shouldRetry =
+        active &&
+        retryAllowed &&
+        !isConnected &&
+        document.visibilityState !== "hidden";
       if (!isConnected) {
         viewer.useGui.set({
           websocketState: shouldRetry ? "reconnecting" : "inactive",
         });
       }
       if (shouldRetry && retryIntervalId === null) {
-        postToWorker({ type: "retry" });
-        retryIntervalId = setInterval(
-          () => postToWorker({ type: "retry" }),
-          1000,
-        );
+        // Own the timer before posting: postMessage can fail synchronously
+        // and re-enter this lifecycle. Failed workers wait for the next tick,
+        // so persistent faults cannot create a tight worker-restart loop.
+        retryIntervalId = setInterval(retryConnection, 1000);
+        if (workerEvents.acceptsEvents) retryConnection();
       } else if (!shouldRetry && retryIntervalId !== null) {
         clearInterval(retryIntervalId);
         retryIntervalId = null;
@@ -126,10 +136,8 @@ export function WebsocketMessageProducer() {
       terminateWorker();
       connectionStats.forget();
       markDisconnected({
-        retry: false,
-        error: reason.endsWith(".")
-          ? reason + " Reload the page to reconnect."
-          : reason + ". Reload the page to reconnect.",
+        retry: true,
+        error: reason,
       });
     };
     viewer.mutable.current.failConnection = failWorker;
@@ -175,89 +183,112 @@ export function WebsocketMessageProducer() {
     };
     const unsubscribeWatchers = connectionStats.store.subscribe(updateWatching);
 
-    window.addEventListener("focus", updateRetryInterval);
-    window.addEventListener("blur", updateRetryInterval);
-    worker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
-      if (!active || !workerEvents.acceptsEvents) return;
-      const data = event.data;
-      if (data.type === "fatal") {
-        failWorker(data.reason);
-        return;
-      }
-      if (data.type === "stats") {
-        connectionStats.record(data.counters);
-        return;
-      }
-      if (data.type === "connected") {
-        const connectionState = connectionStateForEvent(
-          viewer.useGui.get().connectionError,
-          data,
-        );
-        isConnected = true;
-        retryAllowed = connectionState.retry;
-        resetConnectionState();
-        viewer.useGui.set({
-          websocketState: "connected",
-          connectionError: connectionState.connectionError,
-        });
-        updateRetryInterval();
-        installConnectionBoundSender(
-          viewer.mutable.current,
-          (message, transferables) =>
-            postToWorker({ type: "send", message }, transferables),
+    const startWorker = () => {
+      workerEvents = new WorkerEventGate();
+      let nextWorker: Worker;
+      try {
+        nextWorker = new WebsocketClientWorker();
+      } catch (error) {
+        failWorker(
+          error instanceof Error
+            ? "Connection worker could not start: " + error.message
+            : "Connection worker could not start.",
         );
         return;
       }
-      if (data.type === "closed") {
-        const connectionState = connectionStateForEvent(
-          viewer.useGui.get().connectionError,
-          data,
-        );
-        markDisconnected({
-          retry: connectionState.retry,
-          error: connectionState.connectionError,
-        });
-        return;
-      }
-      // The worker's rate smoothing can deliver a batch after the close; a
-      // batch from a dead connection must not replay over the reset GUI.
-      if (isConnected) {
-        if (
-          !viewer.mutable.current.messageQueue.enqueue(
-            data.messages,
-            data.frameBytes,
-            data.metadataBytes,
-          )
-        ) {
-          failWorker(
-            "Connection message queue exceeded its browser safety limit",
+      worker = nextWorker;
+      // A failed worker stays closed. Only a fresh worker may reconnect, and
+      // callbacks already queued by its predecessor cannot affect this one.
+      const acceptsEvents = () =>
+        active && worker === nextWorker && workerEvents.acceptsEvents;
+      nextWorker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
+        if (!acceptsEvents()) return;
+        const data = event.data;
+        if (data.type === "fatal") {
+          failWorker(data.reason);
+          return;
+        }
+        if (data.type === "stats") {
+          connectionStats.record(data.counters);
+          return;
+        }
+        if (data.type === "connected") {
+          const connectionState = connectionStateForEvent(
+            viewer.useGui.get().connectionError,
+            data,
+          );
+          isConnected = true;
+          retryAllowed = connectionState.retry;
+          resetConnectionState();
+          viewer.useGui.set({
+            websocketState: "connected",
+            connectionError: connectionState.connectionError,
+          });
+          updateRetryInterval();
+          installConnectionBoundSender(
+            viewer.mutable.current,
+            (message, transferables) =>
+              postToWorker({ type: "send", message }, transferables),
           );
           return;
         }
-        // Only now does the worker release this transferred frame from its
-        // connection-generation budget and permit the next ordered batch.
-        postToWorker({
-          type: "batch_received",
-          connectionId: data.connectionId,
-          batchId: data.batchId,
-        });
-        viewer.mutable.current.notifyMessageQueue();
-      }
-    };
-    worker.onerror = (event) => {
-      event.preventDefault();
-      failWorker(
-        event.message.length > 0
-          ? "Connection worker failed: " + event.message
-          : "Connection worker failed.",
-      );
-    };
-    worker.onmessageerror = () => {
-      failWorker("Connection worker could not decode a message.");
+        if (data.type === "closed") {
+          const connectionState = connectionStateForEvent(
+            viewer.useGui.get().connectionError,
+            data,
+          );
+          markDisconnected({
+            retry: connectionState.retry,
+            error: connectionState.connectionError,
+          });
+          return;
+        }
+        // The worker's rate smoothing can deliver a batch after the close; a
+        // batch from a dead connection must not replay over the reset GUI.
+        if (isConnected) {
+          if (
+            !viewer.mutable.current.messageQueue.enqueue(
+              data.messages,
+              data.frameBytes,
+              data.metadataBytes,
+            )
+          ) {
+            failWorker(
+              "Connection message queue exceeded its browser safety limit",
+            );
+            return;
+          }
+          // Only now does the worker release this transferred frame from its
+          // connection-generation budget and permit the next ordered batch.
+          postToWorker({
+            type: "batch_received",
+            connectionId: data.connectionId,
+            batchId: data.batchId,
+          });
+          viewer.mutable.current.notifyMessageQueue();
+        }
+      };
+      nextWorker.onerror = (event) => {
+        event.preventDefault();
+        if (!acceptsEvents()) return;
+        failWorker(
+          event.message.length > 0
+            ? "Connection worker failed: " + event.message
+            : "Connection worker failed.",
+        );
+      };
+      nextWorker.onmessageerror = () => {
+        if (!acceptsEvents()) return;
+        failWorker("Connection worker could not decode a message.");
+      };
+
+      postToWorker({ type: "set_server", server });
+      watching = false;
+      updateWatching();
     };
 
-    postToWorker({ type: "set_server", server });
-    updateWatching();
+    document.addEventListener("visibilitychange", updateRetryInterval);
+    startWorker();
     return () => {
       active = false;
       if (viewer.mutable.current.failConnection === failWorker) {
@@ -265,17 +296,18 @@ export function WebsocketMessageProducer() {
           console.error("Cannot fail an inactive connection:", reason);
       }
       workerEvents.close();
-      worker.onmessage = null;
-      worker.onerror = null;
-      worker.onmessageerror = null;
+      if (worker !== null) {
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.onmessageerror = null;
+      }
       terminateWorker();
       unsubscribePageSubscription();
       unsubscribeWatchers();
       // The counters belong to the worker that is about to be replaced, so
       // they say nothing about the connection that follows.
       connectionStats.forget();
-      window.removeEventListener("focus", updateRetryInterval);
-      window.removeEventListener("blur", updateRetryInterval);
+      document.removeEventListener("visibilitychange", updateRetryInterval);
       markDisconnected({ retry: false, error: null });
     };
   }, [server, viewer]);

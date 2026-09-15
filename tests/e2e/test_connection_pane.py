@@ -142,13 +142,13 @@ def test_connected_and_inactive_fit_their_own_labels(
     connected_bounds = badge.bounding_box()
     assert connected_bounds is not None
 
-    # Headless Chromium reports every page as focused, even after another page
-    # is brought forward. Model the background-tab value that makes a closed
-    # connection inactive rather than retrying.
+    # Headless browsers do not consistently hide a page when another one is
+    # brought forward. Model a hidden tab, whose closed connection is inactive
+    # until it becomes visible again.
     leika_page.evaluate(
-        """() => Object.defineProperty(document, "hasFocus", {
+        """() => Object.defineProperty(document, "visibilityState", {
             configurable: true,
-            value: () => false,
+            value: "hidden",
         })"""
     )
     leika_server.stop()
