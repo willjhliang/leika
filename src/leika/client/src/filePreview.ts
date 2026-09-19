@@ -6,7 +6,12 @@ import {
 import { normalizedSafeRasterMimeType } from "./imageSafety";
 import { randomUuid } from "./utils/randomUuid";
 import { resetPreviewDocumentCache } from "./previewDocumentCache";
-import type { GuiPreviewReadyMessage } from "./WebsocketMessages";
+import type {
+  GuiPreviewReadyMessage,
+  GuiPreviewImageMessage,
+} from "./WebsocketMessages";
+import { previewImageSourceKey } from "./previewImageSources";
+import { inspectMarkdownImageSource } from "./components/markdownMediaSafety";
 
 // Which viewer a previewed file gets, and the reading of its size.
 //
@@ -187,6 +192,7 @@ export interface PreviewTextStream {
   text: string;
   nextPart: number;
   complete: boolean;
+  imageSources?: ReadonlyMap<string, string>;
 }
 
 /** One file the server asked this client to look at.
@@ -505,6 +511,43 @@ const TEXT_STREAM_CACHE_CHARS = 2 * 1024 * 1024;
 const textStreams = new Map<string, PreviewTextStream>();
 let cachedTextChars = 0;
 
+/** Resolve early figures without reparsing or replacing the streamed text. */
+export function receiveFilePreviewImage(message: GuiPreviewImageMessage): void {
+  const cached = textStreams.get(message.uuid);
+  const active =
+    current?.sourceUuid === message.uuid ? current.textStream : undefined;
+  const previous = active?.id === message.stream_uuid ? active : cached;
+  if (
+    previous?.id !== message.stream_uuid ||
+    message.source.length > 8192 ||
+    message.url.length > 256
+  )
+    return;
+  const inspected = inspectMarkdownImageSource(message.url);
+  if (!inspected.admission.ok || inspected.sourceKind !== "asset") return;
+  let key: string;
+  try {
+    key = previewImageSourceKey(message.source);
+    if (key.length > 8192) return;
+  } catch {
+    return;
+  }
+  if (previous.imageSources?.get(key) === message.url) return;
+  if (
+    (previous.imageSources?.size ?? 0) >= 128 &&
+    !previous.imageSources?.has(key)
+  )
+    return;
+  const imageSources = new Map(previous.imageSources);
+  imageSources.set(key, message.url);
+  const stream = { ...previous, imageSources };
+  if (cached?.id === stream.id) textStreams.set(message.uuid, stream);
+  if (current?.sourceUuid === message.uuid && active?.id === stream.id) {
+    current = { ...current, textStream: stream };
+    announce();
+  }
+}
+
 export function receiveFilePreviewTextPart(
   sourceUuid: string,
   lead: TextLead,
@@ -542,6 +585,7 @@ export function receiveFilePreviewTextPart(
     text: prefix + lead.textLead,
     nextPart: part.index + 1,
     complete: part.done,
+    imageSources: part.index === 0 ? undefined : previous?.imageSources,
   };
   if (cached !== undefined) cachedTextChars -= cached.text.length;
   textStreams.delete(sourceUuid);

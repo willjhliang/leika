@@ -711,6 +711,24 @@ class GuiPreviewTextMessage(Message):
 
 
 @dataclasses.dataclass
+class GuiPreviewImageMessage(Message):
+    """Server->client: one validated image for an existing text stream.
+
+    Published in document order, before later images finish preparing.
+    The final file transfer still owns complete, downloadable contents.
+    """
+
+    uuid: str
+    stream_uuid: str
+    source: str
+    url: str
+
+    @override
+    def redundancy_key(self) -> str:
+        return f"{type(self).__name__}:{self.stream_uuid}:{self.source}"
+
+
+@dataclasses.dataclass
 class GuiPreviewCancelMessage(Message):
     """Server->client: a preview button could not produce its requested file.
 

@@ -186,7 +186,7 @@ describe("what a document may contain", () => {
     );
     expect(valid).toContain(`width="${validWidth}"`);
     expect(valid).toContain(`height="${validHeight}"`);
-    expect(valid).toContain('loading="lazy"');
+    expect(valid).toContain('loading="eager"');
 
     for (const source of [
       `/leika-assets/${"a".repeat(64)}.png?w=1&h=1`,
@@ -199,7 +199,7 @@ describe("what a document may contain", () => {
       const out = productionMediaHtml(`![plot](${source})`);
       expect(out).not.toMatch(/\bwidth=/);
       expect(out).not.toMatch(/\bheight=/);
-      expect(out).not.toContain('loading="lazy"');
+      expect(out).not.toContain('loading="eager"');
       expect(out).not.toContain("<img");
     }
   });

@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Markdown figures appear in document order as each image becomes ready,
+  without waiting for later images. Reopened previews mount the first blocks
+  before the rest of the cached document, keeping early figures responsive.
+
 - Markdown previews reuse recent completed documents when reopened, while
   checking the source and linked images for changes. Unchanged documents skip
   another transfer, text decode, and parse; manual Reload still reads a fresh copy.

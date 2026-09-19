@@ -9,6 +9,10 @@
  */
 
 import * as React from "react";
+import {
+  PreviewImageSourcesContext,
+  previewImageSourceKey,
+} from "../previewImageSources";
 
 import { cn } from "@/lib/utils";
 
@@ -284,6 +288,26 @@ export function MarkdownImage({
   linkedBy,
   ...sourceProps
 }: MarkdownImageProps) {
+  const preview = React.useContext(PreviewImageSourcesContext);
+  let resolved: string | undefined;
+  try {
+    resolved = preview?.sources?.get(
+      previewImageSourceKey(sourceProps.src ?? ""),
+    );
+  } catch {
+    // Invalid references keep the normal placeholder/error behavior.
+  }
+  if (preview?.pending && resolved === undefined) {
+    return sourceProps.alt
+      ? anchorAround(
+          <span className="block text-center text-sm text-muted-foreground">
+            {sourceProps.alt}
+          </span>,
+          linkedBy,
+        )
+      : null;
+  }
+  if (resolved !== undefined) sourceProps = { ...sourceProps, src: resolved };
   const inspected = inspectMarkdownImageSource(sourceProps.src);
   const measured = inspected.admission.ok ? inspected.admission.size : null;
   if (sourceProps.src === undefined) {
@@ -352,6 +376,8 @@ export function AdmittedMarkdownImage({
   }
 
   const props = { ...sourceProps, ...measured };
+  // The viewport gate already defers offscreen figures. Native lazy loading
+  // would add another observer turn after admitting even a cached image.
   const canDefer = sourceKind === "asset";
   const image = (
     <img
@@ -361,7 +387,7 @@ export function AdmittedMarkdownImage({
         "text-center text-sm text-muted-foreground",
         props.className,
       )}
-      loading={canDefer ? "lazy" : props.loading}
+      loading={canDefer ? "eager" : props.loading}
       decoding={canDefer ? "async" : props.decoding}
       onError={decodeError.onError}
     />

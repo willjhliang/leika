@@ -456,10 +456,10 @@ def test_first_screen_is_readable_while_the_rest_is_still_preparing(
     handle = leika_server.gui.add_preview_button("Read progressively", lambda _: report)
     original = handle._prepared
 
-    def prepare(client, filename, content):
+    def prepare(client, filename, content, stream_uuid=None):
         preparing.set()
         assert release.wait(timeout=15), "test did not release full preparation"
-        return original(client, filename, content)
+        return original(client, filename, content, stream_uuid)
 
     monkeypatch.setattr(handle, "_prepared", prepare)
     try:
@@ -2516,4 +2516,85 @@ def test_refreshing_a_cached_document_keeps_the_readers_scroll_range(
     )
     assert minimum == pytest.approx(initial, abs=2)
     assert frame.evaluate("el => el.scrollTop") == pytest.approx(initial, abs=2)
+    assert page_errors == []
+
+
+def test_first_inline_image_loads_before_later_image_preparation_finishes(
+    leika_server: leika.Server,
+    preview_page: Page,
+    page_errors: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first plot é.png").write_bytes(_png(8, 6))
+    (tmp_path / "later.png").write_bytes(_png(16, 12))
+    document = tmp_path / "ordered.md"
+    document.write_text(
+        "# Ordered figures\n\n[![First figure](<first plot é.png>)](#end)\n\n"
+        + "More report text. " * 33_000
+        + "\n\n![Later figure](later.png)\n\n## End\n"
+    )
+    release = threading.Event()
+    waiting = threading.Event()
+    register = leika_server._register_http_image
+
+    def held(path, **kwargs):
+        if path.name == "later.png":
+            waiting.set()
+            assert release.wait(15), "test did not release later image"
+        return register(path, **kwargs)
+
+    monkeypatch.setattr(leika_server, "_register_http_image", held)
+    leika_server.gui.add_preview_button("Ordered report", lambda _: document)
+    try:
+        _press(preview_page, "Ordered report")
+        dialog = _dialog(preview_page)
+        expect(dialog.get_by_role("img", name="First figure", exact=True)).to_have_js_property(
+            "naturalWidth", 8
+        )
+        assert waiting.is_set()
+        expect(dialog.get_by_role("button", name="Download ordered.md")).to_be_disabled()
+        expect(dialog.get_by_role("button", name="Expand image: First figure")).to_be_visible()
+        expect(
+            dialog.get_by_role("link", name="First figure", exact=True).locator("button")
+        ).to_have_count(0)
+        release.set()
+        expect(dialog.get_by_role("link", name="Download ordered.md")).to_be_visible()
+        expect(dialog.get_by_role("img", name="First figure", exact=True)).to_have_js_property(
+            "naturalWidth", 8
+        )
+    finally:
+        release.set()
+    assert page_errors == []
+
+
+def test_reopened_document_mounts_early_figures_before_the_tail_and_keeps_anchors(
+    leika_server: leika.Server, page: Page, page_errors: list[str], tmp_path: Path
+) -> None:
+    (tmp_path / "figure.png").write_bytes(_png(8, 6))
+    document = tmp_path / "batches.md"
+    document.write_text(
+        "# Cached batches\n\n![Early figure](figure.png)\n\n[Jump to the end](#end)\n\n"
+        + "A later paragraph.\n\n" * 2000
+        + "## End\n\nFinal paragraph.\n"
+    )
+    page.add_init_script("""document.addEventListener('load', event => {
+        if (event.target instanceof HTMLImageElement && event.target.alt === 'Early figure') {
+            window.earlyFigureParagraphs = document.querySelectorAll('[role=dialog] .typeset p').length;
+        }
+    }, true);""")
+    leika_server.gui.add_preview_button("Cached batches", lambda _: document)
+    page.goto(leika_server.url)
+    _press(page, "Cached batches")
+    dialog = _dialog(page)
+    expect(dialog.get_by_role("heading", name="End", exact=True)).to_have_count(1)
+    expect(dialog.get_by_role("img", name="Early figure")).to_have_js_property("naturalWidth", 8)
+    page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+    page.evaluate("window.earlyFigureParagraphs = null")
+    _press(page, "Cached batches")
+    page.wait_for_function("window.earlyFigureParagraphs !== null")
+    assert page.evaluate("window.earlyFigureParagraphs") < 1000
+    dialog.get_by_role("link", name="Jump to the end").click()
+    expect(dialog.get_by_role("heading", name="End", exact=True)).to_be_in_viewport()
     assert page_errors == []

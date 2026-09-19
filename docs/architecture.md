@@ -197,7 +197,13 @@ begins.
 
 Plain-text, prose, and source previews render through 16 MiB; Markdown renders
 through 1 MiB to bound parse and DOM expansion. The Blob remains available to
-download when inline rendering is declined.
+download when inline rendering is declined. Path-backed Markdown streams its
+text first, then publishes validated image URLs in document order as each
+snapshot becomes ready. Up to 128 early image resolutions belong to each text
+stream (bounded source/asset URLs); stale streams cannot update a new preview.
+The final transfer remains the complete downloadable document. Reopened cached
+documents mount in batches of 96 blocks; following an internal link completes
+mounting before resolving its target. Image decoding remains viewport-bound.
 
 Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
 code units (16 Mi-characters). Public creation, update, and assignment preflight

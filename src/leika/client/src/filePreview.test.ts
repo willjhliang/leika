@@ -29,6 +29,7 @@ import {
   receiveFilePreviewPart,
   receiveFilePreviewTextPart,
   receiveFilePreviewReady,
+  receiveFilePreviewImage,
   resetFilePreviewState,
   resolveFilePreview,
   warmedContents,
@@ -844,5 +845,66 @@ describe("reopening retained Markdown", () => {
     lease.evict();
     expect(requestFilePreview("source", "Report").cachedKey).toBeNull();
     expect(filePreviewStore.snapshot()!.contents).toBeNull();
+  });
+});
+
+describe("progressive preview images", () => {
+  afterEach(resetFilePreviewState);
+  const url = `/leika-assets/${"a".repeat(64)}-8x6.png?w=8&h=6`;
+  const part = (id: string) =>
+    receiveFilePreviewTextPart(
+      "report",
+      {
+        filename: "report.md",
+        mimeType: "text/markdown",
+        sizeBytes: 100,
+        textLead: "![Figure](<plot é.png>)",
+      },
+      { streamId: id, sourceVersion: id, index: 0, done: true },
+    );
+  const image = (stream: string, source = "plot é.png", asset = url) =>
+    receiveFilePreviewImage({
+      type: "GuiPreviewImageMessage",
+      uuid: "report",
+      stream_uuid: stream,
+      source,
+      url: asset,
+    });
+
+  it("retains ready images with the warmed stream and rejects stale or unsafe URLs", () => {
+    part("old");
+    image("old");
+    requestFilePreview("report", "Report");
+    expect(
+      filePreviewStore
+        .snapshot()
+        ?.textStream?.imageSources?.get(
+          "http://leika.invalid/plot%20%C3%A9.png",
+        ),
+    ).toBe(url);
+    part("new");
+    image("old");
+    image("new", "plot é.png", "https://example.com/remote.png");
+    expect(
+      filePreviewStore.snapshot()?.textStream?.imageSources,
+    ).toBeUndefined();
+    image("new");
+    expect(filePreviewStore.snapshot()?.textStream?.imageSources?.size).toBe(1);
+    closeFilePreview(filePreviewStore.snapshot()!.id);
+    image("new", "second.png");
+    expect(filePreviewStore.snapshot()).toBeNull();
+    resetFilePreviewState();
+    image("new");
+    requestFilePreview("report", "Report");
+    expect(filePreviewStore.snapshot()?.textStream).toBeUndefined();
+  });
+
+  it("bounds early image state while the complete document remains authoritative", () => {
+    part("stream");
+    for (let i = 0; i < 200; i++) image("stream", `figure-${i}.png`);
+    requestFilePreview("report", "Report");
+    expect(filePreviewStore.snapshot()?.textStream?.imageSources?.size).toBe(
+      128,
+    );
   });
 });

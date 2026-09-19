@@ -36,13 +36,9 @@ const components: MarkdownComponents = {
   // that becomes the width and height the browser reserves from. See
   // `_link_markdown_assets`, and MarkdownImage for why it travels
   // there rather than in the tag.
-  // Warming still fetches every immutable image URL ahead of a press, but
-  // fetching bytes and decoding them are separate browser costs. Ask the
-  // browser to leave a measured offscreen image encoded until it approaches
-  // the viewport, and never make its decode block the document's paint. Only a
-  // Leika asset is already warm, and only a measured one has a box to hold its
-  // place; every external or unmeasured image keeps its prior eager behavior.
-  // Neither hint changes a served image's box or styling.
+  // The image component reserves measured geometry and admits decoding only
+  // near the viewport. Streamed previews resolve each source through context,
+  // keeping the same component and DOM when the final document arrives.
   img: MarkdownImage,
   picture: MarkdownPicture,
   // typeset holds a table's headings on one line, so a table with long ones
@@ -62,20 +58,6 @@ const components: MarkdownComponents = {
 
 const render = createMarkdownRenderer(components);
 export const compileMarkdown = createMarkdownCompiler(components);
-
-// The first screen arrives before relative image URLs have been registered.
-// Keep its text readable without requesting unresolved filesystem paths.
-const leadComponents: MarkdownComponents = {
-  ...components,
-  img: ({ alt }) =>
-    alt ? (
-      <span className="block text-center text-sm text-muted-foreground">
-        {alt}
-      </span>
-    ) : null,
-};
-export const renderMarkdownLead = createMarkdownRenderer(leadComponents);
-export const compileMarkdownLead = createMarkdownCompiler(leadComponents);
 
 /** How many rendered documents are kept. Reading during a run means the same
  * report opened over and over; a handful of documents is a session's worth,

@@ -926,3 +926,41 @@ def test_reopening_markdown_revalidates_images_even_when_document_is_unchanged(
     assert _ready(changed).reused is False
     assert _ready(changed).cache_key != key
     assert changed.previewed[0][1] != first.previewed[0][1]
+
+
+@pytest.mark.parametrize("warming", [False, True])
+def test_preview_publishes_images_in_order_before_later_images_are_prepared(
+    server: leika.Server, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warming: bool
+) -> None:
+    from PIL import Image
+
+    document = tmp_path / "report.md"
+    document.write_text(
+        "# Report\n\n![First](first.png)\n![Again](first.png)\n![Later](later.png)\n"
+    )
+    for name in ("first.png", "later.png"):
+        Image.new("RGB", (8, 6), "red").save(tmp_path / name)
+    handle = server.gui.add_preview_button("Report", document)
+    client = _Client(server)
+    register = server._register_http_image
+    reads = []
+
+    def inspected(path: Path, **kwargs: Any):
+        reads.append(path.name)
+        if path.name == "later.png":
+            images = [m for m in client.messages if isinstance(m, _messages.GuiPreviewImageMessage)]
+            assert [m.source for m in images] == ["first.png"]
+            text = [m for m in client.messages if isinstance(m, _messages.GuiPreviewTextMessage)]
+            assert text[-1].done
+            assert images[0].stream_uuid == text[0].stream_uuid
+            assert images[0].url.startswith("/leika-assets/")
+            assert not client.shown and not client.warmed
+        return register(path, **kwargs)
+
+    monkeypatch.setattr(server, "_register_http_image", inspected)
+    if warming:
+        handle._warm(client)  # type: ignore[arg-type]
+    else:
+        handle._send(GuiEvent(client, 0, handle))  # type: ignore[arg-type]
+    assert reads == ["first.png", "later.png"]
+    assert len([m for m in client.messages if isinstance(m, _messages.GuiPreviewImageMessage)]) == 2

@@ -73,6 +73,7 @@ from ._messages import (
     GuiNumberProps,
     GuiPlotlyProps,
     GuiPopupProps,
+    GuiPreviewImageMessage,
     GuiPreviewOpenMessage,
     GuiPreviewReadyMessage,
     GuiPreviewTextMessage,
@@ -2315,7 +2316,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
 
     def _send_text_stream(
         self, client: ClientHandle, filename: str, content: bytes | Path, version: str | None
-    ) -> None:
+    ) -> str | None:
         filename = validate_file_display_name(filename)
         stream_uuid = f"{self._impl.uuid}:{version}" if version is not None else str(uuid.uuid4())
         for mime, size, index, text, done in iter_preview_text(filename, content, self._max_bytes):
@@ -2333,10 +2334,17 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
                 )
             )
             if queued is False:
-                return
+                return None
             client.flush()
+        return stream_uuid
 
-    def _prepared(self, client: ClientHandle, filename: str, content: bytes | Path) -> bytes | Path:
+    def _prepared(
+        self,
+        client: ClientHandle,
+        filename: str,
+        content: bytes | Path,
+        stream_uuid: str | None = None,
+    ) -> bytes | Path:
         """The contents as the browser should receive them.
 
         A path-backed document knows where its relative images live. The
@@ -2360,12 +2368,29 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             if payload is None:
                 return content
             source = payload.decode("utf-8", errors="replace")
+
+            published_images = 0
+
+            def image_ready(source: str, url: str) -> None:
+                nonlocal published_images
+                # The browser retains at most 128 early resolutions per stream.
+                # Remaining figures still arrive through the completed document.
+                if published_images >= 128:
+                    return
+                published_images += 1
+                assert stream_uuid is not None
+                client._websock_connection.queue_message(
+                    GuiPreviewImageMessage(self._impl.uuid, stream_uuid, source, url)
+                )
+                client.flush()
+
             linked = _link_markdown_assets(
                 source,
                 content.parent,
                 lambda path, metadata: client._server._register_http_image(
                     path, _expected_metadata=metadata
                 ),
+                image_ready if stream_uuid is not None else None,
             ).encode("utf-8")
             return linked if len(linked) <= _GUI_MARKDOWN_MAX_SOURCE_BYTES else content
         return content
@@ -2418,9 +2443,10 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         would agree about a file the reader never got.
         """
         version = self._version()
+        stream_uuid = None
         if disposition == "preview" and cached_key is None:
-            self._send_text_stream(client, filename, content, version)
-        prepared = self._prepared(client, filename, content)
+            stream_uuid = self._send_text_stream(client, filename, content, version)
+        prepared = self._prepared(client, filename, content, stream_uuid)
         # Hash the prepared Markdown, including its immutable image URLs.
         # Recheck providers and image assets on every press; only identical
         # output may reuse a browser copy. Large/other files keep streaming.
@@ -2541,8 +2567,8 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             return
         try:
             version = self._version()
-            self._send_text_stream(client, filename, content, version)
-            prepared = self._prepared(client, filename, content)
+            stream_uuid = self._send_text_stream(client, filename, content, version)
+            prepared = self._prepared(client, filename, content, stream_uuid)
             client._send_file(
                 filename,
                 prepared,

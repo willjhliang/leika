@@ -8,6 +8,7 @@ import {
   cancelPendingFilePreview,
   receiveFilePreviewTextPart,
   receiveFilePreviewReady,
+  receiveFilePreviewImage,
 } from "./filePreview";
 import {
   dismissNotification,
@@ -108,6 +109,9 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "GuiPreviewReadyMessage":
           receiveFilePreviewReady(message);
+          return;
+        case "GuiPreviewImageMessage":
+          receiveFilePreviewImage(message);
           return;
         case "GuiPreviewTextMessage":
           receiveFilePreviewTextPart(

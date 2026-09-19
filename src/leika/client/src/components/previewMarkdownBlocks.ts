@@ -5,7 +5,7 @@ import {
   type MarkdownBlock,
   type MarkdownPatch,
 } from "../progressiveMarkdown";
-import { compileMarkdown, compileMarkdownLead } from "./markdownDocument";
+import { compileMarkdown } from "./markdownDocument";
 
 type CompiledBlock = { signature: string; element: React.ReactElement };
 
@@ -46,8 +46,7 @@ export class PreviewMarkdownBlocks {
 
   private compile(block: MarkdownBlock): void {
     if (this.blocks[block.index]?.signature === block.signature) return;
-    const compile = block.images ? compileMarkdown : compileMarkdownLead;
-    const result = compile({
+    const result = compileMarkdown({
       tree: { type: "root", children: [block.node] },
       headings: [],
     });

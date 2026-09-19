@@ -360,6 +360,7 @@ def _link_markdown_assets(
     markdown: str,
     image_root: Path,
     register: Callable[[Path, os.stat_result], HttpAsset],
+    on_asset: Callable[[str, str], None] | None = None,
 ) -> str:
     """Point a document's relative images at server URLs of their own.
 
@@ -373,9 +374,15 @@ def _link_markdown_assets(
     scheme are already self-contained and pass through untouched. A local
     image that cannot be read keeps its original reference, so the document
     renders with the same broken figure it would show anywhere else.
+    ``on_asset`` receives each unique resolved destination immediately, in
+    document order, without waiting for later image snapshots.
     """
 
+    linked_urls: dict[str, str] = {}
+
     def linked(url: str) -> str | None:
+        if url in linked_urls:
+            return linked_urls[url]
         local_url = _relative_markdown_asset(url)
         if local_url is None:
             return None
@@ -401,9 +408,13 @@ def _link_markdown_assets(
                 stacklevel=2,
             )
             return None
-        if asset.pixel_size is None:
-            return asset.url
-        width, height = asset.pixel_size
-        return f"{asset.url}?w={width}&h={height}"
+        destination = asset.url
+        if asset.pixel_size is not None:
+            width, height = asset.pixel_size
+            destination = f"{asset.url}?w={width}&h={height}"
+        linked_urls[url] = destination
+        if on_asset is not None:
+            on_asset(url, destination)
+        return destination
 
     return _rewrite_markdown_images(markdown, linked)

@@ -1,3 +1,4 @@
+import { PreviewImageSourcesContext } from "../previewImageSources";
 import {
   DownloadIcon,
   FileIcon,
@@ -702,7 +703,11 @@ export function FilePreviewDialog({
       ? stream.text
       : null;
   const text = completeText ?? streamedText ?? lead;
-  const { document, error: markdownError } = usePreviewMarkdown(
+  const {
+    document,
+    error: markdownError,
+    finishMounting,
+  } = usePreviewMarkdown(
     kind === "markdown" ? text : null,
     kind === "markdown" ? lead : null,
     textContinuityKey,
@@ -733,20 +738,28 @@ export function FilePreviewDialog({
     return () => window.clearTimeout(timer);
   }, [reloading]);
 
+  const imageSources = streamedText === null ? undefined : stream?.imageSources;
+  const imageContext = React.useMemo(
+    () => ({ sources: imageSources, pending: completeText === null }),
+    [imageSources, completeText],
+  );
+
   const body =
     preview.contents === null && (!textual || text === null) ? (
       <PendingBody />
     ) : (
       <>
-        <PreviewBody
-          kind={kind}
-          preview={preview}
-          contents={preview.contents}
-          text={text}
-          showContents={showContents}
-          document={document}
-          imageAdmission={imageAdmission}
-        />
+        <PreviewImageSourcesContext.Provider value={imageContext}>
+          <PreviewBody
+            kind={kind}
+            preview={preview}
+            contents={preview.contents}
+            text={text}
+            showContents={showContents}
+            document={document}
+            imageAdmission={imageAdmission}
+          />
+        </PreviewImageSourcesContext.Provider>
         {kind === "markdown" && !markdownRenderAllowed(preview.sizeBytes) ? (
           <MarkdownPreviewLimit filename={preview.filename} />
         ) : textual && !fileTextPreviewAllowed(preview.sizeBytes) ? (
@@ -802,6 +815,13 @@ export function FilePreviewDialog({
         <div
           ref={setReadingFrame}
           data-slot="file-preview-reading-frame"
+          onClickCapture={(event) => {
+            if (
+              event.target instanceof Element &&
+              event.target.closest('a[href^="#"]')
+            )
+              finishMounting();
+          }}
           className={cn(
             // `min-h-0` is what lets the frame be shorter than the document
             // in it, so the scroll happens here. `overscroll-contain` keeps

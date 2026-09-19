@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { FILE_PREVIEW_LEAD_CHARS } from "../filePreview";
 import type { RenderedDocument } from "../markdown";
 import type { MarkdownPatch } from "../progressiveMarkdown";
@@ -16,7 +17,11 @@ export function usePreviewMarkdown(
   continuityKey: string,
   complete = true,
   images = true,
-): { document: RenderedDocument | null; error: string | null } {
+): {
+  document: RenderedDocument | null;
+  error: string | null;
+  finishMounting: () => void;
+} {
   const cached = React.useMemo(
     () =>
       source !== null && complete && images
@@ -24,6 +29,45 @@ export function usePreviewMarkdown(
         : null,
     [source, complete, images],
   );
+  // A cached parse still costs DOM work. Mount its first blocks before filling
+  // the rest, using the same small batches as the worker. Refreshes keep the
+  // complete old document so they cannot shrink an existing scroll range.
+  const openedWith = React.useRef(cached);
+  const [cachedCount, setCachedCount] = React.useState(96);
+  const cachedBlocks =
+    cached !== null &&
+    cached === openedWith.current &&
+    React.isValidElement<{ children?: React.ReactNode[] }>(cached.element) &&
+    Array.isArray(cached.element.props.children)
+      ? cached.element.props.children
+      : null;
+  const moreCached = cachedBlocks !== null && cachedCount < cachedBlocks.length;
+  React.useEffect(() => {
+    if (!moreCached) return;
+    const frame = requestAnimationFrame(() =>
+      setCachedCount((count) => count + 96),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [moreCached, cachedCount]);
+  const mountedCached = React.useMemo(
+    () =>
+      cached !== null && cachedBlocks !== null && moreCached
+        ? {
+            ...cached,
+            element: React.createElement(
+              React.Fragment,
+              null,
+              cachedBlocks.slice(0, cachedCount),
+            ),
+          }
+        : cached,
+    [cached, cachedBlocks, moreCached, cachedCount],
+  );
+  const finishMounting = React.useCallback(() => {
+    // An anchor may name a block not yet mounted. Complete before the reader's
+    // normal click handler looks up its target, preserving navigation semantics.
+    if (moreCached) flushSync(() => setCachedCount(Infinity));
+  }, [moreCached]);
   const hasCached = cached !== null;
   const previousCached = React.useRef<{
     continuityKey: string;
@@ -136,12 +180,13 @@ export function usePreviewMarkdown(
   }, [ready, continuityKey]);
   return {
     document:
-      cached ??
+      mountedCached ??
       (ready?.continuityKey === continuityKey
         ? ready.document
         : previousCached.current?.continuityKey === continuityKey
           ? previousCached.current.document
           : initialDocument),
     error,
+    finishMounting,
   };
 }

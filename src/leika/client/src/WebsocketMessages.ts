@@ -665,6 +665,21 @@ export interface GuiPreviewTextMessage {
   part_index: number;
   done: boolean;
 }
+/** Server->client: one validated image for an existing text stream.
+ *
+ * Published in document order, before later images finish preparing.
+ * The final file transfer still owns complete, downloadable contents.
+ *
+ *
+ * (automatically generated)
+ */
+export interface GuiPreviewImageMessage {
+  type: "GuiPreviewImageMessage";
+  uuid: string;
+  stream_uuid: string;
+  source: string;
+  url: string;
+}
 /** Server->client: a preview button could not produce its requested file.
  *
  * Closes only a still-pending local popup for this source. The accompanying
@@ -1124,6 +1139,7 @@ export type Message =
   | GuiPreviewReadyMessage
   | GuiPreviewWarmMessage
   | GuiPreviewTextMessage
+  | GuiPreviewImageMessage
   | GuiPreviewCancelMessage
   | GuiPreviewReloadMessage
   | GuiPreviewWatchMessage
@@ -2948,6 +2964,24 @@ const messageValidators = new Map<
       typeof message["done"] === "boolean",
   ],
   [
+    "GuiPreviewImageMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "stream_uuid") &&
+      Object.hasOwn(message, "source") &&
+      Object.hasOwn(message, "url") &&
+      message["type"] === "GuiPreviewImageMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      typeof message["stream_uuid"] === "string" &&
+      typeof message["source"] === "string" &&
+      typeof message["url"] === "string",
+  ],
+  [
     "GuiPreviewCancelMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3483,4 +3517,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "9f0ff6470fea";
+export const LEIKA_PROTOCOL = "b2d07566f07c";

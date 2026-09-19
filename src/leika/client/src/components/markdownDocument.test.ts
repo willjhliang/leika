@@ -9,6 +9,7 @@
  */
 
 import { createElement } from "react";
+import { PreviewImageSourcesContext } from "../previewImageSources";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -310,9 +311,9 @@ test("a served figure reserves the size the server measured", () => {
   expect(drawn).toContain('alt="Plot"');
 });
 
-test("figures defer offscreen loading and decode asynchronously", () => {
+test("admitted figures load immediately and decode asynchronously", () => {
   const drawn = admittedHtml(640, 360);
-  expect(drawn).toContain('loading="lazy"');
+  expect(drawn).toContain('loading="eager"');
   expect(drawn).toContain('decoding="async"');
   // Scheduling hints must not trade away the stable geometry that prevents
   // images arriving under the reader from moving the document.
@@ -414,8 +415,7 @@ test("a caption under a figure is still markdown", () => {
 
 test("worker-cloned Markdown uses the same sanitation, headings, and rendering", async () => {
   const { parseMarkdown } = await import("../markdown");
-  const { compileMarkdown, renderMarkdownLead } =
-    await import("./markdownDocument");
+  const { compileMarkdown } = await import("./markdownDocument");
   const source =
     "# Heading\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![plot](relative.png)\n\n## Section\n\n|a|b|\n|-|-|\n|1|2|";
   const parsed = structuredClone(parseMarkdown(source));
@@ -424,7 +424,13 @@ test("worker-cloned Markdown uses the same sanitation, headings, and rendering",
     renderToStaticMarkup(renderMarkdown(source).element),
   );
   expect(compiled.headings).toEqual(renderMarkdown(source).headings);
-  const lead = renderToStaticMarkup(renderMarkdownLead(source).element);
+  const lead = renderToStaticMarkup(
+    createElement(
+      PreviewImageSourcesContext.Provider,
+      { value: { pending: true } },
+      compiled.element,
+    ),
+  );
   expect(lead).toContain("Heading");
   expect(lead).not.toContain("<img");
   expect(lead).not.toContain("<script");
