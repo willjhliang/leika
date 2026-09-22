@@ -5,6 +5,11 @@ versioning.
 
 ## Unreleased
 
+- Settings **Rendering** offers persistent Auto, Performance, and Quality presets
+  for native image panes. Encoding and receipt pacing are per browser; slow
+  connections do not lower other viewers' detail. Preset/size changes refresh
+  paused images. `PaneHandle.has_viewers` lets producers skip hidden routine work.
+
 - Markdown figures appear in document order as each image becomes ready,
   without waiting for later images. Reopened previews mount the first blocks
   before the rest of the cached document, keeping early figures responsive.

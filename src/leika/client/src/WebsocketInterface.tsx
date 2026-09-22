@@ -172,6 +172,21 @@ export function WebsocketMessageProducer() {
     const unsubscribePageSubscription =
       viewer.useViewport.subscribe(syncPageSubscription);
 
+    let sentRendering: string | null = null;
+    const syncRendering = () => {
+      if (!isConnected) return;
+      const { rendering, imageFit } = viewer.useSettings.get();
+      const key = `${rendering}:${imageFit}`;
+      if (key === sentRendering) return;
+      sentRendering = key;
+      viewer.mutable.current.sendMessage({
+        type: "RenderingSettingsMessage",
+        rendering,
+        image_fit: imageFit,
+      });
+    };
+    const unsubscribeRendering = viewer.useSettings.subscribe(syncRendering);
+
     // The worker measures only while something is watching, so it is told when
     // that changes -- and only then, since the counters it reports arrive
     // through this same store once a second.
@@ -233,6 +248,8 @@ export function WebsocketMessageProducer() {
               postToWorker({ type: "send", message }, transferables);
             },
           );
+          sentRendering = null;
+          syncRendering();
           return;
         }
         if (data.type === "closed") {
@@ -306,6 +323,7 @@ export function WebsocketMessageProducer() {
       }
       terminateWorker();
       unsubscribePageSubscription();
+      unsubscribeRendering();
       unsubscribeWatchers();
       // The counters belong to the worker that is about to be replaced, so
       // they say nothing about the connection that follows.

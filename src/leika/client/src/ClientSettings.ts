@@ -7,6 +7,7 @@ import { Store, createStore } from "./store";
  * control usually is. Kept in step with `ImageFit` on the Python side, which
  * is what arrives on a pane's `fit`. */
 export type ImageFit = "fit" | "fill" | "stretch";
+export type RenderingMode = "auto" | "performance" | "quality";
 
 /** The CSS keyword each one applies. The two vocabularies disagree on "fill":
  * CSS means stretching by it, so filling the box is CSS `cover`. */
@@ -32,6 +33,8 @@ export interface ClientSettings {
   accentColor: string | null;
   /** How image panes size themselves when Python did not say. */
   imageFit: ImageFit;
+  /** Per-browser raster fidelity; never changes another viewer's encoding. */
+  rendering: RenderingMode;
   /** Whether the phone's bottom control sheet is unfolded. */
   mobileControlsExpanded: boolean;
 }
@@ -43,6 +46,7 @@ export interface ClientSettingsActions {
   setShowPaneTitles: (showPaneTitles: boolean) => void;
   setAccentColor: (accentColor: string | null) => void;
   setImageFit: (imageFit: ImageFit) => void;
+  setRendering: (rendering: RenderingMode) => void;
   setMobileControlsExpanded: (expanded: boolean) => void;
 }
 
@@ -71,6 +75,7 @@ export function defaultClientSettings(): ClientSettings {
     showPaneTitles: false,
     accentColor: null,
     imageFit: "fit",
+    rendering: "auto",
     mobileControlsExpanded: true,
   };
 }
@@ -126,6 +131,10 @@ export function readClientSettings(
     imageFit: IMAGE_FITS.includes(stored.imageFit as ImageFit)
       ? (stored.imageFit as ImageFit)
       : defaults.imageFit,
+    rendering:
+      stored.rendering === "performance" || stored.rendering === "quality"
+        ? stored.rendering
+        : defaults.rendering,
     mobileControlsExpanded:
       typeof stored.mobileControlsExpanded === "boolean"
         ? stored.mobileControlsExpanded
@@ -164,6 +173,7 @@ export function useClientSettings(
       setShowPaneTitles: (showPaneTitles) => update({ showPaneTitles }),
       setAccentColor: (accentColor) => update({ accentColor }),
       setImageFit: (imageFit) => update({ imageFit }),
+      setRendering: (rendering) => update({ rendering }),
       setMobileControlsExpanded: (mobileControlsExpanded) =>
         update({ mobileControlsExpanded }),
     };

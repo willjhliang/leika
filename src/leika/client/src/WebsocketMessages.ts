@@ -985,6 +985,15 @@ export interface FileTransferPartAck {
   transferred_bytes: number;
   total_bytes: number;
 }
+/** Browser-owned rendering preferences, resent on every connection.
+ *
+ * (automatically generated)
+ */
+export interface RenderingSettingsMessage {
+  type: "RenderingSettingsMessage";
+  rendering: "auto" | "performance" | "quality";
+  image_fit: "fit" | "fill" | "stretch";
+}
 /** Browser pane content dimensions in physical pixels; zero when hidden.
  *
  * (automatically generated)
@@ -1186,6 +1195,7 @@ export type Message =
   | FileTransferPart
   | FileTransferAbort
   | FileTransferPartAck
+  | RenderingSettingsMessage
   | PaneViewportMessage
   | ClientPingMessage
   | ServerPongMessage
@@ -3462,6 +3472,22 @@ const messageValidators = new Map<
       Number.isSafeInteger(message["total_bytes"]),
   ],
   [
+    "RenderingSettingsMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 3 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "rendering") &&
+      Object.hasOwn(message, "image_fit") &&
+      message["type"] === "RenderingSettingsMessage" &&
+      (message["rendering"] === "auto" ||
+        message["rendering"] === "performance" ||
+        message["rendering"] === "quality") &&
+      (message["image_fit"] === "fit" ||
+        message["image_fit"] === "fill" ||
+        message["image_fit"] === "stretch"),
+  ],
+  [
     "PaneViewportMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3574,4 +3600,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "fd5e85505cbc";
+export const LEIKA_PROTOCOL = "b6e38c6ddefd";

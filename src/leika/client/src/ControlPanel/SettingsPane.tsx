@@ -2,7 +2,7 @@ import { SettingsIcon } from "lucide-react";
 import * as React from "react";
 
 import { commandPalette } from "../CommandPaletteController";
-import { ImageFit } from "../ClientSettings";
+import { ImageFit, RenderingMode } from "../ClientSettings";
 import { LEIKA_VERSION } from "../VersionInfo";
 import { useViewer } from "../ViewerContext";
 import { usePeekHold } from "../dock/DockContext";
@@ -200,6 +200,35 @@ function ImageFitRow() {
   );
 }
 
+const RENDERING_ITEMS: { value: RenderingMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "performance", label: "Performance" },
+  { value: "quality", label: "Quality" },
+];
+
+function RenderingRow() {
+  const viewer = useViewer();
+  const rendering = viewer.useSettings((state) => state.rendering);
+  return (
+    <SettingsSelectRow
+      id="leika-settings-rendering"
+      label="Rendering"
+      items={RENDERING_ITEMS}
+      value={rendering}
+      onValueChange={viewer.settingsActions.setRendering}
+      attrs={{
+        "data-leika-settings-rendering": "true",
+        title:
+          rendering === "performance"
+            ? "Smaller images for lighter transfers."
+            : rendering === "quality"
+              ? "Full source resolution and quality."
+              : "Fit images to the display while preserving detail.",
+      }}
+    />
+  );
+}
+
 const REPOSITORY_URL = "https://github.com/willjhliang/leika";
 const DOCUMENTATION_URL = "https://willjhliang.github.io/leika/";
 const EXAMPLES_URL = "https://github.com/willjhliang/leika/tree/main/examples";
@@ -303,6 +332,7 @@ function SettingsRows() {
       </SettingsRow>
       <AccentColorRow />
       <ImageFitRow />
+      <RenderingRow />
       {/* A step clear of the fields: it does not set a preference, it opens
           something else. */}
       <Button

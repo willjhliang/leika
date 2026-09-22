@@ -25,12 +25,13 @@ transition has a clear home.
 | Responsibility | Python modules |
 | --- | --- |
 | Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
-| One browser's GUI, outgoing transfers, and transfer cancellation | `_client_handle.py` |
+| One browser's GUI, rendering preferences, outgoing transfers, and transfer cancellation | `_client_handle.py` |
 | Download limits, validation, and descriptor-backed chunk sources | `_downloads.py` |
 | Bounded background jobs and captured-payload admission | `_executor.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
 | Renderer preparation shared by GUI controls and panes | `_array_snapshot.py`, `_plotly.py`, `_markdown.py`, `_image_encoding.py` |
+| Per-browser raster variants after transport coalescing | `_rendering.py` |
 | Retained GUI/pane resource measurement | `_gui_resources.py` |
 | Typed wire schema and generated client contract | `_messages.py`, `infra/_messages.py`, `infra/_typescript_interface_gen.py` |
 | WebSocket lifecycle, dispatch, replay, and flow control | `infra/_infra.py`, `infra/_async_message_buffer.py` |

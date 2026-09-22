@@ -73,6 +73,8 @@ class _ClientHandleState:
     message_buffer: AsyncMessageBuffer
     persistent_message_buffer: AsyncMessageBuffer | None = None
     delivery_rate: float | None = None
+    prepare_outgoing: Callable[[Sequence[Message]], Awaitable[Sequence[Message]]] | None = None
+    rendering_backpressure: bool = False
 
     def record_delivery(self, size: int, elapsed: float) -> None:
         # Tiny control-only batches measure RTT, not useful bulk throughput.
@@ -1127,6 +1129,8 @@ async def _message_producer(
             reserved_file_bytes = window.file_bytes_reserved
             reserved_file_parts = window.file_parts_reserved
             try:
+                if client_state is not None and client_state.prepare_outgoing is not None:
+                    outgoing = await client_state.prepare_outgoing(outgoing)
                 binary_buffers: list[memoryview] = []
                 serialized_messages = tuple(
                     message.as_serializable_dict(binary_buffers) for message in outgoing
@@ -1172,7 +1176,9 @@ async def _message_producer(
                 # format while avoiding a frame-sized copy of every ndarray.
                 started = time.monotonic()
                 await websocket.send(parts)
-                if delivery_backpressure:
+                if delivery_backpressure or (
+                    client_state is not None and client_state.rendering_backpressure
+                ):
                     # send() may only copy into an OS socket buffer. A pong
                     # proves the peer received the preceding bytes, keeping
                     # stale updates in our coalescing queue until then.

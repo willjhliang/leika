@@ -843,9 +843,11 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
     collapsed panel down to its badge. It has to stay up while either is open,
     or the reader is left with a badge and a popout hanging off nothing."""
     page = dock_page
+    # Stay outside the settings popover as its preference rows grow.
+    canvas = (24.0, VIEWPORT_H - 24.0)
     page.mouse.click(*center(control_handle(page)))
     expect(page.locator("[data-dock-collapsed]")).to_have_count(1, timeout=5_000)
-    page.mouse.move(*CANVAS)
+    page.mouse.move(*canvas)
     expect(control_panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)", timeout=5_000)
 
     for trigger, popover in (
@@ -861,7 +863,7 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
         # Pointer right away from both. Portal-bubbled events deliberately do
         # not masquerade as physical panel hover; the explicit popout hold is
         # what keeps the header visible wherever its reader's pointer goes.
-        page.mouse.move(*CANVAS)
+        page.mouse.move(*canvas)
         page.wait_for_timeout(400)
         held = _peek_state(page)
         assert _draws_a_shadow(held["shadow"]), held
@@ -872,7 +874,7 @@ def test_a_popout_holds_the_collapsed_panel_open(dock_page: Page) -> None:
         # down. Closing hands focus to the control that opened it either way,
         # so this is the case that used to sit open behind a pointer that had
         # long since left.
-        page.mouse.click(*CANVAS)
+        page.mouse.click(*canvas)
         expect(page.locator(popover)).to_have_count(0, timeout=5_000)
         expect(control_panel(page)).to_have_css(
             "background-color", "rgba(0, 0, 0, 0)", timeout=5_000

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import ipaddress
 import math
 import os
@@ -112,11 +113,13 @@ class Server:
     ``allow_embedding=True`` only for an intentional iframe or notebook
     :meth:`show` use.
 
-    Set ``delivery_backpressure=True`` for live streams on slow connections.
+    Browser rendering preferences automatically enable delivery backpressure.
+    Set ``delivery_backpressure=True`` to enable it for other clients too.
     Each outbound producer waits for transport receipt before sending another
     batch, allowing pending updates to coalesce instead of buffering old frames
     in the network. This can lower playback rate on high-latency connections;
-    it acknowledges byte delivery, not browser rendering. Disabled by default.
+    it acknowledges byte delivery, not browser rendering. Non-browser clients
+    retain the default of False unless explicitly enabled.
     """
 
     def __init__(
@@ -238,6 +241,7 @@ class Server:
         server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
         server.register_handler(_messages.PaneViewportMessage, self._handle_pane_viewport)
+        server.register_handler(_messages.RenderingSettingsMessage, self._handle_rendering_settings)
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
         @server.on_client_disconnect
@@ -601,6 +605,51 @@ class Server:
             if subscribed and page.panes._has_plotly_pane_locked():
                 self._ensure_plotly_js_sent(client._websock_connection)
 
+    def _refresh_rendering(self, client: ClientHandle, pane_id: str | None = None) -> None:
+        # Re-publish current content on the SAME ordered broadcast producer.
+        # A private replay could overtake a newer live update. Other browsers
+        # see their own encoding of this harmless same-content refresh.
+        from ._panes import ImagePaneHandle
+
+        page_id = client._websock_connection.delivery_scope()
+        if page_id is None:
+            return
+        with self.pages._lock:
+            page = self.pages._page_from_page_id.get(page_id)
+        if page is None:
+            return
+        with page.panes._lock:
+            for handle in page.panes._handle_from_pane_id.values():
+                if isinstance(handle, ImagePaneHandle) and (
+                    pane_id is None or handle.pane_id == pane_id
+                ):
+                    handle._queue_update(dataclasses.asdict(handle._impl.props))
+
+    def _handle_rendering_settings(
+        self, client_id: infra.ClientId, message: _messages.RenderingSettingsMessage
+    ) -> None:
+        if message.rendering not in ("auto", "performance", "quality") or message.image_fit not in (
+            "fit",
+            "fill",
+            "stretch",
+        ):
+            return
+        with self._client_lock:
+            client = self._connected_clients.get(client_id)
+        if client is None:
+            return
+        with client._pane_size_lock:
+            changed = (client._rendering, client._image_fit) != (
+                message.rendering,
+                message.image_fit,
+            )
+            client._rendering, client._image_fit = message.rendering, message.image_fit
+        state = client._websock_connection._state
+        state.prepare_outgoing = client._prepare_rendering
+        state.rendering_backpressure = True
+        if changed:
+            self._refresh_rendering(client)
+
     def _handle_pane_viewport(
         self, client_id: infra.ClientId, message: _messages.PaneViewportMessage
     ) -> None:
@@ -622,7 +671,10 @@ class Server:
             key = (message.page_id, message.pane_id)
             if key not in client._pane_sizes and len(client._pane_sizes) >= 128:
                 client._pane_sizes.pop(next(iter(client._pane_sizes)))
+            previous = client._pane_sizes.get(key)
             client._pane_sizes[key] = message.width, message.height
+        if previous != (message.width, message.height) and message.width and message.height:
+            self._refresh_rendering(client, message.pane_id)
 
     def _handle_client_ping(
         self, client_id: infra.ClientId, message: _messages.ClientPingMessage

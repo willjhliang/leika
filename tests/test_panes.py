@@ -210,7 +210,8 @@ def test_image_update_can_change_loading_in_one_message(server: leika.Server) ->
     ]
     assert len(queued) == 1
     assert isinstance(queued[0], messages.ViewportPaneUpdateMessage)
-    assert set(queued[0].updates) == {"_data", "_format", "loading"}
+    assert set(queued[0].updates) == {"_data", "_format", "loading", "fit"}
+    assert queued[0].updates["fit"] is None
     assert queued[0].updates["loading"] is False
     assert pane.loading is False
     np.testing.assert_array_equal(pane.image, replacement)

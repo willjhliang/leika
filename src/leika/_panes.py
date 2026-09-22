@@ -400,6 +400,19 @@ class PaneHandle(Generic[_PaneStateT]):
         if self._impl.removed:
             raise RuntimeError(f"Cannot update a removed {type(self).__name__}.")
 
+    @property
+    def has_viewers(self) -> bool:
+        """Whether a connected browser may be displaying this pane.
+
+        Unknown dimensions count as visible until the browser reports them.
+        Applications can skip expensive routine work when False; explicit
+        selection/loading updates should still publish their new content.
+        """
+        self._check_not_removed()
+        return self.visible and any(
+            client.pane_size(self) != (0, 0) for client in self._impl.api._owner.clients.values()
+        )
+
     def invalidate_on(self, *controls: Any) -> None:
         """Hide this pane immediately when a bound GUI input changes.
 
@@ -649,7 +662,11 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             # Encoding can be expensive. Recheck after taking the lock so a
             # concurrent remove cannot queue an update for a reused pane ID.
             self._check_not_removed()
-            updates: dict[str, Any] = {"_format": resolved_format, "_data": data}
+            updates: dict[str, Any] = {
+                "_format": resolved_format,
+                "_data": data,
+                "fit": self._impl.props.fit,
+            }
             if loading is not None:
                 updates["loading"] = loading
             self._publish_update_locked(updates, state_updates={"image": image})

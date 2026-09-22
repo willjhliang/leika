@@ -7,7 +7,7 @@ import contextlib
 import mimetypes
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ContextManager, Iterator
+from typing import TYPE_CHECKING, Callable, ContextManager, Iterator, Sequence
 from uuid import uuid4
 
 from . import _downloads, _messages, infra
@@ -15,6 +15,7 @@ from ._async_errors import print_async_errors
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
+from ._rendering import RenderingMode, render_message
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 
 if TYPE_CHECKING:
@@ -38,16 +39,51 @@ class ClientHandle:
         """Handle for interacting with the GUI."""
         self.client_id: int = conn.client_id
         """Unique ID for this client."""
+        self._rendering: RenderingMode = "auto"
+        self._image_fit = "fit"
         self._pane_size_lock = threading.Lock()
         self._pane_sizes: dict[tuple[str, str], tuple[int, int]] = {}
         self._outgoing_transfer_lock = threading.Lock()
         self._outgoing_transfer_cancel_from_uuid: dict[str, threading.Event] = {}
 
+    async def _prepare_rendering(
+        self, messages: Sequence[infra.Message]
+    ) -> Sequence[infra.Message]:
+        with self._pane_size_lock:
+            mode, fit = self._rendering, self._image_fit
+            sizes = self._pane_sizes.copy()
+        if mode == "quality" or not any(
+            isinstance(message, _messages.ViewportImageMessage)
+            or (
+                isinstance(message, _messages.ViewportPaneUpdateMessage)
+                and "_data" in message.updates
+            )
+            for message in messages
+        ):
+            return messages
+
+        def prepare() -> Sequence[infra.Message]:
+            return tuple(
+                render_message(
+                    message,
+                    mode,
+                    sizes.get((getattr(message, "page_id", ""), getattr(message, "pane_id", ""))),
+                    fit,
+                    self._server,
+                )
+                for message in messages
+            )
+
+        return await asyncio.get_running_loop().run_in_executor(
+            self._server._thread_executor, prepare
+        )
+
     @property
     def delivery_rate(self) -> float | None:
         """Smoothed received bytes/second, or None before a bulk receipt.
 
-        Available when the server enables ``delivery_backpressure``. Includes
+        Available with browser rendering preferences or explicit server
+        ``delivery_backpressure``. Includes
         round-trip delay, so this is conservative delivery throughput, not a
         measurement of the physical link's maximum bandwidth.
         """

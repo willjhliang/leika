@@ -59,6 +59,7 @@ describe("readClientSettings", () => {
       showPaneTitles: false,
       accentColor: null,
       imageFit: "fit",
+      rendering: "auto",
       mobileControlsExpanded: true,
     });
     expect(readClientSettings(null)).toEqual(defaultClientSettings());
@@ -71,6 +72,7 @@ describe("readClientSettings", () => {
       showPaneTitles: true,
       accentColor: "rgb(10, 20, 30)",
       imageFit: "fill",
+      rendering: "auto",
       mobileControlsExpanded: false,
     });
     expect(readClientSettings(storage)).toEqual({
@@ -78,6 +80,7 @@ describe("readClientSettings", () => {
       showPaneTitles: true,
       accentColor: "rgb(10, 20, 30)",
       imageFit: "fill",
+      rendering: "auto",
       mobileControlsExpanded: false,
     });
   });
@@ -90,6 +93,7 @@ describe("readClientSettings", () => {
       showPaneTitles: true,
       accentColor: null,
       imageFit: "fit",
+      rendering: "auto",
       mobileControlsExpanded: true,
     });
   });
@@ -111,6 +115,7 @@ describe("readClientSettings", () => {
       showPaneTitles: false,
       accentColor: null,
       imageFit: "fit",
+      rendering: "auto",
       mobileControlsExpanded: true,
     });
   });
@@ -137,6 +142,17 @@ describe("readClientSettings", () => {
     expect(readClientSettings(storage).imageFit).toBe("fit");
     stored(storage, { imageFit: "stretch" });
     expect(readClientSettings(storage).imageFit).toBe("stretch");
+  });
+
+  it("restores rendering presets and rejects unknown values", () => {
+    const storage = new MemoryStorage();
+    for (const rendering of ["auto", "performance", "quality"] as const) {
+      const { actions } = createSettingsHarness(storage);
+      actions.setRendering(rendering);
+      expect(readClientSettings(storage).rendering).toBe(rendering);
+    }
+    stored(storage, { rendering: "invalid" as never });
+    expect(readClientSettings(storage).rendering).toBe("auto");
   });
 
   it("falls back when the payload is not an object or not JSON", () => {
@@ -172,6 +188,7 @@ describe("useClientSettings", () => {
       showPaneTitles: true,
       accentColor: "rgb(255, 0, 0)",
       imageFit: "fill",
+      rendering: "auto",
       mobileControlsExpanded: false,
     });
     expect(storage.values.size).toBe(1);
