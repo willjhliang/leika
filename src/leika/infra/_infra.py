@@ -82,7 +82,10 @@ class _ClientHandleState:
             return
         rate = size / elapsed
         prior = self.delivery_rate
-        self.delivery_rate = rate if prior is None else 0.7 * prior + 0.3 * rate
+        # Smooth time per byte: a prior fast LAN sample must not mask a new
+        # slow connection for dozens of large transfers. This also recovers as
+        # successful fast receipts replace the old cost, without extra probes.
+        self.delivery_rate = rate if prior is None else 1.0 / (0.7 / prior + 0.3 / rate)
 
 
 ClientId = NewType("ClientId", int)

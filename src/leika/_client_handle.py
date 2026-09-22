@@ -62,6 +62,8 @@ class ClientHandle:
         ):
             return messages
 
+        delivery_rate = self.delivery_rate if mode == "auto" else None
+
         def prepare() -> Sequence[infra.Message]:
             return tuple(
                 render_message(
@@ -70,6 +72,7 @@ class ClientHandle:
                     sizes.get((getattr(message, "page_id", ""), getattr(message, "pane_id", ""))),
                     fit,
                     self._server,
+                    delivery_rate=delivery_rate,
                 )
                 for message in messages
             )

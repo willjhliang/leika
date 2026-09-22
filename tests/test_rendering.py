@@ -24,28 +24,41 @@ def source_image(format="jpeg"):
 
 @pytest.mark.parametrize(
     "mode,size",
-    [("quality", (160, 120)), ("auto", None), ("auto", (640, 480)), ("auto", (1280, 960))],
+    [("quality", (160, 120)), ("auto", None), ("auto", (160, 120)), ("auto", (1280, 960))],
 )
 def test_quality_and_native_auto_preserve_original_bytes(server, mode, size):
     data = source_image()
     assert render_image(data, mode, size, "fit", server) is data
 
 
-def test_auto_fits_display_without_lowering_jpeg_quality(server):
+@pytest.mark.parametrize("size", [None, (0, 0), (160, 120), (1280, 960)])
+@pytest.mark.parametrize("fit", ["fit", "fill"])
+def test_auto_uses_connection_speed_and_preserves_jpeg_quality(server, size, fit):
     data = source_image()
-    resized = render_image(data, "auto", (320, 300), "fit", server)
+    # A full source image has a predicted one-second delivery time.
+    resized = render_image(data, "auto", size, fit, server, delivery_rate=len(data))
     with Image.open(BytesIO(data)) as original, Image.open(BytesIO(resized)) as decoded:
-        assert decoded.size == (320, 240)
+        assert decoded.size == (453, 339)
         assert decoded.quantization == original.quantization
     assert len(resized) < len(data)
     assert server._image_preparation_bytes == 0
+    # A fast or recovered connection receives the original, even in a tiny pane.
+    assert render_image(data, "auto", size, fit, server, delivery_rate=10 * len(data)) is data
 
 
-def test_fill_preserves_enough_pixels_for_the_cropped_dimension(server):
+def test_auto_keeps_detail_floor_on_very_slow_links(server):
+    data = source_image()
     with Image.open(
-        BytesIO(render_image(source_image(), "auto", (200, 400), "fill", server))
+        BytesIO(render_image(data, "auto", (100, 100), "fit", server, delivery_rate=1))
     ) as image:
-        assert image.size == (533, 400)
+        assert image.size == (448, 336)
+
+
+def test_performance_fill_preserves_the_cropped_dimension(server):
+    with Image.open(
+        BytesIO(render_image(source_image(), "performance", (200, 400), "fill", server))
+    ) as image:
+        assert image.size == (267, 200)
 
 
 @pytest.mark.parametrize("format", ["jpeg", "png"])
@@ -88,10 +101,10 @@ def test_rendering_does_not_mutate_shared_messages_or_selection_receipts(server)
 def test_create_messages_and_png_remain_independent(server):
     props = _messages.ViewportImageProps(source_image("png"), "png", "Image", True, False, "fit")
     message = _messages.ViewportImageMessage("page", "pane", "right", "root", (), props)
-    resized = render_message(message, "auto", (320, 240), "fit", server)
+    resized = render_message(message, "auto", (320, 240), "fit", server, delivery_rate=1)
     assert resized.props._data != props._data
     with Image.open(BytesIO(resized.props._data)) as image:
-        assert image.mode == "RGBA" and image.size == (320, 240)
+        assert image.mode == "RGBA" and image.size == (448, 336)
 
 
 def test_settings_and_size_refresh_use_ordered_content_and_preserve_source(server):
@@ -144,8 +157,9 @@ def test_client_preparation_uses_its_own_preferences(server):
         "page", "pane", {"_data": data, "_format": "jpeg", "fit": "fit"}
     )
 
-    def client(mode):
+    def client(mode, rate=None):
         conn = SimpleNamespace(
+            _state=SimpleNamespace(delivery_rate=rate),
             client_id=ClientId(1),
             register_handler=lambda *_: None,
             get_message_buffer=lambda: server._websock_server._broadcast_buffer,
@@ -159,8 +173,13 @@ def test_client_preparation_uses_its_own_preferences(server):
         return await asyncio.gather(
             client("quality")._prepare_rendering((message,)),
             client("performance")._prepare_rendering((message,)),
+            client("auto", 1)._prepare_rendering((message,)),
+            client("auto", 100_000_000)._prepare_rendering((message,)),
         )
 
-    quality, performance = asyncio.run(prepare())
+    quality, performance, slow, fast = asyncio.run(prepare())
+    assert fast[0] is message
+    with Image.open(BytesIO(slow[0].updates["_data"])) as image:
+        assert image.size == (448, 336)
     assert quality[0] is message
     assert len(performance[0].updates["_data"]) < len(data)

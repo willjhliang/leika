@@ -977,3 +977,21 @@ def test_delivery_rate_waits_for_bulk_receipt():
             await asyncio.gather(producer, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_delivery_rate_tracks_slowdown_and_recovery_without_control_noise():
+    state = infra_impl._ClientHandleState(None)
+    state.record_delivery(1_000_000, 0.01)
+    assert state.delivery_rate == 100_000_000
+    state.record_delivery(125_000, 1)
+    assert 125_000 < state.delivery_rate < 420_000
+    for _ in range(10):
+        state.record_delivery(125_000, 1)
+    assert 125_000 <= state.delivery_rate < 130_000
+    slow = state.delivery_rate
+    state.record_delivery(100, 10)
+    state.record_delivery(125_000, 0)
+    assert state.delivery_rate == slow
+    for _ in range(10):
+        state.record_delivery(1_000_000, 0.01)
+    assert state.delivery_rate > 4_000_000

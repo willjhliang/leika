@@ -6,7 +6,9 @@ versioning.
 ## Unreleased
 
 - Settings **Rendering** offers persistent Auto, Performance, and Quality presets
-  for native image panes. Encoding and receipt pacing are per browser; slow
+  for native image panes. Auto adapts to measured connection throughput, independently
+  of display size, preserving JPEG quality and at least 70% of source dimensions.
+  Encoding and receipt pacing are per browser; slow
   connections do not lower other viewers' detail. Preset/size changes refresh
   paused images. `PaneHandle.has_viewers` lets producers skip hidden routine work.
 

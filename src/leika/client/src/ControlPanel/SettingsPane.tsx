@@ -223,7 +223,7 @@ function RenderingRow() {
             ? "Smaller images for lighter transfers."
             : rendering === "quality"
               ? "Full source resolution and quality."
-              : "Fit images to the display while preserving detail.",
+              : "Adapt to connection speed while preserving detail.",
       }}
     />
   );

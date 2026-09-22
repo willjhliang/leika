@@ -234,9 +234,17 @@ reconnect. It applies to native image panes, including paused images:
 
 | Preset | Behavior |
 | --- | --- |
-| **Auto** (default) | Fit images to the pane's physical pixel size without lowering JPEG quality. Delivery receipts pace the connection; slow links drop superseded frames rather than reduce detail. |
+| **Auto** (default) | Start at full source resolution, then adapt to measured connection throughput, preserving JPEG quality. Display size does not affect Auto. |
 | **Performance** | Use half the display resolution in each dimension and JPEG quality 50 for smaller transfers. PNG stays lossless with alpha preserved, at the reduced resolution. |
 | **Quality** | Send the application's original encoded image at full source resolution, without resizing or recompression. |
+
+Auto uses smoothed bulk delivery receipts and the source image's byte size to
+estimate a half-second transfer budget. It scales by pixel area, keeping at least
+70% of each source dimension; this is a conservative heuristic, not a transfer-time
+guarantee. Unknown or sufficiently fast connections receive original bytes, and
+resolution recovers as faster receipts arrive. Very slow links also skip superseded
+frames instead of reducing detail further. Small control messages do not change
+the estimate; receipt timing includes round-trip delay.
 
 No preset upscales the source. Auto retains JPEG quantization and chroma sampling
 when resizing; unchanged-size Auto and Quality send the exact original bytes.
