@@ -110,6 +110,16 @@ the context is not a browser transaction, an all-or-nothing operation, or a
 delivery/render acknowledgement. `flush()` only requests an immediate outbound
 window by bypassing the batching delay; it is not a delivery or render barrier.
 
+For live streams, ``Server(delivery_backpressure=True)`` makes each outbound
+producer wait for a WebSocket pong after sending its batch. Because the pong
+follows that batch on the wire, only one batch per producer can be in flight;
+updates waiting in the message buffer still coalesce to their newest values.
+The two producers (connection-local and broadcast) and each connected client
+advance independently. This limits stale frame buildup on slow links at the
+cost of a round trip per batch. It acknowledges byte delivery, not rendering;
+existing connection keepalive and shutdown retain ownership of timeouts.
+The setting defaults to false, preserving existing transport behavior.
+
 Tab groups use an explicit flat lifecycle. The group declaration is retained
 separately from stable tab create, update, and remove records, so every replay
 prefix is valid and recursive removal retires both a descriptor and its GUI

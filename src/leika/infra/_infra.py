@@ -281,6 +281,9 @@ class WebsockServer(WebsockMessageHandler):
             Entries are hostnames only, without ports; at most 256 may be
             configured. Invalid, duplicate, changing, or oversized sequences
             raise :class:`ValueError` during construction.
+        delivery_backpressure: Wait for a WebSocket pong after each outbound
+            batch before advancing its producer. Pending updates coalesce while
+            slow clients receive earlier bytes. Disabled by default.
         allow_embedding: Opt out of the default ``frame-ancestors 'none'``
             protection when this workspace is intentionally embedded.
     """
@@ -295,6 +298,7 @@ class WebsockServer(WebsockMessageHandler):
         password: str | None = None,
         allowed_hosts: Sequence[str] | None = None,
         allow_embedding: bool = False,
+        delivery_backpressure: bool = False,
     ):
         if type(host) is not str or _canonical_hostname(host) is None:
             raise ValueError("host must be a valid DNS name or IP address.")
@@ -319,6 +323,8 @@ class WebsockServer(WebsockMessageHandler):
             raise TypeError("verbose must be a bool.")
         if not isinstance(allow_embedding, bool):
             raise TypeError("allow_embedding must be a bool.")
+        if not isinstance(delivery_backpressure, bool):
+            raise TypeError("delivery_backpressure must be a bool.")
         normalized_allowed_hosts = _normalize_allowed_hosts(allowed_hosts)
         super().__init__()
 
@@ -338,6 +344,7 @@ class WebsockServer(WebsockMessageHandler):
         self._auth_guard = HttpPasswordGuard(password) if password is not None else None
         self._viser_proxy = ViserProxy(protected=password is not None)
         self._verbose = verbose
+        self._delivery_backpressure = delivery_backpressure
         self._background_event_loop: asyncio.AbstractEventLoop | None = None
 
         self._stop_event: asyncio.Event | None = None
@@ -807,11 +814,13 @@ class WebsockServer(WebsockMessageHandler):
                         connection,
                         client_state.message_buffer,
                         client_id,
+                        delivery_backpressure=self._delivery_backpressure,
                     ),
                     _message_producer(
                         connection,
                         self._broadcast_buffer,
                         client_id,
+                        delivery_backpressure=self._delivery_backpressure,
                     ),
                     _message_consumer(connection, handle_incoming, message_class),
                 )
@@ -1069,6 +1078,8 @@ async def _message_producer(
     websocket: ServerConnection,
     buffer: AsyncMessageBuffer,
     client_id: int,
+    *,
+    delivery_backpressure: bool = False,
 ) -> None:
     """Infinite loop to broadcast windows of messages from a buffer.
 
@@ -1148,6 +1159,15 @@ async def _message_producer(
                 # fragmented binary message. This preserves the client wire
                 # format while avoiding a frame-sized copy of every ndarray.
                 await websocket.send(parts)
+                if delivery_backpressure:
+                    # send() may only copy into an OS socket buffer. A pong
+                    # proves the peer received the preceding bytes, keeping
+                    # stale updates in our coalescing queue until then.
+                    # This is per connection and producer; a slow browser
+                    # cannot hold back other clients. Existing connection
+                    # keepalive and closure own timeout/cancellation policy.
+                    receipt = await websocket.ping()
+                    await receipt
                 buffer.mark_messages_sent(client_id, window.last_message_id)
             finally:
                 if reserved_file_parts:

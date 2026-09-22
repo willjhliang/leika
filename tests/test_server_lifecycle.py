@@ -1225,3 +1225,22 @@ def test_callback_stop_hands_slow_share_tunnel_to_finalizer(
         release_close.set()
         server.stop()
     assert server._share_tunnel is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_delivery_backpressure_is_opt_in_and_passed_to_transport(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+    options = {"delivery_backpressure": True} if enabled else {}
+    server = leika.Server(host="127.0.0.1", port=0, verbose=False, **options)
+    try:
+        assert server._websock_server._delivery_backpressure is enabled
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("server_type", [leika.Server, infra_impl.WebsockServer])
+def test_delivery_backpressure_rejects_non_boolean_before_start(server_type: Any) -> None:
+    with pytest.raises(TypeError, match="delivery_backpressure must be a bool"):
+        server_type(host="127.0.0.1", port=0, delivery_backpressure="yes")

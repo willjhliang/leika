@@ -822,3 +822,116 @@ def test_metadata_utf8_preflight_across_chunk_boundaries(character: str) -> None
     encoded_size = len(payload.encode("utf-8"))
     assert not infra_impl._metadata_payload_exceeds(payload, encoded_size)
     assert infra_impl._metadata_payload_exceeds(payload, encoded_size - 1)
+
+
+@pytest.mark.parametrize("delivery_backpressure", [False, True])
+def test_delivery_backpressure_coalesces_pending_updates_when_enabled(
+    delivery_backpressure: bool,
+) -> None:
+    async def scenario() -> None:
+        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
+        sends: asyncio.Queue[bytes] = asyncio.Queue()
+        receipts: asyncio.Queue[asyncio.Future[float]] = asyncio.Queue()
+
+        class DeliverySocket(_RecordingProducerSocket):
+            async def send(self, payload: Any) -> None:
+                await super().send(payload)
+                sends.put_nowait(b"".join(payload))
+
+            async def ping(self) -> asyncio.Future[float]:
+                receipt = asyncio.get_running_loop().create_future()
+                receipts.put_nowait(receipt)
+                return receipt
+
+        socket = DeliverySocket()
+        buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 0}))
+        producer = asyncio.create_task(
+            _message_producer(
+                socket, buffer, ClientId(1), delivery_backpressure=delivery_backpressure
+            )
+        )
+        try:
+            await asyncio.wait_for(sends.get(), timeout=1)
+            receipt = (
+                await asyncio.wait_for(receipts.get(), timeout=1) if delivery_backpressure else None
+            )
+            for value in range(1, 100):
+                buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": value}))
+            buffer.flush()
+            if receipt is not None:
+                # No more bytes can enter the socket before receipt, even
+                # though 99 replacement updates have accumulated.
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(sends.get(), timeout=0.05)
+                assert len(socket.sent) == 1
+                receipt.set_result(0.0)
+            frame = await asyncio.wait_for(sends.get(), timeout=1)
+            compressed_size = int.from_bytes(frame[8:16], "little")
+            envelope = msgspec.msgpack.decode(
+                zstandard.ZstdDecompressor().decompress(frame[16 : 16 + compressed_size])
+            )
+            assert [message["updates"]["value"] for message in envelope["messages"]] == [99]
+            if not delivery_backpressure:
+                assert receipts.empty()
+            assert socket.closed == []
+        finally:
+            buffer.set_done()
+            producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+        assert producer.done()
+
+    asyncio.run(scenario())
+
+
+def test_delivery_backpressure_does_not_block_another_client() -> None:
+    async def scenario() -> None:
+        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=True)
+        sent: asyncio.Queue[int] = asyncio.Queue()
+        release_slow = asyncio.get_running_loop().create_future()
+
+        class DeliverySocket(_RecordingProducerSocket):
+            def __init__(self, client_id: int) -> None:
+                super().__init__()
+                self.client_id = client_id
+
+            async def send(self, payload: object) -> None:
+                await super().send(payload)
+                sent.put_nowait(self.client_id)
+
+            async def ping(self) -> asyncio.Future[float]:
+                if self.client_id == 1:
+                    return release_slow
+                receipt = asyncio.get_running_loop().create_future()
+                receipt.set_result(0.0)
+                return receipt
+
+        for client_id in (1, 2):
+            buffer.register_client(ClientId(client_id))
+        buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 0}))
+        sockets = [DeliverySocket(1), DeliverySocket(2)]
+        producers = [
+            asyncio.create_task(
+                _message_producer(
+                    socket, buffer, ClientId(socket.client_id), delivery_backpressure=True
+                )
+            )
+            for socket in sockets
+        ]
+        try:
+            initial = [await asyncio.wait_for(sent.get(), timeout=1) for _ in range(2)]
+            assert sorted(initial) == [1, 2]
+            buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 1}))
+            buffer.flush()
+            assert await asyncio.wait_for(sent.get(), timeout=1) == 2
+            assert len(sockets[0].sent) == 1
+            assert len(sockets[1].sent) == 2
+            assert not release_slow.done()
+        finally:
+            buffer.set_done()
+            for producer in producers:
+                producer.cancel()
+            await asyncio.gather(*producers, return_exceptions=True)
+            for client_id in (1, 2):
+                buffer.unregister_client(ClientId(client_id))
+
+    asyncio.run(scenario())

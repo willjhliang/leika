@@ -111,6 +111,12 @@ class Server:
     the accepted request origin. Pages deny framing by default; set
     ``allow_embedding=True`` only for an intentional iframe or notebook
     :meth:`show` use.
+
+    Set ``delivery_backpressure=True`` for live streams on slow connections.
+    Each outbound producer waits for transport receipt before sending another
+    batch, allowing pending updates to coalesce instead of buffering old frames
+    in the network. This can lower playback rate on high-latency connections;
+    it acknowledges byte delivery, not browser rendering. Disabled by default.
     """
 
     def __init__(
@@ -125,6 +131,7 @@ class Server:
         allow_embedding: bool = False,
         share: bool = False,
         verbose: bool = True,
+        delivery_backpressure: bool = False,
     ) -> None:
         if type(host) is not str or _canonical_hostname(host) is None:
             raise ValueError("host must be a valid DNS name or IP address.")
@@ -144,6 +151,8 @@ class Server:
             raise TypeError("share must be a bool.")
         if not isinstance(verbose, bool):
             raise TypeError("verbose must be a bool.")
+        if not isinstance(delivery_backpressure, bool):
+            raise TypeError("delivery_backpressure must be a bool.")
         normalized_allowed_hosts = tuple(sorted(_normalize_allowed_hosts(allowed_hosts)))
         # Sharing means the dashboard carries data worth protecting, and a
         # non-loopback bind would serve that same data as unencrypted HTTP to
@@ -210,6 +219,7 @@ class Server:
             password=password,
             allowed_hosts=normalized_allowed_hosts,
             allow_embedding=allow_embedding,
+            delivery_backpressure=delivery_backpressure,
         )
         self._websock_server = server
 
