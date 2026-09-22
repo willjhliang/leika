@@ -1,3 +1,4 @@
+import { prepareGuiRefresh } from "./prepareGuiRefresh";
 import React from "react";
 
 import { connectionStats } from "./ConnectionStatsController";
@@ -227,8 +228,10 @@ export function WebsocketMessageProducer() {
           updateRetryInterval();
           installConnectionBoundSender(
             viewer.mutable.current,
-            (message, transferables) =>
-              postToWorker({ type: "send", message }, transferables),
+            (message, transferables) => {
+              message = prepareGuiRefresh(viewer, message);
+              postToWorker({ type: "send", message }, transferables);
+            },
           );
           return;
         }

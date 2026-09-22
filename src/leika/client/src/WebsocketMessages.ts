@@ -735,6 +735,16 @@ export interface GuiUpdateMessage {
   uuid: string;
   updates: { [key: string]: any };
 }
+/** GUI input whose dependent panes have already been hidden locally.
+ *
+ * (automatically generated)
+ */
+export interface GuiRefreshMessage {
+  type: "GuiRefreshMessage";
+  uuid: string;
+  updates: { [key: string]: any };
+  request_id: string;
+}
 /** Create a native image pane in the pane workspace.
  *
  * (automatically generated)
@@ -975,6 +985,17 @@ export interface FileTransferPartAck {
   transferred_bytes: number;
   total_bytes: number;
 }
+/** Browser pane content dimensions in physical pixels; zero when hidden.
+ *
+ * (automatically generated)
+ */
+export interface PaneViewportMessage {
+  type: "PaneViewportMessage";
+  page_id: string;
+  pane_id: string;
+  width: number;
+  height: number;
+}
 /** Message from client->server asking to be answered as soon as possible.
  *
  * The client is timing the round trip, so the server's only job is to hand
@@ -1144,6 +1165,7 @@ export type Message =
   | GuiPreviewReloadMessage
   | GuiPreviewWatchMessage
   | GuiUpdateMessage
+  | GuiRefreshMessage
   | ViewportImageMessage
   | ViewportMatplotlibMessage
   | ViewportPlotlyMessage
@@ -1164,6 +1186,7 @@ export type Message =
   | FileTransferPart
   | FileTransferAbort
   | FileTransferPartAck
+  | PaneViewportMessage
   | ClientPingMessage
   | ServerPongMessage
   | RegisterCommandMessage
@@ -3034,6 +3057,22 @@ const messageValidators = new Map<
       isProtocolMapping(message["updates"], (item) => isProtocolValue(item)),
   ],
   [
+    "GuiRefreshMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 4 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "uuid") &&
+      Object.hasOwn(message, "updates") &&
+      Object.hasOwn(message, "request_id") &&
+      message["type"] === "GuiRefreshMessage" &&
+      typeof message["uuid"] === "string" &&
+      (typeof message["uuid"] !== "string" ||
+        isProtocolIdentifier(message["uuid"])) &&
+      isProtocolMapping(message["updates"], (item) => isProtocolValue(item)) &&
+      typeof message["request_id"] === "string",
+  ],
+  [
     "ViewportImageMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3423,6 +3462,24 @@ const messageValidators = new Map<
       Number.isSafeInteger(message["total_bytes"]),
   ],
   [
+    "PaneViewportMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 5 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "width") &&
+      Object.hasOwn(message, "height") &&
+      message["type"] === "PaneViewportMessage" &&
+      typeof message["page_id"] === "string" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      Number.isSafeInteger(message["width"]) &&
+      Number.isSafeInteger(message["height"]),
+  ],
+  [
     "ClientPingMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3517,4 +3574,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "b2d07566f07c";
+export const LEIKA_PROTOCOL = "fd5e85505cbc";

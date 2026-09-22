@@ -5,6 +5,7 @@ import { ViewportPlotlyRenderer } from "./ViewportPlotlyRenderer";
 import { ViewportViserRenderer } from "./ViewportViserRenderer";
 
 export function ViewportPaneRenderer({ pane }: { pane: ViewportPane }) {
+  if (pane.kind !== "root" && pane.refreshPending !== undefined) return null;
   switch (pane.kind) {
     case "root":
       return null;

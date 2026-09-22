@@ -1,4 +1,5 @@
 import React from "react";
+import { captureSendSession } from "../connectionSender";
 import { Card } from "../components/ui/card";
 import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
@@ -58,12 +59,72 @@ export function ViewportPaneHost({
   const [isHovered, setIsHovered] = React.useState(false);
   // Keyboard users can focus the header without hovering; keep it visible.
   const [isFocused, setIsFocused] = React.useState(false);
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const paneVisible =
+    pane !== undefined &&
+    pane.kind !== "root" &&
+    pane.props.visible &&
+    rect !== null;
+  React.useEffect(() => {
+    const element = contentRef.current;
+    if (element === null || pageId === null || pane?.kind === "root") return;
+    const session = captureSendSession(viewer.mutable.current);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const report = () => {
+      if (!session.isCurrent()) return;
+      const box = element.getBoundingClientRect();
+      const visible = paneVisible && !document.hidden;
+      session.sendMessage({
+        type: "PaneViewportMessage",
+        page_id: pageId,
+        pane_id: paneId,
+        width: visible
+          ? Math.min(
+              8192,
+              Math.max(0, Math.round(box.width * window.devicePixelRatio)),
+            )
+          : 0,
+        height: visible
+          ? Math.min(
+              8192,
+              Math.max(0, Math.round(box.height * window.devicePixelRatio)),
+            )
+          : 0,
+      });
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(report, 150);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(element);
+    document.addEventListener("visibilitychange", report);
+    report();
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", report);
+      if (session.isCurrent())
+        session.sendMessage({
+          type: "PaneViewportMessage",
+          page_id: pageId,
+          pane_id: paneId,
+          width: 0,
+          height: 0,
+        });
+    };
+  }, [viewer, pageId, paneId, paneVisible, pane?.kind]);
   if (pane === undefined) return null;
 
   const isHiddenRootHost = rect === null;
   const title = paneTitle(pane);
   const hasTitleBar = !hideChrome && !isHiddenRootHost;
-  const loading = pane.kind === "root" ? false : pane.props.loading;
+  const loading =
+    pane.kind === "root"
+      ? false
+      : pane.refreshPending !== undefined
+        ? true
+        : pane.props.loading;
   const isLoading = loading !== false;
   return (
     <Card
@@ -98,6 +159,7 @@ export function ViewportPaneHost({
       }}
     >
       <div
+        ref={contentRef}
         data-viewport-pane-content={paneId}
         style={{
           position: "absolute",

@@ -237,6 +237,7 @@ class Server:
 
         server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
+        server.register_handler(_messages.PaneViewportMessage, self._handle_pane_viewport)
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
         @server.on_client_disconnect
@@ -599,6 +600,29 @@ class Server:
             )
             if subscribed and page.panes._has_plotly_pane_locked():
                 self._ensure_plotly_js_sent(client._websock_connection)
+
+    def _handle_pane_viewport(
+        self, client_id: infra.ClientId, message: _messages.PaneViewportMessage
+    ) -> None:
+        if any(type(n) is not int or not 0 <= n <= 8192 for n in (message.width, message.height)):
+            return
+        with self.pages._lock:
+            page = self.pages._page_from_page_id.get(message.page_id)
+        if page is None:
+            return
+        with page.panes._lock:
+            if message.pane_id not in page.panes._handle_from_pane_id:
+                return
+        with self._client_lock:
+            client = self._connected_clients.get(client_id)
+        if client is None or client._websock_connection.delivery_scope() != message.page_id:
+            return
+        with client._pane_size_lock:
+            # Only one page is streamed per client. Bound stale, removed IDs too.
+            key = (message.page_id, message.pane_id)
+            if key not in client._pane_sizes and len(client._pane_sizes) >= 128:
+                client._pane_sizes.pop(next(iter(client._pane_sizes)))
+            client._pane_sizes[key] = message.width, message.height
 
     def _handle_client_ping(
         self, client_id: infra.ClientId, message: _messages.ClientPingMessage

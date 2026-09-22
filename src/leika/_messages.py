@@ -1110,6 +1110,19 @@ class GuiUpdateMessage(
 
 
 @dataclasses.dataclass
+class GuiRefreshMessage(Message):
+    """GUI input whose dependent panes have already been hidden locally."""
+
+    uuid: str
+    updates: Dict[str, Any]
+    request_id: str
+
+    @override
+    def redundancy_key(self) -> None:
+        return None
+
+
+@dataclasses.dataclass
 class ViewportImageProps:
     """Properties for a native image pane."""
 
@@ -1414,6 +1427,16 @@ class FileTransferPartAck(Message):
     @override
     def redundancy_key(self) -> None:
         return None
+
+
+@dataclasses.dataclass
+class PaneViewportMessage(Message):
+    """Browser pane content dimensions in physical pixels; zero when hidden."""
+
+    page_id: str
+    pane_id: str
+    width: int
+    height: int
 
 
 @dataclasses.dataclass

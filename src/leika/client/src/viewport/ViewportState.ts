@@ -28,7 +28,17 @@ import {
 
 export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
-export interface ViewportImageProps {
+interface RefreshableProps {
+  _refresh_controls?: readonly string[];
+  _refresh_revision?: number;
+  _refresh_requests?: readonly string[];
+}
+
+interface RefreshablePane {
+  refreshPending?: { requestId: string | null; minimumRevision: number };
+}
+
+export interface ViewportImageProps extends RefreshableProps {
   _data: Uint8Array<ArrayBuffer> | null;
   _format: "jpeg" | "png";
   title: string;
@@ -38,7 +48,7 @@ export interface ViewportImageProps {
   fit: ImageFit | null;
 }
 
-export interface ViewportMatplotlibProps {
+export interface ViewportMatplotlibProps extends RefreshableProps {
   /** Figure SVG source, rendered as-is and scaled to the pane. */
   _svg: string;
   title: string;
@@ -46,7 +56,7 @@ export interface ViewportMatplotlibProps {
   loading: boolean | string;
 }
 
-export interface ViewportPlotlyProps {
+export interface ViewportPlotlyProps extends RefreshableProps {
   _plotly_json_str: string;
   /** JSON string with "light"/"dark" template definitions, applied when the
    * figure does not specify a template. */
@@ -56,7 +66,7 @@ export interface ViewportPlotlyProps {
   loading: boolean | string;
 }
 
-export interface ViewportViserProps {
+export interface ViewportViserProps extends RefreshableProps {
   /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
   _url: string | null;
   /** Viser server port; the host is derived from the page's hostname. Null
@@ -73,25 +83,25 @@ export interface ViewportRootPane {
   visible: boolean;
 }
 
-export interface ViewportImagePane {
+export interface ViewportImagePane extends RefreshablePane {
   kind: "image";
   paneId: string;
   props: ViewportImageProps;
 }
 
-export interface ViewportMatplotlibPane {
+export interface ViewportMatplotlibPane extends RefreshablePane {
   kind: "matplotlib";
   paneId: string;
   props: ViewportMatplotlibProps;
 }
 
-export interface ViewportPlotlyPane {
+export interface ViewportPlotlyPane extends RefreshablePane {
   kind: "plotly";
   paneId: string;
   props: ViewportPlotlyProps;
 }
 
-export interface ViewportViserPane {
+export interface ViewportViserPane extends RefreshablePane {
   kind: "viser";
   paneId: string;
   props: ViewportViserProps;
@@ -215,6 +225,7 @@ export interface ViewportActions {
     paneId: string,
     updates: ViewportPaneUpdates,
   ) => void;
+  invalidateForInput: (uuid: string, requestId: string) => boolean;
   removePane: (pageId: string, paneId: string) => void;
   setPaneSnapshot: (pageId: string, paneIds: readonly string[]) => void;
   commitUserLayout: (layout: ViewportLayout) => void;
@@ -335,10 +346,40 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
       typeof pane.props.loading !== "string")
   )
     return false;
+  const bindings = pane.props._refresh_controls;
+  const revision = pane.props._refresh_revision;
+  const requests = pane.props._refresh_requests;
+  if (
+    requests !== undefined &&
+    (!Array.isArray(requests) ||
+      requests.length > 128 ||
+      requests.some(
+        (id) => typeof id !== "string" || id.length < 1 || id.length > 128,
+      ))
+  )
+    return false;
+  if (
+    bindings !== undefined &&
+    (!Array.isArray(bindings) ||
+      bindings.length > 4096 ||
+      bindings.some((id) => !isBoundedLayoutId(id)) ||
+      new Set(bindings).size !== bindings.length)
+  )
+    return false;
+  if (
+    revision !== undefined &&
+    (!Number.isSafeInteger(revision) || revision < 0)
+  )
+    return false;
+  const propCount =
+    Object.keys(pane.props).length -
+    Number(bindings !== undefined) -
+    Number(revision !== undefined) -
+    Number(requests !== undefined);
   if (pane.kind === "image") {
     const props = pane.props;
     return (
-      Object.keys(props).length === 6 &&
+      propCount === 6 &&
       (props._data === null || props._data instanceof Uint8Array) &&
       (props._format === "jpeg" || props._format === "png") &&
       (props.fit === null ||
@@ -349,19 +390,19 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
   }
   if (pane.kind === "matplotlib") {
     const props = pane.props;
-    return Object.keys(props).length === 4 && typeof props._svg === "string";
+    return propCount === 4 && typeof props._svg === "string";
   }
   if (pane.kind === "plotly") {
     const props = pane.props;
     return (
-      Object.keys(props).length === 5 &&
+      propCount === 5 &&
       typeof props._plotly_json_str === "string" &&
       typeof props._theme_templates === "string"
     );
   }
   const props = pane.props;
   return (
-    Object.keys(props).length === 5 &&
+    propCount === 5 &&
     (props._url === null || typeof props._url === "string") &&
     (props._port === null || Number.isSafeInteger(props._port)) &&
     (props._url === null) !== (props._port === null)
@@ -1291,6 +1332,34 @@ export function createViewportState(
       });
     },
 
+    invalidateForInput: (uuid, requestId) => {
+      const state = store.get();
+      const page =
+        state.displayPageId === null
+          ? undefined
+          : state.pages[state.displayPageId];
+      if (page === undefined) return false;
+      const panes = copyPaneRecord(page.panes);
+      let changed = false;
+      for (const [paneId, pane] of Object.entries(panes)) {
+        if (
+          pane.kind === "root" ||
+          !pane.props._refresh_controls?.includes(uuid)
+        )
+          continue;
+        panes[paneId] = {
+          ...pane,
+          refreshPending: {
+            requestId,
+            minimumRevision: pane.props._refresh_revision ?? 0,
+          },
+        };
+        changed = true;
+      }
+      if (changed) replacePage({ ...page, panes });
+      return changed;
+    },
+
     updatePane: (pageId, paneId, updates) => {
       if (
         !admitDirect(
@@ -1306,7 +1375,24 @@ export function createViewportState(
       const pane = page?.panes[paneId];
       if (page === undefined || pane === undefined || pane.kind === "root")
         return;
+      const revision = updates._refresh_revision ?? 0;
+      const pending = pane.refreshPending;
       if (
+        (pending !== undefined &&
+          !updates._refresh_requests?.includes(pending.requestId!)) ||
+        revision <
+          (pending?.minimumRevision ?? pane.props._refresh_revision ?? 0)
+      )
+        return;
+      const hasContent = [
+        "_data",
+        "_svg",
+        "_plotly_json_str",
+        "_url",
+        "_port",
+      ].some((key) => Object.hasOwn(updates, key));
+      if (
+        pending === undefined &&
         Object.entries(updates).every(([key, value]) =>
           Object.is(Reflect.get(pane.props, key), value),
         )
@@ -1317,6 +1403,7 @@ export function createViewportState(
         {
           ...pane,
           props: { ...pane.props, ...updates },
+          refreshPending: hasContent ? undefined : pending,
         } as ViewportContentPane,
         pane,
       );

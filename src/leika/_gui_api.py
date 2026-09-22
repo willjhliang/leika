@@ -513,6 +513,9 @@ class GuiApi(GuiContainer):
             _messages.GuiUpdateMessage, self._handle_gui_updates
         )
         self._websock_interface.register_handler(
+            _messages.GuiRefreshMessage, self._handle_gui_refresh
+        )
+        self._websock_interface.register_handler(
             _messages.GuiButtonHoldMessage, self._handle_gui_button_hold
         )
         self._websock_interface.register_handler(
@@ -769,6 +772,27 @@ class GuiApi(GuiContainer):
             if isinstance(self._owner, Server):
                 return connected
         assert_never(self._owner)
+
+    async def _handle_gui_refresh(
+        self, client_id: ClientId, message: _messages.GuiRefreshMessage
+    ) -> None:
+        if not 1 <= len(message.request_id) <= 128:
+            return
+        with self._lock:
+            if message.uuid not in self._gui_input_handle_from_uuid:
+                return
+        try:
+            await self._handle_gui_updates(
+                client_id, _messages.GuiUpdateMessage(message.uuid, message.updates)
+            )
+        finally:
+            # A no-op or rejected value must also settle local invalidation.
+            # The barrier and snapshot share the broadcast producer's ordering.
+            for page in self._server.pages:
+                with page.panes._lock:
+                    handles = tuple(page.panes._handle_from_pane_id.values())
+                for handle in handles:
+                    handle._ack_refresh(message.uuid, message.request_id, client_id)
 
     async def _handle_gui_updates(
         self,

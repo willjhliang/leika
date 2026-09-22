@@ -935,3 +935,45 @@ def test_delivery_backpressure_does_not_block_another_client() -> None:
                 buffer.unregister_client(ClientId(client_id))
 
     asyncio.run(scenario())
+
+
+def test_delivery_rate_waits_for_bulk_receipt():
+    async def scenario():
+        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
+        state = infra_impl._ClientHandleState(buffer)
+        receipts = asyncio.Queue()
+
+        class Socket(_RecordingProducerSocket):
+            async def ping(self):
+                receipt = asyncio.get_running_loop().create_future()
+                receipts.put_nowait(receipt)
+                return receipt
+
+        # Binary payload is not compressed away, even when every byte is equal.
+        buffer.push(
+            _messages.ViewportPaneUpdateMessage(
+                "page", "video", {"_data": np.zeros(32_000, dtype=np.uint8)}
+            )
+        )
+        producer = asyncio.create_task(
+            _message_producer(
+                Socket(), buffer, ClientId(1), delivery_backpressure=True, client_state=state
+            )
+        )
+        try:
+            receipt = await asyncio.wait_for(receipts.get(), 1)
+            assert state.delivery_rate is None
+            await asyncio.sleep(0.03)
+            receipt.set_result(0.0)
+            await asyncio.sleep(0.01)
+            assert state.delivery_rate is not None
+            assert 0 < state.delivery_rate < 2_000_000
+            before = state.delivery_rate
+            state.record_delivery(100, 1)
+            assert state.delivery_rate == before
+        finally:
+            buffer.set_done()
+            producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+
+    asyncio.run(scenario())

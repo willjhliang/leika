@@ -72,6 +72,15 @@ class _ClientHandleState:
     # Internal state for ClientConnection objects.
     message_buffer: AsyncMessageBuffer
     persistent_message_buffer: AsyncMessageBuffer | None = None
+    delivery_rate: float | None = None
+
+    def record_delivery(self, size: int, elapsed: float) -> None:
+        # Tiny control-only batches measure RTT, not useful bulk throughput.
+        if size < 4096 or elapsed <= 0:
+            return
+        rate = size / elapsed
+        prior = self.delivery_rate
+        self.delivery_rate = rate if prior is None else 0.7 * prior + 0.3 * rate
 
 
 ClientId = NewType("ClientId", int)
@@ -815,12 +824,14 @@ class WebsockServer(WebsockMessageHandler):
                         client_state.message_buffer,
                         client_id,
                         delivery_backpressure=self._delivery_backpressure,
+                        client_state=client_state,
                     ),
                     _message_producer(
                         connection,
                         self._broadcast_buffer,
                         client_id,
                         delivery_backpressure=self._delivery_backpressure,
+                        client_state=client_state,
                     ),
                     _message_consumer(connection, handle_incoming, message_class),
                 )
@@ -1080,6 +1091,7 @@ async def _message_producer(
     client_id: int,
     *,
     delivery_backpressure: bool = False,
+    client_state: _ClientHandleState | None = None,
 ) -> None:
     """Infinite loop to broadcast windows of messages from a buffer.
 
@@ -1158,6 +1170,7 @@ async def _message_producer(
                 # websockets sends an iterable of bytes-like objects as one
                 # fragmented binary message. This preserves the client wire
                 # format while avoiding a frame-sized copy of every ndarray.
+                started = time.monotonic()
                 await websocket.send(parts)
                 if delivery_backpressure:
                     # send() may only copy into an OS socket buffer. A pong
@@ -1168,6 +1181,8 @@ async def _message_producer(
                     # keepalive and closure own timeout/cancellation policy.
                     receipt = await websocket.ping()
                     await receipt
+                    if client_state is not None:
+                        client_state.record_delivery(frame_size, time.monotonic() - started)
                 buffer.mark_messages_sent(client_id, window.last_message_id)
             finally:
                 if reserved_file_parts:

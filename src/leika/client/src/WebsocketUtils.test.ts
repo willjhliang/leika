@@ -17,6 +17,7 @@ function makeSender(limits?: {
   const sent: Message[] = [];
   const failConnection = vi.fn();
   const viewer = {
+    viewportActions: { invalidateForInput: vi.fn(() => false) },
     mutable: {
       current: {
         sendMessage: (message: Message) => {
@@ -232,5 +233,27 @@ describe("makeThrottledMessageSender", () => {
     expect(() =>
       makeSender({ maxPendingMessages: 1, maxPendingEvents: 2 }),
     ).toThrow("Invalid throttled-message queue limits");
+  });
+});
+
+describe("refresh before throttle", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("invalidates every local edit while sending only the latest pending request", () => {
+    const { viewer, send, sent } = makeSender();
+    const invalidate = vi.mocked(viewer.viewportActions.invalidateForInput);
+    invalidate.mockReturnValue(true);
+    send(value("dataset", "first"));
+    send(value("dataset", "second"));
+    send(value("dataset", "last"));
+    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(sent).toHaveLength(1);
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({
+      type: "GuiRefreshMessage",
+      updates: { value: "last" },
+      request_id: invalidate.mock.calls[2][1],
+    });
   });
 });

@@ -213,6 +213,31 @@ The same `loading=` creation and update arguments are available on image,
 matplotlib, Plotly, and Viser panes. Passing `None` to `update(..., loading=)`
 leaves the current loading state unchanged.
 
+For controls that replace the meaning of a pane, bind those inputs once:
+
+```python
+selector = server.gui.add_dropdown("Dataset", options=("train", "validation"))
+pane.invalidate_on(selector)
+```
+
+The browser hides the old content as soon as an edit is queued, before GUI
+throttling or network delivery. It accepts content again only when the update
+includes the receipt for its latest edit. The callback must synchronously clear
+obsolete server content, and background work must reject obsolete results. The
+receipt also settles same-value and rejected edits; reconnecting restores the
+server's current snapshot. Bind only live shared controls from this server.
+
+For adaptive image streaming, `client.pane_size(pane)` reports the content size
+in physical pixels, `(0, 0)` when hidden or on another page, and `None` until a
+size is known. With `Server(delivery_backpressure=True)`, `client.delivery_rate`
+reports smoothed bulk bytes received per second. This includes round-trip delay;
+it is a conservative throughput hint, not the link's theoretical bandwidth.
+An application can use these hints to pace rendering, resize images, and call
+`pane.update(image, jpeg_quality=40)` for a per-update quality override. Leika
+itself does not change image quality or application frame rate. Shared panes
+have one encoded image for all viewers, so applications choose their own policy
+for multiple viewers.
+
 Updates apply whether or not the pane's page is currently selected. Switching
 back shows the handle's latest retained content without creating another pane.
 An inactive update is still prepared and retained by the Python server, but it

@@ -400,7 +400,70 @@ class PaneHandle(Generic[_PaneStateT]):
         if self._impl.removed:
             raise RuntimeError(f"Cannot update a removed {type(self).__name__}.")
 
+    def invalidate_on(self, *controls: Any) -> None:
+        """Hide this pane immediately when a bound GUI input changes.
+
+        Bind shared inputs owned by this server. The input callback must clear
+        stale content synchronously and reject obsolete background results.
+        Once callbacks finish, the browser receives a versioned snapshot;
+        late frames from earlier selections cannot reveal the previous image.
+        Repeated calls add bindings and prune removed controls.
+        """
+        from ._gui_handles import _GuiInputHandle
+
+        self._check_not_removed()
+        owner = self._impl.api._owner
+        for control in controls:
+            if not isinstance(control, _GuiInputHandle):
+                raise TypeError("invalidate_on requires GUI input handles.")
+            if control._impl.gui_api._owner is not owner or control._impl.removed:
+                raise ValueError("refresh controls must be live shared inputs on this server.")
+        with self._impl.api._lock:
+            bindings = {
+                uuid: reference
+                for uuid, reference in getattr(self, "_refresh_controls", {}).items()
+                if reference() is not None and not reference()._impl.removed
+            }
+            for control in controls:
+                bindings[control._impl.uuid] = weakref.ref(control)
+            if len(bindings) > 4096:
+                raise ValueError("a pane supports at most 4096 refresh controls.")
+            previous = getattr(self, "_refresh_controls", {})
+            self._refresh_controls = bindings
+            try:
+                self._queue_update({"_refresh_controls": tuple(bindings)})
+            except BaseException:
+                self._refresh_controls = previous
+                raise
+
+    def _ack_refresh(self, gui_uuid: str, request_id: str, client_id: int) -> None:
+        with self._impl.api._lock:
+            if self._impl.removed or gui_uuid not in getattr(self, "_refresh_controls", {}):
+                return
+            clients = self._impl.api._owner.clients
+            if client_id not in clients:
+                return
+            requests = {
+                key: value
+                for key, value in getattr(self, "_refresh_requests", {}).items()
+                if key in clients
+            }
+            requests[client_id] = request_id
+            self._refresh_requests = requests
+            self._refresh_revision = getattr(self, "_refresh_revision", 0) + 1
+            # The barrier rides on the content itself, so coalescing cannot
+            # drop a receipt or let an older image overtake it. One ID per
+            # connected client bounds retained state across reconnects.
+            self._queue_update(dataclasses.asdict(self._impl.props))
+
     def _queue_update(self, updates: dict[str, Any]) -> None:
+        if getattr(self, "_refresh_controls", None):
+            updates = {
+                **updates,
+                "_refresh_revision": getattr(self, "_refresh_revision", 0),
+                "_refresh_controls": tuple(self._refresh_controls),
+                "_refresh_requests": tuple(getattr(self, "_refresh_requests", {}).values()),
+            }
         self._impl.api._websock_interface.queue_message_or_raise(
             _messages.ViewportPaneUpdateMessage(
                 page_id=self._impl.api._page_id,
@@ -549,10 +612,13 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
     def image(self, image: np.ndarray) -> None:
         self._update_image(image, loading=None)
 
-    def _update_image(self, image: np.ndarray, loading: PaneLoading | None) -> None:
+    def _update_image(
+        self, image: np.ndarray, loading: PaneLoading | None, jpeg_quality: int | None = None
+    ) -> None:
         self._check_not_removed()
         if loading is not None:
             loading = _validate_loading(loading)
+        _validate_image_encoding_options(self._impl.requested_format, jpeg_quality)
         image = _validate_image(image)
         spec = _ndarray_snapshot_spec(image)
         if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
@@ -562,7 +628,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
             resolved_format, data = encode_image_binary(
                 snapshot,
                 self._impl.requested_format,
-                jpeg_quality=self._impl.jpeg_quality,
+                jpeg_quality=self._impl.jpeg_quality if jpeg_quality is None else jpeg_quality,
             )
             if self._impl.requested_format == "jpeg" and snapshot.shape[2] == 4:
                 warnings.warn(
@@ -588,14 +654,21 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
                 updates["loading"] = loading
             self._publish_update_locked(updates, state_updates={"image": image})
 
-    def update(self, image: np.ndarray, *, loading: PaneLoading | None = None) -> None:
+    def update(
+        self,
+        image: np.ndarray,
+        *,
+        loading: PaneLoading | None = None,
+        jpeg_quality: int | None = None,
+    ) -> None:
         """Replace the image, optionally changing loading in the same update.
 
         None leaves the current loading state unchanged. Pass False to reveal
-        the new image as part of the same pane update.
+        the new image as part of the same pane update. ``jpeg_quality`` overrides
+        the creation quality for this update only (0–100); None uses the default.
         """
 
-        self._update_image(image, loading)
+        self._update_image(image, loading, jpeg_quality)
 
     @property
     def format(self) -> Literal["auto", "jpeg", "png"]:

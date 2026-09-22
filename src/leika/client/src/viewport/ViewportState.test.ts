@@ -1054,3 +1054,60 @@ describe("createViewportState pages", () => {
     expect(after.pages.analysis.layout).toBe(targetLayout);
   });
 });
+
+describe("local selection refresh", () => {
+  it("rejects old and superseded images until the latest request accompanies content", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addImagePane(imageDeclaration("camera"));
+    actions.updatePane("camera", {
+      _refresh_controls: ["dataset", "timeline"],
+      _refresh_revision: 0,
+      _refresh_requests: [],
+      _data: new Uint8Array([1]),
+    });
+    // A real page has completed its subscription before it can be edited.
+    actions.beginPageSubscription(DEFAULT_PAGE_ID, 1);
+    actions.beginPageStream(DEFAULT_PAGE_ID, 1);
+    actions.addImagePane(imageDeclaration("camera"));
+    actions.updatePane("camera", {
+      _refresh_controls: ["dataset", "timeline"],
+      _refresh_revision: 0,
+      _refresh_requests: [],
+      _data: new Uint8Array([1]),
+    });
+    actions.finishPageStream(DEFAULT_PAGE_ID, 1);
+    expect(actions.invalidateForInput("dataset", "first")).toBe(true);
+    actions.updatePane("camera", {
+      _data: new Uint8Array([2]),
+      _refresh_revision: 0,
+    });
+    expect(getState().panes.camera).toMatchObject({
+      refreshPending: { requestId: "first" },
+      props: { _data: new Uint8Array([1]) },
+    });
+    actions.invalidateForInput("timeline", "last");
+    actions.updatePane("camera", {
+      _data: new Uint8Array([3]),
+      _refresh_revision: 1,
+      _refresh_requests: ["first"],
+    });
+    expect(getState().panes.camera).toMatchObject({
+      refreshPending: { requestId: "last" },
+    });
+    actions.updatePane("camera", {
+      _data: new Uint8Array([4]),
+      _refresh_revision: 2,
+      _refresh_requests: ["last"],
+    });
+    expect(getState().panes.camera).toHaveProperty("refreshPending", undefined);
+    actions.updatePane("camera", {
+      _data: new Uint8Array([5]),
+      _refresh_revision: 1,
+      _refresh_requests: ["first"],
+    });
+    expect(getState().panes.camera).toMatchObject({
+      props: { _data: new Uint8Array([4]) },
+    });
+    expect(actions.invalidateForInput("unbound", "none")).toBe(false);
+  });
+});

@@ -4395,3 +4395,116 @@ def test_image_and_renderer_preparation_admission_is_bounded_and_released(
     first.join(2)
     second.join(2)
     assert renderer_second.is_set()
+
+
+def test_refresh_bindings_acknowledge_same_value_and_bound_client_history(server):
+    control = server.gui.add_slider("Frame", initial_value=0, min=0, max=10, step=1)
+    pane = server.panes.add_image(np.full((8, 8, 3), 80, np.uint8))
+    pane.invalidate_on(control)
+    connection = _client_connection_stub(server, ClientId(12))
+    client = ClientHandle(connection, server)
+    server._connected_clients[12] = client
+    seen = []
+
+    @control.on_update
+    def changed(event):
+        seen.append(event.value)
+        pane.update(np.zeros((8, 8, 3), np.uint8), loading=True)
+
+    def request(value, request_id):
+        asyncio.run(
+            server.gui._handle_gui_refresh(
+                ClientId(12),
+                _messages.GuiRefreshMessage(control._impl.uuid, {"value": value}, request_id),
+            )
+        )
+        buffer = server._websock_server.get_message_buffer()
+        updates = [
+            m
+            for m in buffer.message_from_id.values()
+            if isinstance(m, _messages.ViewportPaneUpdateMessage) and m.pane_id == pane.pane_id
+        ]
+        return updates[-1].updates
+
+    first = request(1, "first")
+    assert first["_refresh_controls"] == (control._impl.uuid,)
+    assert first["_refresh_requests"] == ("first",)
+    assert first["loading"] is True
+    assert first["_data"] == pane._impl.props._data
+    second = request(1, "same-value")
+    assert second["_refresh_revision"] > first["_refresh_revision"]
+    assert second["_refresh_requests"] == ("same-value",)
+    assert seen == [1]
+    for i in range(100):
+        request(1, f"repeat-{i}")
+    assert len(pane._refresh_requests) == 1
+    assert (
+        len(
+            [
+                m
+                for m in server._websock_server.get_message_buffer().message_from_id.values()
+                if isinstance(m, _messages.ViewportPaneUpdateMessage) and m.pane_id == pane.pane_id
+            ]
+        )
+        <= 3
+    )
+    server._connected_clients.clear()
+    server._connected_clients[13] = ClientHandle(
+        _client_connection_stub(server, ClientId(13)), server
+    )
+    pane._ack_refresh(control._impl.uuid, "reconnected", 13)
+    assert pane._refresh_requests == {13: "reconnected"}
+
+
+def test_refresh_binding_rejects_removed_or_private_control_and_prunes_old(server):
+    pane = server.panes.add_image(np.zeros((8, 8, 3), np.uint8))
+    first = server.gui.add_button("First")
+    pane.invalidate_on(first)
+    first.remove()
+    with pytest.raises(ValueError):
+        pane.invalidate_on(first)
+    second = server.gui.add_button("Second")
+    pane.invalidate_on(second)
+    assert tuple(pane._refresh_controls) == (second._impl.uuid,)
+    client = ClientHandle(_client_connection_stub(server, ClientId(1)), server)
+    private = client.gui.add_button("Private")
+    with pytest.raises(ValueError):
+        pane.invalidate_on(private)
+    with pytest.raises(TypeError):
+        pane.invalidate_on(object())
+
+
+def test_pane_size_feedback_ignores_invalid_dimensions_and_other_pages(server):
+    pane = server.panes.add_image(np.zeros((8, 8, 3), np.uint8))
+    page_id = pane._impl.api._page_id
+    connection = _client_connection_stub(server, ClientId(12))
+    connection.delivery_scope = lambda: page_id
+    client = ClientHandle(connection, server)
+    server._connected_clients[12] = client
+    assert client.pane_size(pane) is None
+    server._handle_pane_viewport(
+        ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, 640, 480)
+    )
+    assert client.pane_size(pane) == (640, 480)
+    server._handle_pane_viewport(
+        ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, -1, 480)
+    )
+    server._handle_pane_viewport(
+        ClientId(12), _messages.PaneViewportMessage("other", pane.pane_id, 320, 240)
+    )
+    assert client.pane_size(pane) == (640, 480)
+    connection.delivery_scope = lambda: "other"
+    assert client.pane_size(pane) == (0, 0)
+
+
+def test_per_frame_jpeg_quality_changes_only_display_encoding(server):
+    image = np.random.default_rng(2).integers(0, 255, (240, 320, 3), dtype=np.uint8)
+    pane = server.panes.add_image(image, format="jpeg", jpeg_quality=90)
+    original_bytes = pane._impl.props._data
+    pane.update(image, jpeg_quality=30)
+    assert len(pane._impl.props._data) < len(original_bytes) / 2
+    np.testing.assert_array_equal(pane.image, image)
+    pane.update(image)
+    assert pane._impl.props._data == original_bytes
+    with pytest.raises(ValueError):
+        pane.update(image, jpeg_quality=101)

@@ -38,8 +38,32 @@ class ClientHandle:
         """Handle for interacting with the GUI."""
         self.client_id: int = conn.client_id
         """Unique ID for this client."""
+        self._pane_size_lock = threading.Lock()
+        self._pane_sizes: dict[tuple[str, str], tuple[int, int]] = {}
         self._outgoing_transfer_lock = threading.Lock()
         self._outgoing_transfer_cancel_from_uuid: dict[str, threading.Event] = {}
+
+    @property
+    def delivery_rate(self) -> float | None:
+        """Smoothed received bytes/second, or None before a bulk receipt.
+
+        Available when the server enables ``delivery_backpressure``. Includes
+        round-trip delay, so this is conservative delivery throughput, not a
+        measurement of the physical link's maximum bandwidth.
+        """
+        return self._websock_connection._state.delivery_rate
+
+    def pane_size(self, pane) -> tuple[int, int] | None:
+        """Latest browser content size in physical pixels, or None if unknown.
+
+        A hidden pane reports (0, 0). A pane on another subscribed page also
+        returns (0, 0). Applications may use this hint to size streamed images.
+        """
+        page_id = pane._impl.api._page_id
+        if self._websock_connection.delivery_scope() != page_id:
+            return (0, 0)
+        with self._pane_size_lock:
+            return self._pane_sizes.get((page_id, str(pane.pane_id)))
 
     @contextlib.contextmanager
     def _track_outgoing_file_transfer(self, transfer_uuid: str) -> Iterator[threading.Event]:

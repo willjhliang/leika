@@ -1,3 +1,4 @@
+import { prepareGuiRefresh } from "./prepareGuiRefresh";
 import React from "react";
 import { Message } from "./WebsocketMessages";
 import { useViewer, ViewerContextContents } from "./ViewerContext";
@@ -43,7 +44,10 @@ export function useThrottledMessageSender(throttleMilliseconds: number) {
 function coalescingKey(message: Message): string {
   const parts: string[] = [message.type];
   if ("uuid" in message) parts.push(message.uuid);
-  if (message.type === "GuiUpdateMessage") {
+  if (
+    message.type === "GuiUpdateMessage" ||
+    message.type === "GuiRefreshMessage"
+  ) {
     for (const key of Object.keys(message.updates).sort()) parts.push(key);
   } else if (message.type === "GuiButtonHoldMessage") {
     parts.push(String(message.frequency));
@@ -147,6 +151,7 @@ export function makeThrottledMessageSender(
       if (session.sendMessage === blockedSender) return;
       blockedSender = null;
     }
+    message = prepareGuiRefresh(viewer, message);
     if (readyToSend) {
       session.sendMessage(message);
       openWindow();
