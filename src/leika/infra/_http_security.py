@@ -6,8 +6,11 @@ import dataclasses
 import http
 import ipaddress
 import itertools
+import json
+import os
 import threading
 from collections.abc import Sequence
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from websockets import Headers
@@ -136,6 +139,36 @@ def _normalize_allowed_hosts(hosts: Sequence[str] | None) -> frozenset[str]:
             raise ValueError(f"Duplicate allowed host: {host!r}.")
         normalized.add(canonical)
     return frozenset(normalized)
+
+
+def _configured_allowed_hosts(hosts: Sequence[str] | None) -> frozenset[str]:
+    """Use the user's persistent endpoint names unless the caller overrides them.
+
+    Missing configuration preserves the default localhost/IP policy. An existing
+    but invalid or unreadable file fails startup rather than silently discarding
+    the operator's configuration. Explicit sequences (including []) are complete
+    overrides, so applications can opt out of user configuration.
+    """
+    if hosts is not None:
+        return _normalize_allowed_hosts(hosts)
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(config_home) if config_home else Path.home() / ".config"
+    if not base.is_absolute():
+        raise ValueError("XDG_CONFIG_HOME must be an absolute path.")
+    path = base / "leika" / "allowed_hosts.json"
+    try:
+        payload = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return frozenset()
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"Cannot read Leika allowed hosts from {path}: {error}") from error
+    try:
+        values = json.loads(payload)
+        if not isinstance(values, list):
+            raise TypeError("expected a JSON array of hostnames")
+        return _normalize_allowed_hosts(values)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid Leika allowed hosts in {path}: {error}") from error
 
 
 def _is_ip_host(host: str) -> bool:

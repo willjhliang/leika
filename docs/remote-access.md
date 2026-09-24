@@ -21,6 +21,36 @@ name it controls at a Leika server and use a browser as a local-network proxy.
 The browser `Origin`, when present, must also match the effective scheme,
 hostname, and port.
 
+For several dashboards, configure the names once in
+`~/.config/leika/allowed_hosts.json` (or
+`$XDG_CONFIG_HOME/leika/allowed_hosts.json`):
+
+```json
+["machine-name", "machine-name.tailnet-name.ts.net"]
+```
+
+Every `leika.Server()` with the default `allowed_hosts=None` reads this file at
+construction. Both the short and full DNS spellings must be listed if both are
+used; IP literals can also be listed. This configuration does not depend on a
+running VPN daemon, DNS resolution, or which service starts first. It applies
+to every dashboard using that user's config directory, including across machines
+with a shared home. Include only intentional endpoint names.
+
+Passing `allowed_hosts=[...]` replaces the file's list for that server; passing
+`allowed_hosts=[]` ignores the file and adds no names. A missing file preserves
+the default policy; malformed or unreadable configuration fails startup with
+its path and cause. The same validation and 256-entry limit apply to both inputs.
+Restart running dashboards after changing the file. Neither configuring names
+nor using a VPN bypasses the matching browser `Origin` requirement.
+
+A `403 FORBIDDEN` from a tailnet URL while localhost works usually means the
+browser's hostname is absent from the allowlist. Check the exact server port
+and compare an HTTP request carrying that URL's `Host` header, then verify a
+WebSocket handshake with the matching `Origin`. A localhost-only health check
+cannot verify remote-host access. One-time discovery from `tailscale status`
+can miss a daemon that starts later; use persistent configuration for stable
+endpoint names.
+
 Embedding is denied by default with `Content-Security-Policy: frame-ancestors
 'none'`. Opt in for a trusted parent page with
 `Server(allow_embedding=True)`. Notebook `show()` also requires that opt-in.

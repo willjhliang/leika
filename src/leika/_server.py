@@ -41,8 +41,8 @@ from .infra._auth import HttpPasswordGuard
 from .infra._http_assets import HttpAsset
 from .infra._http_security import (
     _canonical_hostname,
+    _configured_allowed_hosts,
     _is_loopback_host,
-    _normalize_allowed_hosts,
 )
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
@@ -107,6 +107,11 @@ class Server:
     Wildcard binds accept localhost and IP-literal request hosts by default.
     Add intentional DNS, mDNS, or tailnet names with ``allowed_hosts``;
     entries are hostnames without ports and the sequence is capped at 256.
+    With ``allowed_hosts=None``, load the JSON array in
+    ``$XDG_CONFIG_HOME/leika/allowed_hosts.json`` (default
+    ``~/.config/leika/allowed_hosts.json``). A missing file adds no names.
+    An explicit sequence replaces user configuration; ``[]`` disables it.
+    Configuration is read once per server construction, before allocating resources.
     Invalid, duplicate, changing, or oversized sequences raise ``ValueError``
     during construction. Browser ``Origin`` must still match
     the accepted request origin. Pages deny framing by default; set
@@ -156,7 +161,7 @@ class Server:
             raise TypeError("verbose must be a bool.")
         if not isinstance(delivery_backpressure, bool):
             raise TypeError("delivery_backpressure must be a bool.")
-        normalized_allowed_hosts = tuple(sorted(_normalize_allowed_hosts(allowed_hosts)))
+        normalized_allowed_hosts = tuple(sorted(_configured_allowed_hosts(allowed_hosts)))
         # Sharing means the dashboard carries data worth protecting, and a
         # non-loopback bind would serve that same data as unencrypted HTTP to
         # the local network -- where the password itself travels in the clear.
