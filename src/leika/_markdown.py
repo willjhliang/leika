@@ -12,7 +12,7 @@ import os
 import re
 import warnings
 from collections.abc import Callable, Iterator
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
@@ -23,10 +23,6 @@ if TYPE_CHECKING:
     from .infra._http_assets import HttpAsset
 
 
-class _UnsafeMarkdownAssetPath(ValueError):
-    """A markdown image reference that leaves its declared asset root."""
-
-
 @dataclasses.dataclass(frozen=True)
 class _ResolvedMarkdownAsset:
     path: Path
@@ -34,25 +30,8 @@ class _ResolvedMarkdownAsset:
 
 
 def _resolve_markdown_asset(image_root: Path, url: str) -> _ResolvedMarkdownAsset:
-    """Resolve and capture one contained local Markdown asset's identity."""
-    posix_path = PurePosixPath(url)
-    windows_path = PureWindowsPath(url)
-    if (
-        posix_path.is_absolute()
-        or windows_path.drive
-        or windows_path.root
-        or ".." in posix_path.parts
-        or ".." in windows_path.parts
-        or any(":" in part for part in windows_path.parts)
-    ):
-        raise _UnsafeMarkdownAssetPath(url)
-
-    root = image_root.resolve()
-    path = (root / Path(*posix_path.parts)).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as error:
-        raise _UnsafeMarkdownAssetPath(url) from error
+    """Resolve a local image using ordinary filesystem path semantics."""
+    path = (image_root / url).resolve()
     return _ResolvedMarkdownAsset(path, path.stat())
 
 
@@ -292,12 +271,6 @@ def _get_data_url(
         image_root = Path(__file__).parent
     try:
         source = _resolve_markdown_asset(image_root, local_url)
-    except _UnsafeMarkdownAssetPath:
-        warnings.warn(
-            f"Refused image {url}, which is outside image_root {image_root}.",
-            stacklevel=2,
-        )
-        return url
     except OSError:
         warnings.warn(
             f"Failed to read image {url}, with image_root set to {image_root}.",
@@ -388,12 +361,6 @@ def _link_markdown_assets(
             return None
         try:
             source = _resolve_markdown_asset(image_root, local_url)
-        except _UnsafeMarkdownAssetPath:
-            warnings.warn(
-                f"Refused image {url}, which is outside image_root {image_root}.",
-                stacklevel=2,
-            )
-            return None
         except OSError:
             warnings.warn(
                 f"Failed to read image {url}, relative to {image_root}.",

@@ -72,20 +72,24 @@ def test_an_image_opens_in_the_dialog(
     assert page_errors == []
 
 
+@pytest.mark.parametrize("figure_directory", ["figures", "../figures"])
 def test_a_documents_images_are_fetched_beside_it(
     leika_server: leika.Server,
     preview_page: Page,
     page_errors: list[str],
     tmp_path: Path,
+    figure_directory: str,
 ) -> None:
     # A path-backed document's relative images are not carried inside the
     # transfer: the server registers each one and the document arrives naming
     # URLs, which the browser fetches like any page's images. The text shows
     # without waiting for a byte of figure data.
     docs = tmp_path / "docs"
-    (docs / "figures").mkdir(parents=True)
-    (docs / "figures" / "plot.png").write_bytes(_png(8, 6))
-    (docs / "notes.md").write_text("# Results\n\n![plot](figures/plot.png)\n")
+    docs.mkdir()
+    figures = docs / figure_directory
+    figures.mkdir(parents=True)
+    (figures / "plot.png").write_bytes(_png(8, 6))
+    (docs / "notes.md").write_text(f"# Results\n\n![plot]({figure_directory}/plot.png)\n")
     leika_server.gui.add_preview_button("Show notes", docs / "notes.md")
 
     _press(preview_page, "Show notes")

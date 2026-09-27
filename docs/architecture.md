@@ -233,7 +233,11 @@ to 33,554,432 decoded pixels, raising before encoding an oversized source. A
 received file-preview, Markdown, or registered-asset image reaches the decoder
 only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
 animated, oversized, and unsupported files remain available through an explicit
-link or download fallback. Markdown does not fetch external images; only a
+link or download fallback. Local Markdown image paths resolve from the document
+directory (or `add_text`'s `image_root`) with ordinary filesystem semantics,
+including parent directories, absolute paths, and symlinks. This base directory
+does not restrict which local images a document can reference.
+Markdown does not fetch external images; only a
 bounded data image or the exact hash-and-dimensions URL emitted for a validated
 Leika asset can render inline.
 

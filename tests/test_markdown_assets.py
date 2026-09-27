@@ -44,57 +44,52 @@ def test_markdown_asset_resolver_captures_canonical_identity(tmp_path: Path) -> 
     assert resolved.metadata.st_size == len(payload)
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "../secret.png",
-        "/etc/passwd",
-        "C:/Windows/win.ini",
-        "figure.png:alternate-stream",
-        r"\\server\share\secret.png",
-    ],
-)
-def test_markdown_asset_paths_cannot_leave_their_root(tmp_path: Path, url: str) -> None:
-    with pytest.raises(ValueError):
-        _resolve_markdown_asset(tmp_path / "docs", url)
-
-
-def test_markdown_asset_symlinks_cannot_leave_their_root(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reference", ["../figure.png", "absolute", "symlink"])
+def test_markdown_assets_resolve_paths_outside_the_document_directory(
+    tmp_path: Path, reference: str
+) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
-    secret = tmp_path / "secret.png"
-    secret.write_bytes(b"secret")
-    docs.joinpath("linked.png").symlink_to(secret)
+    figure = tmp_path / "figure.png"
+    figure.write_bytes(_png_header())
+    if reference == "absolute":
+        reference = str(figure)
+    elif reference == "symlink":
+        docs.joinpath("linked.png").symlink_to(figure)
+        reference = "linked.png"
 
-    with pytest.raises(ValueError):
-        _resolve_markdown_asset(docs, "linked.png")
+    resolved = _resolve_markdown_asset(docs, reference)
+
+    assert resolved.path == figure.resolve()
+    assert os.path.samestat(resolved.metadata, figure.stat())
 
 
-def test_http_backed_markdown_keeps_refused_reference(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reference", ["../figure.png", "../figure%2Epng"])
+def test_markdown_loads_parent_directory_images(tmp_path: Path, reference: str) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
+    figure = tmp_path / "figure.png"
+    figure.write_bytes(_png_header())
+    register = Mock(return_value=HttpAsset("/asset/figure", None))
+
+    linked = _link_markdown_assets(f"![figure]({reference})", docs, register)
+    inlined = _get_data_url(reference, docs)
+
+    assert linked == "![figure](/asset/figure)"
+    assert register.call_args.args[0] == figure.resolve()
+    assert inlined.startswith("data:image/png;base64,")
+
+
+def test_markdown_keeps_missing_image_references(tmp_path: Path) -> None:
     register = Mock()
+    with pytest.warns(UserWarning, match="Failed to read image"):
+        linked = _link_markdown_assets("![missing](../missing.png)", tmp_path, register)
+    with pytest.warns(UserWarning, match="Failed to read image"):
+        inlined = _get_data_url("../missing.png", tmp_path)
 
-    with pytest.warns(UserWarning, match="outside image_root"):
-        result = _link_markdown_assets(
-            "![secret](../secret.png)",
-            docs,
-            register,
-        )
-
-    assert result == "![secret](../secret.png)"
+    assert linked == "![missing](../missing.png)"
+    assert inlined == "../missing.png"
     register.assert_not_called()
-
-
-def test_inlined_markdown_cannot_read_outside_image_root(tmp_path: Path) -> None:
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    tmp_path.joinpath("secret.png").write_bytes(b"secret")
-
-    with pytest.warns(UserWarning, match="outside image_root"):
-        result = _get_data_url("../secret.png", docs)
-
-    assert result == "../secret.png"
 
 
 def test_inlined_markdown_refuses_one_oversized_asset(

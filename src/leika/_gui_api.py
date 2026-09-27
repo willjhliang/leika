@@ -2775,6 +2775,10 @@ class GuiApi(GuiContainer):
         contents in the margin beside it, where the window is wide enough to
         hold a column of them without narrowing the writing.
 
+        Local Markdown images resolve relative to the document directory,
+        including parent-directory paths and symlinks. Absolute local paths
+        also work; the directory is a base path, not a filesystem boundary.
+
         Recent completed Markdown previews are retained in a bounded browser
         cache. Reopening shows the cached document immediately while the server
         rechecks the source and its linked images. Identical prepared contents
@@ -3167,8 +3171,9 @@ class GuiApi(GuiContainer):
                 height the box keeps, scrolling its own text rather than growing.
                 Left out, an editable box is three lines and a read-only one fits
                 itself to the text it holds. Ignored unless ``multiline``.
-            image_root: Optional root directory to resolve relative image paths in
-                markdown against.
+            image_root: Optional base directory for relative Markdown image paths.
+                Parent-directory paths, absolute paths, and symlinks follow normal
+                filesystem resolution.
             disabled: Whether an editable box is disabled.
             visible: Whether the text is visible.
             hint: Optional hint to display on hover.

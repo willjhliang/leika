@@ -150,11 +150,13 @@ def _asset_url(document: bytes) -> str:
     return found.group(0)[1:]
 
 
+@pytest.mark.parametrize("figure_directory", ["figures", "../figures"])
 def test_a_path_backed_markdown_preview_links_relative_images(
-    server: leika.Server, tmp_path: Path
+    server: leika.Server, tmp_path: Path, figure_directory: str
 ) -> None:
     docs = tmp_path / "docs"
-    figures = docs / "figures"
+    docs.mkdir()
+    figures = docs / figure_directory
     figures.mkdir(parents=True)
     # A valid one-pixel PNG. The exact image data is immaterial; the assertion
     # is that the path is resolved beside the markdown, registered with the
@@ -164,9 +166,9 @@ def test_a_path_backed_markdown_preview_links_relative_images(
     figures.joinpath("plot.png").write_bytes(png)
     document = docs / "notes.md"
     document.write_text(
-        "# Results\n\n![plot](figures/plot.png)\n\n"
+        f"# Results\n\n![plot]({figure_directory}/plot.png)\n\n"
         "Text with (parentheses) between figures.\n\n"
-        "![plot again](figures/plot.png)\n"
+        f"![plot again]({figure_directory}/plot.png)\n"
     )
 
     handle = server.gui.add_preview_button("Look", document)
