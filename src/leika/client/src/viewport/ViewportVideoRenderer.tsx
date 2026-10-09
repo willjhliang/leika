@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { VideoPlaybackControls } from "./VideoPlaybackControls";
 import type { ViewportVideoPane, ViewportVideoProps } from "./ViewportState";
 
 const Video = memo(function Video({
@@ -46,14 +47,13 @@ const Video = memo(function Video({
     };
   }, [url, options.autoplay, options.visible]);
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+    <div className="group/video @container relative h-full w-full">
       <video
         ref={ref}
         src={url}
         aria-label={label}
         loop={options.loop}
         muted={options.muted}
-        controls={options.controls}
         playsInline
         preload="metadata"
         onError={() => setError(true)}
@@ -66,6 +66,9 @@ const Video = memo(function Video({
           objectFit: "contain",
         }}
       />
+      {options.controls && (
+        <VideoPlaybackControls videoRef={ref} label={label} disabled={error} />
+      )}
       {error && (
         <p role="alert" style={{ position: "absolute", inset: 12 }}>
           Could not play this video. Check its URL and browser codec support.

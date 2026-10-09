@@ -79,3 +79,104 @@ def test_video_grid_players_are_independent(leika_page: Page, leika_server: leik
     second.update(leika_server.register_http_asset(CLIP) + "?replacement=1")
     leika_page.wait_for_function("document.querySelectorAll('video')[1] !== window.players[1]")
     assert videos.nth(0).evaluate("v => v === window.players[0] && v.paused")
+
+
+def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) -> None:
+    pane = leika_server.panes.add_video(CLIP, title="Task", autoplay=False, loop=False)
+    video = leika_page.locator("video")
+    bar = leika_page.get_by_role("group", name="Task playback", exact=True)
+    play = leika_page.get_by_role("button", name="Play Task", exact=True)
+    seek = leika_page.get_by_role("slider", name="Seek Task", exact=True)
+    leika_page.wait_for_function('document.querySelector("video")?.readyState >= 2')
+    video.evaluate("v => { window.originalVideo = v; }")
+    assert not video.evaluate("v => v.controls")
+    leika_page.mouse.move(0, 0)
+    expect(bar).to_have_css("opacity", "0")
+    video.hover()
+    expect(bar).to_have_css("opacity", "1")
+    play.click()
+    leika_page.wait_for_function('!document.querySelector("video").paused')
+    leika_page.get_by_role("button", name="Pause Task", exact=True).click()
+    leika_page.wait_for_function('document.querySelector("video").paused')
+
+    # Focus keeps the controls usable after the pointer leaves the video.
+    leika_page.mouse.move(0, 0)
+    expect(bar).to_have_css("opacity", "1")
+    seek.focus()
+    seek.press("Home")
+    seek.press("ArrowRight")
+    leika_page.wait_for_function('Math.abs(document.querySelector("video").currentTime - .1) < .01')
+    track = bar.locator('[data-slot="slider-track"]').bounding_box()
+    assert track is not None
+    leika_page.mouse.click(track["x"] + track["width"] * 0.75, track["y"] + track["height"] / 2)
+    leika_page.wait_for_function(
+        'Math.abs(document.querySelector("video").currentTime / '
+        'document.querySelector("video").duration - .75) < .1'
+    )
+    assert video.evaluate("v => v.paused")
+
+    leika_page.get_by_role("combobox", name="Task playback speed", exact=True).click()
+    leika_page.mouse.move(0, 0)
+    expect(bar).to_have_css("opacity", "1")
+    leika_page.get_by_role("option", name="2×", exact=True).click()
+    leika_page.wait_for_function('document.querySelector("video").playbackRate === 2')
+    pane.title = "Renamed"
+    pane.update(CLIP)
+    expect(
+        leika_page.get_by_role("combobox", name="Renamed playback speed").locator(
+            '[data-slot="select-value"]'
+        )
+    ).to_have_text("2×")
+    assert video.evaluate("v => v === window.originalVideo && v.paused && v.playbackRate === 2")
+
+    # The controls also follow media events, including ending and restarting.
+    video.evaluate("v => { v.currentTime = v.duration - .1; return v.play(); }")
+    leika_page.wait_for_function('document.querySelector("video").ended')
+    play = leika_page.get_by_role("button", name="Play Renamed", exact=True)
+    play.focus()
+    play.press("Space")
+    leika_page.wait_for_function(
+        '!document.querySelector("video").paused && !document.querySelector("video").ended'
+    )
+
+
+def test_video_controls_are_optional_and_independent(
+    leika_page: Page, leika_server: leika.Server
+) -> None:
+    grid = leika_server.panes.add_grid(columns=2)
+    grid.add_video(CLIP, title="First")
+    grid.add_video(CLIP, title="Second", controls=False)
+    leika_page.wait_for_function(
+        "document.querySelectorAll('video').length === 2 && "
+        "[...document.querySelectorAll('video')].every(v => v.currentTime > .1)"
+    )
+    videos = leika_page.locator("video")
+    videos.nth(0).hover()
+    leika_page.get_by_role("button", name="Pause First", exact=True).click()
+    assert videos.nth(0).evaluate("v => v.paused")
+    assert videos.nth(1).evaluate("v => !v.paused && !v.controls")
+    expect(leika_page.get_by_role("group", name="Second playback")).to_have_count(0)
+    leika_page.get_by_role("combobox", name="First playback speed", exact=True).click()
+    leika_page.get_by_role("option", name="0.5×", exact=True).click()
+    leika_page.wait_for_function('document.querySelector("video").playbackRate === .5')
+    assert videos.nth(1).evaluate("v => v.playbackRate === 1 && !v.paused")
+
+
+def test_video_touch_controls(leika_page: Page, leika_server: leika.Server) -> None:
+    leika_server.panes.add_video(CLIP, title="Touch", autoplay=False)
+    browser = leika_page.context.browser
+    assert browser is not None
+    context = browser.new_context(
+        viewport={"width": 390, "height": 700}, has_touch=True, is_mobile=True
+    )
+    try:
+        page = context.new_page()
+        page.goto(leika_server.url)
+        bar = page.get_by_role("group", name="Touch playback", exact=True)
+        expect(bar).to_have_css("opacity", "1")
+        page.get_by_role("button", name="Play Touch", exact=True).tap()
+        page.wait_for_function('!document.querySelector("video").paused')
+        page.get_by_role("button", name="Pause Touch", exact=True).tap()
+        page.wait_for_function('document.querySelector("video").paused')
+    finally:
+        context.close()
