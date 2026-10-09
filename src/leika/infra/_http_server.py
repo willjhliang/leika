@@ -15,6 +15,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from pathlib import Path, PureWindowsPath
+from typing import Literal
 from urllib.parse import unquote as _url_unquote
 
 from websockets import Headers
@@ -27,6 +28,29 @@ from ._auth import HttpPasswordGuard
 from ._http_assets import _HTTP_ASSET_URL_PREFIX, HttpAssetRegistry
 from ._http_security import HttpRequestPolicy
 from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
+
+
+def _single_byte_range(value: str, size: int) -> tuple[int, int] | None | Literal[False]:
+    """Return a half-open range, None to ignore, or False if unsatisfiable."""
+    if not value.startswith("bytes=") or "," in value or len(value) > 128:
+        return None
+    left, dash, right = value[6:].partition("-")
+    if (
+        not dash
+        or not (left or right)
+        or any(part and (not part.isascii() or not part.isdigit()) for part in (left, right))
+    ):
+        return None
+    if not left:
+        length = int(right)
+        return (max(0, size - length), size) if length and size else False
+    start = int(left)
+    last = int(right) if right else size - 1
+    if right and last < start:
+        return None
+    if start >= size:
+        return False
+    return start, min(size, last + 1)
 
 
 def _static_relpath(request_target: str) -> str | None:
@@ -395,36 +419,50 @@ class HttpRequestHandler:
         # Runtime assets take precedence and are available without a static root.
         url_path = request.path.partition("?")[0]
         if url_path.startswith(_HTTP_ASSET_URL_PREFIX):
-            return self._asset_response(connection, url_path)
+            return self._asset_response(connection, request, url_path)
         return await self._static_response(connection, request)
 
-    def _asset_response(self, connection: ServerConnection, url_path: str) -> Response:
-        """Serve only exact immutable names admitted by the shared registry."""
+    def _asset_response(
+        self, connection: ServerConnection, request: Request, url_path: str
+    ) -> Response:
+        """Serve immutable assets, including bounded single byte ranges for media."""
         payload = self._assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
         if payload is None:
             return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
-        if not self._response_budget.try_resize(connection, len(payload)):
-            return _server_busy_response()
-        return Response(
-            http.HTTPStatus.OK,
-            "OK",
-            Headers(
-                **{
-                    "Content-Type": _http_content_type(url_path),
-                    "Content-Length": str(len(payload)),
-                    # The name is the content's hash, so what this URL
-                    # answers can never change; the browser may keep it
-                    # for as long as it likes and never ask again.
-                    "Cache-Control": "private, max-age=31536000, immutable",
-                    # Runtime assets may originate in an untrusted
-                    # Markdown tree. Even if one is HTML or SVG and a
-                    # user navigates to it directly, it cannot execute
-                    # with Leika's same-origin authority.
-                    "Content-Security-Policy": "sandbox; frame-ancestors 'none'",
-                }
-            ),
-            payload,
+        size = len(payload)
+        etag = '"' + url_path.rsplit("/", 1)[-1] + '"'
+        headers = Headers(
+            {
+                "Content-Type": _http_content_type(url_path),
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "Content-Security-Policy": "sandbox; frame-ancestors 'none'",
+                "Accept-Ranges": "bytes",
+                "ETag": etag,
+            }
         )
+        status = http.HTTPStatus.OK
+        ranges = request.headers.get_all("Range")
+        if_range = request.headers.get_all("If-Range")
+        start, end = 0, size
+        if len(ranges) == 1 and (not if_range or if_range == [etag]):
+            selected = _single_byte_range(ranges[0], size)
+            if selected is False:
+                headers["Content-Range"] = f"bytes */{size}"
+                headers["Content-Length"] = "0"
+                return Response(
+                    http.HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+                    "Range Not Satisfiable",
+                    headers,
+                    b"",
+                )
+            if selected is not None:
+                start, end = selected
+                status = http.HTTPStatus.PARTIAL_CONTENT
+                headers["Content-Range"] = f"bytes {start}-{end - 1}/{size}"
+        if not self._response_budget.try_resize(connection, end - start):
+            return _server_busy_response()
+        headers["Content-Length"] = str(end - start)
+        return Response(status, status.phrase, headers, payload[start:end])
 
     async def _static_response(self, connection: ServerConnection, request: Request) -> Response:
         """Read a contained static file and apply representation cache semantics."""

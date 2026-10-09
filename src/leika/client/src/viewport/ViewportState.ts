@@ -66,6 +66,18 @@ export interface ViewportPlotlyProps extends RefreshableProps {
   loading: boolean | string;
 }
 
+export interface ViewportVideoProps extends RefreshableProps {
+  _videos: readonly (readonly [string, string])[];
+  columns: number;
+  autoplay: boolean;
+  loop: boolean;
+  muted: boolean;
+  controls: boolean;
+  title: string;
+  visible: boolean;
+  loading: boolean | string;
+}
+
 export interface ViewportViserProps extends RefreshableProps {
   /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
   _url: string | null;
@@ -101,6 +113,12 @@ export interface ViewportPlotlyPane extends RefreshablePane {
   props: ViewportPlotlyProps;
 }
 
+export interface ViewportVideoPane extends RefreshablePane {
+  kind: "video";
+  paneId: string;
+  props: ViewportVideoProps;
+}
+
 export interface ViewportViserPane extends RefreshablePane {
   kind: "viser";
   paneId: string;
@@ -112,7 +130,8 @@ export type ViewportContentPane =
   | ViewportImagePane
   | ViewportMatplotlibPane
   | ViewportPlotlyPane
-  | ViewportViserPane;
+  | ViewportViserPane
+  | ViewportVideoPane;
 
 export type ViewportPane = ViewportRootPane | ViewportContentPane;
 
@@ -183,6 +202,15 @@ export interface ViewportPlotlyDeclaration {
   equalize_group: readonly string[];
 }
 
+export interface ViewportVideoDeclaration {
+  page_id: string;
+  pane_id: string;
+  props: ViewportVideoProps;
+  placement: ViewportPanePlacement;
+  relative_to: string;
+  equalize_group: readonly string[];
+}
+
 export interface ViewportViserDeclaration {
   page_id: string;
   pane_id: string;
@@ -198,7 +226,8 @@ export type ViewportPaneUpdates =
   | Partial<ViewportImageProps>
   | Partial<ViewportMatplotlibProps>
   | Partial<ViewportPlotlyProps>
-  | Partial<ViewportViserProps>;
+  | Partial<ViewportViserProps>
+  | Partial<ViewportVideoProps>;
 
 export interface ViewportActions {
   /** Clear all temporal pane state, including layout (used by file playback). */
@@ -219,6 +248,7 @@ export interface ViewportActions {
   addImagePane: (message: ViewportImageDeclaration) => void;
   addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
+  addVideoPane: (message: ViewportVideoDeclaration) => void;
   addViserPane: (message: ViewportViserDeclaration) => void;
   updatePane: (
     pageId: string,
@@ -331,6 +361,8 @@ function contentPaneFromMessage(message: Message): ViewportContentPane | null {
       };
     case "ViewportPlotlyMessage":
       return { kind: "plotly", paneId: message.pane_id, props: message.props };
+    case "ViewportVideoMessage":
+      return { kind: "video", paneId: message.pane_id, props: message.props };
     case "ViewportViserMessage":
       return { kind: "viser", paneId: message.pane_id, props: message.props };
     default:
@@ -398,6 +430,24 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
       propCount === 5 &&
       typeof props._plotly_json_str === "string" &&
       typeof props._theme_templates === "string"
+    );
+  }
+  if (pane.kind === "video") {
+    const props = pane.props;
+    return (
+      propCount === 9 &&
+      Number.isInteger(props.columns) &&
+      [props.autoplay, props.loop, props.muted, props.controls].every(
+        (v) => typeof v === "boolean",
+      ) &&
+      Array.isArray(props._videos) &&
+      props._videos.length <= 32 &&
+      props._videos.every(
+        (item) =>
+          Array.isArray(item) &&
+          item.length === 2 &&
+          item.every((value) => typeof value === "string"),
+      )
     );
   }
   const props = pane.props;
@@ -811,6 +861,7 @@ export function createViewportState(
           message.type !== "ViewportImageMessage" &&
           message.type !== "ViewportMatplotlibMessage" &&
           message.type !== "ViewportPlotlyMessage" &&
+          message.type !== "ViewportVideoMessage" &&
           message.type !== "ViewportViserMessage"
         )
           return reject("pane declaration type is invalid");
@@ -1323,6 +1374,14 @@ export function createViewportState(
         props: message.props,
       });
     },
+    addVideoPane: (message) => {
+      if (!admitDirect(directMessage("ViewportVideoMessage", message))) return;
+      addContentPane(message, {
+        kind: "video",
+        paneId: message.pane_id,
+        props: message.props,
+      });
+    },
     addViserPane: (message) => {
       if (!admitDirect(directMessage("ViewportViserMessage", message))) return;
       addContentPane(message, {
@@ -1390,6 +1449,7 @@ export function createViewportState(
         "_plotly_json_str",
         "_url",
         "_port",
+        "_videos",
       ].some((key) => Object.hasOwn(updates, key));
       if (
         pending === undefined &&

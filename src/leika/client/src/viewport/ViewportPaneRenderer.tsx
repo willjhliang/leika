@@ -1,3 +1,4 @@
+import { ViewportVideoRenderer } from "./ViewportVideoRenderer";
 import type { ViewportPane } from "./ViewportState";
 import { ViewportImageRenderer } from "./ViewportImageRenderer";
 import ViewportMatplotlibRenderer from "./ViewportMatplotlibRenderer";
@@ -15,6 +16,8 @@ export function ViewportPaneRenderer({ pane }: { pane: ViewportPane }) {
       return <ViewportMatplotlibRenderer pane={pane} />;
     case "plotly":
       return <ViewportPlotlyRenderer pane={pane} />;
+    case "video":
+      return <ViewportVideoRenderer pane={pane} />;
     case "viser":
       return <ViewportViserRenderer pane={pane} />;
   }

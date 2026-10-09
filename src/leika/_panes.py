@@ -12,6 +12,7 @@ import uuid
 import warnings
 import weakref
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, NewType, TypeVar, cast
 
 import numpy as np
@@ -144,6 +145,10 @@ def _pane_resource_cost(handle: "PaneHandle[Any]") -> _PaneResourceCost:
             payload_bytes += len(value.encode("utf-8"))
         elif isinstance(value, bytes):
             payload_bytes += len(value)
+    if isinstance(handle, VideoPaneHandle):
+        for label, url in props._videos:
+            text_units += utf16_code_unit_length(label) + utf16_code_unit_length(url)
+            payload_bytes += len(label.encode("utf-8")) + len(url.encode("utf-8"))
     decoded_pixels = 0
     if isinstance(handle, ImagePaneHandle):
         image = handle._impl.image
@@ -348,6 +353,14 @@ class _PlotlyPaneHandleState:
 
 
 @dataclasses.dataclass
+class _VideoPaneHandleState:
+    pane_id: str
+    props: _messages.ViewportVideoProps
+    api: Panes
+    removed: bool = False
+
+
+@dataclasses.dataclass
 class _ViserPaneHandleState:
     pane_id: str
     props: _messages.ViewportViserProps
@@ -364,6 +377,7 @@ _PaneStateT = TypeVar(
     _MatplotlibPaneHandleState,
     _PlotlyPaneHandleState,
     _ViserPaneHandleState,
+    _VideoPaneHandleState,
 )
 
 
@@ -383,6 +397,8 @@ def _scrub_pane_handle_locked(handle: "PaneHandle[Any]") -> None:
     elif isinstance(handle, PlotlyPaneHandle):
         handle._impl.props._plotly_json_str = ""
         handle._impl.props._theme_templates = ""
+    elif isinstance(handle, VideoPaneHandle):
+        handle._impl.props._videos = ()
     elif isinstance(handle, ViserPaneHandle):
         handle._impl.api._websock_interface._viser_proxy.unregister(handle._impl.proxy_path)
         handle._impl.proxy_path = None
@@ -879,6 +895,58 @@ class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
             _minimize_viser_gui(target)
 
 
+def _prepare_videos(api: Panes, videos: Mapping[str, Path | str]) -> tuple[tuple[str, str], ...]:
+    if not isinstance(videos, Mapping):
+        raise TypeError("videos must map labels to Paths or HTTP URLs")
+    if len(videos) > 32:
+        raise ValueError("A video gallery supports at most 32 videos")
+    prepared: list[tuple[str, Path | str]] = []
+    for label, source in videos.items():
+        label = cast(str, validate_renderer_string(label, "video label"))
+        if not isinstance(source, (Path, str)):
+            raise TypeError("video sources must be Paths or HTTP URLs")
+        if isinstance(source, str):
+            parsed = urllib.parse.urlsplit(source)
+            if (
+                not (
+                    (parsed.scheme in ("http", "https") and parsed.netloc)
+                    or (source.startswith("/") and not source.startswith("//"))
+                )
+                or "\\" in source
+                or any(ord(c) < 32 for c in source)
+            ):
+                raise ValueError("video URLs must be absolute HTTP(S) or root-relative URLs")
+            if utf16_code_unit_length(source) > 16_384:
+                raise ValueError("video URL exceeds 16384 UTF-16 code units")
+        prepared.append((label, source))
+    return tuple(
+        (label, api._owner.register_http_asset(source) if isinstance(source, Path) else source)
+        for label, source in prepared
+    )
+
+
+class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
+    """A gallery of independent browser-native video players.
+
+    Unchanged media URLs keep their players and playback positions across updates.
+    Local files use the server's bounded immutable HTTP asset registry; no frames
+    are decoded in Python or streamed through the GUI websocket.
+    """
+
+    def __init__(self, impl: _VideoPaneHandleState) -> None:
+        self._impl = impl
+
+    def update(self, videos: Mapping[str, Path | str]) -> None:
+        """Replace the labeled media sources, preserving unchanged players.
+
+        An empty mapping displays an empty gallery. Paths are snapshotted using
+        :meth:`Server.register_http_asset`; strings are HTTP(S) or root-relative
+        URLs. Browser codec support applies. At most 32 videos are allowed.
+        """
+        self._check_not_removed()
+        self._set_prop("_videos", _prepare_videos(self._impl.api, videos))
+
+
 class PaneGroup:
     """Adds panes to an equally divided row or column.
 
@@ -1030,6 +1098,41 @@ class PaneGroup:
             handle = self._api._add_plotly(
                 figure,
                 config=config,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                loading=loading,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            )
+            self._members.append(weakref.ref(handle))
+        return handle
+
+    def add_video_gallery(
+        self,
+        videos: Mapping[str, Path | str],
+        *,
+        columns: int = 2,
+        autoplay: bool = True,
+        loop: bool = True,
+        muted: bool = True,
+        controls: bool = True,
+        pane_id: str | None = None,
+        title: str = "Videos",
+        visible: bool = True,
+        loading: PaneLoading = False,
+    ) -> VideoPaneHandle:
+        """Add a video gallery with the group's placement; see :meth:`Panes.add_video_gallery`."""
+        with self._declaration_lock:
+            placement, relative_to, equalize_group = self._next_declaration()
+            handle = self._api._add_video_gallery(
+                videos,
+                columns=columns,
+                autoplay=autoplay,
+                loop=loop,
+                muted=muted,
+                controls=controls,
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
@@ -1193,6 +1296,38 @@ class PaneGrid:
             handle = group.add_plotly(
                 figure,
                 config=config,
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                loading=loading,
+            )
+            self._track(group, handle)
+        return handle
+
+    def add_video_gallery(
+        self,
+        videos: Mapping[str, Path | str],
+        *,
+        columns: int = 2,
+        autoplay: bool = True,
+        loop: bool = True,
+        muted: bool = True,
+        controls: bool = True,
+        pane_id: str | None = None,
+        title: str = "Videos",
+        visible: bool = True,
+        loading: PaneLoading = False,
+    ) -> VideoPaneHandle:
+        """Add a video gallery to the next cell; see :meth:`Panes.add_video_gallery`."""
+        with self._declaration_lock:
+            group = self._next_group()
+            handle = group.add_video_gallery(
+                videos,
+                columns=columns,
+                autoplay=autoplay,
+                loop=loop,
+                muted=muted,
+                controls=controls,
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
@@ -1748,6 +1883,101 @@ class Panes:
             ),
             relative_to,
             before_publish=lambda: self._owner._ensure_page_plotly_js_sent(self._page_id),
+        )
+        return handle
+
+    def add_video_gallery(
+        self,
+        videos: Mapping[str, Path | str],
+        *,
+        columns: int = 2,
+        autoplay: bool = True,
+        loop: bool = True,
+        muted: bool = True,
+        controls: bool = True,
+        pane_id: str | None = None,
+        title: str = "Videos",
+        visible: bool = True,
+        loading: PaneLoading = False,
+        placement: Placement = "right",
+        relative_to: str | None = None,
+    ) -> VideoPaneHandle:
+        """Add one pane containing independently playable native videos.
+
+        ``videos`` maps captions to local ``Path`` objects or HTTP(S)/root-relative
+        URLs. Paths use :meth:`Server.register_http_asset` and its retention limits
+        (64 MiB per file, 128 MiB total). Use external URLs for larger media.
+        Browser codec support applies; H.264 MP4 is widely supported. Autoplay
+        normally requires muted audio. Offscreen players pause automatically.
+
+        Up to 32 clips share a scrollable grid with 1–8 columns. Empty mappings
+        are allowed. The usual pane title, visibility, loading and placement
+        arguments apply. Use a one-item mapping for a single video.
+        """
+        return self._add_video_gallery(
+            videos,
+            columns=columns,
+            autoplay=autoplay,
+            loop=loop,
+            muted=muted,
+            controls=controls,
+            pane_id=pane_id,
+            title=title,
+            visible=visible,
+            loading=loading,
+            placement=placement,
+            relative_to=relative_to,
+            equalize_group=(),
+        )
+
+    def _add_video_gallery(
+        self,
+        videos: Mapping[str, Path | str],
+        *,
+        columns: int,
+        autoplay: bool,
+        loop: bool,
+        muted: bool,
+        controls: bool,
+        pane_id: str | None,
+        title: str,
+        visible: bool,
+        loading: PaneLoading,
+        placement: Placement,
+        relative_to: str | None,
+        equalize_group: tuple[str, ...],
+    ) -> VideoPaneHandle:
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
+        if type(columns) is not int or not 1 <= columns <= 8:
+            raise ValueError("columns must be an integer from 1 to 8")
+        if any(type(value) is not bool for value in (autoplay, loop, muted, controls)):
+            raise TypeError("autoplay, loop, muted and controls must be bools")
+        pane_id = self._validate_pane_declaration(pane_id, placement)
+        relative_to = self._resolve_relative_to(relative_to)
+        props = _messages.ViewportVideoProps(
+            _videos=_prepare_videos(self, videos),
+            columns=columns,
+            autoplay=autoplay,
+            loop=loop,
+            muted=muted,
+            controls=controls,
+            title=title,
+            visible=visible,
+            loading=loading,
+        )
+        handle = VideoPaneHandle(_VideoPaneHandleState(pane_id, copy.deepcopy(props), self))
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportVideoMessage(
+                page_id=self._page_id,
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
         )
         return handle
 

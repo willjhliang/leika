@@ -7,7 +7,6 @@ import {
   VIEWPORT_ROOT_PANE_ID,
   type ViewportDropRegion,
   type ViewportLayout,
-  collectViewportPaneIds,
   dropViewportPane,
   sameViewportLayout,
 } from "./layoutModel";
@@ -651,7 +650,12 @@ export function ViewportWorkspace() {
     displayLayout.root.pane_id === VIEWPORT_ROOT_PANE_ID;
   const canvasWidth = grid.columns * grid.cellSize;
   const canvasHeight = grid.rows * grid.cellSize;
-  const visiblePaneIds = collectViewportPaneIds(displayLayout);
+  // Visibility changes layout, not renderer ownership. In particular an iframe
+  // must not reconnect, and a video must not lose its time or manual pause.
+  const retainedPaneIds = viewer.useViewport(
+    (state) => Object.keys(displayedViewportPage(state)?.panes ?? {}),
+    (a, b) => a.length === b.length && a.every((id, index) => id === b[index]),
+  );
 
   return (
     <div
@@ -682,11 +686,8 @@ export function ViewportWorkspace() {
           background: "var(--border)",
         }}
       >
-        {visiblePaneIds.map((paneId) => {
+        {retainedPaneIds.map((paneId) => {
           const rect = geometry.panes[paneId] ?? null;
-          if (rect === null && paneId !== VIEWPORT_ROOT_PANE_ID) {
-            return null;
-          }
           return (
             <ViewportPaneHost
               key={`${displayPageId ?? "none"}:${paneId}`}

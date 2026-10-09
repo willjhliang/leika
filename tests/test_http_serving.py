@@ -1355,3 +1355,38 @@ def test_static_cache_retains_both_encodings_and_invalidates_both_on_change(
     assert reads == 4
     assert compressions == 2
     assert cache._bytes == len(new_raw) + len(new_compressed)
+
+
+@pytest.mark.parametrize(
+    ("value", "status", "body", "content_range"),
+    [
+        ("bytes=2-5", 206, b"2345", "bytes 2-5/10"),
+        ("bytes=7-", 206, b"789", "bytes 7-9/10"),
+        ("bytes=-3", 206, b"789", "bytes 7-9/10"),
+        ("bytes=8-99", 206, b"89", "bytes 8-9/10"),
+        ("bytes=10-", 416, b"", "bytes */10"),
+        ("bytes=-0", 416, b"", "bytes */10"),
+        ("bytes=4-2", 200, b"0123456789", None),
+        ("bytes=0-1,3-4", 200, b"0123456789", None),
+        ("bytes=nope", 200, b"0123456789", None),
+    ],
+)
+def test_runtime_asset_byte_ranges(
+    server: leika.Server,
+    tmp_path: Path,
+    value: str,
+    status: int,
+    body: bytes,
+    content_range: str | None,
+) -> None:
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"0123456789")
+    url = server.register_http_asset(clip)
+    actual, headers, payload = _get(server.port, url, {"Range": value})
+    assert actual == status
+    assert payload == body
+    assert headers.get("content-range") == content_range
+    assert headers["accept-ranges"] == "bytes"
+    assert int(headers["content-length"]) == len(body)
+    assert _get(server.port, url, {"Range": "bytes=0-1", "If-Range": '"stale"'})[0] == 200
+    assert _get(server.port, url, {"Range": "bytes=0-1", "If-Range": headers["etag"]})[0] == 206

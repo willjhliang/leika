@@ -54,3 +54,10 @@ Types
 .. autodata:: PaneLoading
 
 .. autodata:: Placement
+
+Video gallery
+-------------
+
+.. autoclass:: VideoPaneHandle
+   :members:
+   :inherited-members:

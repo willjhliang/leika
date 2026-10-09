@@ -1209,6 +1209,28 @@ class ViewportPlotlyMessage(_ViewportPaneCreateMessage):
 
 
 @dataclasses.dataclass
+class ViewportVideoProps:
+    """Native media URLs and presentation; video bytes travel over HTTP."""
+
+    _videos: Tuple[Tuple[str, str], ...]
+    columns: int
+    autoplay: bool
+    loop: bool
+    muted: bool
+    controls: bool
+    title: str
+    visible: bool
+    loading: bool | str
+
+
+@dataclasses.dataclass
+class ViewportVideoMessage(_ViewportPaneCreateMessage):
+    """Create a native video gallery pane."""
+
+    props: ViewportVideoProps
+
+
+@dataclasses.dataclass
 class ViewportViserProps:
     """Properties for an embedded viser pane."""
 

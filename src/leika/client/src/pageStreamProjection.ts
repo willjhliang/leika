@@ -6,6 +6,7 @@ function viewportPayloadPageId(message: Message): string | null {
     case "ViewportImageMessage":
     case "ViewportMatplotlibMessage":
     case "ViewportPlotlyMessage":
+    case "ViewportVideoMessage":
     case "ViewportViserMessage":
     case "ViewportPaneUpdateMessage":
     case "ViewportPaneRemoveMessage":

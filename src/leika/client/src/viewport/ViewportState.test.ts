@@ -1111,3 +1111,43 @@ describe("local selection refresh", () => {
     expect(actions.invalidateForInput("unbound", "none")).toBe(false);
   });
 });
+
+it("admits video replay and live updates within media bounds", () => {
+  const { actions, getState, viewportActions } = createViewportHarness();
+  const message = {
+    type: "ViewportVideoMessage" as const,
+    page_id: DEFAULT_PAGE_ID,
+    pane_id: "videos",
+    placement: "right" as const,
+    relative_to: VIEWPORT_ROOT_PANE_ID,
+    equalize_group: [],
+    props: {
+      _videos: [["Task", "/task.mp4"]] as [string, string][],
+      columns: 2,
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: true,
+      title: "Videos",
+      visible: true,
+      loading: false,
+    },
+  };
+  expect(viewportActions.preflightMessageBatch([message])).toBeNull();
+  actions.addVideoPane(message);
+  expect(getState().panes.videos.kind).toBe("video");
+  actions.updatePane("videos", { _videos: [["Other", "/other.mp4"]] });
+  const pane = getState().panes.videos;
+  expect(pane.kind === "video" && pane.props._videos[0][1]).toBe("/other.mp4");
+  expect(
+    viewportActions.preflightMessageBatch([
+      {
+        ...message,
+        pane_id: "bad",
+        props: { ...message.props, _videos: [["bad", "javascript:alert(1)"]] },
+      },
+    ]),
+  ).not.toBeNull();
+  actions.removePane("videos");
+  expect(getState().panes.videos).toBeUndefined();
+});

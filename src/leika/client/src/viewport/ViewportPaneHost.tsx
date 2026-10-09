@@ -116,9 +116,9 @@ export function ViewportPaneHost({
   }, [viewer, pageId, paneId, paneVisible, pane?.kind]);
   if (pane === undefined) return null;
 
-  const isHiddenRootHost = rect === null;
+  const isHiddenHost = rect === null;
   const title = paneTitle(pane);
-  const hasTitleBar = !hideChrome && !isHiddenRootHost;
+  const hasTitleBar = !hideChrome && !isHiddenHost;
   const loading =
     pane.kind === "root"
       ? false
@@ -128,9 +128,9 @@ export function ViewportPaneHost({
   const isLoading = loading !== false;
   return (
     <Card
-      data-viewport-pane={isHiddenRootHost ? undefined : paneId}
+      data-viewport-pane={isHiddenHost ? undefined : paneId}
       role="region"
-      aria-hidden={isHiddenRootHost || undefined}
+      aria-hidden={isHiddenHost || undefined}
       aria-busy={isLoading || undefined}
       className={cn(
         // Panes tile the canvas edge to edge, so they get neither rounding nor
@@ -139,10 +139,10 @@ export function ViewportPaneHost({
         // rounded corners let the canvas show through at each junction. The
         // divider owns the seam line; the canvas owns the colour behind it.
         "isolate min-h-0 min-w-0 overflow-hidden rounded-none ring-0",
-        (hideChrome || isHiddenRootHost) && "gap-0 bg-background py-0",
+        (hideChrome || isHiddenHost) && "gap-0 bg-background py-0",
       )}
       style={{
-        ...(isHiddenRootHost
+        ...(isHiddenHost
           ? {
               position: "absolute" as const,
               left: 0,
@@ -155,7 +155,7 @@ export function ViewportPaneHost({
           : panePositionStyle(rect, cellSize)),
         minWidth: 0,
         minHeight: 0,
-        transition: isHiddenRootHost ? undefined : geometryTransition,
+        transition: isHiddenHost ? undefined : geometryTransition,
       }}
     >
       <div

@@ -57,6 +57,7 @@ from ._panes import PaneLoading as PaneLoading
 from ._panes import Panes as Panes
 from ._panes import Placement as Placement
 from ._panes import PlotlyPaneHandle as PlotlyPaneHandle
+from ._panes import VideoPaneHandle as VideoPaneHandle
 from ._panes import ViserPaneHandle as ViserPaneHandle
 from ._server import Server as Server
 

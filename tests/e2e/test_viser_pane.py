@@ -72,3 +72,21 @@ def test_password_protects_native_viser_embedding(page: Page) -> None:
             assert all(socket.startswith(server.url.replace("http:", "ws:")) for socket in sockets)
     finally:
         scene.stop()
+
+
+def test_hidden_viser_keeps_the_iframe_document(
+    leika_page: Page, leika_server: leika.Server
+) -> None:
+    # A local inert asset gives us a same-origin document to mark without
+    # starting another renderer or relying on network services.
+    pane = leika_server.panes.add_viser(leika_server.url + "/missing-scene", pane_id="persistent")
+    iframe = leika_page.locator("iframe")
+    expect(iframe).to_have_count(1)
+    frame = leika_page.frames[1]
+    frame.wait_for_load_state()
+    frame.evaluate("window.sceneMarker = document")
+    pane.visible = False
+    expect(iframe).not_to_be_visible()
+    pane.visible = True
+    expect(iframe).to_be_visible()
+    assert frame.evaluate("window.sceneMarker === document")

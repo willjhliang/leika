@@ -280,6 +280,11 @@ other pages, nor decoded or stored by them. Page selection does not pause
 caller-side queries or rendering work; an application that wants demand-driven
 computation must still decide when to produce an update.
 
+Setting `visible=False` removes a pane from the active page's layout while
+retaining its renderer. Showing it again preserves the Viser iframe and native
+video playback position and manual pause state. `remove()` disposes the renderer.
+Inactive pages still follow the bounded page-cache lifecycle described above.
+
 Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the
 same as calling `update()`.
@@ -312,3 +317,32 @@ Page layouts use the version-3 browser store, keyed by server URL,
 Leika imports the prior version-2 single-page layout and writes it under the
 default page's new key. Additional pages start with their declared placement
 hints and never inherit that legacy layout.
+
+## Native video galleries
+
+Use one pane for independently looping recordings. The browser fetches and
+caches the media over HTTP; Python does not decode or send video frames.
+
+```python
+from pathlib import Path
+import leika
+
+server = leika.Server()
+gallery = server.panes.add_video_gallery(
+    {"Reach": Path("reach.mp4"), "Grasp": Path("grasp.mp4")},
+    columns=2,
+    title="Training references",
+)
+# Existing URLs keep their players and playback positions.
+gallery.update({"Reach": Path("reach.mp4")})
+```
+
+A one-item mapping displays a single video. URL strings may be absolute HTTP(S)
+or root-relative. Local `Path` sources use `register_http_asset`: immutable
+snapshots limited to 64 MiB per file and 128 MiB across the server, with LRU
+retention. Serve larger collections through an external media server. Browser
+codec support applies; H.264 MP4 is a portable choice. Native controls are on by
+default, and autoplay is muted to satisfy browser autoplay rules. Offscreen
+players pause; manual pauses remain paused when returning to view. Gallery and
+Viser playback are independent. Local assets support single byte-range requests
+for seeking; unsupported multi-range requests receive the complete asset.
