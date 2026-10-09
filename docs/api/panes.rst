@@ -31,6 +31,10 @@ Handles
    :members:
    :inherited-members:
 
+.. autoclass:: VideoPaneHandle
+   :members:
+   :inherited-members:
+
 .. autoclass:: ViserPaneHandle
    :members:
    :inherited-members:
@@ -54,10 +58,3 @@ Types
 .. autodata:: PaneLoading
 
 .. autodata:: Placement
-
-Video gallery
--------------
-
-.. autoclass:: VideoPaneHandle
-   :members:
-   :inherited-members:

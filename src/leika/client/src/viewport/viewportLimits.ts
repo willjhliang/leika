@@ -37,12 +37,6 @@ export function viewportPaneSourceCost(
       retainedBytes += value.byteLength;
     }
   }
-  if (pane.kind === "video") {
-    for (const [label, url] of pane.props._videos) {
-      textCodeUnits += label.length + url.length;
-      retainedBytes += utf8ByteLength(label) + utf8ByteLength(url);
-    }
-  }
   return { retainedBytes, textCodeUnits };
 }
 
@@ -56,19 +50,12 @@ export function viewportPaneWithinEntityLimits(
   )
     return false;
   if (pane.kind === "video") {
+    const url = pane.props._url;
     return (
-      Number.isInteger(pane.props.columns) &&
-      pane.props.columns >= 1 &&
-      pane.props.columns <= 8 &&
-      pane.props._videos.length <= 32 &&
-      pane.props._videos.every(
-        ([label, url]) =>
-          commonRendererStringWithinLimit(label) &&
-          url.length <= MAX_VIEWPORT_URL_CODE_UNITS &&
-          /^(https?:\/\/[^/]+|\/(?!\/))/.test(url) &&
-          !url.includes("\\") &&
-          ![...url].some((c) => c.charCodeAt(0) < 32),
-      )
+      url.length <= MAX_VIEWPORT_URL_CODE_UNITS &&
+      /^(https?:\/\/[^/]+|\/(?!\/))/.test(url) &&
+      !url.includes("\\") &&
+      ![...url].some((c) => c.charCodeAt(0) < 32)
     );
   }
   if (pane.kind === "matplotlib") {

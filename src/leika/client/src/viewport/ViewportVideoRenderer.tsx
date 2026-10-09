@@ -46,7 +46,7 @@ const Video = memo(function Video({
     };
   }, [url, options.autoplay, options.visible]);
   return (
-    <figure style={{ margin: 0, minWidth: 0 }}>
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <video
         ref={ref}
         src={url}
@@ -61,50 +61,27 @@ const Video = memo(function Video({
         style={{
           display: "block",
           width: "100%",
-          aspectRatio: "16 / 9",
+          height: "100%",
           background: "#101318",
           objectFit: "contain",
         }}
       />
-      <figcaption style={{ padding: "6px 2px", fontSize: 12 }}>
-        {label}
-      </figcaption>
       {error && (
-        <p role="alert">
+        <p role="alert" style={{ position: "absolute", inset: 12 }}>
           Could not play this video. Check its URL and browser codec support.
         </p>
       )}
-    </figure>
+    </div>
   );
 });
 
 export function ViewportVideoRenderer({ pane }: { pane: ViewportVideoPane }) {
-  const occurrences = new Map<string, number>();
   return (
-    <div
-      data-video-gallery
-      style={{ width: "100%", height: "100%", overflow: "auto", padding: 10 }}
-    >
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(${pane.props.columns}, minmax(0, 1fr))`,
-          gap: 10,
-        }}
-      >
-        {pane.props._videos.map(([label, url]) => {
-          const occurrence = occurrences.get(url) ?? 0;
-          occurrences.set(url, occurrence + 1);
-          return (
-            <Video
-              key={`${url}:${occurrence}`}
-              url={url}
-              label={label}
-              options={pane.props}
-            />
-          );
-        })}
-      </div>
-    </div>
+    <Video
+      key={pane.props._url}
+      url={pane.props._url}
+      label={pane.props.title}
+      options={pane.props}
+    />
   );
 }

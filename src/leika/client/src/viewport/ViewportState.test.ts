@@ -1122,8 +1122,7 @@ it("admits video replay and live updates within media bounds", () => {
     relative_to: VIEWPORT_ROOT_PANE_ID,
     equalize_group: [],
     props: {
-      _videos: [["Task", "/task.mp4"]] as [string, string][],
-      columns: 2,
+      _url: "/task.mp4",
       autoplay: true,
       loop: true,
       muted: true,
@@ -1136,15 +1135,15 @@ it("admits video replay and live updates within media bounds", () => {
   expect(viewportActions.preflightMessageBatch([message])).toBeNull();
   actions.addVideoPane(message);
   expect(getState().panes.videos.kind).toBe("video");
-  actions.updatePane("videos", { _videos: [["Other", "/other.mp4"]] });
+  actions.updatePane("videos", { _url: "/other.mp4" });
   const pane = getState().panes.videos;
-  expect(pane.kind === "video" && pane.props._videos[0][1]).toBe("/other.mp4");
+  expect(pane.kind === "video" && pane.props._url).toBe("/other.mp4");
   expect(
     viewportActions.preflightMessageBatch([
       {
         ...message,
         pane_id: "bad",
-        props: { ...message.props, _videos: [["bad", "javascript:alert(1)"]] },
+        props: { ...message.props, _url: "javascript:alert(1)" },
       },
     ]),
   ).not.toBeNull();

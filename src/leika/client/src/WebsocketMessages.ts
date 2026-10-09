@@ -802,7 +802,7 @@ export interface ViewportPlotlyMessage {
     loading: boolean | string;
   };
 }
-/** Create a native video gallery pane.
+/** Create a native video pane.
  *
  * (automatically generated)
  */
@@ -814,8 +814,7 @@ export interface ViewportVideoMessage {
   relative_to: string;
   equalize_group: string[];
   props: {
-    _videos: [string, string][];
-    columns: number;
+    _url: string;
     autoplay: boolean;
     loop: boolean;
     muted: boolean;
@@ -2076,9 +2075,8 @@ function isProtocolStruct30(value: unknown): boolean {
 function isProtocolStruct31(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
-    Object.keys(value).length === 9 &&
-    Object.hasOwn(value, "_videos") &&
-    Object.hasOwn(value, "columns") &&
+    Object.keys(value).length === 8 &&
+    Object.hasOwn(value, "_url") &&
     Object.hasOwn(value, "autoplay") &&
     Object.hasOwn(value, "loop") &&
     Object.hasOwn(value, "muted") &&
@@ -2086,15 +2084,7 @@ function isProtocolStruct31(value: unknown): boolean {
     Object.hasOwn(value, "title") &&
     Object.hasOwn(value, "visible") &&
     Object.hasOwn(value, "loading") &&
-    isProtocolArray(
-      value["_videos"],
-      (item) =>
-        Array.isArray(item) &&
-        item.length === 2 &&
-        typeof item[0] === "string" &&
-        typeof item[1] === "string",
-    ) &&
-    Number.isSafeInteger(value["columns"]) &&
+    typeof value["_url"] === "string" &&
     typeof value["autoplay"] === "boolean" &&
     typeof value["loop"] === "boolean" &&
     typeof value["muted"] === "boolean" &&
@@ -3689,4 +3679,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "53d4aa192025";
+export const LEIKA_PROTOCOL = "edee37f21c64";

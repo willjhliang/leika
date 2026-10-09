@@ -67,8 +67,7 @@ export interface ViewportPlotlyProps extends RefreshableProps {
 }
 
 export interface ViewportVideoProps extends RefreshableProps {
-  _videos: readonly (readonly [string, string])[];
-  columns: number;
+  _url: string;
   autoplay: boolean;
   loop: boolean;
   muted: boolean;
@@ -435,18 +434,10 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
   if (pane.kind === "video") {
     const props = pane.props;
     return (
-      propCount === 9 &&
-      Number.isInteger(props.columns) &&
+      propCount === 8 &&
+      typeof props._url === "string" &&
       [props.autoplay, props.loop, props.muted, props.controls].every(
         (v) => typeof v === "boolean",
-      ) &&
-      Array.isArray(props._videos) &&
-      props._videos.length <= 32 &&
-      props._videos.every(
-        (item) =>
-          Array.isArray(item) &&
-          item.length === 2 &&
-          item.every((value) => typeof value === "string"),
       )
     );
   }
@@ -1449,7 +1440,6 @@ export function createViewportState(
         "_plotly_json_str",
         "_url",
         "_port",
-        "_videos",
       ].some((key) => Object.hasOwn(updates, key));
       if (
         pending === undefined &&

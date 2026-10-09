@@ -62,6 +62,7 @@ so the same controls stay available while viewers switch pages.
 | {meth}`~leika.Panes.add_image`      | A NumPy array, encoded as PNG or JPEG                           | You have pixels: a camera frame, a render, a rasterized plot     |
 | {meth}`~leika.Panes.add_matplotlib` | A matplotlib figure, relayed as SVG                             | You already draw with matplotlib and want the figure as-is       |
 | {meth}`~leika.Panes.add_plotly`     | A Plotly figure, kept interactive                               | The viewer should hover, zoom, or pan the chart                  |
+| {meth}`~leika.Panes.add_video` | A saved video file or HTTP URL | You want independent browser playback |
 | {meth}`~leika.Panes.add_viser`      | A live [viser](https://github.com/viser-project/viser) 3D scene | You need a 3D scene; viser serves it and Leika embeds its client |
 
 Only `add_plotly` requires its library to be installed. `add_matplotlib` and
@@ -210,7 +211,7 @@ pane.update(frame, loading=False)
 ```
 
 The same `loading=` creation and update arguments are available on image,
-matplotlib, Plotly, and Viser panes. Passing `None` to `update(..., loading=)`
+video, matplotlib, Plotly, and Viser panes. Passing `None` to `update(..., loading=)`
 leaves the current loading state unchanged.
 
 For controls that replace the meaning of a pane, bind those inputs once:
@@ -318,31 +319,39 @@ Leika imports the prior version-2 single-page layout and writes it under the
 default page's new key. Additional pages start with their declared placement
 hints and never inherit that legacy layout.
 
-## Native video galleries
+## Native videos
 
-Use one pane for independently looping recordings. The browser fetches and
-caches the media over HTTP; Python does not decode or send video frames.
+Use `add_video` for one independent browser-native player. Python publishes its
+source URL; the browser fetches and caches the media over HTTP. No video frames
+are decoded or sent through the GUI connection by Python.
 
 ```python
 from pathlib import Path
 import leika
 
 server = leika.Server()
-gallery = server.panes.add_video_gallery(
-    {"Reach": Path("reach.mp4"), "Grasp": Path("grasp.mp4")},
-    columns=2,
-    title="Training references",
-)
-# Existing URLs keep their players and playback positions.
-gallery.update({"Reach": Path("reach.mp4")})
+pane = server.panes.add_video(Path("reach.mp4"), title="Reach")
+pane.update(Path("grasp.mp4"), loading=False)
 ```
 
-A one-item mapping displays a single video. URL strings may be absolute HTTP(S)
-or root-relative. Local `Path` sources use `register_http_asset`: immutable
-snapshots limited to 64 MiB per file and 128 MiB across the server, with LRU
-retention. Serve larger collections through an external media server. Browser
-codec support applies; H.264 MP4 is a portable choice. Native controls are on by
-default, and autoplay is muted to satisfy browser autoplay rules. Offscreen
-players pause; manual pauses remain paused when returning to view. Gallery and
-Viser playback are independent. Local assets support single byte-range requests
-for seeking; unsupported multi-range requests receive the complete asset.
+Compose a collection with the existing pane layout helpers:
+
+```python
+grid = server.panes.add_grid(columns=2)
+for title, source in {"Reach": Path("reach.mp4"), "Grasp": Path("grasp.mp4")}.items():
+    grid.add_video(source, title=title, autoplay=True, loop=True)
+```
+
+Each video is independently resizable and movable. A pane grid divides the
+available workspace; it does not create a scrolling container. Titles use the
+normal pane label, and the player fits its pane while preserving aspect ratio.
+
+Sources may be local `Path` objects or absolute HTTP(S)/root-relative URL strings.
+Local files use `register_http_asset`: immutable snapshots limited to 64 MiB per
+file and 128 MiB across the server, with LRU retention. Serve larger collections
+through an external media server. Browser codec support applies. Native controls
+are on by default, and autoplay is muted to satisfy browser autoplay rules.
+Offscreen players pause; manual pauses remain paused when returning to view.
+An update with the same URL preserves playback; a different URL starts a new
+player. Local assets support single byte-range requests for seeking; unsupported
+multi-range requests receive the complete asset.
