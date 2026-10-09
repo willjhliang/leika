@@ -48,7 +48,10 @@ const Video = memo(function Video({
     };
   }, [url, options.autoplay, options.visible]);
   return (
-    <div ref={playerRef} className="@container relative h-full w-full">
+    <div
+      ref={playerRef}
+      className="group/video @container relative h-full w-full"
+    >
       <video
         ref={ref}
         src={url}

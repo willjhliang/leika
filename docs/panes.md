@@ -353,7 +353,7 @@ through an external media server. Browser codec support applies.
 
 The compact playback bar uses Leika's theme and controls: play/pause, seeking,
 elapsed/total time, playback speed and fullscreen. It appears only while the
-pointer is over the bottom control strip; clicking or focusing a control does
+pointer is over the video pane; clicking or focusing a control does
 not keep the bar visible after the pointer leaves. On touch devices it stays
 visible. Fullscreen includes the video and its controls, including the speed
 menu. Narrow panes show only elapsed time to keep the seek slider usable.

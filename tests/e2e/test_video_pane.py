@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Page, expect
 
 import leika
@@ -90,10 +91,10 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
     leika_page.wait_for_function('document.querySelector("video")?.readyState >= 2')
     video.evaluate("v => { window.originalVideo = v; }")
     assert not video.evaluate("v => v.controls")
-    leika_page.mouse.move(0, 0)
+    leika_page.mouse.move(-1, -1)
     expect(bar).to_have_css("opacity", "0")
     video.hover()
-    expect(bar).to_have_css("opacity", "0")
+    expect(bar).to_have_css("opacity", "1")
     bar.hover()
     expect(bar).to_have_css("opacity", "1")
     play.click()
@@ -104,10 +105,11 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
     # Clicking a control must not pin the bar open through retained focus.
     expect(play).to_be_focused()
     video.hover()
-    expect(bar).to_have_css("opacity", "0")
-    leika_page.mouse.move(0, 0)
+    expect(bar).to_have_css("opacity", "1")
+    leika_page.mouse.move(-1, -1)
     expect(bar).to_have_css("opacity", "0")
     seek.focus()
+    expect(bar).to_have_css("opacity", "0")
     seek.press("Home")
     seek.press("ArrowRight")
     leika_page.wait_for_function('Math.abs(document.querySelector("video").currentTime - .1) < .01')
@@ -121,11 +123,11 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
     assert video.evaluate("v => v.paused")
 
     leika_page.get_by_role("combobox", name="Task playback speed", exact=True).click()
-    leika_page.mouse.move(0, 0)
+    leika_page.mouse.move(-1, -1)
     expect(bar).to_have_css("opacity", "0")
     leika_page.get_by_role("option", name="2×", exact=True).click()
     video.hover()
-    expect(bar).to_have_css("opacity", "0")
+    expect(bar).to_have_css("opacity", "1")
     leika_page.wait_for_function('document.querySelector("video").playbackRate === 2')
     pane.title = "Renamed"
     pane.update(CLIP)
@@ -205,7 +207,7 @@ def test_video_fullscreen_keeps_player_and_controls(
         "v => v === window.originalVideo && v.paused && Math.abs(v.currentTime - .5) < .01"
     )
     video.hover()
-    expect(bar).to_have_css("opacity", "0")
+    expect(bar).to_have_css("opacity", "1")
     bar.hover()
     expect(bar).to_have_css("opacity", "1")
     leika_page.get_by_role("combobox", name="Task playback speed", exact=True).click()
@@ -223,3 +225,62 @@ def test_video_fullscreen_keeps_player_and_controls(
     leika_page.evaluate("document.exitFullscreen()")
     expect(leika_page.get_by_role("button", name="Fullscreen Task", exact=True)).to_have_count(1)
     assert video.evaluate("v => v === window.originalVideo && v.paused")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1080, 720])
+def test_video_control_hover_geometry(
+    leika_page: Page, leika_server: leika.Server, theme: str, width: int
+) -> None:
+    leika_server.gui.configure_theme(theme=theme)
+    grid = leika_server.panes.add_grid(columns=3)
+    for i in range(3):
+        grid.add_video(CLIP, title=f"Task {i}", autoplay=False)
+    leika_page.set_viewport_size({"width": width, "height": 700})
+    leika_page.wait_for_function(
+        "dark => document.documentElement.classList.contains('dark') === dark", arg=theme == "dark"
+    )
+    video = leika_page.locator("video").first
+    bar = leika_page.get_by_role("group", name="Task 0 playback", exact=True)
+    video.hover()
+    expect(bar).to_have_css("opacity", "1")
+    controls = [
+        bar.get_by_role("button", name="Play Task 0", exact=True),
+        bar.get_by_role("combobox"),
+        bar.get_by_role("button", name="Fullscreen Task 0", exact=True),
+    ]
+    backgrounds = []
+    for control in controls:
+        control.hover()
+        leika_page.wait_for_timeout(200)  # Let the shared hover-color transition finish.
+        backgrounds.append(
+            control.evaluate("""e => {
+            const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+            const insetTop = s.backgroundClip === 'padding-box' ? parseFloat(s.borderTopWidth) : 0;
+            const insetBottom = s.backgroundClip === 'padding-box' ? parseFloat(s.borderBottomWidth) : 0;
+            return {boxHeight:r.height, paintedTop:r.top + insetTop,
+                paintedHeight:r.height - insetTop - insetBottom,
+                color:s.backgroundColor, radius:s.borderTopLeftRadius};
+        }""")
+        )
+    # Equal outer heights alone miss backgrounds painted over transparent borders.
+    assert backgrounds[0] == backgrounds[1] == backgrounds[2], backgrounds
+    assert backgrounds[0]["boxHeight"] == 24
+    assert backgrounds[0]["paintedHeight"] == 22
+    for rate in (1, 0.25):
+        video.evaluate("(v, rate) => { v.playbackRate = rate; }", rate)
+        expect(controls[1].locator('[data-slot="select-value"]')).to_have_text(f"{rate}×")
+        gaps = bar.evaluate("""bar => {
+            const box = selector => bar.querySelector(selector).getBoundingClientRect();
+            const play = box('button[data-slot="button"] svg');
+            const track = box('[data-slot="slider-track"]');
+            const time = document.createRange();
+            time.selectNodeContents(bar.querySelector('span[aria-hidden="true"]'));
+            const text = time.getBoundingClientRect();
+            const speedText = box('[data-slot="select-value"]');
+            const speedIcon = box('[data-slot="select-trigger"] svg');
+            const fullscreen = [...bar.querySelectorAll('button[data-slot="button"] svg')].at(-1).getBoundingClientRect();
+            return [track.left - play.right, text.left - track.right,
+                speedText.left - text.right, fullscreen.left - speedIcon.right];
+        }""")
+        assert all(8 <= gap <= 12 for gap in gaps), gaps

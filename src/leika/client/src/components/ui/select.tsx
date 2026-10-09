@@ -2,6 +2,7 @@ import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
 import * as React from "react";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 
+import { buttonVariants } from "@/components/ui/button";
 import { HoverScrollText } from "@/components/HoverScrollText";
 import { cn } from "@/lib/utils";
 
@@ -30,17 +31,22 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
 function SelectTrigger({
   className,
   size = "default",
+  variant = "default",
   children,
   ...props
 }: SelectPrimitive.Trigger.Props & {
-  size?: "sm" | "default";
+  size?: "xs" | "sm" | "default";
+  variant?: "default" | "ghost";
 }) {
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-placeholder:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+        variant === "ghost"
+          ? buttonVariants({ variant: "ghost", size })
+          : "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-placeholder:text-muted-foreground data-[size=xs]:h-6 data-[size=xs]:py-0 data-[size=xs]:rounded-[min(var(--radius-md),10px)] data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+        "w-fit",
         className,
       )}
       {...props}
@@ -48,7 +54,13 @@ function SelectTrigger({
       {children}
       <SelectPrimitive.Icon
         render={
-          <ChevronDownIcon className="pointer-events-none size-3.5 text-muted-foreground" />
+          <ChevronDownIcon
+            className={cn(
+              "pointer-events-none",
+              size === "xs" ? "size-3" : "size-3.5",
+              variant === "default" && "text-muted-foreground",
+            )}
+          />
         }
       />
     </SelectPrimitive.Trigger>
