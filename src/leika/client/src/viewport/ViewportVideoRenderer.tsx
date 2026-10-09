@@ -62,7 +62,7 @@ const Video = memo(function Video({
           display: "block",
           width: "100%",
           height: "100%",
-          background: "#101318",
+          background: "var(--leika-media-background)",
           objectFit: "contain",
         }}
       />

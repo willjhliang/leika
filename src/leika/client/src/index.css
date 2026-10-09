@@ -84,6 +84,8 @@
      as a variable, so what is inside the panel names the surface rather than
      restating that fact. */
   --leika-panel-surface: var(--card);
+  /* Image and video letterboxing shares one surface in both themes. */
+  --leika-media-background: #000;
 }
 
 .dark {

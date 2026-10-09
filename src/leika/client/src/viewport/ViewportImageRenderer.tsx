@@ -116,7 +116,7 @@ export function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
           height: "100%",
           alignItems: "center",
           justifyContent: "center",
-          background: "#000",
+          background: "var(--leika-media-background)",
           color: "#888",
           fontSize: "var(--text-sm)",
         }}
@@ -138,7 +138,7 @@ export function ViewportImageRenderer({ pane }: { pane: ViewportImagePane }) {
         height: "100%",
         objectFit: fit,
         userSelect: "none",
-        background: "#000",
+        background: "var(--leika-media-background)",
       }}
     />
   );
