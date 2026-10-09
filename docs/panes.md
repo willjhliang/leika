@@ -352,10 +352,13 @@ file and 128 MiB across the server, with LRU retention. Serve larger collections
 through an external media server. Browser codec support applies.
 
 The compact playback bar uses Leika's theme and controls: play/pause, seeking,
-elapsed/total time and playback speed. It appears on hover or keyboard focus;
-on touch devices it stays visible. Narrow panes show only elapsed time to keep
-the seek slider usable. Set `controls=False` to hide the bar. Controls operate
-locally in the browser, independently for every pane, without Python callbacks.
+elapsed/total time, playback speed and fullscreen. It appears only while the
+pointer is over the bottom control strip; clicking or focusing a control does
+not keep the bar visible after the pointer leaves. On touch devices it stays
+visible. Fullscreen includes the video and its controls, including the speed
+menu. Narrow panes show only elapsed time to keep the seek slider usable.
+Set `controls=False` to hide the bar. Controls operate locally in the browser,
+independently for every pane, without Python callbacks.
 Autoplay is muted to satisfy browser autoplay rules.
 Offscreen players pause; manual pauses remain paused when returning to view.
 An update with the same URL preserves playback; a different URL starts a new

@@ -93,15 +93,20 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
     leika_page.mouse.move(0, 0)
     expect(bar).to_have_css("opacity", "0")
     video.hover()
+    expect(bar).to_have_css("opacity", "0")
+    bar.hover()
     expect(bar).to_have_css("opacity", "1")
     play.click()
     leika_page.wait_for_function('!document.querySelector("video").paused')
     leika_page.get_by_role("button", name="Pause Task", exact=True).click()
     leika_page.wait_for_function('document.querySelector("video").paused')
 
-    # Focus keeps the controls usable after the pointer leaves the video.
+    # Clicking a control must not pin the bar open through retained focus.
+    expect(play).to_be_focused()
+    video.hover()
+    expect(bar).to_have_css("opacity", "0")
     leika_page.mouse.move(0, 0)
-    expect(bar).to_have_css("opacity", "1")
+    expect(bar).to_have_css("opacity", "0")
     seek.focus()
     seek.press("Home")
     seek.press("ArrowRight")
@@ -117,8 +122,10 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
 
     leika_page.get_by_role("combobox", name="Task playback speed", exact=True).click()
     leika_page.mouse.move(0, 0)
-    expect(bar).to_have_css("opacity", "1")
+    expect(bar).to_have_css("opacity", "0")
     leika_page.get_by_role("option", name="2×", exact=True).click()
+    video.hover()
+    expect(bar).to_have_css("opacity", "0")
     leika_page.wait_for_function('document.querySelector("video").playbackRate === 2')
     pane.title = "Renamed"
     pane.update(CLIP)
@@ -180,3 +187,39 @@ def test_video_touch_controls(leika_page: Page, leika_server: leika.Server) -> N
         page.wait_for_function('document.querySelector("video").paused')
     finally:
         context.close()
+
+
+def test_video_fullscreen_keeps_player_and_controls(
+    leika_page: Page, leika_server: leika.Server
+) -> None:
+    leika_server.panes.add_video(CLIP, title="Task", autoplay=False)
+    video = leika_page.locator("video")
+    bar = leika_page.get_by_role("group", name="Task playback", exact=True)
+    leika_page.wait_for_function('document.querySelector("video")?.readyState >= 2')
+    video.evaluate("v => { window.originalVideo = v; v.currentTime = .5; }")
+    leika_page.get_by_role("button", name="Fullscreen Task", exact=True).click()
+    leika_page.wait_for_function(
+        'document.fullscreenElement === document.querySelector("video").parentElement'
+    )
+    assert video.evaluate(
+        "v => v === window.originalVideo && v.paused && Math.abs(v.currentTime - .5) < .01"
+    )
+    video.hover()
+    expect(bar).to_have_css("opacity", "0")
+    bar.hover()
+    expect(bar).to_have_css("opacity", "1")
+    leika_page.get_by_role("combobox", name="Task playback speed", exact=True).click()
+    option = leika_page.get_by_role("option", name="0.5×", exact=True)
+    expect(option).to_be_visible()
+    assert option.evaluate("e => document.fullscreenElement.contains(e)")
+    option.click()
+    leika_page.wait_for_function('document.querySelector("video").playbackRate === .5')
+    leika_page.get_by_role("button", name="Exit fullscreen Task", exact=True).click()
+    leika_page.wait_for_function("document.fullscreenElement === null")
+    assert video.evaluate("v => v === window.originalVideo && v.paused && v.playbackRate === .5")
+    leika_page.get_by_role("button", name="Fullscreen Task", exact=True).click()
+    leika_page.wait_for_function("document.fullscreenElement !== null")
+    # Browser-initiated exits must update the icon/label as well as our button.
+    leika_page.evaluate("document.exitFullscreen()")
+    expect(leika_page.get_by_role("button", name="Fullscreen Task", exact=True)).to_have_count(1)
+    assert video.evaluate("v => v === window.originalVideo && v.paused")

@@ -1,4 +1,4 @@
-import { PauseIcon, PlayIcon } from "lucide-react";
+import { MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,10 +26,12 @@ function formatTime(seconds: number): string {
 /** Media events update only this bar; playback never travels through Python. */
 export function VideoPlaybackControls({
   videoRef,
+  playerRef,
   label,
   disabled,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
+  playerRef: RefObject<HTMLDivElement | null>;
   label: string;
   disabled: boolean;
 }) {
@@ -37,7 +39,16 @@ export function VideoPlaybackControls({
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(NaN);
   const [rate, setRate] = useState(1);
-  const [speedOpen, setSpeedOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const sync = () => {
+      setFullscreen(document.fullscreenElement === playerRef.current);
+    };
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, [playerRef]);
 
   useEffect(() => {
     const video = videoRef.current!;
@@ -69,77 +80,100 @@ export function VideoPlaybackControls({
     <div
       role="group"
       aria-label={`${label} playback`}
-      data-open={speedOpen}
-      className="pointer-events-none absolute inset-x-1 bottom-1 flex h-8 items-center gap-2 rounded-md border bg-card px-1 text-card-foreground opacity-0 shadow-sm transition-opacity group-hover/video:pointer-events-auto group-hover/video:opacity-100 group-focus-within/video:pointer-events-auto group-focus-within/video:opacity-100 data-[open=true]:pointer-events-auto data-[open=true]:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+      className="absolute inset-x-0 bottom-0 p-1 opacity-0 hover:opacity-100 [@media(hover:none)]:opacity-100"
     >
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        className="shrink-0"
-        aria-label={`${paused ? "Play" : "Pause"} ${label}`}
-        title={paused ? "Play" : "Pause"}
-        disabled={disabled}
-        onClick={() => {
-          const video = videoRef.current!;
-          if (video.paused) void video.play().catch(() => {});
-          else video.pause();
-        }}
-      >
-        {paused ? <PlayIcon /> : <PauseIcon />}
-      </Button>
-      <div className="min-w-4 flex-1">
-        <Slider
-          value={[canSeek ? Math.min(time, duration) : 0]}
-          min={0}
-          max={canSeek ? duration : 1}
-          step={0.1}
-          largeStep={5}
-          disabled={!canSeek}
-          getThumbAriaLabel={() => `Seek ${label}`}
-          format={{ style: "unit", unit: "second" }}
-          onValueChange={(value) => {
-            const next = Array.isArray(value) ? value[0] : value;
-            videoRef.current!.currentTime = next;
-            setTime(next);
-          }}
-        />
-      </div>
-      <span className="shrink-0 text-[11px] tabular-nums" aria-hidden="true">
-        {formatTime(time)}
-        <span className="@max-[260px]:hidden text-muted-foreground">
-          {" / "}
-          {formatTime(duration)}
-        </span>
-      </span>
-      <Select
-        value={rate}
-        onOpenChange={setSpeedOpen}
-        onValueChange={(value) => {
-          if (value !== null) videoRef.current!.playbackRate = value;
-        }}
-      >
-        <SelectTrigger
-          size="sm"
-          className="shrink-0 gap-0.5 border-0 px-1 text-[11px] dark:bg-transparent"
-          aria-label={`${label} playback speed`}
-          title="Playback speed"
+      <div className="flex h-8 items-center gap-2 rounded-md border bg-card px-1 text-card-foreground shadow-sm">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="shrink-0"
+          aria-label={`${paused ? "Play" : "Pause"} ${label}`}
+          title={paused ? "Play" : "Pause"}
           disabled={disabled}
+          onClick={() => {
+            const video = videoRef.current!;
+            if (video.paused) void video.play().catch(() => {});
+            else video.pause();
+          }}
         >
-          <SelectValue>{rate}×</SelectValue>
-        </SelectTrigger>
-        <SelectContent
-          side="top"
-          align="end"
-          alignItemWithTrigger={false}
-          className="min-w-20"
+          {paused ? (
+            <PlayIcon fill="currentColor" strokeWidth={0} />
+          ) : (
+            <PauseIcon fill="currentColor" strokeWidth={0} />
+          )}
+        </Button>
+        <div className="min-w-4 flex-1">
+          <Slider
+            value={[canSeek ? Math.min(time, duration) : 0]}
+            min={0}
+            max={canSeek ? duration : 1}
+            step={0.1}
+            largeStep={5}
+            disabled={!canSeek}
+            getThumbAriaLabel={() => `Seek ${label}`}
+            format={{ style: "unit", unit: "second" }}
+            onValueChange={(value) => {
+              const next = Array.isArray(value) ? value[0] : value;
+              videoRef.current!.currentTime = next;
+              setTime(next);
+            }}
+          />
+        </div>
+        <span className="shrink-0 text-[11px] tabular-nums" aria-hidden="true">
+          {formatTime(time)}
+          <span className="@max-[260px]:hidden text-muted-foreground">
+            {" / "}
+            {formatTime(duration)}
+          </span>
+        </span>
+        <Select
+          value={rate}
+          onValueChange={(value) => {
+            if (value !== null) videoRef.current!.playbackRate = value;
+          }}
         >
-          {PLAYBACK_RATES.map((value) => (
-            <SelectItem key={value} value={value}>
-              {value}×
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+          <SelectTrigger
+            size="sm"
+            className="shrink-0 gap-0.5 border-0 px-1 py-0 text-[11px] hover:bg-muted data-[size=sm]:h-6 dark:bg-transparent dark:hover:bg-muted/50"
+            aria-label={`${label} playback speed`}
+            title="Playback speed"
+            disabled={disabled}
+          >
+            <SelectValue>{rate}×</SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            container={fullscreen ? playerRef : undefined}
+            side="top"
+            align="end"
+            alignItemWithTrigger={false}
+            className="min-w-20"
+          >
+            {PLAYBACK_RATES.map((value) => (
+              <SelectItem key={value} value={value}>
+                {value}×
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="shrink-0"
+          aria-label={`${fullscreen ? "Exit fullscreen" : "Fullscreen"} ${label}`}
+          title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+          disabled={!document.fullscreenEnabled}
+          onClick={() => {
+            const player = playerRef.current!;
+            const request =
+              document.fullscreenElement === player
+                ? document.exitFullscreen()
+                : player.requestFullscreen();
+            void request.catch(() => {});
+          }}
+        >
+          {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+        </Button>
+      </div>
     </div>
   );
 }

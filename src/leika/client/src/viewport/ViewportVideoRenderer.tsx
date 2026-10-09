@@ -12,6 +12,7 @@ const Video = memo(function Video({
   options: ViewportVideoProps;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
   const wantsPlayback = useRef(options.autoplay);
   const automaticPauses = useRef(0);
@@ -47,7 +48,7 @@ const Video = memo(function Video({
     };
   }, [url, options.autoplay, options.visible]);
   return (
-    <div className="group/video @container relative h-full w-full">
+    <div ref={playerRef} className="@container relative h-full w-full">
       <video
         ref={ref}
         src={url}
@@ -67,7 +68,12 @@ const Video = memo(function Video({
         }}
       />
       {options.controls && (
-        <VideoPlaybackControls videoRef={ref} label={label} disabled={error} />
+        <VideoPlaybackControls
+          videoRef={ref}
+          playerRef={playerRef}
+          label={label}
+          disabled={error}
+        />
       )}
       {error && (
         <p role="alert" style={{ position: "absolute", inset: 12 }}>
