@@ -92,6 +92,15 @@ runtime orchestration; see [Development](development.md) for their entry points.
    clients. The source client is excluded from that echo, preventing a fast
    slider from flickering through an older round-trip value.
 
+On a retryable connection loss, the viewport retains its displayed page in the
+existing bounded transition slot while a fresh catalog and page stream replay.
+Matching pane IDs and renderer sources keep their mounted browser elements,
+including local video playback state and Viser's iframe. Replayed state remains
+authoritative: removed panes disappear, changed sources update, and a different
+server or workspace clears the retained page. Memory admission can evict the
+snapshot under pressure. Transfers and GUI controls still reset per connection;
+retained renderers keep their resource leases until replaced or unmounted.
+
 Named pages partition the viewport state, not the whole application. The GUI
 tree and control dock are workspace-global and stay mounted as the viewer
 switches pages. Inactive-page pane state remains retained on the server, but its

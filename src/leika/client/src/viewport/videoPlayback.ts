@@ -1,4 +1,5 @@
 import { createStore } from "../store";
+import { displayedViewportPage } from "./viewportSelectors";
 import type { ViewportVideoPane, ViewportState } from "./ViewportState";
 
 export interface PlaybackState {
@@ -375,12 +376,9 @@ export class VideoPlaybackRegistry {
     };
   }
   reconcile(state: ViewportState): void {
-    const page =
-      state.displayPageId === null
-        ? undefined
-        : state.pages[state.displayPageId];
+    const page = displayedViewportPage(state, state.displayPageId);
     const groups = new Map<string, Map<string, ViewportVideoPane>>();
-    if (page && state.transitionPage === null) {
+    if (page) {
       for (const pane of Object.values(page.panes)) {
         if (pane.kind !== "video") continue;
         const key = videoPlaybackKey(pane, page.pageId);

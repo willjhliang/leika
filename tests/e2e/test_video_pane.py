@@ -83,7 +83,7 @@ def test_video_grid_players_are_independent(leika_page: Page, leika_server: leik
 
 
 def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) -> None:
-    pane = leika_server.panes.add_video(CLIP, title="Task", autoplay=False, loop=False)
+    pane = leika_server.panes.add_video(CLIP, title="Task", autoplay=False, loop=False, fps=10)
     video = leika_page.locator("video")
     bar = leika_page.get_by_role("group", name="Task playback", exact=True)
     play = leika_page.get_by_role("button", name="Play Task", exact=True)
@@ -138,8 +138,26 @@ def test_video_compact_controls(leika_page: Page, leika_server: leika.Server) ->
     ).to_have_text("2×")
     assert video.evaluate("v => v === window.originalVideo && v.paused && v.playbackRate === 2")
 
-    # The controls also follow media events, including ending and restarting.
-    video.evaluate("v => { v.currentTime = v.duration - .1; return v.play(); }")
+    # Independent videos expose the same stepping and loop controls as groups.
+    seek = leika_page.get_by_role("slider", name="Seek Renamed", exact=True)
+    seek.focus()
+    seek.press("Home")
+    leika_page.get_by_role("button", name="Next frame Renamed", exact=True).click()
+    leika_page.wait_for_function('Math.abs(document.querySelector("video").currentTime - .1) < .01')
+    leika_page.get_by_role("button", name="Previous frame Renamed", exact=True).click()
+    leika_page.wait_for_function('document.querySelector("video").currentTime < .01')
+    loop = leika_page.get_by_role("button", name="Loop Renamed", exact=True)
+    expect(loop).to_have_attribute("aria-pressed", "false")
+    loop.click()
+    expect(loop).to_have_attribute("aria-pressed", "true")
+    loop.click()
+
+    # Finish seeking before a native play request; seeks may pause the decoder.
+    video.evaluate("""async v => {
+        v.currentTime = v.duration - .1;
+        await new Promise(resolve => v.addEventListener('seeked', resolve, {once:true}));
+        await v.play();
+    }""")
     leika_page.wait_for_function('document.querySelector("video").ended')
     play = leika_page.get_by_role("button", name="Play Renamed", exact=True)
     play.focus()
@@ -279,8 +297,10 @@ def test_video_control_hover_geometry(
             const text = time.getBoundingClientRect();
             const speedText = box('[data-slot="select-value"]');
             const speedIcon = box('[data-slot="select-trigger"] svg');
+            const loop = box('button[title="Loop"] svg');
             const fullscreen = [...bar.querySelectorAll('button[data-slot="button"] svg')].at(-1).getBoundingClientRect();
             return [track.left - play.right, text.left - track.right,
-                speedText.left - text.right, fullscreen.left - speedIcon.right];
+                speedText.left - text.right, loop.left - speedIcon.right,
+                fullscreen.left - loop.right];
         }""")
         assert all(8 <= gap <= 12 for gap in gaps), gaps

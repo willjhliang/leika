@@ -352,11 +352,13 @@ file and 128 MiB across the server, with LRU retention. Serve larger collections
 through an external media server. Browser codec support applies.
 
 The compact playback bar uses Leika's theme and controls: play/pause, seeking,
-elapsed/total time, playback speed and fullscreen. It appears only while the
-pointer is over the video pane; clicking or focusing a control does
+elapsed/total time, playback speed, looping and fullscreen. It appears only while
+the pointer is over the video pane; clicking or focusing a control does
 not keep the bar visible after the pointer leaves. On touch devices it stays
 visible. Fullscreen includes the video and its controls, including the speed
 menu. Narrow panes show only elapsed time to keep the seek slider usable.
+Set `fps=` to the media frame rate to enable previous/next frame buttons and
+frame-sized seeking, for independent players as well as grouped videos.
 Set `controls=False` to hide the bar. Controls operate locally in the browser,
 independently for every pane, without Python callbacks.
 Autoplay is muted to satisfy browser autoplay rules.
@@ -405,6 +407,7 @@ same URL preserves position. Group names follow the pane-ID limits.
 `pane.sync_group` and `pane.fps` are writable. Set `sync_group=None` on empty
 placeholder panes so their duration does not affect the episode. Publish loading,
 source and membership changes together with `server.atomic()`; the group waits
-for loading members. In a group, a pane's hover bar shows fullscreen; fullscreen
-also exposes the shared playback controls. With `sync_group=None`, the same
-controller drives the pane's independent hover controls.
+for loading members. In a group, a pane's hover bar fits just the fullscreen
+button at the bottom right; fullscreen also exposes the shared playback controls.
+With `sync_group=None`, the same controller drives the pane's independent hover
+controls.

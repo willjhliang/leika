@@ -627,6 +627,76 @@ describe("createViewportState pages", () => {
     });
   });
 
+  it("retains one displayed snapshot across reconnects and reconciles a fresh replay", () => {
+    const { viewportActions: actions, getViewportState } =
+      createEmptyViewportHarness();
+    actions.setPersistenceServer("ws://server");
+    actions.setPersistenceWorkspace("workspace");
+    actions.addPage(DEFAULT_PAGE_ID, "Main", true);
+    actions.finishPageCatalog([DEFAULT_PAGE_ID]);
+    actions.beginPageSubscription(DEFAULT_PAGE_ID, 1);
+    actions.beginPageStream(DEFAULT_PAGE_ID, 1);
+    actions.addImagePane(imageDeclaration("keep"));
+    actions.addImagePane(imageDeclaration("removed"));
+    actions.finishPageStream(DEFAULT_PAGE_ID, 1);
+    const displayed = getViewportState().pages.default;
+
+    actions.reconnect();
+    actions.reconnect();
+    expect(getViewportState()).toMatchObject({
+      pages: {},
+      activePageId: DEFAULT_PAGE_ID,
+      displayPageId: DEFAULT_PAGE_ID,
+      catalogReady: false,
+      pageStream: null,
+      warmPage: null,
+    });
+    expect(getViewportState().transitionPage).toBe(displayed);
+    expect(isViewportPageReady(getViewportState())).toBe(false);
+    actions.setPersistenceWorkspace("workspace");
+    actions.addPage(DEFAULT_PAGE_ID, "Main", true);
+    actions.finishPageCatalog([DEFAULT_PAGE_ID]);
+    actions.beginPageSubscription(DEFAULT_PAGE_ID, 2);
+    actions.beginPageStream(DEFAULT_PAGE_ID, 2);
+    actions.addImagePane(imageDeclaration("keep"));
+    actions.addImagePane(imageDeclaration("added"));
+    expect(getViewportState().transitionPage).toBe(displayed);
+    actions.finishPageStream(DEFAULT_PAGE_ID, 1);
+    expect(isViewportPageReady(getViewportState())).toBe(false);
+    actions.finishPageStream(DEFAULT_PAGE_ID, 2);
+    expect(getViewportState().transitionPage).toBeNull();
+    expect(getViewportState().pages.default.panes.keep?.kind).toBe("image");
+    expect(getViewportState().pages.default.panes.added?.kind).toBe("image");
+    expect(getViewportState().pages.default.panes.removed).toBeUndefined();
+    expect(isViewportPageReady(getViewportState())).toBe(true);
+  });
+
+  it.each(["server", "workspace", "page"])(
+    "discards reconnect content when its %s disappears",
+    (owner) => {
+      const { viewportActions: actions, getViewportState } =
+        createEmptyViewportHarness();
+      actions.setPersistenceServer("ws://server");
+      actions.setPersistenceWorkspace("workspace");
+      actions.addPage(DEFAULT_PAGE_ID, "Main", true);
+      actions.finishPageCatalog([DEFAULT_PAGE_ID]);
+      actions.beginPageSubscription(DEFAULT_PAGE_ID, 1);
+      actions.beginPageStream(DEFAULT_PAGE_ID, 1);
+      actions.addImagePane(imageDeclaration("old"));
+      actions.finishPageStream(DEFAULT_PAGE_ID, 1);
+      actions.reconnect();
+      if (owner === "server") actions.setPersistenceServer("ws://different");
+      else if (owner === "workspace")
+        actions.setPersistenceWorkspace("different");
+      else {
+        actions.addPage("different", "Different", true);
+        actions.finishPageCatalog(["different"]);
+      }
+      expect(getViewportState().transitionPage).toBeNull();
+      expect(getViewportState().displayPageId).toBeNull();
+    },
+  );
+
   it("keeps the outgoing page visible until an uncached target is ready", () => {
     const { viewportActions, getViewportState } = createViewportHarness();
     viewportActions.addPage("analysis", "Analysis", false);

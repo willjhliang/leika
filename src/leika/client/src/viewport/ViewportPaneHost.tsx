@@ -55,6 +55,9 @@ export function ViewportPaneHost({
   const pane = viewer.useViewport(
     (state) => displayedViewportPage(state, pageId)?.panes[paneId],
   );
+  const interactionEpoch = viewer.useViewport(
+    (state) => state.interactionEpoch,
+  );
   const showPaneTitles = viewer.useSettings((state) => state.showPaneTitles);
   const [isHovered, setIsHovered] = React.useState(false);
   // Keyboard users can focus the header without hovering; keep it visible.
@@ -113,7 +116,7 @@ export function ViewportPaneHost({
           height: 0,
         });
     };
-  }, [viewer, pageId, paneId, paneVisible, pane?.kind]);
+  }, [viewer, pageId, paneId, paneVisible, pane?.kind, interactionEpoch]);
   if (pane === undefined) return null;
 
   const isHiddenHost = rect === null;

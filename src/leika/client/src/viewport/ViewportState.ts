@@ -235,6 +235,8 @@ export interface ViewportActions {
   reset: () => void;
   /** Clear pane contents for a new connection while retaining browser layout. */
   resetPanes: () => void;
+  /** Retain the displayed page while a connection replays its catalog. */
+  reconnect: () => void;
   /** Select the websocket server portion of the persistence namespace. */
   setPersistenceServer: (serverUrl: string) => void;
   /** Restore the workspace-specific persisted layout. */
@@ -1074,6 +1076,28 @@ export function createViewportState(
   const actions: ViewportActions = {
     reset: clearPages,
     resetPanes: clearPages,
+
+    reconnect: () => {
+      const state = store.get();
+      // Reuse the page-transition owner: one bounded snapshot stays mounted
+      // until a complete stream replaces it. New workspace/server identities
+      // still clear it, and normal admission can evict it under pressure.
+      const transitionPage =
+        state.transitionPage ??
+        (state.displayPageId !== null && state.pageStream?.ready
+          ? (state.pages[state.displayPageId] ?? null)
+          : null);
+      preferredActivePageId = state.activePageId ?? preferredActivePageId;
+      authoritativePanesByPage.clear();
+      const next = {
+        ...initialState(state.interactionEpoch + 1),
+        activePageId: state.activePageId,
+        displayPageId: transitionPage?.pageId ?? null,
+        transitionPage,
+      };
+      recountContentPanes(next.pages, null, transitionPage);
+      store.set(next);
+    },
 
     setPersistenceServer: (serverUrl) => {
       if (persistenceServer === serverUrl) return;

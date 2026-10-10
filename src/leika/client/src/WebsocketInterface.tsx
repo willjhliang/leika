@@ -90,7 +90,7 @@ export function WebsocketMessageProducer() {
       }
     };
 
-    const resetConnectionResources = () => {
+    const resetConnectionResources = (retainPanes: boolean) => {
       viewer.mutable.current.downloads.reset();
       viewer.mutable.current.uploads.reset(
         "The connection changed during the upload.",
@@ -103,17 +103,23 @@ export function WebsocketMessageProducer() {
       resetMarkdownDocumentCache();
       resetNotifications();
       resetFileTransferFailureToast();
-      plotlyBootstrap.reset();
-      resetMountedRasterPixels();
+      // Retained renderers still own these leases during ordinary reconnect.
+      // Their normal unmount paths release them after replay or eviction.
+      if (!retainPanes) {
+        plotlyBootstrap.reset();
+        resetMountedRasterPixels();
+      }
       viewer.mutable.current.messageQueue.reset();
     };
 
-    const resetConnectionState = () => {
+    const resetConnectionState = (retainPanes: boolean) => {
       requestedPageId = null;
       resetConnectionOwners({
         resetGui: viewer.guiActions.resetGui,
-        resetPanes: viewer.viewportActions.resetPanes,
-        resetResources: resetConnectionResources,
+        resetPanes: retainPanes
+          ? viewer.viewportActions.reconnect
+          : viewer.viewportActions.resetPanes,
+        resetResources: () => resetConnectionResources(retainPanes),
       });
     };
 
@@ -126,7 +132,7 @@ export function WebsocketMessageProducer() {
     }) => {
       isConnected = false;
       retryAllowed = retry;
-      resetConnectionState();
+      resetConnectionState(active && retry);
       viewer.mutable.current.sendMessage = warnDisconnectedSend;
       viewer.useGui.set({ connectionError: error });
       updateRetryInterval();
@@ -235,7 +241,7 @@ export function WebsocketMessageProducer() {
           );
           isConnected = true;
           retryAllowed = connectionState.retry;
-          resetConnectionState();
+          resetConnectionState(true);
           viewer.useGui.set({
             websocketState: "connected",
             connectionError: connectionState.connectionError,

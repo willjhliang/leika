@@ -81,7 +81,7 @@ export function VideoPlaybackControls({
       className={
         dock
           ? "@container space-y-1"
-          : "absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100"
+          : `absolute right-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100 ${fullControls ? "left-0" : ""}`
       }
     >
       {dock && <div className="px-2">{timeline}</div>}
@@ -183,19 +183,17 @@ export function VideoPlaybackControls({
                   ))}
                 </SelectContent>
               </Select>
-              {(dock || grouped) && (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="shrink-0"
-                  aria-label={`Loop ${label}`}
-                  aria-pressed={loop}
-                  title="Loop"
-                  onClick={playback.toggleLoop}
-                >
-                  <RepeatIcon className={loop ? "" : "opacity-40"} />
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="shrink-0"
+                aria-label={`Loop ${label}`}
+                aria-pressed={loop}
+                title="Loop"
+                onClick={playback.toggleLoop}
+              >
+                <RepeatIcon className={loop ? "" : "opacity-40"} />
+              </Button>
             </>
           )}
           {playerRef && (
