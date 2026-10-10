@@ -296,11 +296,10 @@ def test_video_control_hover_geometry(
             time.selectNodeContents(bar.querySelector('span[aria-hidden="true"]'));
             const text = time.getBoundingClientRect();
             const speedText = box('[data-slot="select-value"]');
-            const speedIcon = box('[data-slot="select-trigger"] svg');
             const loop = box('button[title="Loop"] svg');
             const fullscreen = [...bar.querySelectorAll('button[data-slot="button"] svg')].at(-1).getBoundingClientRect();
             return [track.left - play.right, text.left - track.right,
-                speedText.left - text.right, loop.left - speedIcon.right,
+                speedText.left - text.right, loop.left - speedText.right,
                 fullscreen.left - loop.right];
         }""")
         assert all(8 <= gap <= 12 for gap in gaps), gaps

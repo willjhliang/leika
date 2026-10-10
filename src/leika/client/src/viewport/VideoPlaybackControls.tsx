@@ -116,7 +116,7 @@ export function VideoPlaybackControls({
                   disabled={!canSeek}
                   onClick={() => playback.step(-1)}
                 >
-                  <StepBackIcon />
+                  <StepBackIcon fill="currentColor" />
                 </Button>
                 <Button
                   variant="ghost"
@@ -127,7 +127,7 @@ export function VideoPlaybackControls({
                   disabled={!canSeek}
                   onClick={() => playback.step(1)}
                 >
-                  <StepForwardIcon />
+                  <StepForwardIcon fill="currentColor" />
                 </Button>
               </>
             )}
@@ -162,7 +162,7 @@ export function VideoPlaybackControls({
                 <SelectTrigger
                   size="xs"
                   variant="ghost"
-                  className="gap-0.5 px-1 text-[11px] text-muted-foreground"
+                  className="px-1 text-[11px] text-muted-foreground [&>svg]:hidden"
                   aria-label={`${label} playback speed`}
                   title="Playback speed"
                   disabled={!canSeek}
