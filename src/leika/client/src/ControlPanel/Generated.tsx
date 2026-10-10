@@ -34,6 +34,7 @@ import UploadButtonComponent from "../components/UploadButton";
 import ProgressBarComponent from "../components/ProgressBar";
 import ImageComponent from "../components/Image";
 import HtmlComponent from "../components/Html";
+import VideoControlsComponent from "../components/VideoControls";
 import DividerComponent from "../components/Divider";
 
 /** Root of generated inputs. */
@@ -122,6 +123,8 @@ const GeneratedInput = React.memo(function GeneratedInput(props: {
       return <PopupComponent {...conf} />;
     case "GuiTabGroupMessage":
       return <TabGroupComponent {...conf} />;
+    case "GuiVideoControlsMessage":
+      return <VideoControlsComponent {...conf} />;
     case "GuiHtmlMessage":
       return <HtmlComponent {...conf} />;
     case "GuiDividerMessage":

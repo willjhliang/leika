@@ -1,3 +1,4 @@
+import { isBoundedLayoutId } from "./persistenceLimits";
 import type {
   GuiComponentMessage,
   GuiModalMessage,
@@ -241,6 +242,8 @@ export function guiConfigWithinEntityLimits(
 ): boolean {
   if (!commonRendererStringsWithinLimits(config)) return false;
   switch (config.type) {
+    case "GuiVideoControlsMessage":
+      return isBoundedLayoutId(config.props.sync_group);
     case "GuiHtmlMessage":
       return guiHtmlSourceError(config.props.content) === null;
     case "GuiPlotlyMessage":

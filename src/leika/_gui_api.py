@@ -92,6 +92,7 @@ from ._gui_handles import (
     GuiUploadButtonHandle,
     GuiVector2Handle,
     GuiVector3Handle,
+    GuiVideoControlsHandle,
     PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
@@ -2270,6 +2271,43 @@ class GuiApi(GuiContainer):
             ),
         )
         return handle
+
+    def add_video_controls(
+        self,
+        label: str,
+        *,
+        sync_group: str,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiVideoControlsHandle:
+        """Add shared play/pause, seek, speed, loop and frame-step controls.
+
+        Videos join by passing the same ``sync_group`` to ``add_video``.
+        Playback belongs to each browser, independently of Python and other
+        viewers. Hiding or removing this component does not stop its videos.
+        Frame stepping requires an equal, known ``fps`` on all group members.
+        Group names follow the same nonempty 1,024 UTF-16-unit limit as pane IDs.
+        """
+        message = _messages.GuiVideoControlsMessage(
+            uuid=_make_uuid(),
+            container_uuid=self._get_container_uuid(),
+            props=_messages.GuiVideoControlsProps(
+                order=self._apply_default_order(order),
+                label=label,
+                sync_group=sync_group,
+                visible=visible,
+            ),
+        )
+        return GuiVideoControlsHandle(
+            _GuiHandleState(
+                message.uuid,
+                self,
+                None,
+                props=message.props,
+                parent_container_id=message.container_uuid,
+                create_message=message,
+            )
+        )
 
     def add_divider(
         self,

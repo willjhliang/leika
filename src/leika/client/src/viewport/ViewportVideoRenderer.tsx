@@ -1,52 +1,33 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useViewer } from "../ViewerContext";
 import { VideoPlaybackControls } from "./VideoPlaybackControls";
-import type { ViewportVideoPane, ViewportVideoProps } from "./ViewportState";
+import { videoPlaybackKey } from "./videoPlayback";
+import type { ViewportVideoPane } from "./ViewportState";
 
-const Video = memo(function Video({
-  url,
-  label,
-  options,
-}: {
-  url: string;
-  label: string;
-  options: ViewportVideoProps;
-}) {
+const Video = memo(function Video({ pane }: { pane: ViewportVideoPane }) {
+  const viewer = useViewer();
+  const pageId = viewer.useViewport((s) => s.displayPageId) ?? "";
+  const key = videoPlaybackKey(pane, pageId);
+  const playback = viewer.videoPlayback.get(key);
   const ref = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
-  const wantsPlayback = useRef(options.autoplay);
-  const automaticPauses = useRef(0);
-  useEffect(() => {
-    wantsPlayback.current = options.autoplay;
-  }, [url, options.autoplay]);
+  const { paneId, props: options } = pane;
+  const visible = useRef(options.visible);
+  visible.current = options.visible;
+  useEffect(() => viewer.videoPlayback.retain(key), [viewer, key]);
   useEffect(() => {
     const video = ref.current!;
-    const onPlay = () => {
-      wantsPlayback.current = true;
-    };
-    const onPause = () => {
-      if (automaticPauses.current > 0) automaticPauses.current--;
-      else wantsPlayback.current = false;
-    };
-    video.addEventListener("play", onPlay);
-    video.addEventListener("pause", onPause);
+    const binding = playback.attach(paneId, video);
     const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting || !options.visible) {
-        if (!video.paused) {
-          automaticPauses.current++;
-          video.pause();
-        }
-      } else if (wantsPlayback.current) {
-        void video.play().catch(() => {});
-      }
+      binding.visible(entry.isIntersecting && visible.current);
     });
     observer.observe(video);
     return () => {
       observer.disconnect();
-      video.removeEventListener("play", onPlay);
-      video.removeEventListener("pause", onPause);
+      binding.remove();
     };
-  }, [url, options.autoplay, options.visible]);
+  }, [playback, paneId]);
   return (
     <div
       ref={playerRef}
@@ -54,12 +35,11 @@ const Video = memo(function Video({
     >
       <video
         ref={ref}
-        src={url}
-        aria-label={label}
-        loop={options.loop}
+        src={options._url}
+        aria-label={options.title}
         muted={options.muted}
         playsInline
-        preload="metadata"
+        preload="auto"
         onError={() => setError(true)}
         onLoadedData={() => setError(false)}
         style={{
@@ -72,10 +52,10 @@ const Video = memo(function Video({
       />
       {options.controls && (
         <VideoPlaybackControls
-          videoRef={ref}
+          playback={playback}
           playerRef={playerRef}
-          label={label}
-          disabled={error}
+          label={options.title}
+          grouped={options.sync_group !== null}
         />
       )}
       {error && (
@@ -88,12 +68,12 @@ const Video = memo(function Video({
 });
 
 export function ViewportVideoRenderer({ pane }: { pane: ViewportVideoPane }) {
+  // A new media source or clock gets its own element, so queued native events
+  // from the previous owner cannot change the new controller's playback intent.
   return (
     <Video
-      key={pane.props._url}
-      url={pane.props._url}
-      label={pane.props.title}
-      options={pane.props}
+      key={JSON.stringify([pane.props._url, pane.props.sync_group])}
+      pane={pane}
     />
   );
 }

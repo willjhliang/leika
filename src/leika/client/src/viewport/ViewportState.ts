@@ -72,6 +72,8 @@ export interface ViewportVideoProps extends RefreshableProps {
   loop: boolean;
   muted: boolean;
   controls: boolean;
+  sync_group: string | null;
+  fps: number | null;
   title: string;
   visible: boolean;
   loading: boolean | string;
@@ -434,7 +436,9 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
   if (pane.kind === "video") {
     const props = pane.props;
     return (
-      propCount === 8 &&
+      propCount === 10 &&
+      (props.sync_group === null || typeof props.sync_group === "string") &&
+      (props.fps === null || typeof props.fps === "number") &&
       typeof props._url === "string" &&
       [props.autoplay, props.loop, props.muted, props.controls].every(
         (v) => typeof v === "boolean",

@@ -1,4 +1,12 @@
-import { MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon } from "lucide-react";
+import {
+  MaximizeIcon,
+  MinimizeIcon,
+  PauseIcon,
+  PlayIcon,
+  RepeatIcon,
+  StepBackIcon,
+  StepForwardIcon,
+} from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,9 +17,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import type { VideoPlayback } from "./videoPlayback";
 
 const PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2];
-
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds)) return "–:––";
   const whole = Math.max(0, Math.floor(seconds));
@@ -23,160 +31,202 @@ function formatTime(seconds: number): string {
     : `${minutes}:${remainder}`;
 }
 
-/** Media events update only this bar; playback never travels through Python. */
+/** The dock and every fullscreen overlay subscribe to the same controller. */
 export function VideoPlaybackControls({
-  videoRef,
+  playback,
   playerRef,
   label,
-  disabled,
+  grouped = false,
 }: {
-  videoRef: RefObject<HTMLVideoElement | null>;
-  playerRef: RefObject<HTMLDivElement | null>;
+  playback: VideoPlayback;
+  playerRef?: RefObject<HTMLDivElement | null>;
   label: string;
-  disabled: boolean;
+  grouped?: boolean;
 }) {
-  const [paused, setPaused] = useState(true);
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState(NaN);
-  const [rate, setRate] = useState(1);
+  const { paused, time, duration, rate, fps, loop, buffering, error } =
+    playback.state();
   const [fullscreen, setFullscreen] = useState(false);
-
   useEffect(() => {
-    const sync = () => {
-      setFullscreen(document.fullscreenElement === playerRef.current);
-    };
+    const sync = () =>
+      setFullscreen(
+        playerRef !== undefined &&
+          document.fullscreenElement === playerRef.current,
+      );
     sync();
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, [playerRef]);
-
-  useEffect(() => {
-    const video = videoRef.current!;
-    const sync = () => {
-      setPaused(video.paused);
-      setTime(video.currentTime);
-      setDuration(video.duration);
-      setRate(video.playbackRate);
-    };
-    const events = [
-      "play",
-      "pause",
-      "ended",
-      "timeupdate",
-      "loadedmetadata",
-      "durationchange",
-      "ratechange",
-      "emptied",
-    ];
-    sync();
-    events.forEach((event) => video.addEventListener(event, sync));
-    return () => {
-      events.forEach((event) => video.removeEventListener(event, sync));
-    };
-  }, [videoRef]);
-
-  const canSeek = Number.isFinite(duration) && duration > 0 && !disabled;
+  const dock = playerRef === undefined;
+  const fullControls = dock || !grouped || fullscreen;
+  const canSeek = duration > 0 && !error;
+  const timeline = (
+    <Slider
+      value={[canSeek ? Math.min(time, duration) : 0]}
+      min={0}
+      max={canSeek ? duration : 1}
+      step={fps === null ? 0.1 : 1 / fps}
+      largeStep={5}
+      disabled={!canSeek}
+      getThumbAriaLabel={() => `Seek ${label}`}
+      format={{ style: "unit", unit: "second" }}
+      onValueChange={(value) =>
+        playback.seek(Array.isArray(value) ? value[0] : value)
+      }
+    />
+  );
   return (
     <div
       role="group"
       aria-label={`${label} playback`}
-      className="absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100"
+      className={
+        dock
+          ? "@container space-y-1"
+          : "absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100"
+      }
     >
-      <div className="flex h-8 items-center gap-1 rounded-md border bg-card px-1 text-card-foreground shadow-sm">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="shrink-0"
-          aria-label={`${paused ? "Play" : "Pause"} ${label}`}
-          title={paused ? "Play" : "Pause"}
-          disabled={disabled}
-          onClick={() => {
-            const video = videoRef.current!;
-            if (video.paused) void video.play().catch(() => {});
-            else video.pause();
-          }}
-        >
-          {paused ? (
-            <PlayIcon fill="currentColor" strokeWidth={0} />
-          ) : (
-            <PauseIcon fill="currentColor" strokeWidth={0} />
-          )}
-        </Button>
-        <div className="min-w-4 flex-1">
-          <Slider
-            value={[canSeek ? Math.min(time, duration) : 0]}
-            min={0}
-            max={canSeek ? duration : 1}
-            step={0.1}
-            largeStep={5}
-            disabled={!canSeek}
-            getThumbAriaLabel={() => `Seek ${label}`}
-            format={{ style: "unit", unit: "second" }}
-            onValueChange={(value) => {
-              const next = Array.isArray(value) ? value[0] : value;
-              videoRef.current!.currentTime = next;
-              setTime(next);
-            }}
-          />
-        </div>
-        <div className="flex shrink-0 items-center">
-          <span className="px-1 text-[11px] tabular-nums" aria-hidden="true">
-            {formatTime(time)}
-            <span className="@max-[260px]:hidden text-muted-foreground">
-              {" / "}
-              {formatTime(duration)}
-            </span>
-          </span>
-          <Select
-            value={rate}
-            onValueChange={(value) => {
-              if (value !== null) videoRef.current!.playbackRate = value;
-            }}
-          >
-            <SelectTrigger
-              size="xs"
+      {dock && <div className="px-2">{timeline}</div>}
+      <div
+        className={`flex h-8 items-center gap-1 rounded-md px-1 ${dock ? "" : "border bg-card text-card-foreground shadow-sm"}`}
+      >
+        {fullControls && (
+          <>
+            <Button
               variant="ghost"
-              className="gap-0.5 px-1 text-[11px] text-muted-foreground"
-              aria-label={`${label} playback speed`}
-              title="Playback speed"
-              disabled={disabled}
+              size="icon-xs"
+              className="shrink-0"
+              aria-label={`${paused ? "Play" : "Pause"} ${label}`}
+              title={paused ? "Play" : "Pause"}
+              disabled={!canSeek}
+              onClick={paused ? playback.play : playback.pause}
             >
-              <SelectValue>{rate}×</SelectValue>
-            </SelectTrigger>
-            <SelectContent
-              container={fullscreen ? playerRef : undefined}
-              side="top"
-              align="end"
-              alignItemWithTrigger={false}
-              className="min-w-20"
+              {paused ? (
+                <PlayIcon fill="currentColor" strokeWidth={0} />
+              ) : (
+                <PauseIcon fill="currentColor" strokeWidth={0} />
+              )}
+            </Button>
+            {fps !== null && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label={`Previous frame ${label}`}
+                  title="Previous frame"
+                  disabled={!canSeek}
+                  onClick={() => playback.step(-1)}
+                >
+                  <StepBackIcon />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label={`Next frame ${label}`}
+                  title="Next frame"
+                  disabled={!canSeek}
+                  onClick={() => playback.step(1)}
+                >
+                  <StepForwardIcon />
+                </Button>
+              </>
+            )}
+            {!dock && <div className="min-w-4 flex-1">{timeline}</div>}
+          </>
+        )}
+        <div
+          className={
+            dock
+              ? "flex min-w-0 flex-1 items-center"
+              : "ml-auto flex shrink-0 items-center"
+          }
+        >
+          {fullControls && (
+            <>
+              <span
+                className={`${dock ? "flex-1" : ""} px-1 text-[11px] tabular-nums`}
+                aria-hidden="true"
+              >
+                {formatTime(time)}
+                <span className="@max-[260px]:hidden text-muted-foreground">
+                  {" "}
+                  / {formatTime(duration)}
+                </span>
+              </span>
+              <Select
+                value={rate}
+                onValueChange={(value) => {
+                  if (value !== null) playback.setRate(value);
+                }}
+              >
+                <SelectTrigger
+                  size="xs"
+                  variant="ghost"
+                  className="gap-0.5 px-1 text-[11px] text-muted-foreground"
+                  aria-label={`${label} playback speed`}
+                  title="Playback speed"
+                  disabled={!canSeek}
+                >
+                  <SelectValue>{rate}×</SelectValue>
+                </SelectTrigger>
+                <SelectContent
+                  container={fullscreen ? playerRef : undefined}
+                  side="top"
+                  align="end"
+                  alignItemWithTrigger={false}
+                  className="min-w-20"
+                >
+                  {PLAYBACK_RATES.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}×
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(dock || grouped) && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label={`Loop ${label}`}
+                  aria-pressed={loop}
+                  title="Loop"
+                  onClick={playback.toggleLoop}
+                >
+                  <RepeatIcon className={loop ? "" : "opacity-40"} />
+                </Button>
+              )}
+            </>
+          )}
+          {playerRef && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="ml-auto shrink-0"
+              aria-label={`${fullscreen ? "Exit fullscreen" : "Fullscreen"} ${label}`}
+              title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              disabled={!document.fullscreenEnabled}
+              onClick={() => {
+                const player = playerRef.current!;
+                void (
+                  document.fullscreenElement === player
+                    ? document.exitFullscreen()
+                    : player.requestFullscreen()
+                ).catch(() => {});
+              }}
             >
-              {PLAYBACK_RATES.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}×
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="shrink-0"
-            aria-label={`${fullscreen ? "Exit fullscreen" : "Fullscreen"} ${label}`}
-            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-            disabled={!document.fullscreenEnabled}
-            onClick={() => {
-              const player = playerRef.current!;
-              const request =
-                document.fullscreenElement === player
-                  ? document.exitFullscreen()
-                  : player.requestFullscreen();
-              void request.catch(() => {});
-            }}
-          >
-            {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
-          </Button>
+              {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+            </Button>
+          )}
         </div>
       </div>
+      {dock && (buffering || error) && (
+        <p role="status" className="px-1 text-xs text-muted-foreground">
+          {error
+            ? "Could not load a video in this group."
+            : "Waiting for video…"}
+        </p>
+      )}
     </div>
   );
 }

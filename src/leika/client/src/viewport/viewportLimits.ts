@@ -1,3 +1,4 @@
+import { isBoundedLayoutId } from "../persistenceLimits";
 import { commonRendererStringWithinLimit, utf8ByteLength } from "../guiLimits";
 import { matplotlibSvgSourceError } from "../rendererSourceLimits";
 import { PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS } from "./plotlyPayload";
@@ -52,6 +53,10 @@ export function viewportPaneWithinEntityLimits(
   if (pane.kind === "video") {
     const url = pane.props._url;
     return (
+      (pane.props.sync_group === null ||
+        isBoundedLayoutId(pane.props.sync_group)) &&
+      (pane.props.fps === null ||
+        (Number.isFinite(pane.props.fps) && pane.props.fps > 0)) &&
       url.length <= MAX_VIEWPORT_URL_CODE_UNITS &&
       /^(https?:\/\/[^/]+|\/(?!\/))/.test(url) &&
       !url.includes("\\") &&

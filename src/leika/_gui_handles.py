@@ -95,6 +95,7 @@ from ._messages import (
     GuiUploadButtonProps,
     GuiVector2Props,
     GuiVector3Props,
+    GuiVideoControlsProps,
     RemoveCommandMessage,
     _normalize_key_modifier,
 )
@@ -103,7 +104,7 @@ from ._plotly import (
     _plotly_json_with_config,
     _plotly_payload_from_json,
 )
-from ._validation import utf16_code_unit_length_exceeds
+from ._validation import utf16_code_unit_length_exceeds, validate_layout_id
 from ._validation import validate_finite_number as _finite_number
 from ._validation import validate_positive_number as _positive_number
 from ._validation import validate_renderer_string as _validate_renderer_string
@@ -527,6 +528,8 @@ def _validate_gui_props_candidate(handle: Any, props: Any) -> None:
                 "choose a smaller child order"
             )
 
+    if isinstance(props, GuiVideoControlsProps):
+        validate_layout_id(props.sync_group, "sync_group")
     if isinstance(props, GuiPlotlyProps):
         _positive_number(props.aspect, "aspect")
 
@@ -3602,6 +3605,10 @@ class GuiHtmlHandle(_GuiHandle[None], GuiHtmlProps):
         if name == "content":
             value = _validate_gui_html_content(value)
         super().__setattr__(name, value)
+
+
+class GuiVideoControlsHandle(_GuiHandle[None], GuiVideoControlsProps):
+    """Dock controls for a browser-local video group, without Python playback events."""
 
 
 class GuiDividerHandle(_GuiHandle[None], GuiDividerProps):

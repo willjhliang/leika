@@ -1127,6 +1127,8 @@ it("admits video replay and live updates within media bounds", () => {
       loop: true,
       muted: true,
       controls: true,
+      sync_group: null,
+      fps: null,
       title: "Videos",
       visible: true,
       loading: false,

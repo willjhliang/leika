@@ -66,6 +66,12 @@ ENTRIES = [
                 )""",
             ),
             Entry(
+                slug="video-controls",
+                title="Video controls",
+                ref="add_video_controls",
+                code='gui.add_video_controls("Playback", sync_group="episode")',
+            ),
+            Entry(
                 slug="multi-slider",
                 title="Multi slider",
                 ref="add_multi_slider",

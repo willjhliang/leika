@@ -18,3 +18,6 @@ Sanitize all untrusted content before passing it to this method.
 
 .. autoclass:: GuiContainer
    :members:
+
+.. autoclass:: GuiVideoControlsHandle
+   :members:

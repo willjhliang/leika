@@ -62,7 +62,7 @@ so the same controls stay available while viewers switch pages.
 | {meth}`~leika.Panes.add_image`      | A NumPy array, encoded as PNG or JPEG                           | You have pixels: a camera frame, a render, a rasterized plot     |
 | {meth}`~leika.Panes.add_matplotlib` | A matplotlib figure, relayed as SVG                             | You already draw with matplotlib and want the figure as-is       |
 | {meth}`~leika.Panes.add_plotly`     | A Plotly figure, kept interactive                               | The viewer should hover, zoom, or pan the chart                  |
-| {meth}`~leika.Panes.add_video` | A saved video file or HTTP URL | You want independent browser playback |
+| {meth}`~leika.Panes.add_video` | A saved video file or HTTP URL | You want local or synchronized browser playback |
 | {meth}`~leika.Panes.add_viser`      | A live [viser](https://github.com/viser-project/viser) 3D scene | You need a 3D scene; viser serves it and Leika embeds its client |
 
 Only `add_plotly` requires its library to be installed. `add_matplotlib` and
@@ -364,3 +364,47 @@ Offscreen players pause; manual pauses remain paused when returning to view.
 An update with the same URL preserves playback; a different URL starts a new
 player. Local assets support single byte-range requests for seeking; unsupported
 multi-range requests receive the complete asset.
+
+### Shared playback
+
+A named group gives the videos on the displayed page one timeline in each
+browser. The dock component and fullscreen overlays control that same timeline:
+
+```python
+server.gui.add_video_controls("Playback", sync_group="episode")
+grid = server.panes.add_grid(columns=2)
+for index in range(4):
+    grid.add_video(
+        Path(f"camera-{index}.mp4"),
+        title=f"Camera {index}",
+        sync_group="episode",
+        fps=30,
+    )
+```
+
+The controller belongs to the viewer, independently of the dock's visibility.
+Play/pause, seeking, speed and looping affect every group member; other browsers
+keep their own playback state. The first declared member supplies initial
+`autoplay` and `loop`. The longest clip sets the common duration, and shorter
+clips hold their final frame until that timeline ends. Declare matching clips
+with the same time origin; Leika does not infer timestamps or offsets.
+
+Pass the same positive `fps` on every member to enable previous/next frame
+buttons and frame-sized timeline steps. With unknown or differing rates, the
+shared timeline still works but frame buttons are omitted. Stepping pauses the
+group. This is time-based synchronization with drift correction, not a guarantee
+of simultaneous frame presentation across browser decoders.
+
+The group waits for visible members to load, seek or recover from buffering.
+Hidden/minimized players pause individually and catch up when shown; hiding all
+members or the browser tab freezes the common clock. A media error leaves the
+group stopped with an error status. Replacing a source resets the common time to
+zero while preserving the viewer's pause, speed and loop choices; updating the
+same URL preserves position. Group names follow the pane-ID limits.
+
+`pane.sync_group` and `pane.fps` are writable. Set `sync_group=None` on empty
+placeholder panes so their duration does not affect the episode. Publish loading,
+source and membership changes together with `server.atomic()`; the group waits
+for loading members. In a group, a pane's hover bar shows fullscreen; fullscreen
+also exposes the shared playback controls. With `sync_group=None`, the same
+controller drives the pane's independent hover controls.

@@ -79,3 +79,56 @@ def test_video_update_settles_loading_atomically(server: leika.Server) -> None:
     with pytest.raises(TypeError):
         pane.update("/c.mp4", loading=1)  # type: ignore[arg-type]
     assert pane._impl.props._url == "/b.mp4"
+
+
+def test_shared_video_api_replay_and_group_assignment(server: leika.Server) -> None:
+    controls = server.gui.add_video_controls("Playback", sync_group="episode")
+    with server.gui.add_folder("Nested") as folder:
+        nested = folder.add_video_controls("Other", sync_group="episode")
+    for api in (server.panes, server.panes.add_row(), server.panes.add_grid(columns=2)):
+        pane = api.add_video("/clip.mp4", sync_group="episode", fps=30)
+        assert pane.sync_group == "episode"
+        assert pane.fps == 30
+        pane.sync_group = None
+        pane.fps = 7.5
+        assert pane.sync_group is None
+        assert pane.fps == 7.5
+        pane.remove()
+    controls.visible = False
+    controls.label = "Timeline"
+    nested.sync_group = "other"
+    messages = list(server._websock_server.get_message_buffer().message_from_id.values())
+    creates = [m for m in messages if isinstance(m, _messages.GuiVideoControlsMessage)]
+    assert len(creates) == 2
+    assert {m.props.sync_group for m in creates} == {"episode"}  # Updates replay separately.
+    folder.remove()
+    controls.remove()
+    assert controls._impl.removed and nested._impl.removed
+
+
+@pytest.mark.parametrize("group", ["", "__proto__", "a" * 1025, 3])
+def test_video_group_validation_is_transactional(server: leika.Server, group: object) -> None:
+    pane = server.panes.add_video("/clip.mp4", sync_group="valid")
+    controls = server.gui.add_video_controls("Playback", sync_group="valid")
+    for assign in (
+        lambda: server.panes.add_video("/clip.mp4", sync_group=group),
+        lambda: server.gui.add_video_controls("Playback", sync_group=group),
+        lambda: setattr(pane, "sync_group", group),
+        lambda: setattr(controls, "sync_group", group),
+    ):
+        with pytest.raises((ValueError, TypeError)):
+            assign()
+    assert pane.sync_group == controls.sync_group == "valid"
+    assert server.panes._aggregate.live_panes == 1
+
+
+@pytest.mark.parametrize("fps", [0, -1, float("inf"), float("nan"), True, "30"])
+def test_video_fps_rejects_invalid_values(server: leika.Server, fps: object) -> None:
+    pane = server.panes.add_video("/clip.mp4", fps=30)
+    with pytest.raises(ValueError, match="fps"):
+        server.panes.add_video("/clip.mp4", fps=fps)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="fps"):
+        pane.fps = fps  # type: ignore[assignment]
+    assert pane.fps == 30
+    pane.fps = None
+    assert pane.fps is None

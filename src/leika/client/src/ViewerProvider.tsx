@@ -1,4 +1,5 @@
 import React from "react";
+import { VideoPlaybackRegistry } from "./viewport/videoPlayback";
 
 import { useClientSettings } from "./ClientSettings";
 import { useGuiState } from "./ControlPanel/GuiState";
@@ -41,12 +42,25 @@ export function ViewerProvider({
   const mutable = React.useRef(transport);
   const guiState = useGuiState(initialServer);
   const viewportState = useViewportState();
+  const [videoPlayback] = React.useState(() => new VideoPlaybackRegistry());
+  React.useEffect(() => {
+    const sync = () => videoPlayback.reconcile(viewportState.store.get());
+    sync();
+    const unsubscribe = viewportState.store.subscribe(sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      unsubscribe();
+      document.removeEventListener("visibilitychange", sync);
+      videoPlayback.dispose();
+    };
+  }, [viewportState, videoPlayback]);
   const { store: settingsStore, actions: settingsActions } =
     useClientSettings();
   // Memoized: a rebuilt context value would re-render every consumer in the
   // app whenever its provider re-renders.
   const viewer: ViewerContextContents = React.useMemo(
     () => ({
+      videoPlayback,
       useGui: guiState.store,
       useGuiConfig: guiState.configStore,
       guiActions: guiState.actions,
@@ -56,7 +70,7 @@ export function ViewerProvider({
       settingsActions: settingsActions,
       mutable,
     }),
-    [guiState, viewportState, settingsStore, settingsActions],
+    [guiState, viewportState, settingsStore, settingsActions, videoPlayback],
   );
 
   return (

@@ -61,6 +61,7 @@ file-serving details while preserving their shared shutdown boundary.
 | Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
 | Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
 | Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
+| Browser-local video clocks, groups and media lifecycle | `viewport/videoPlayback.ts`; dock and fullscreen controls subscribe to the same controller |
 | Dock layout and control-panel presentation | `dock/`, `ControlPanel/` |
 
 `createGuiState()` and `createViewportState()` construct complete sessions

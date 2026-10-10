@@ -469,6 +469,24 @@ class GuiHtmlMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiVideoControlsProps:
+    order: float
+    """Order value for arranging GUI elements."""
+    label: str
+    """Label shown above the shared playback controls."""
+    sync_group: str
+    """Playback group controlled in each browser independently."""
+    visible: bool
+    """Whether these controls are visible. Hiding them does not stop playback."""
+
+
+@dataclasses.dataclass
+class GuiVideoControlsMessage(_CreateGuiComponentMessage):
+    container_uuid: str
+    props: GuiVideoControlsProps
+
+
+@dataclasses.dataclass
 class GuiDividerProps:
     order: float
     """Order value for arranging GUI elements. """
@@ -1217,6 +1235,8 @@ class ViewportVideoProps:
     loop: bool
     muted: bool
     controls: bool
+    sync_group: str | None
+    fps: float | None
     title: str
     visible: bool
     loading: bool | str

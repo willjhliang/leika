@@ -1,4 +1,5 @@
 import React from "react";
+import type { VideoPlaybackRegistry } from "./viewport/videoPlayback";
 
 import { useClientSettings } from "./ClientSettings";
 import type { GuiSession } from "./ControlPanel/GuiState";
@@ -27,6 +28,7 @@ export function warnDisconnectedSend(message: Message): void {
 
 /** Application context for Leika's GUI and 2D pane workspace. */
 export type ViewerContextContents = {
+  videoPlayback: VideoPlaybackRegistry;
   useGui: GuiSession["store"];
   useGuiConfig: GuiSession["configStore"];
   guiActions: GuiSession["actions"];

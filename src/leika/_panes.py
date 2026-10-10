@@ -32,6 +32,7 @@ from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
     validate_layout_id,
+    validate_positive_number,
     validate_renderer_string,
 )
 from ._validation import (
@@ -911,6 +912,14 @@ def _prepare_video(api: Panes, source: Path | str) -> str:
     return source
 
 
+def _validate_video_group(value: str | None) -> str | None:
+    return None if value is None else validate_layout_id(value, "sync_group")
+
+
+def _validate_video_fps(value: float | None) -> float | None:
+    return None if value is None else float(validate_positive_number(value, "fps"))
+
+
 class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
     """One browser-native video player.
 
@@ -921,6 +930,24 @@ class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
 
     def __init__(self, impl: _VideoPaneHandleState) -> None:
         self._impl = impl
+
+    @property
+    def sync_group(self) -> str | None:
+        """Named browser-local playback group, or None for independent playback."""
+        return self._impl.props.sync_group
+
+    @sync_group.setter
+    def sync_group(self, value: str | None) -> None:
+        self._set_prop("sync_group", _validate_video_group(value))
+
+    @property
+    def fps(self) -> float | None:
+        """Source frame rate for frame stepping; None disables frame stepping."""
+        return self._impl.props.fps
+
+    @fps.setter
+    def fps(self, value: float | None) -> None:
+        self._set_prop("fps", _validate_video_fps(value))
 
     def update(self, source: Path | str, *, loading: PaneLoading | None = None) -> None:
         """Replace the video source, optionally changing loading in the same update.
@@ -1108,6 +1135,8 @@ class PaneGroup:
         loop: bool = True,
         muted: bool = True,
         controls: bool = True,
+        sync_group: str | None = None,
+        fps: float | None = None,
         pane_id: str | None = None,
         title: str = "Video",
         visible: bool = True,
@@ -1122,6 +1151,8 @@ class PaneGroup:
                 loop=loop,
                 muted=muted,
                 controls=controls,
+                sync_group=sync_group,
+                fps=fps,
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
@@ -1301,6 +1332,8 @@ class PaneGrid:
         loop: bool = True,
         muted: bool = True,
         controls: bool = True,
+        sync_group: str | None = None,
+        fps: float | None = None,
         pane_id: str | None = None,
         title: str = "Video",
         visible: bool = True,
@@ -1315,6 +1348,8 @@ class PaneGrid:
                 loop=loop,
                 muted=muted,
                 controls=controls,
+                sync_group=sync_group,
+                fps=fps,
                 pane_id=pane_id,
                 title=title,
                 visible=visible,
@@ -1881,6 +1916,8 @@ class Panes:
         loop: bool = True,
         muted: bool = True,
         controls: bool = True,
+        sync_group: str | None = None,
+        fps: float | None = None,
         pane_id: str | None = None,
         title: str = "Video",
         visible: bool = True,
@@ -1896,6 +1933,15 @@ class Panes:
         Browser codec support applies. Autoplay normally requires muted audio.
         Offscreen players pause automatically and preserve manual pause state.
 
+        A shared ``sync_group`` gives videos on the displayed page one local
+        timeline per browser. Add :meth:`GuiApi.add_video_controls` to control it
+        from the dock. Grouped panes show fullscreen controls; in fullscreen
+        they also show the shared timeline. The first pane sets initial autoplay
+        and looping. The longest clip sets duration; shorter clips hold their
+        last frame. Supply the same positive ``fps`` on every member to enable
+        frame stepping. None leaves the rate unknown. Replacing a grouped source
+        restarts the timeline while retaining the viewer's pause and speed.
+
         Compose multiple videos with :meth:`add_grid`, :meth:`add_row`, or
         :meth:`add_column`. Each video is an independently arranged pane.
         """
@@ -1905,6 +1951,8 @@ class Panes:
             loop=loop,
             muted=muted,
             controls=controls,
+            sync_group=sync_group,
+            fps=fps,
             pane_id=pane_id,
             title=title,
             visible=visible,
@@ -1922,6 +1970,8 @@ class Panes:
         loop: bool,
         muted: bool,
         controls: bool,
+        sync_group: str | None,
+        fps: float | None,
         pane_id: str | None,
         title: str,
         visible: bool,
@@ -1935,12 +1985,16 @@ class Panes:
             raise TypeError("autoplay, loop, muted and controls must be bools")
         pane_id = self._validate_pane_declaration(pane_id, placement)
         relative_to = self._resolve_relative_to(relative_to)
+        sync_group = _validate_video_group(sync_group)
+        fps = _validate_video_fps(fps)
         props = _messages.ViewportVideoProps(
             _url=_prepare_video(self, source),
             autoplay=autoplay,
             loop=loop,
             muted=muted,
             controls=controls,
+            sync_group=sync_group,
+            fps=fps,
             title=title,
             visible=visible,
             loading=loading,
