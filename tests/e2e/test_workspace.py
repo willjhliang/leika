@@ -80,6 +80,96 @@ def test_image_panes_tile_resize_persist_and_update(
     assert page_errors == []
 
 
+@pytest.mark.parametrize("direction", ["row", "column"])
+@pytest.mark.parametrize("viewport", [(960, 700), (1200, 520), (650, 950)])
+def test_dividers_snap_to_sixtieths_of_each_workspace_axis(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+    direction: str,
+    viewport: tuple[int, int],
+) -> None:
+    page = leika_page
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    container = (
+        leika_server.panes.add_row() if direction == "row" else leika_server.panes.add_column()
+    )
+    container.add_pane(pane_id="first", title="First")
+    container.add_pane(pane_id="second", title="Second")
+    first = '[data-viewport-pane="first"]'
+    second = '[data-viewport-pane="second"]'
+    expect(page.locator(second)).to_be_visible()
+    divider = page.locator(f'[data-viewport-divider-direction="{direction}"]')
+    expect(divider).to_have_attribute("aria-valuenow", "30")
+    workspace = box(page, "[data-viewport-grid-canvas]")
+    dimension = "width" if direction == "row" else "height"
+    assert abs(box(page, first)[dimension] - box(page, second)[dimension]) <= 1
+    assert abs(box(page, first)[dimension] - workspace[dimension] / 2) <= 1
+
+    divider.focus()
+    divider.press("ArrowRight" if direction == "row" else "ArrowDown")
+    expect(divider).to_have_attribute("aria-valuenow", "31")
+    assert abs(box(page, first)[dimension] - workspace[dimension] * 31 / 60) <= 1
+    divider.press("Shift+ArrowLeft" if direction == "row" else "Shift+ArrowUp")
+    expect(divider).to_have_attribute("aria-valuenow", "27")
+    assert abs(box(page, first)[dimension] - workspace[dimension] * 27 / 60) <= 1
+
+    # Hover waits for the divider's CSS transition to settle before measuring
+    # the grab point for the subsequent raw mouse gesture.
+    divider.hover()
+    bounds = divider.bounding_box()
+    assert bounds is not None
+    x = bounds["x"] + bounds["width"] / 2
+    y = bounds["y"] + bounds["height"] / 2
+    # Grab off-center: resizing must preserve the pointer's offset from the line.
+    if direction == "row":
+        x += 4
+        target_x, target_y = workspace["x"] + workspace["width"] * 0.75 + 4, y
+    else:
+        y += 4
+        target_x, target_y = x, workspace["y"] + workspace["height"] * 0.75 + 4
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(target_x, target_y, steps=8)
+    page.mouse.up()
+    expect(divider).to_have_attribute("aria-valuenow", "45")
+    assert abs(box(page, first)[dimension] - workspace[dimension] * 0.75) <= 1
+    assert page_errors == []
+
+
+def test_pane_drop_preview_matches_committed_vertical_split(
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    page = leika_page
+    row = leika_server.panes.add_row()
+    row.add_pane(pane_id="first", title="First")
+    row.add_pane(pane_id="second", title="Second")
+    expect(page.locator('[data-viewport-pane="second"]')).to_be_visible()
+    header = box(page, '[data-viewport-pane-header="first"]')
+    target = box(page, '[data-viewport-pane="second"]')
+    page.mouse.move(header["x"] + header["width"] / 2, header["y"] + header["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(
+        target["x"] + target["width"] / 2,
+        target["y"] + target["height"] * 0.9,
+        steps=8,
+    )
+    hint = '[data-viewport-drop-hint="split"]'
+    expect(page.locator(hint)).to_be_visible()
+    preview = box(page, hint)
+    workspace = box(page, "[data-viewport-grid-canvas]")
+    assert abs(preview["y"] - workspace["y"] - workspace["height"] / 2) <= 1
+    assert abs(preview["height"] - workspace["height"] / 2) <= 1
+    page.mouse.up()
+    expect(page.locator(hint)).to_have_count(0)
+    actual = box(page, '[data-viewport-pane="first"]')
+    for key in ["x", "y", "width", "height"]:
+        assert abs(actual[key] - preview[key]) <= 1
+    assert page_errors == []
+
+
 def test_pane_header_is_a_square_bar_across_the_pane_top(
     leika_server: leika.Server,
     leika_page: Page,

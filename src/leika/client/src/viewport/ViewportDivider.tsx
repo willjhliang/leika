@@ -1,7 +1,11 @@
 import React from "react";
 import { Button } from "../components/ui/button";
 import { Separator } from "../components/ui/separator";
-import { GRID_EPSILON, type DividerGeometry } from "./gridLayout";
+import {
+  GRID_EPSILON,
+  type DividerGeometry,
+  type GridSpec,
+} from "./gridLayout";
 import { gridLinePx } from "./workspaceGeometry";
 
 const DIVIDER_HIT_SIZE_PX = 24;
@@ -10,7 +14,7 @@ const DIVIDER_LINE_SIZE_PX = 1;
 
 export function ViewportDivider({
   divider,
-  cellSize,
+  grid,
   geometryTransition,
   beforeTitle,
   afterTitle,
@@ -22,7 +26,7 @@ export function ViewportDivider({
   onKeyDown,
 }: {
   divider: DividerGeometry;
-  cellSize: number;
+  grid: GridSpec;
   geometryTransition: string | undefined;
   beforeTitle: string;
   afterTitle: string;
@@ -39,6 +43,7 @@ export function ViewportDivider({
     divider: DividerGeometry,
   ) => void;
 }) {
+  const { cellWidth, cellHeight } = grid;
   const vertical = divider.direction === "row";
   const index = divider.dividerIndex;
   const minimum = Math.ceil(
@@ -104,18 +109,21 @@ export function ViewportDivider({
       style={{
         position: "absolute",
         left: vertical
-          ? gridLinePx(divider.coordinate, cellSize) - DIVIDER_HIT_SIZE_PX / 2
-          : gridLinePx(divider.nodeRect.x, cellSize),
+          ? gridLinePx(divider.coordinate, cellWidth) - DIVIDER_HIT_SIZE_PX / 2
+          : gridLinePx(divider.nodeRect.x, cellWidth),
         top: vertical
-          ? gridLinePx(divider.nodeRect.y, cellSize)
-          : gridLinePx(divider.coordinate, cellSize) - DIVIDER_HIT_SIZE_PX / 2,
+          ? gridLinePx(divider.nodeRect.y, cellHeight)
+          : gridLinePx(divider.coordinate, cellHeight) -
+            DIVIDER_HIT_SIZE_PX / 2,
         width: vertical
           ? DIVIDER_HIT_SIZE_PX
-          : gridLinePx(divider.nodeRect.x + divider.nodeRect.width, cellSize) -
-            gridLinePx(divider.nodeRect.x, cellSize),
+          : gridLinePx(divider.nodeRect.x + divider.nodeRect.width, cellWidth) -
+            gridLinePx(divider.nodeRect.x, cellWidth),
         height: vertical
-          ? gridLinePx(divider.nodeRect.y + divider.nodeRect.height, cellSize) -
-            gridLinePx(divider.nodeRect.y, cellSize)
+          ? gridLinePx(
+              divider.nodeRect.y + divider.nodeRect.height,
+              cellHeight,
+            ) - gridLinePx(divider.nodeRect.y, cellHeight)
           : DIVIDER_HIT_SIZE_PX,
         cursor: vertical ? "col-resize" : "row-resize",
         touchAction: "none",

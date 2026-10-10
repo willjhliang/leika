@@ -38,7 +38,7 @@ interface DropHint {
   targetPaneId: string;
   region: ViewportDropRegion;
   rect: GridRect;
-  cellSize: number;
+  grid: GridSpec;
 }
 
 interface GestureBase {
@@ -251,10 +251,15 @@ export function ViewportWorkspace() {
         });
       }
       const canvas = canvasRef.current;
-      if (canvas === null || gesture.grid.cellSize <= 0) return;
+      if (
+        canvas === null ||
+        gesture.grid.cellWidth <= 0 ||
+        gesture.grid.cellHeight <= 0
+      )
+        return;
       const bounds = canvas.getBoundingClientRect();
-      const pointerX = (clientX - bounds.left) / gesture.grid.cellSize;
-      const pointerY = (clientY - bounds.top) / gesture.grid.cellSize;
+      const pointerX = (clientX - bounds.left) / gesture.grid.cellWidth;
+      const pointerY = (clientY - bounds.top) / gesture.grid.cellHeight;
       const target = Object.entries(gesture.startGeometry.panes).find(
         ([paneId, rect]) =>
           paneId !== gesture.sourcePaneId &&
@@ -301,7 +306,7 @@ export function ViewportWorkspace() {
         targetPaneId,
         region,
         rect: candidateRect,
-        cellSize: candidateGrid.cellSize,
+        grid: candidateGrid,
       };
       gesture.lastCandidate = candidate;
       gesture.lastHint = hint;
@@ -314,12 +319,17 @@ export function ViewportWorkspace() {
     (gesture: DividerGesture, clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
       if (!interactive) return;
-      if (canvas === null || gesture.grid.cellSize <= 0) return;
+      if (
+        canvas === null ||
+        gesture.grid.cellWidth <= 0 ||
+        gesture.grid.cellHeight <= 0
+      )
+        return;
       const bounds = canvas.getBoundingClientRect();
       const pointerCoordinate =
         gesture.divider.direction === "row"
-          ? (clientX - bounds.left) / gesture.grid.cellSize
-          : (clientY - bounds.top) / gesture.grid.cellSize;
+          ? (clientX - bounds.left) / gesture.grid.cellWidth
+          : (clientY - bounds.top) / gesture.grid.cellHeight;
       const requestedGridLine = Math.round(
         pointerCoordinate - gesture.pointerOffset,
       );
@@ -393,7 +403,8 @@ export function ViewportWorkspace() {
         !interactive ||
         event.button !== 0 ||
         gestureRef.current !== null ||
-        grid.cellSize <= 0
+        grid.cellWidth <= 0 ||
+        grid.cellHeight <= 0
       ) {
         return;
       }
@@ -499,7 +510,8 @@ export function ViewportWorkspace() {
         !interactive ||
         event.button !== 0 ||
         gestureRef.current !== null ||
-        grid.cellSize <= 0
+        grid.cellWidth <= 0 ||
+        grid.cellHeight <= 0
       ) {
         return;
       }
@@ -508,8 +520,8 @@ export function ViewportWorkspace() {
       const bounds = canvas.getBoundingClientRect();
       const pointerCoordinate =
         divider.direction === "row"
-          ? (event.clientX - bounds.left) / grid.cellSize
-          : (event.clientY - bounds.top) / grid.cellSize;
+          ? (event.clientX - bounds.left) / grid.cellWidth
+          : (event.clientY - bounds.top) / grid.cellHeight;
       event.preventDefault();
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -648,8 +660,8 @@ export function ViewportWorkspace() {
   const pristineRootOnly =
     displayLayout.root.type === "pane" &&
     displayLayout.root.pane_id === VIEWPORT_ROOT_PANE_ID;
-  const canvasWidth = grid.columns * grid.cellSize;
-  const canvasHeight = grid.rows * grid.cellSize;
+  const canvasWidth = grid.columns * grid.cellWidth;
+  const canvasHeight = grid.rows * grid.cellHeight;
   // Visibility changes layout, not renderer ownership. In particular an iframe
   // must not reconnect, and a video must not lose its time or manual pause.
   const retainedPaneIds = viewer.useViewport(
@@ -694,7 +706,7 @@ export function ViewportWorkspace() {
               pageId={displayPageId}
               paneId={paneId}
               rect={rect}
-              cellSize={grid.cellSize}
+              grid={grid}
               geometryTransition={paneGeometryTransition}
               isDragging={dragIndicator?.paneId === paneId}
               motionEnabled={motionEnabled}
@@ -715,7 +727,7 @@ export function ViewportWorkspace() {
           <ViewportDivider
             key={divider.key}
             divider={divider}
-            cellSize={grid.cellSize}
+            grid={grid}
             geometryTransition={paneGeometryTransition}
             beforeTitle={getPaneTitle(divider.beforePaneId)}
             afterTitle={getPaneTitle(divider.afterPaneId)}
@@ -735,7 +747,7 @@ export function ViewportWorkspace() {
             }
             className="pointer-events-none z-50"
             style={{
-              ...panePositionStyle(dropHint.rect, dropHint.cellSize),
+              ...panePositionStyle(dropHint.rect, dropHint.grid),
               transition: hintGeometryTransition,
               opacity: 0.75,
             }}

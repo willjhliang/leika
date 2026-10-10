@@ -5,7 +5,7 @@ import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 import { useViewer } from "../ViewerContext";
-import type { GridRect } from "./gridLayout";
+import type { GridRect, GridSpec } from "./gridLayout";
 import { panePositionStyle, paneTitle } from "./workspaceGeometry";
 import { displayedViewportPage } from "./viewportSelectors";
 import { ViewportPaneRenderer } from "./ViewportPaneRenderer";
@@ -18,7 +18,7 @@ export function ViewportPaneHost({
   pageId,
   paneId,
   rect,
-  cellSize,
+  grid,
   geometryTransition,
   isDragging,
   motionEnabled,
@@ -33,7 +33,7 @@ export function ViewportPaneHost({
   pageId: string | null;
   paneId: string;
   rect: GridRect | null;
-  cellSize: number;
+  grid: GridSpec;
   geometryTransition: string | undefined;
   isDragging: boolean;
   motionEnabled: boolean;
@@ -155,7 +155,7 @@ export function ViewportPaneHost({
               visibility: "hidden" as const,
               pointerEvents: "none" as const,
             }
-          : panePositionStyle(rect, cellSize)),
+          : panePositionStyle(rect, grid)),
         minWidth: 0,
         minHeight: 0,
         transition: isHiddenHost ? undefined : geometryTransition,

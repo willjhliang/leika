@@ -354,6 +354,14 @@ independent saved arrangement, and that arrangement wins on reload. Stable
 a Python restart; changing a display name or pane title does not change that
 identity.
 
+Pane boundaries snap to a 60-column by 60-row grid that fills the workspace.
+Horizontal steps are 1/60 of its width and vertical steps are 1/60 of its
+height, so equal full-axis splits into two through six panes align at any
+aspect ratio. Focus a divider and use the arrow keys to move one step, or
+Shift plus an arrow key to move four. Dense layouts expand the affected axis
+in multiples of 60 when needed to keep every pane at least four columns wide
+and three rows tall.
+
 Page layouts use the version-3 browser store, keyed by server URL,
 `workspace_id`, and `page_id`. When the default page has no version-3 layout,
 Leika imports the prior version-2 single-page layout and writes it under the

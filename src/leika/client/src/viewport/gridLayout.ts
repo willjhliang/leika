@@ -8,12 +8,9 @@ import {
   setViewportSplitWeights,
 } from "./layoutModel";
 
-// LCM(2..6): splitting the full width into 2-6 equal panes lands exactly on
-// integer grid lines. This exactness assumes the nominal grid; when minimum
-// pane sizes force a smaller cell (e.g. very short workspaces), the column
-// count stops being a multiple of 60 and equal splits round to the nearest
-// grid line instead.
-const NOMINAL_GRID_COLUMNS = 60;
+// LCM(2..6): splitting either full axis into 2-6 equal panes lands exactly on
+// integer grid lines, regardless of the workspace's aspect ratio.
+const NOMINAL_GRID_DIVISIONS = 60;
 const MIN_PANE_COLUMNS = 4;
 const MIN_PANE_ROWS = 3;
 const DROP_EDGE_FRACTION = 0.25;
@@ -34,7 +31,8 @@ export interface GridRect {
 export interface GridSpec {
   columns: number;
   rows: number;
-  cellSize: number;
+  cellWidth: number;
+  cellHeight: number;
 }
 
 export interface DividerGeometry {
@@ -77,7 +75,9 @@ function minimumSubtreeSpan(
   return maximum;
 }
 
-/** Create a square-cell grid large enough for every layout subtree. */
+/** Fit a 60 x 60 grid to the workspace with independent axis scales.
+ * Dense layouts grow each axis in multiples of 60 to preserve equal splits
+ * while still satisfying every subtree's minimum span. */
 export function gridSpecForLayout(
   layout: ViewportLayout,
   workspace: WorkspaceSize,
@@ -87,22 +87,25 @@ export function gridSpecForLayout(
     minimums?.columns ?? minimumSubtreeSpan(layout.root, "row");
   const minimumRows =
     minimums?.rows ?? minimumSubtreeSpan(layout.root, "column");
+  const columns =
+    Math.max(1, Math.ceil(minimumColumns / NOMINAL_GRID_DIVISIONS)) *
+    NOMINAL_GRID_DIVISIONS;
+  const rows =
+    Math.max(1, Math.ceil(minimumRows / NOMINAL_GRID_DIVISIONS)) *
+    NOMINAL_GRID_DIVISIONS;
   if (workspace.width <= 0 || workspace.height <= 0) {
     return {
-      columns: Math.max(NOMINAL_GRID_COLUMNS, minimumColumns),
-      rows: minimumRows,
-      cellSize: 0,
+      columns,
+      rows,
+      cellWidth: 0,
+      cellHeight: 0,
     };
   }
-  const cellSize = Math.min(
-    workspace.width / NOMINAL_GRID_COLUMNS,
-    workspace.width / minimumColumns,
-    workspace.height / minimumRows,
-  );
   return {
-    columns: workspace.width / cellSize,
-    rows: workspace.height / cellSize,
-    cellSize,
+    columns,
+    rows,
+    cellWidth: workspace.width / columns,
+    cellHeight: workspace.height / rows,
   };
 }
 
