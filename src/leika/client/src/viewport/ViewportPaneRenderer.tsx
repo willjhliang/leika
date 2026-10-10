@@ -8,6 +8,7 @@ import { ViewportViserRenderer } from "./ViewportViserRenderer";
 export function ViewportPaneRenderer({ pane }: { pane: ViewportPane }) {
   if (pane.kind !== "root" && pane.refreshPending !== undefined) return null;
   switch (pane.kind) {
+    case "empty":
     case "root":
       return null;
     case "image":

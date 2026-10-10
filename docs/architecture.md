@@ -301,6 +301,13 @@ Internally, an invisible root sentinel gives the dock manager a valid anchor
 before any data pane exists. It is not a public pane and occupies no workspace
 once visible panes are present.
 
+Pane handles own stable identity and one replaceable content worker. Content
+preparation runs before an atomic registry commit, which checks the captured
+worker, admits the replacement resource cost, and then retires the old worker.
+Placement declarations have their own replay lifecycle, preserving initial
+layout order while renderer declarations replace their previous payloads and
+updates. Empty content uses that same path and allocates no renderer.
+
 ## Scope
 
 Leika is a simple data workspace. The client carries GUI, dock, layout, image,

@@ -6,6 +6,7 @@ import contextlib
 import copy
 import dataclasses
 import io
+import json
 import threading
 import urllib.parse
 import uuid
@@ -126,6 +127,21 @@ class _PanesAggregate:
             if viser:
                 self.live_viser_panes += 1
 
+    @contextlib.contextmanager
+    def replace_renderer(self, *, old_viser: bool, new_viser: bool) -> Iterator[None]:
+        with self._lock:
+            delta = int(new_viser) - int(old_viser)
+            if self.live_viser_panes + delta > _VISER_PANE_MAX:
+                raise RuntimeError(
+                    f"A workspace cannot own more than {_VISER_PANE_MAX} viser panes."
+                )
+            self.live_viser_panes += delta
+            try:
+                yield
+            except BaseException:
+                self.live_viser_panes -= delta
+                raise
+
     def release_pane(self, *, viser: bool) -> None:
         with self._lock:
             if self.live_panes <= 0 or (viser and self.live_viser_panes <= 0):
@@ -135,7 +151,7 @@ class _PanesAggregate:
                 self.live_viser_panes -= 1
 
 
-def _pane_resource_cost(handle: "PaneHandle[Any]") -> _PaneResourceCost:
+def _pane_resource_cost(handle: "_PaneContent[Any]") -> _PaneResourceCost:
     props = handle._impl.props
     text_units = 0
     payload_bytes = 0
@@ -146,8 +162,12 @@ def _pane_resource_cost(handle: "PaneHandle[Any]") -> _PaneResourceCost:
             payload_bytes += len(value.encode("utf-8"))
         elif isinstance(value, bytes):
             payload_bytes += len(value)
+    if isinstance(handle._impl, _EmptyPaneHandleState):
+        options = json.dumps(handle._impl.resume_options)
+        text_units += utf16_code_unit_length(options)
+        payload_bytes += len(options.encode("utf-8"))
     decoded_pixels = 0
-    if isinstance(handle, ImagePaneHandle):
+    if isinstance(handle._impl, _ImagePaneHandleState):
         image = handle._impl.image
         payload_bytes += int(image.nbytes)
         decoded_pixels = int(image.shape[0]) * int(image.shape[1])
@@ -322,6 +342,16 @@ def _minimize_viser_gui(target: Any) -> None:
 
 
 @dataclasses.dataclass
+class _EmptyPaneHandleState:
+    pane_id: str
+    props: _messages.ViewportEmptyProps
+    api: Panes
+    resume_kind: str | None = None
+    resume_options: dict[str, Any] = dataclasses.field(default_factory=dict)
+    removed: bool = False
+
+
+@dataclasses.dataclass
 class _ImagePaneHandleState:
     pane_id: str
     props: _messages.ViewportImageProps
@@ -370,6 +400,7 @@ class _ViserPaneHandleState:
 
 _PaneStateT = TypeVar(
     "_PaneStateT",
+    _EmptyPaneHandleState,
     _ImagePaneHandleState,
     _MatplotlibPaneHandleState,
     _PlotlyPaneHandleState,
@@ -378,25 +409,28 @@ _PaneStateT = TypeVar(
 )
 
 
-def _scrub_pane_handle_locked(handle: "PaneHandle[Any]") -> None:
+def _scrub_pane_handle_locked(handle: "_PaneContent[Any]") -> None:
     """Drop all resource-charged state after terminal pane retirement."""
     props = handle._impl.props
     props.title = ""
     props.loading = False
-    if isinstance(handle, ImagePaneHandle):
+    if isinstance(handle._impl, _EmptyPaneHandleState):
+        handle._impl.resume_options.clear()
+        handle._impl.resume_kind = None
+    elif isinstance(handle._impl, _ImagePaneHandleState):
         handle._impl.image = np.empty((0,), dtype=np.uint8)
         handle._impl.requested_format = "auto"
         handle._impl.jpeg_quality = None
         handle._impl.props._data = b""
-    elif isinstance(handle, MatplotlibPaneHandle):
+    elif isinstance(handle._impl, _MatplotlibPaneHandleState):
         handle._impl.figure_ref = None
         handle._impl.props._svg = ""
-    elif isinstance(handle, PlotlyPaneHandle):
+    elif isinstance(handle._impl, _PlotlyPaneHandleState):
         handle._impl.props._plotly_json_str = ""
         handle._impl.props._theme_templates = ""
-    elif isinstance(handle, VideoPaneHandle):
+    elif isinstance(handle._impl, _VideoPaneHandleState):
         handle._impl.props._url = ""
-    elif isinstance(handle, ViserPaneHandle):
+    elif isinstance(handle._impl, _ViserPaneHandleState):
         handle._impl.api._websock_interface._viser_proxy.unregister(handle._impl.proxy_path)
         handle._impl.proxy_path = None
         handle._impl.proxy_address = None
@@ -404,10 +438,13 @@ def _scrub_pane_handle_locked(handle: "PaneHandle[Any]") -> None:
         handle._impl.props._port = None
 
 
-class PaneHandle(Generic[_PaneStateT]):
+class _PaneContent(Generic[_PaneStateT]):
     """Lifecycle and property logic shared by all pane handles."""
 
     _impl: _PaneStateT
+
+    def __init__(self, state: _PaneStateT) -> None:
+        self._impl = state
 
     def _check_not_removed(self) -> None:
         if self._impl.removed:
@@ -482,21 +519,21 @@ class PaneHandle(Generic[_PaneStateT]):
             # connected client bounds retained state across reconnects.
             self._queue_update(dataclasses.asdict(self._impl.props))
 
-    def _queue_update(self, updates: dict[str, Any]) -> None:
-        if getattr(self, "_refresh_controls", None):
+    def _update_message(self, updates: dict[str, Any]) -> _messages.ViewportPaneUpdateMessage:
+        handle = self._impl.api._handle_from_pane_id.get(self._impl.pane_id, self)
+        if getattr(handle, "_refresh_controls", None):
             updates = {
                 **updates,
-                "_refresh_revision": getattr(self, "_refresh_revision", 0),
-                "_refresh_controls": tuple(self._refresh_controls),
-                "_refresh_requests": tuple(getattr(self, "_refresh_requests", {}).values()),
+                "_refresh_revision": getattr(handle, "_refresh_revision", 0),
+                "_refresh_controls": tuple(handle._refresh_controls),
+                "_refresh_requests": tuple(getattr(handle, "_refresh_requests", {}).values()),
             }
-        self._impl.api._websock_interface.queue_message_or_raise(
-            _messages.ViewportPaneUpdateMessage(
-                page_id=self._impl.api._page_id,
-                pane_id=self._impl.pane_id,
-                updates=updates,
-            )
+        return _messages.ViewportPaneUpdateMessage(
+            page_id=self._impl.api._page_id, pane_id=self._impl.pane_id, updates=updates
         )
+
+    def _queue_update(self, updates: dict[str, Any]) -> None:
+        self._impl.api._websock_interface.queue_message_or_raise(self._update_message(updates))
 
     def _publish_update_locked(
         self,
@@ -616,12 +653,12 @@ class PaneHandle(Generic[_PaneStateT]):
                 api._release_resource_locked(self._impl.pane_id)
             finally:
                 try:
-                    api._aggregate.release_pane(viser=isinstance(self, ViserPaneHandle))
+                    api._aggregate.release_pane(viser=isinstance(self._impl, _ViserPaneHandleState))
                 finally:
                     _scrub_pane_handle_locked(self)
 
 
-class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
+class _ImagePaneContent(_PaneContent[_ImagePaneHandleState]):
     """Handle for updating or removing a native image pane."""
 
     def __init__(self, state: _ImagePaneHandleState) -> None:
@@ -722,7 +759,7 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
         self._set_prop("fit", value)
 
 
-class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
+class _MatplotlibPaneContent(_PaneContent[_MatplotlibPaneHandleState]):
     """Handle that owns bounded SVG, with only a weak caller-Figure reference."""
 
     def __init__(self, state: _MatplotlibPaneHandleState) -> None:
@@ -774,7 +811,7 @@ class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
         self._update_figure(figure, loading)
 
 
-class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
+class _PlotlyPaneContent(_PaneContent[_PlotlyPaneHandleState]):
     """Handle backed only by bounded JSON, never by the caller's mutable Figure."""
 
     def __init__(self, state: _PlotlyPaneHandleState) -> None:
@@ -828,7 +865,7 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
         self._update_figure(figure, loading)
 
 
-class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
+class _ViserPaneContent(_PaneContent[_ViserPaneHandleState]):
     """Handle for re-pointing or removing an embedded viser pane."""
 
     def __init__(self, state: _ViserPaneHandleState) -> None:
@@ -920,7 +957,7 @@ def _validate_video_fps(value: float | None) -> float | None:
     return None if value is None else float(validate_positive_number(value, "fps"))
 
 
-class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
+class _VideoPaneContent(_PaneContent[_VideoPaneHandleState]):
     """One browser-native video player.
 
     Updating with the same media URL preserves playback position and pause state.
@@ -963,6 +1000,333 @@ class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
         updates["_url"] = _prepare_video(self._impl.api, source)
         with self._impl.api._lock:
             self._publish_update_locked(updates)
+
+
+_ContentT = TypeVar("_ContentT", bound=_PaneContent[Any])
+
+
+@dataclasses.dataclass(frozen=True)
+class _PaneReplacement:
+    handle: PaneHandle[Any]
+    content: _PaneContent[Any]
+    loading: PaneLoading | None
+
+
+class PaneHandle(_PaneContent[_PaneStateT]):
+    """A stable workspace pane whose content can be replaced or cleared.
+
+    ``set_*`` methods select a renderer and its settings. ``clear()`` releases
+    its content while retaining layout, title, visibility and refresh bindings.
+    Handles returned by ``add_video``, ``add_image``, etc. also provide their
+    familiar typed ``update`` and properties. After clearing, ``update`` restores
+    that renderer with its previous settings. After selecting a different kind,
+    use ``set_*`` to switch back explicitly.
+    """
+
+    def __init__(self, state: _PaneStateT) -> None:
+        super().__init__(state)
+        factories: dict[type[Any], type[_PaneContent[Any]]] = {
+            _EmptyPaneHandleState: _PaneContent,
+            _ImagePaneHandleState: _ImagePaneContent,
+            _MatplotlibPaneHandleState: _MatplotlibPaneContent,
+            _PlotlyPaneHandleState: _PlotlyPaneContent,
+            _VideoPaneHandleState: _VideoPaneContent,
+            _ViserPaneHandleState: _ViserPaneContent,
+        }
+        self._content = factories[type(state)](state)
+
+    def _replace(
+        self,
+        kind: str,
+        *args: Any,
+        loading: PaneLoading | None = None,
+        expected: _PaneContent[Any] | None = None,
+        **options: Any,
+    ) -> None:
+        api = self._impl.api
+        with api._lock:
+            self._check_not_removed()
+            if expected is not None and self._content is not expected:
+                raise RuntimeError("Pane content changed during preparation.")
+            replacement = _PaneReplacement(self, self._content, loading)
+            title, visible = self.title, self.visible
+            effective_loading = self.loading if loading is None else _validate_loading(loading)
+        getattr(api, f"_add_{kind}")(
+            *args,
+            pane_id=self.pane_id,
+            title=title,
+            visible=visible,
+            loading=effective_loading,
+            placement="right",
+            relative_to=api._root_pane_id,
+            equalize_group=(),
+            replacement=replacement,
+            **options,
+        )
+
+    def clear(self, *, loading: PaneLoading | None = None) -> None:
+        """Release content and show an empty pane, keeping its ID and layout.
+
+        None preserves the loading overlay; False hides it. Renderer settings
+        are retained for a typed handle's next ``update``; source data, media,
+        figures and Viser proxy routes are released. Clearing does not stop a
+        caller-owned Viser server. Work preparing the previous content cannot
+        publish after this call succeeds.
+        """
+        with self._impl.api._lock:
+            self._check_not_removed()
+            current = self._content
+            state = current._impl
+            kind: str | None = None
+            options: dict[str, Any] = {}
+            if isinstance(state, _EmptyPaneHandleState):
+                kind, options = state.resume_kind, state.resume_options
+            elif isinstance(state, _ImagePaneHandleState):
+                kind = "image"
+                options = dict(
+                    format=state.requested_format,
+                    jpeg_quality=state.jpeg_quality,
+                    fit=state.props.fit,
+                )
+            elif isinstance(state, _VideoPaneHandleState):
+                kind = "video"
+                options = {
+                    key: getattr(state.props, key)
+                    for key in ("autoplay", "loop", "muted", "controls", "sync_group", "fps")
+                }
+            elif isinstance(state, _MatplotlibPaneHandleState):
+                kind = "matplotlib"
+            elif isinstance(state, _PlotlyPaneHandleState):
+                kind = "plotly"
+                _, config = _plotly_payload_from_json(state.props._plotly_json_str)
+                options = dict(config=config)
+            elif isinstance(state, _ViserPaneHandleState):
+                kind = "viser"
+                options = dict(minimize_gui=state.minimize_gui)
+        self._replace(
+            "pane", loading=loading, expected=current, resume_kind=kind, resume_options=options
+        )
+
+    def set_image(
+        self,
+        image: np.ndarray,
+        *,
+        format: Literal["auto", "png", "jpeg"] = "auto",
+        jpeg_quality: int | None = None,
+        fit: ImageFit | None = None,
+        loading: PaneLoading | None = None,
+    ) -> None:
+        """Display an image using :meth:`Panes.add_image` settings, keeping layout."""
+        self._replace(
+            "image", image, format=format, jpeg_quality=jpeg_quality, fit=fit, loading=loading
+        )
+
+    def set_video(
+        self,
+        source: Path | str,
+        *,
+        autoplay: bool = True,
+        loop: bool = True,
+        muted: bool = True,
+        controls: bool = True,
+        sync_group: str | None = None,
+        fps: float | None = None,
+        loading: PaneLoading | None = None,
+    ) -> None:
+        """Display a video using :meth:`Panes.add_video` settings, keeping layout."""
+        self._replace(
+            "video",
+            source,
+            autoplay=autoplay,
+            loop=loop,
+            muted=muted,
+            controls=controls,
+            sync_group=sync_group,
+            fps=fps,
+            loading=loading,
+        )
+
+    def set_matplotlib(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
+        """Display a Matplotlib figure as SVG, keeping the pane's layout."""
+        self._replace("matplotlib", figure, loading=loading)
+
+    def set_plotly(
+        self,
+        figure: go.Figure,
+        *,
+        config: Mapping[str, Any] | None = None,
+        loading: PaneLoading | None = None,
+    ) -> None:
+        """Display an interactive Plotly figure, keeping the pane's layout."""
+        self._replace("plotly", figure, config=config, loading=loading)
+
+    def set_viser(
+        self,
+        target: str | Any,
+        *,
+        minimize_gui: bool = True,
+        loading: PaneLoading | None = None,
+    ) -> None:
+        """Embed Viser using :meth:`Panes.add_viser` settings, keeping layout."""
+        self._replace("viser", target, minimize_gui=minimize_gui, loading=loading)
+
+    def _typed_content(self, content_type: type[_ContentT]) -> _ContentT:
+        with self._impl.api._lock:
+            self._check_not_removed()
+            content = self._content
+            if not isinstance(content, content_type):
+                raise RuntimeError(
+                    "This pane has different or empty content; use set_* to select its renderer."
+                )
+            return content
+
+    def _update_content(
+        self, kind: str, content_type: type[_ContentT], value: Any, **kwargs: Any
+    ) -> None:
+        options: dict[str, Any] | None = None
+        worker: _ContentT | None = None
+        with self._impl.api._lock:
+            self._check_not_removed()
+            content = self._content
+            state = content._impl
+            if not isinstance(state, _EmptyPaneHandleState):
+                worker = self._typed_content(content_type)
+            elif state.resume_kind != kind:
+                raise RuntimeError("This pane has a different renderer; use set_* to switch back.")
+            else:
+                options = copy.deepcopy(state.resume_options)
+                if kind == "image":
+                    kwargs["update_quality"] = kwargs.pop("jpeg_quality", None)
+                options.update(kwargs)
+        if options is not None:
+            self._replace(kind, value, expected=content, **options)
+        else:
+            assert worker is not None
+            getattr(worker, "update")(value, **kwargs)
+
+
+class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
+    """An image pane with convenient frame updates and image properties."""
+
+    @property
+    def image(self) -> np.ndarray:
+        """Independent copy of the current image. Assign to update."""
+        return self._typed_content(_ImagePaneContent).image
+
+    @image.setter
+    def image(self, image: np.ndarray) -> None:
+        self.update(image)
+
+    @property
+    def format(self) -> Literal["auto", "jpeg", "png"]:
+        """Requested image encoding."""
+        return self._typed_content(_ImagePaneContent).format
+
+    @property
+    def fit(self) -> ImageFit | None:
+        """Image sizing policy, or None to follow the viewer's preference."""
+        return self._typed_content(_ImagePaneContent).fit
+
+    @fit.setter
+    def fit(self, value: ImageFit | None) -> None:
+        self._typed_content(_ImagePaneContent).fit = value
+
+    def update(
+        self,
+        image: np.ndarray,
+        *,
+        loading: PaneLoading | None = None,
+        jpeg_quality: int | None = None,
+    ) -> None:
+        """Replace the image; optional JPEG quality applies to this frame only.
+
+        None preserves loading. After clear(), restore the previous image settings.
+        """
+        self._update_content(
+            "image", _ImagePaneContent, image, loading=loading, jpeg_quality=jpeg_quality
+        )
+
+
+class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
+    """A native video pane with convenient source and playback-setting updates."""
+
+    @property
+    def sync_group(self) -> str | None:
+        """Named browser-local playback group, or None for independent playback."""
+        return self._typed_content(_VideoPaneContent).sync_group
+
+    @sync_group.setter
+    def sync_group(self, value: str | None) -> None:
+        self._typed_content(_VideoPaneContent).sync_group = value
+
+    @property
+    def fps(self) -> float | None:
+        """Source frame rate for frame stepping; None disables frame stepping."""
+        return self._typed_content(_VideoPaneContent).fps
+
+    @fps.setter
+    def fps(self, value: float | None) -> None:
+        self._typed_content(_VideoPaneContent).fps = value
+
+    def update(self, source: Path | str, *, loading: PaneLoading | None = None) -> None:
+        """Replace the source, preserving settings; the same URL preserves playback.
+
+        Local Paths use the immutable HTTP asset registry. None preserves loading.
+        After clear(), restore the previous video settings and playback group.
+        """
+        self._update_content("video", _VideoPaneContent, source, loading=loading)
+
+
+class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
+    """A Matplotlib pane with convenient figure updates."""
+
+    @property
+    def figure(self) -> Any:
+        """Caller-owned figure, if still alive. Assign to update."""
+        return self._typed_content(_MatplotlibPaneContent).figure
+
+    @figure.setter
+    def figure(self, figure: Any) -> None:
+        self.update(figure)
+
+    def update(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
+        """Publish a figure after redrawing it; None preserves loading."""
+        self._update_content("matplotlib", _MatplotlibPaneContent, figure, loading=loading)
+
+
+class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
+    """A Plotly pane with convenient figure updates."""
+
+    @property
+    def figure(self) -> go.Figure:
+        """Independent figure snapshot. Assign it back to publish edits."""
+        return self._typed_content(_PlotlyPaneContent).figure
+
+    @figure.setter
+    def figure(self, figure: go.Figure) -> None:
+        self.update(figure)
+
+    def update(self, figure: go.Figure, *, loading: PaneLoading | None = None) -> None:
+        """Replace the figure, preserving config; None preserves loading."""
+        self._update_content("plotly", _PlotlyPaneContent, figure, loading=loading)
+
+
+class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
+    """An embedded Viser pane with convenient target updates."""
+
+    @property
+    def url(self) -> str | None:
+        """Current embed URL; a same-origin path for local servers."""
+        return self._typed_content(_ViserPaneContent).url
+
+    @property
+    def port(self) -> int | None:
+        """Viser server port, or None for explicit URL targets."""
+        return self._typed_content(_ViserPaneContent).port
+
+    def update(self, target: str | Any, *, loading: PaneLoading | None = None) -> None:
+        """Re-point Viser, preserving minimize_gui; None preserves loading."""
+        self._update_content("viser", _ViserPaneContent, target, loading=loading)
 
 
 class PaneGroup:
@@ -1034,6 +1398,32 @@ class PaneGroup:
             return self._placement, self._api._resolve_relative_to(relative_to), ()
         placement: Placement = "right" if self._axis == "row" else "bottom"
         return placement, members[-1], tuple(members)
+
+    def add_pane(
+        self,
+        *,
+        pane_id: str | None = None,
+        title: str = "",
+        visible: bool = True,
+        loading: PaneLoading = False,
+    ) -> PaneHandle[Any]:
+        """Add an empty pane, with placement managed by this container.
+
+        See :meth:`Panes.add_pane` for content and lifecycle behavior.
+        """
+        with self._declaration_lock:
+            placement, relative_to, equalize_group = self._next_declaration()
+            handle = self._api._add_pane(
+                pane_id=pane_id,
+                title=title,
+                visible=visible,
+                loading=loading,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            )
+            self._members.append(weakref.ref(handle))
+        return handle
 
     def add_image(
         self,
@@ -1241,6 +1631,24 @@ class PaneGrid:
         if self._count >= 2 * self._columns:
             self._count = self._columns
 
+    def add_pane(
+        self,
+        *,
+        pane_id: str | None = None,
+        title: str = "",
+        visible: bool = True,
+        loading: PaneLoading = False,
+    ) -> PaneHandle[Any]:
+        """Add an empty pane, with placement managed by this container.
+
+        See :meth:`Panes.add_pane` for content and lifecycle behavior.
+        """
+        with self._declaration_lock:
+            group = self._next_group()
+            handle = group.add_pane(pane_id=pane_id, title=title, visible=visible, loading=loading)
+            self._track(group, handle)
+        return handle
+
     def add_image(
         self,
         image: np.ndarray,
@@ -1429,7 +1837,7 @@ class Panes:
         return old
 
     @contextlib.contextmanager
-    def _resource_transaction_locked(self, handle: PaneHandle[Any]) -> Iterator[None]:
+    def _resource_transaction_locked(self, handle: _PaneContent[Any]) -> Iterator[None]:
         old = self._set_resource_locked(handle._impl.pane_id, _pane_resource_cost(handle))
         try:
             yield
@@ -1448,7 +1856,9 @@ class Panes:
             for handle in tuple(self._handle_from_pane_id.values()):
                 handle._impl.removed = True
                 try:
-                    self._aggregate.release_pane(viser=isinstance(handle, ViserPaneHandle))
+                    self._aggregate.release_pane(
+                        viser=isinstance(handle._impl, _ViserPaneHandleState)
+                    )
                 finally:
                     _scrub_pane_handle_locked(handle)
             self._handle_from_pane_id.clear()
@@ -1522,20 +1932,24 @@ class Panes:
         self,
         pane_id: str,
         handle: PaneHandle[Any],
-        create_message: _messages.Message,
+        create_message: _messages._ViewportPaneCreateMessage,
         relative_to: str,
         before_publish: Callable[[], None] | None = None,
+        replacement: _PaneReplacement | None = None,
     ) -> None:
         """Register a new pane handle and queue its creation messages."""
 
         with self._lock:
             if self._terminal:
                 raise RuntimeError("Panes is no longer active.")
+            if replacement is not None:
+                self._replace_pane_locked(handle, create_message, replacement, before_publish)
+                return
             if pane_id in self._handle_from_pane_id:
                 raise ValueError(f"Pane ID {pane_id!r} already exists.")
             if relative_to not in self._visible_pane_ids():
                 raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
-            is_viser = isinstance(handle, ViserPaneHandle)
+            is_viser = isinstance(handle._impl, _ViserPaneHandleState)
             self._aggregate.reserve_pane(viser=is_viser)
             try:
                 old_resource = self._set_resource_locked(pane_id, _pane_resource_cost(handle))
@@ -1544,7 +1958,22 @@ class Panes:
                     if before_publish is not None:
                         before_publish()
                     self._websock_interface.queue_messages_or_raise(
-                        (create_message, self._snapshot_message())
+                        (
+                            _messages.ViewportPaneMessage(
+                                page_id=self._page_id,
+                                pane_id=pane_id,
+                                placement=create_message.placement,
+                                relative_to=create_message.relative_to,
+                                equalize_group=create_message.equalize_group,
+                                props=_messages.ViewportEmptyProps(
+                                    title=handle.title,
+                                    visible=handle.visible,
+                                    loading=handle.loading,
+                                ),
+                            ),
+                            create_message,
+                            self._snapshot_message(),
+                        )
                     )
                 except BaseException:
                     self._handle_from_pane_id.pop(pane_id, None)
@@ -1558,8 +1987,114 @@ class Panes:
         """Return whether this registry owns a live Plotly pane. Lock held."""
 
         return any(
-            isinstance(handle, PlotlyPaneHandle) for handle in self._handle_from_pane_id.values()
+            isinstance(handle._impl, _PlotlyPaneHandleState)
+            for handle in self._handle_from_pane_id.values()
         )
+
+    def _replace_pane_locked(
+        self,
+        prepared: PaneHandle[Any],
+        message: _messages._ViewportPaneCreateMessage,
+        replacement: _PaneReplacement,
+        before_publish: Callable[[], None] | None,
+    ) -> None:
+        target, expected, loading = replacement.handle, replacement.content, replacement.loading
+        target._check_not_removed()
+        if target._content is not expected:
+            raise RuntimeError("Pane content changed during preparation.")
+        props = prepared._impl.props
+        props.title = target.title
+        props.visible = target.visible
+        props.loading = target.loading if loading is None else loading
+        message = dataclasses.replace(message, **{"props": copy.deepcopy(props)})
+        old = target._content
+        with (
+            self._aggregate.replace_renderer(
+                old_viser=isinstance(old._impl, _ViserPaneHandleState),
+                new_viser=isinstance(prepared._impl, _ViserPaneHandleState),
+            ),
+            self._resource_transaction_locked(prepared),
+        ):
+            if before_publish is not None:
+                before_publish()
+            messages: list[_messages.Message] = [message]
+            if getattr(target, "_refresh_controls", None):
+                messages.append(target._update_message({}))
+            self._websock_interface.queue_messages_or_raise(tuple(messages))
+        target._content = prepared._content
+        target._impl = prepared._impl
+        old._impl.removed = True
+        _scrub_pane_handle_locked(old)
+
+    def add_pane(
+        self,
+        *,
+        pane_id: str | None = None,
+        title: str = "",
+        visible: bool = True,
+        loading: PaneLoading = False,
+        placement: Placement = "right",
+        relative_to: str | None = None,
+    ) -> PaneHandle[Any]:
+        """Add an empty pane, ready for any of the handle's ``set_*`` methods.
+
+        The pane keeps its ID and browser arrangement when its content changes.
+        Empty panes render only the workspace background and optional title/loading
+        overlay; they do not create a player, image, plot, or embedded server.
+        Placement and persistence work just like :meth:`add_image`.
+        """
+        return self._add_pane(
+            pane_id=pane_id,
+            title=title,
+            visible=visible,
+            loading=loading,
+            placement=placement,
+            relative_to=relative_to,
+            equalize_group=(),
+        )
+
+    def _add_pane(
+        self,
+        *,
+        pane_id: str | None,
+        title: str,
+        visible: bool,
+        loading: PaneLoading,
+        placement: Placement,
+        relative_to: str | None,
+        equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
+        resume_kind: str | None = None,
+        resume_options: dict[str, Any] | None = None,
+    ) -> PaneHandle[Any]:
+        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
+        pane_id = self._validate_pane_declaration(pane_id, placement)
+        relative_to = self._resolve_relative_to(relative_to)
+        props = _messages.ViewportEmptyProps(title=title, visible=visible, loading=loading)
+        handle = PaneHandle(
+            _EmptyPaneHandleState(
+                pane_id,
+                copy.deepcopy(props),
+                self,
+                resume_kind,
+                copy.deepcopy(resume_options or {}),
+            )
+        )
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportEmptyMessage(
+                page_id=self._page_id,
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
+            replacement=replacement,
+        )
+        return handle
 
     def add_image(
         self,
@@ -1630,8 +2165,11 @@ class Panes:
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
+        update_quality: int | None = None,
     ) -> ImagePaneHandle:
         _validate_image_encoding_options(format, jpeg_quality)
+        _validate_image_encoding_options(format, update_quality)
         image = _validate_image(image)
         spec = _ndarray_snapshot_spec(image)
         if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
@@ -1647,7 +2185,11 @@ class Panes:
                     "Encoding an RGBA pane image as JPEG discards its alpha channel.",
                     stacklevel=3,
                 )
-            resolved_format, data = encode_image_binary(snapshot, format, jpeg_quality=jpeg_quality)
+            resolved_format, data = encode_image_binary(
+                snapshot,
+                format,
+                jpeg_quality=jpeg_quality if update_quality is None else update_quality,
+            )
             props = _messages.ViewportImageProps(
                 _data=data,
                 _format=resolved_format,
@@ -1678,6 +2220,7 @@ class Panes:
                     equalize_group=equalize_group,
                 ),
                 relative_to,
+                replacement=replacement,
             )
             return handle
 
@@ -1755,6 +2298,7 @@ class Panes:
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
     ) -> MatplotlibPaneHandle:
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
@@ -1789,6 +2333,7 @@ class Panes:
                 equalize_group=equalize_group,
             ),
             relative_to,
+            replacement=replacement,
         )
         return handle
 
@@ -1870,6 +2415,7 @@ class Panes:
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
     ) -> PlotlyPaneHandle:
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
@@ -1904,6 +2450,7 @@ class Panes:
                 equalize_group=equalize_group,
             ),
             relative_to,
+            replacement=replacement,
             before_publish=lambda: self._owner._ensure_page_plotly_js_sent(self._page_id),
         )
         return handle
@@ -1979,6 +2526,7 @@ class Panes:
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
     ) -> VideoPaneHandle:
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         if any(type(value) is not bool for value in (autoplay, loop, muted, controls)):
@@ -2012,6 +2560,7 @@ class Panes:
                 equalize_group=equalize_group,
             ),
             relative_to,
+            replacement=replacement,
         )
         return handle
 
@@ -2112,6 +2661,7 @@ class Panes:
         placement: Placement,
         relative_to: str | None,
         equalize_group: tuple[str, ...],
+        replacement: _PaneReplacement | None = None,
     ) -> ViserPaneHandle:
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         if type(minimize_gui) is not bool:
@@ -2153,6 +2703,7 @@ class Panes:
                     equalize_group=equalize_group,
                 ),
                 relative_to,
+                replacement=replacement,
             )
         except BaseException:
             proxy.unregister(proxy_path)

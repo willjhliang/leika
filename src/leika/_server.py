@@ -614,7 +614,7 @@ class Server:
         # Re-publish current content on the SAME ordered broadcast producer.
         # A private replay could overtake a newer live update. Other browsers
         # see their own encoding of this harmless same-content refresh.
-        from ._panes import ImagePaneHandle
+        from ._panes import _ImagePaneHandleState
 
         page_id = client._websock_connection.delivery_scope()
         if page_id is None:
@@ -625,7 +625,7 @@ class Server:
             return
         with page.panes._lock:
             for handle in page.panes._handle_from_pane_id.values():
-                if isinstance(handle, ImagePaneHandle) and (
+                if isinstance(handle._impl, _ImagePaneHandleState) and (
                     pane_id is None or handle.pane_id == pane_id
                 ):
                     handle._queue_update(dataclasses.asdict(handle._impl.props))

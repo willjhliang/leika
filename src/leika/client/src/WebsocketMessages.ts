@@ -760,6 +760,36 @@ export interface GuiRefreshMessage {
   updates: { [key: string]: any };
   request_id: string;
 }
+/** Stable placement declaration, retained in initial layout order.
+ *
+ * Renderer declarations have a separate lifecycle so replacing content never
+ * changes placement order for a newly connected browser.
+ *
+ *
+ * (automatically generated)
+ */
+export interface ViewportPaneMessage {
+  type: "ViewportPaneMessage";
+  page_id: string;
+  pane_id: string;
+  placement: "left" | "right" | "top" | "bottom";
+  relative_to: string;
+  equalize_group: string[];
+  props: { title: string; visible: boolean; loading: boolean | string };
+}
+/** Declare an empty pane, or clear an existing pane without changing its ID.
+ *
+ * (automatically generated)
+ */
+export interface ViewportEmptyMessage {
+  type: "ViewportEmptyMessage";
+  page_id: string;
+  pane_id: string;
+  placement: "left" | "right" | "top" | "bottom";
+  relative_to: string;
+  equalize_group: string[];
+  props: { title: string; visible: boolean; loading: boolean | string };
+}
 /** Create a native image pane in the pane workspace.
  *
  * (automatically generated)
@@ -1215,6 +1245,8 @@ export type Message =
   | GuiPreviewWatchMessage
   | GuiUpdateMessage
   | GuiRefreshMessage
+  | ViewportPaneMessage
+  | ViewportEmptyMessage
   | ViewportImageMessage
   | ViewportMatplotlibMessage
   | ViewportPlotlyMessage
@@ -1539,7 +1571,7 @@ function isProtocolStruct9(value: unknown): boolean {
     Object.hasOwn(value, "_tabs") &&
     Object.hasOwn(value, "order") &&
     Object.hasOwn(value, "visible") &&
-    isProtocolArray(value["_tabs"], (item) => isProtocolStruct35(item)) &&
+    isProtocolArray(value["_tabs"], (item) => isProtocolStruct36(item)) &&
     typeof value["order"] === "number" &&
     Number.isFinite(value["order"]) &&
     typeof value["visible"] === "boolean"
@@ -1632,7 +1664,7 @@ function isProtocolStruct12(value: unknown): boolean {
     Number.isFinite(value["step"]) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["show_value"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct36(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct37(item)) ||
       value["_marks"] === null)
   );
 }
@@ -1670,7 +1702,7 @@ function isProtocolStruct13(value: unknown): boolean {
       value["min_range"] === null) &&
     Number.isSafeInteger(value["precision"]) &&
     typeof value["fixed_endpoints"] === "boolean" &&
-    (isProtocolArray(value["_marks"], (item) => isProtocolStruct36(item)) ||
+    (isProtocolArray(value["_marks"], (item) => isProtocolStruct37(item)) ||
       value["_marks"] === null)
   );
 }
@@ -2054,6 +2086,20 @@ function isProtocolStruct28(value: unknown): boolean {
 function isProtocolStruct29(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
+    Object.keys(value).length === 3 &&
+    Object.hasOwn(value, "title") &&
+    Object.hasOwn(value, "visible") &&
+    Object.hasOwn(value, "loading") &&
+    typeof value["title"] === "string" &&
+    typeof value["visible"] === "boolean" &&
+    (typeof value["loading"] === "boolean" ||
+      typeof value["loading"] === "string")
+  );
+}
+
+function isProtocolStruct30(value: unknown): boolean {
+  return (
+    isProtocolRecord(value) &&
     Object.keys(value).length === 6 &&
     Object.hasOwn(value, "_data") &&
     Object.hasOwn(value, "_format") &&
@@ -2074,7 +2120,7 @@ function isProtocolStruct29(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct30(value: unknown): boolean {
+function isProtocolStruct31(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 4 &&
@@ -2090,7 +2136,7 @@ function isProtocolStruct30(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct31(value: unknown): boolean {
+function isProtocolStruct32(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -2108,7 +2154,7 @@ function isProtocolStruct31(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct32(value: unknown): boolean {
+function isProtocolStruct33(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 10 &&
@@ -2137,7 +2183,7 @@ function isProtocolStruct32(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct33(value: unknown): boolean {
+function isProtocolStruct34(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 5 &&
@@ -2155,7 +2201,7 @@ function isProtocolStruct33(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct34(value: unknown): boolean {
+function isProtocolStruct35(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 6 &&
@@ -2233,7 +2279,7 @@ function isProtocolStruct34(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct35(value: unknown): boolean {
+function isProtocolStruct36(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 3 &&
@@ -2248,7 +2294,7 @@ function isProtocolStruct35(value: unknown): boolean {
   );
 }
 
-function isProtocolStruct36(value: unknown): boolean {
+function isProtocolStruct37(value: unknown): boolean {
   return (
     isProtocolRecord(value) &&
     Object.keys(value).length === 2 &&
@@ -3189,6 +3235,70 @@ const messageValidators = new Map<
       typeof message["request_id"] === "string",
   ],
   [
+    "ViewportPaneMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 7 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportPaneMessage" &&
+      typeof message["page_id"] === "string" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct29(message["props"]),
+  ],
+  [
+    "ViewportEmptyMessage",
+    (message) =>
+      isProtocolRecord(message) &&
+      Object.keys(message).length === 7 &&
+      Object.hasOwn(message, "type") &&
+      Object.hasOwn(message, "page_id") &&
+      Object.hasOwn(message, "pane_id") &&
+      Object.hasOwn(message, "placement") &&
+      Object.hasOwn(message, "relative_to") &&
+      Object.hasOwn(message, "equalize_group") &&
+      Object.hasOwn(message, "props") &&
+      message["type"] === "ViewportEmptyMessage" &&
+      typeof message["page_id"] === "string" &&
+      typeof message["pane_id"] === "string" &&
+      (typeof message["pane_id"] !== "string" ||
+        isProtocolIdentifier(message["pane_id"])) &&
+      (message["placement"] === "left" ||
+        message["placement"] === "right" ||
+        message["placement"] === "top" ||
+        message["placement"] === "bottom") &&
+      typeof message["relative_to"] === "string" &&
+      (typeof message["relative_to"] !== "string" ||
+        isProtocolIdentifier(message["relative_to"])) &&
+      isProtocolArray(
+        message["equalize_group"],
+        (item) => typeof item === "string",
+      ) &&
+      (!Array.isArray(message["equalize_group"]) ||
+        message["equalize_group"].every(isProtocolIdentifier)) &&
+      isProtocolStruct29(message["props"]),
+  ],
+  [
     "ViewportImageMessage",
     (message) =>
       isProtocolRecord(message) &&
@@ -3218,7 +3328,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct29(message["props"]),
+      isProtocolStruct30(message["props"]),
   ],
   [
     "ViewportMatplotlibMessage",
@@ -3250,7 +3360,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct30(message["props"]),
+      isProtocolStruct31(message["props"]),
   ],
   [
     "ViewportPlotlyMessage",
@@ -3282,7 +3392,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct31(message["props"]),
+      isProtocolStruct32(message["props"]),
   ],
   [
     "ViewportVideoMessage",
@@ -3314,7 +3424,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct32(message["props"]),
+      isProtocolStruct33(message["props"]),
   ],
   [
     "ViewportViserMessage",
@@ -3346,7 +3456,7 @@ const messageValidators = new Map<
       ) &&
       (!Array.isArray(message["equalize_group"]) ||
         message["equalize_group"].every(isProtocolIdentifier)) &&
-      isProtocolStruct33(message["props"]),
+      isProtocolStruct34(message["props"]),
   ],
   [
     "ViewportPaneUpdateMessage",
@@ -3677,7 +3787,7 @@ const messageValidators = new Map<
       typeof message["uuid"] === "string" &&
       (typeof message["uuid"] !== "string" ||
         isProtocolIdentifier(message["uuid"])) &&
-      isProtocolStruct34(message["props"]),
+      isProtocolStruct35(message["props"]),
   ],
   [
     "CommandUpdateMessage",
@@ -3738,4 +3848,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "9a5dcf859a20";
+export const LEIKA_PROTOCOL = "3838e3696271";

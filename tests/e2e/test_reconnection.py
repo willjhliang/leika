@@ -199,7 +199,7 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
 
     group = "episode" if grouped else None
     if grouped:
-        leika_server.gui.add_video_controls("Playback", sync_group=group)
+        leika_server.gui.add_video_controls(sync_group=group)
     video_pane = leika_server.panes.add_video(
         CLIP,
         pane_id="video",

@@ -38,6 +38,18 @@ interface RefreshablePane {
   refreshPending?: { requestId: string | null; minimumRevision: number };
 }
 
+export interface ViewportEmptyProps extends RefreshableProps {
+  title: string;
+  visible: boolean;
+  loading: boolean | string;
+}
+
+export interface ViewportEmptyPane extends RefreshablePane {
+  kind: "empty";
+  paneId: string;
+  props: ViewportEmptyProps;
+}
+
 export interface ViewportImageProps extends RefreshableProps {
   _data: Uint8Array<ArrayBuffer> | null;
   _format: "jpeg" | "png";
@@ -128,6 +140,7 @@ export interface ViewportViserPane extends RefreshablePane {
 
 /** Server-declared panes that render content other than the 3D hidden root. */
 export type ViewportContentPane =
+  | ViewportEmptyPane
   | ViewportImagePane
   | ViewportMatplotlibPane
   | ViewportPlotlyPane
@@ -174,6 +187,15 @@ export function isViewportPageReady(state: ViewportState): boolean {
     stream.pageId === pageId &&
     stream.ready
   );
+}
+
+export interface ViewportEmptyDeclaration {
+  page_id: string;
+  pane_id: string;
+  props: ViewportEmptyProps;
+  placement: ViewportPanePlacement;
+  relative_to: string;
+  equalize_group: readonly string[];
 }
 
 export interface ViewportImageDeclaration {
@@ -224,6 +246,7 @@ export interface ViewportViserDeclaration {
 // A union of Partials rather than a Partial of an intersection, so that
 // same-named props with different types never collapse across pane kinds.
 export type ViewportPaneUpdates =
+  | Partial<ViewportEmptyProps>
   | Partial<ViewportImageProps>
   | Partial<ViewportMatplotlibProps>
   | Partial<ViewportPlotlyProps>
@@ -248,6 +271,7 @@ export interface ViewportActions {
   beginPageSubscription: (pageId: string, generation: number) => void;
   beginPageStream: (pageId: string, generation: number) => void;
   finishPageStream: (pageId: string, generation: number) => void;
+  addEmptyPane: (message: ViewportEmptyDeclaration) => void;
   addImagePane: (message: ViewportImageDeclaration) => void;
   addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
   addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
@@ -354,6 +378,9 @@ function copyPaneRecord(
 
 function contentPaneFromMessage(message: Message): ViewportContentPane | null {
   switch (message.type) {
+    case "ViewportPaneMessage":
+    case "ViewportEmptyMessage":
+      return { kind: "empty", paneId: message.pane_id, props: message.props };
     case "ViewportImageMessage":
       return { kind: "image", paneId: message.pane_id, props: message.props };
     case "ViewportMatplotlibMessage":
@@ -411,6 +438,7 @@ function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
     Number(bindings !== undefined) -
     Number(revision !== undefined) -
     Number(requests !== undefined);
+  if (pane.kind === "empty") return propCount === 3;
   if (pane.kind === "image") {
     const props = pane.props;
     return (
@@ -855,6 +883,8 @@ export function createViewportState(
       const declaration = contentPaneFromMessage(message);
       if (declaration !== null) {
         if (
+          message.type !== "ViewportPaneMessage" &&
+          message.type !== "ViewportEmptyMessage" &&
           message.type !== "ViewportImageMessage" &&
           message.type !== "ViewportMatplotlibMessage" &&
           message.type !== "ViewportPlotlyMessage" &&
@@ -1368,6 +1398,14 @@ export function createViewportState(
       });
     },
 
+    addEmptyPane: (message) => {
+      if (!admitDirect(directMessage("ViewportEmptyMessage", message))) return;
+      addContentPane(message, {
+        kind: "empty",
+        paneId: message.pane_id,
+        props: message.props,
+      });
+    },
     addImagePane: (message) => {
       if (!admitDirect(directMessage("ViewportImageMessage", message))) return;
       addContentPane(message, {

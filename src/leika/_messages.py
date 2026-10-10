@@ -138,7 +138,9 @@ class GuiTab:
 TagLiteral = Literal["GuiComponentMessage"]
 
 # Entity lifecycle markers, which drive coalescing and garbage collection.
-EntityType: TypeAlias = Literal["gui", "command", "notification", "modal", "page", "viewport"]
+EntityType: TypeAlias = Literal[
+    "gui", "command", "notification", "modal", "page", "viewport", "viewport-content"
+]
 """Kinds of removable entities in the protocol."""
 
 LifecyclePhase: TypeAlias = Literal["create", "update_dict", "update_simple", "remove"]
@@ -1169,7 +1171,7 @@ class _PageScopedMessage(Message):
 @dataclasses.dataclass
 class _ViewportPaneCreateMessage(
     _PageScopedMessage,
-    entity=EntityLifecycle("viewport", "create", ("page_id", "pane_id")),
+    entity=EntityLifecycle("viewport-content", "create", ("page_id", "pane_id")),
 ):
     page_id: str
     pane_id: str
@@ -1178,6 +1180,34 @@ class _ViewportPaneCreateMessage(
     equalize_group: Tuple[str, ...]
     """Sibling pane IDs whose combined share, including this pane's, is
     redistributed equally on insertion. Empty for standalone panes."""
+
+
+@dataclasses.dataclass
+class ViewportEmptyProps:
+    title: str
+    visible: bool
+    loading: bool | str
+
+
+@dataclasses.dataclass
+class ViewportPaneMessage(
+    _ViewportPaneCreateMessage,
+    entity=EntityLifecycle("viewport", "create", ("page_id", "pane_id")),
+):
+    """Stable placement declaration, retained in initial layout order.
+
+    Renderer declarations have a separate lifecycle so replacing content never
+    changes placement order for a newly connected browser.
+    """
+
+    props: ViewportEmptyProps
+
+
+@dataclasses.dataclass
+class ViewportEmptyMessage(_ViewportPaneCreateMessage):
+    """Declare an empty pane, or clear an existing pane without changing its ID."""
+
+    props: ViewportEmptyProps
 
 
 @dataclasses.dataclass
@@ -1273,7 +1303,7 @@ class ViewportViserMessage(_ViewportPaneCreateMessage):
 @dataclasses.dataclass
 class ViewportPaneUpdateMessage(
     _PageScopedMessage,
-    entity=EntityLifecycle("viewport", "update_dict", ("page_id", "pane_id")),
+    entity=EntityLifecycle("viewport-content", "update_dict", ("page_id", "pane_id")),
 ):
     """Update one or more properties of a pane."""
 
@@ -1291,6 +1321,11 @@ class ViewportPaneRemoveMessage(
 
     page_id: str
     pane_id: str
+
+    @override
+    def purge_entities(self) -> tuple[tuple[str, object], ...]:
+        key = (self.page_id, self.pane_id)
+        return (("viewport", key), ("viewport-content", key))
 
 
 @dataclasses.dataclass

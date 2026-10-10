@@ -147,6 +147,10 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
         case "RemoveCommandMessage":
           viewer.guiActions.removeCommand(message.uuid);
           return;
+        case "ViewportPaneMessage":
+        case "ViewportEmptyMessage":
+          viewer.viewportActions.addEmptyPane(message);
+          return;
         case "ViewportImageMessage":
           viewer.viewportActions.addImagePane(message);
           return;

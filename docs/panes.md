@@ -59,6 +59,7 @@ so the same controls stay available while viewers switch pages.
 
 | Call                                | Content                                                         | Reach for it when                                                |
 | ----------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------- |
+| {meth}`~leika.Panes.add_pane` | Empty, ready for any content | Reserve a slot before data is available |
 | {meth}`~leika.Panes.add_image`      | A NumPy array, encoded as PNG or JPEG                           | You have pixels: a camera frame, a render, a rasterized plot     |
 | {meth}`~leika.Panes.add_matplotlib` | A matplotlib figure, relayed as SVG                             | You already draw with matplotlib and want the figure as-is       |
 | {meth}`~leika.Panes.add_plotly`     | A Plotly figure, kept interactive                               | The viewer should hover, zoom, or pan the chart                  |
@@ -68,6 +69,46 @@ so the same controls stay available while viewers switch pages.
 Only `add_plotly` requires its library to be installed. `add_matplotlib` and
 `add_viser` are duck-typed -- on `savefig` and on `get_port()`/`get_host()`
 respectively -- so neither matplotlib nor viser is a Leika dependency.
+
+### Empty panes and changing content
+
+A pane's identity and arrangement are independent of its content. Reserve a
+slot with `add_pane()` on `server.panes`, a row, column, or grid:
+
+```python
+pane = server.panes.add_pane(pane_id="preview", title="Preview")
+pane.set_video(video_path, sync_group="episode", fps=30)
+pane.clear()                     # Blank, with no video player or controls.
+pane.set_image(frame)            # Same pane and browser arrangement.
+```
+
+Every pane handle supports `set_image`, `set_video`, `set_matplotlib`,
+`set_plotly`, `set_viser`, and `clear`. The setters take the renderer settings
+from the corresponding `add_*` method; title, visibility and placement stay
+with the pane. `loading=None` preserves the current overlay; pass
+`loading=False` to reveal prepared content in the same change.
+
+Existing convenience methods remain unchanged:
+
+```python
+video = server.panes.add_video(video_path, sync_group="episode", fps=30)
+video.update(next_video_path)
+video.clear()
+video.update(next_video_path)    # Restores the previous video settings.
+```
+
+Clearing releases source data and renderer resources while keeping the pane's
+ID, layout, title, visibility, and input refresh bindings. An empty pane has
+only the workspace background and optional title/loading overlay. It belongs
+to no playback group. Replacing or clearing Viser unregisters its proxy route;
+you still own the Viser server itself. Immutable HTTP assets remain subject to
+the server's bounded asset cache.
+
+Preparation that was already running for the previous content raises if it
+tries to publish after replacement or removal. Applications still own selection
+revisions for work they start outside Leika. A typed handle's `update` restores
+its renderer after clearing; after switching to another kind, use `set_*` to
+switch back explicitly. `remove()` permanently removes the pane itself.
 
 ### Images
 

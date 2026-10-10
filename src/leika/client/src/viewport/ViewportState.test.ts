@@ -1222,3 +1222,60 @@ it("admits video replay and live updates within media bounds", () => {
   actions.removePane("videos");
   expect(getState().panes.videos).toBeUndefined();
 });
+
+describe("replaceable pane content", () => {
+  it("keeps a viewer arrangement while releasing the old renderer's props", () => {
+    const { actions, getState } = createViewportHarness();
+    actions.addImagePane(imageDeclaration("a"));
+    actions.addImagePane(
+      imageDeclaration("b", { relative_to: "a", placement: "bottom" }),
+    );
+    const layout = getState().layout;
+    const empty = {
+      ...imageDeclaration("a"),
+      props: { title: "Preview", visible: true, loading: false },
+    };
+    actions.addEmptyPane(empty);
+    expect(getState().layout).toEqual(layout);
+    expect(getState().panes.a).toEqual({
+      kind: "empty",
+      paneId: "a",
+      props: empty.props,
+    });
+    actions.addViserPane(viserDeclaration("a"));
+    expect(getState().layout).toEqual(layout);
+    expect(getState().panes.a.kind).toBe("viser");
+    actions.addEmptyPane(empty);
+    expect(getState().layout).toEqual(layout);
+    expect(getState().panes.a).not.toHaveProperty("props._url");
+    expect(getState().panes.a).not.toHaveProperty("props._data");
+  });
+
+  it("rejects payloads smuggled into empty panes and releases iframe admission", () => {
+    const { actions, viewportActions, getState } = createViewportHarness();
+    addViserPanes(
+      viewportActions,
+      DEFAULT_PAGE_ID,
+      "scene",
+      MAX_LIVE_VIEWPORT_VISER_PANES,
+    );
+    const empty = {
+      ...viserDeclaration("scene0"),
+      pane_id: "scene-0",
+      props: { title: "Empty", visible: true, loading: false },
+    };
+    expect(
+      actions.preflightMessageBatch([
+        {
+          type: "ViewportEmptyMessage",
+          ...empty,
+          props: { ...empty.props, _url: "https://example.com" },
+        } as never,
+      ]),
+    ).not.toBeNull();
+    actions.addEmptyPane(empty);
+    actions.addViserPane(viserDeclaration("replacement"));
+    expect(getState().panes.replacement.kind).toBe("viser");
+    expect(getState().panes["scene-0"].kind).toBe("empty");
+  });
+});
