@@ -9,7 +9,7 @@ VIDEOS = "[...document.querySelectorAll('video')]"
 
 
 def setup_group(server: leika.Server):
-    controls = server.gui.add_video_controls("Playback", sync_group="episode")
+    controls = server.gui.add_video_controls(sync_group="episode")
     grid = server.panes.add_grid(columns=2)
     panes = [
         grid.add_video(CLIP, title=f"Camera {i}", sync_group="episode", fps=10) for i in range(4)
@@ -130,4 +130,65 @@ def test_loading_barrier_dock_collapse_and_membership_updates(
     expect(page.get_by_role("button", name="Play Playback", exact=True)).to_be_disabled()
     controls.remove()
     expect(page.get_by_role("group", name="Playback playback", exact=True)).to_have_count(0)
+    assert not page_errors
+
+
+def test_dock_label_selects_standard_row_layout_without_resetting_playback(
+    leika_page: Page, leika_server: leika.Server, page_errors: list[str]
+) -> None:
+    controls, _ = setup_group(leika_server)
+    leika_server.gui.add_text("Reference", "x")
+    page = leika_page
+    page.wait_for_function(f"{VIDEOS}.length === 4 && {VIDEOS}.every(v => v.readyState >= 3)")
+    full = page.get_by_role("group", name="Playback playback", exact=True)
+    full.get_by_role("button", name="Pause Playback", exact=True).click()
+    seek = full.get_by_role("slider")
+    seek.focus()
+    seek.press("Home")
+    for _ in range(5):
+        seek.press("ArrowRight")
+    page.wait_for_function(f"{VIDEOS}.every(v => Math.abs(v.currentTime - .5) < .02)")
+    full.get_by_role("combobox").click()
+    page.get_by_role("option", name="1.5×", exact=True).click()
+    full.get_by_role("button", name="Loop Playback", exact=True).click()
+    expect(full.locator("span.tabular-nums")).to_have_text("0:00")
+    expect(full.get_by_role("button", name="Next frame Playback", exact=True)).to_be_visible()
+    assert full.bounding_box()["height"] == 32
+
+    def assert_fits(bar):
+        geometry = bar.evaluate("""el => {
+            const row = el.getBoundingClientRect();
+            const slider = el.querySelector('[data-slot="slider"]').getBoundingClientRect();
+            const buttons = [...el.querySelectorAll('button')].map(b => b.getBoundingClientRect());
+            return {sliderWidth: slider.width,
+                fits: buttons.every(b => b.left >= row.left && b.right <= row.right &&
+                    b.top >= row.top && b.bottom <= row.bottom)};
+        }""")
+        assert geometry["sliderWidth"] >= 40, geometry
+        assert geometry["fits"], geometry
+
+    assert_fits(full)
+    controls.label = "Timeline"
+    compact = page.get_by_role("group", name="Timeline playback", exact=True)
+    expect(compact.get_by_role("button", name="Play Timeline", exact=True)).to_be_visible()
+    expect(compact.get_by_role("button")).to_have_count(2)  # Play and loop; speed is a combobox.
+    expect(compact.locator("span.tabular-nums")).to_have_count(0)
+    expect(compact.locator('[data-slot="select-value"]')).to_have_text("1.5×")
+    expect(compact.get_by_role("button", name="Loop Timeline", exact=True)).to_have_attribute(
+        "aria-pressed", "false"
+    )
+    labelled_row = compact.locator("xpath=ancestor::*[@data-leika-gui-row]")
+    assert labelled_row.bounding_box()["height"] == 24
+    reference = page.get_by_role("textbox", name="Reference")
+    assert compact.bounding_box()["x"] == reference.bounding_box()["x"]
+    assert_fits(compact)
+    compact.get_by_role("slider").focus()
+    compact.get_by_role("slider").press("ArrowRight")
+    page.wait_for_function(f"{VIDEOS}.every(v => v.paused && Math.abs(v.currentTime - .6) < .02)")
+
+    controls.label = None
+    expect(full.get_by_role("button", name="Next frame Playback", exact=True)).to_be_visible()
+    expect(full.locator('[data-slot="select-value"]')).to_have_text("1.5×")
+    expect(full.get_by_role("slider")).to_have_attribute("aria-valuenow", "0.6")
+    assert full.bounding_box()["height"] == 32
     assert not page_errors

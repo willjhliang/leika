@@ -62,7 +62,12 @@ export interface GuiVideoControlsMessage {
   type: "GuiVideoControlsMessage";
   uuid: string;
   container_uuid: string;
-  props: { order: number; label: string; sync_group: string; visible: boolean };
+  props: {
+    order: number;
+    label: string | null;
+    sync_group: string;
+    visible: boolean;
+  };
 }
 /** GuiDividerMessage(uuid: 'str', container_uuid: 'str', props: 'GuiDividerProps')
  *
@@ -1460,7 +1465,7 @@ function isProtocolStruct4(value: unknown): boolean {
     Object.hasOwn(value, "visible") &&
     typeof value["order"] === "number" &&
     Number.isFinite(value["order"]) &&
-    typeof value["label"] === "string" &&
+    (typeof value["label"] === "string" || value["label"] === null) &&
     typeof value["sync_group"] === "string" &&
     typeof value["visible"] === "boolean"
   );
@@ -3733,4 +3738,4 @@ export function validateMessage(message: unknown): asserts message is Message {
 /** Hash of the message schema this bundle was built against. Sent with
  * the version at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "59e23dada2f0";
+export const LEIKA_PROTOCOL = "9a5dcf859a20";

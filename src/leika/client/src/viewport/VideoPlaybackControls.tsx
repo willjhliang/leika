@@ -35,12 +35,12 @@ function formatTime(seconds: number): string {
 export function VideoPlaybackControls({
   playback,
   playerRef,
-  label,
+  label: controlLabel,
   grouped = false,
 }: {
   playback: VideoPlayback;
   playerRef?: RefObject<HTMLDivElement | null>;
-  label: string;
+  label: string | null;
   grouped?: boolean;
 }) {
   const { paused, time, duration, rate, fps, loop, buffering, error } =
@@ -57,6 +57,13 @@ export function VideoPlaybackControls({
     return () => document.removeEventListener("fullscreenchange", sync);
   }, [playerRef]);
   const dock = playerRef === undefined;
+  const compact = dock && controlLabel !== null;
+  const label = controlLabel ?? "Playback";
+  const status = error
+    ? "Could not load a video in this group."
+    : buffering
+      ? "Waiting for video…"
+      : undefined;
   const fullControls = dock || !grouped || fullscreen;
   const canSeek = duration > 0 && !error;
   const timeline = (
@@ -78,15 +85,15 @@ export function VideoPlaybackControls({
     <div
       role="group"
       aria-label={`${label} playback`}
+      title={dock ? status : undefined}
       className={
         dock
-          ? "@container space-y-1"
+          ? "min-w-0"
           : `absolute right-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100 ${fullControls ? "left-0" : ""}`
       }
     >
-      {dock && <div className="px-2">{timeline}</div>}
       <div
-        className={`flex h-8 items-center gap-1 rounded-md px-1 ${dock ? "" : "border bg-card text-card-foreground shadow-sm"}`}
+        className={`flex min-w-0 items-center gap-1 rounded-md ${compact ? "h-6" : "h-8"} ${dock ? "" : "border bg-card px-1 text-card-foreground shadow-sm"}`}
       >
         {fullControls && (
           <>
@@ -105,7 +112,7 @@ export function VideoPlaybackControls({
                 <PauseIcon fill="currentColor" strokeWidth={0} />
               )}
             </Button>
-            {fps !== null && (
+            {!compact && fps !== null && (
               <>
                 <Button
                   variant="ghost"
@@ -131,28 +138,27 @@ export function VideoPlaybackControls({
                 </Button>
               </>
             )}
-            {!dock && <div className="min-w-4 flex-1">{timeline}</div>}
+            <div className="min-w-4 flex-1">{timeline}</div>
           </>
         )}
-        <div
-          className={
-            dock
-              ? "flex min-w-0 flex-1 items-center"
-              : "ml-auto flex shrink-0 items-center"
-          }
-        >
+        <div className="ml-auto flex shrink-0 items-center">
           {fullControls && (
             <>
-              <span
-                className={`${dock ? "flex-1" : ""} px-1 text-[11px] tabular-nums`}
-                aria-hidden="true"
-              >
-                {formatTime(time)}
-                <span className="@max-[260px]:hidden text-muted-foreground">
-                  {" "}
-                  / {formatTime(duration)}
+              {!compact && (
+                <span
+                  className={`px-1 tabular-nums ${dock ? "text-xs" : "text-[11px]"}`}
+                  aria-hidden="true"
+                  title={`${formatTime(time)} / ${formatTime(duration)}`}
+                >
+                  {formatTime(time)}
+                  {!dock && (
+                    <span className="@max-[260px]:hidden text-muted-foreground">
+                      {" "}
+                      / {formatTime(duration)}
+                    </span>
+                  )}
                 </span>
-              </span>
+              )}
               <Select
                 value={rate}
                 onValueChange={(value) => {
@@ -162,7 +168,7 @@ export function VideoPlaybackControls({
                 <SelectTrigger
                   size="xs"
                   variant="ghost"
-                  className="px-1 text-[11px] text-muted-foreground [&>svg]:hidden"
+                  className={`px-1 text-muted-foreground [&>svg]:hidden ${dock ? "text-xs" : "text-[11px]"}`}
                   aria-label={`${label} playback speed`}
                   title="Playback speed"
                   disabled={!canSeek}
@@ -218,11 +224,9 @@ export function VideoPlaybackControls({
           )}
         </div>
       </div>
-      {dock && (buffering || error) && (
-        <p role="status" className="px-1 text-xs text-muted-foreground">
-          {error
-            ? "Could not load a video in this group."
-            : "Waiting for video…"}
+      {dock && status && (
+        <p role="status" className="sr-only">
+          {status}
         </p>
       )}
     </div>

@@ -35,6 +35,16 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_video_controls()</code>
 </span>
 </a>
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_video_controls">
+<span class="gallery-media">
+<img class="only-light" src="_static/gallery/video-controls-labelled-light.png" alt="Labelled video controls" loading="lazy">
+<img class="only-dark" src="_static/gallery/video-controls-labelled-dark.png" alt="Labelled video controls" loading="lazy">
+</span>
+<span class="gallery-caption">
+<span>Labelled video controls</span>
+<code>add_video_controls()</code>
+</span>
+</a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_multi_slider">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/multi-slider-light.png" alt="Multi slider" loading="lazy">

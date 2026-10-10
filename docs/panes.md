@@ -373,7 +373,7 @@ A named group gives the videos on the displayed page one timeline in each
 browser. The dock component and fullscreen overlays control that same timeline:
 
 ```python
-server.gui.add_video_controls("Playback", sync_group="episode")
+server.gui.add_video_controls(sync_group="episode")
 grid = server.panes.add_grid(columns=2)
 for index in range(4):
     grid.add_video(
@@ -383,6 +383,14 @@ for index in range(4):
         fps=30,
     )
 ```
+
+Without a label, the dock component is one full-width 32px row: play/pause,
+previous/next frame, seek, elapsed time, speed and loop. Elapsed time stays
+visible; hover over it for total duration. Pass a label, for example
+`server.gui.add_video_controls("Playback", sync_group="episode")`, for a standard
+24px labelled row containing only play/pause, seek, speed and loop. The label
+uses the same left column and styling as other GUI controls. Update
+`controls.label` to switch layouts; `None` restores the full row.
 
 The controller belongs to the viewer, independently of the dock's visibility.
 Play/pause, seeking, speed and looping affect every group member; other browsers

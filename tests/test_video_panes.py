@@ -82,7 +82,8 @@ def test_video_update_settles_loading_atomically(server: leika.Server) -> None:
 
 
 def test_shared_video_api_replay_and_group_assignment(server: leika.Server) -> None:
-    controls = server.gui.add_video_controls("Playback", sync_group="episode")
+    controls = server.gui.add_video_controls(sync_group="episode")
+    assert controls.label is None
     with server.gui.add_folder("Nested") as folder:
         nested = folder.add_video_controls("Other", sync_group="episode")
     for api in (server.panes, server.panes.add_row(), server.panes.add_grid(columns=2)):
@@ -96,6 +97,9 @@ def test_shared_video_api_replay_and_group_assignment(server: leika.Server) -> N
         pane.remove()
     controls.visible = False
     controls.label = "Timeline"
+    assert controls.label == "Timeline"
+    controls.label = None
+    assert controls.label is None
     nested.sync_group = "other"
     messages = list(server._websock_server.get_message_buffer().message_from_id.values())
     creates = [m for m in messages if isinstance(m, _messages.GuiVideoControlsMessage)]

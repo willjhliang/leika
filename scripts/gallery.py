@@ -69,6 +69,12 @@ ENTRIES = [
                 slug="video-controls",
                 title="Video controls",
                 ref="add_video_controls",
+                code='gui.add_video_controls(sync_group="episode")',
+            ),
+            Entry(
+                slug="video-controls-labelled",
+                title="Labelled video controls",
+                ref="add_video_controls",
                 code='gui.add_video_controls("Playback", sync_group="episode")',
             ),
             Entry(

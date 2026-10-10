@@ -2274,13 +2274,18 @@ class GuiApi(GuiContainer):
 
     def add_video_controls(
         self,
-        label: str,
+        label: str | None = None,
         *,
         sync_group: str,
         order: float | None = None,
         visible: bool = True,
     ) -> GuiVideoControlsHandle:
-        """Add shared play/pause, seek, speed, loop and frame-step controls.
+        """Add shared video playback controls.
+
+        Without a label, a full-width 32px row contains play/pause, frame
+        stepping, seeking, elapsed time, speed and looping. With a label, a
+        standard 24px labelled row contains play/pause, seeking, speed and
+        looping. Set ``label=None`` to switch back to the full layout.
 
         Videos join by passing the same ``sync_group`` to ``add_video``.
         Playback belongs to each browser, independently of Python and other

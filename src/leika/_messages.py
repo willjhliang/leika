@@ -472,8 +472,8 @@ class GuiHtmlMessage(_CreateGuiComponentMessage):
 class GuiVideoControlsProps:
     order: float
     """Order value for arranging GUI elements."""
-    label: str
-    """Label shown above the shared playback controls."""
+    label: str | None
+    """Optional row label. Labelled controls use the compact playback layout."""
     sync_group: str
     """Playback group controlled in each browser independently."""
     visible: bool
