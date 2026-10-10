@@ -92,8 +92,11 @@ export function VideoPlaybackControls({
           : `absolute right-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100 ${fullControls ? "left-0" : ""}`
       }
     >
+      {/* Each item contributes a 6px content inset, giving a 12px visible gap.
+          The 24px icon buttons already inset their 12px icons by 6px; the
+          speed trigger uses 5px padding plus its 1px transparent border. */}
       <div
-        className={`flex min-w-0 items-center gap-1 rounded-md ${compact ? "h-6" : "h-8"} ${dock ? "" : "border bg-card px-1 text-card-foreground shadow-sm"}`}
+        className={`flex min-w-0 items-center rounded-md ${compact ? "h-6" : "h-8"} ${dock ? "" : "border bg-card px-1 text-card-foreground shadow-sm"}`}
       >
         {fullControls && (
           <>
@@ -138,91 +141,85 @@ export function VideoPlaybackControls({
                 </Button>
               </>
             )}
-            <div className="min-w-4 flex-1">{timeline}</div>
-          </>
-        )}
-        <div className="ml-auto flex shrink-0 items-center">
-          {fullControls && (
-            <>
-              {!compact && (
-                <span
-                  className={`px-1 tabular-nums ${dock ? "text-xs" : "text-[11px]"}`}
-                  aria-hidden="true"
-                  title={`${formatTime(time)} / ${formatTime(duration)}`}
-                >
-                  {formatTime(time)}
-                  {!dock && (
-                    <span className="@max-[260px]:hidden text-muted-foreground">
-                      {" "}
-                      / {formatTime(duration)}
-                    </span>
-                  )}
-                </span>
-              )}
-              <Select
-                value={rate}
-                onValueChange={(value) => {
-                  if (value !== null) playback.setRate(value);
-                }}
+            <div className="min-w-7 flex-1 px-1.5">{timeline}</div>
+            {!compact && (
+              <span
+                className={`shrink-0 px-1.5 tabular-nums whitespace-nowrap ${dock ? "text-xs" : "text-[11px]"}`}
+                aria-hidden="true"
+                title={`${formatTime(time)} / ${formatTime(duration)}`}
               >
-                <SelectTrigger
-                  size="xs"
-                  variant="ghost"
-                  className={`px-1 text-muted-foreground [&>svg]:hidden ${dock ? "text-xs" : "text-[11px]"}`}
-                  aria-label={`${label} playback speed`}
-                  title="Playback speed"
-                  disabled={!canSeek}
-                >
-                  <SelectValue>{rate}×</SelectValue>
-                </SelectTrigger>
-                <SelectContent
-                  container={fullscreen ? playerRef : undefined}
-                  side="top"
-                  align="end"
-                  alignItemWithTrigger={false}
-                  className="min-w-20"
-                >
-                  {PLAYBACK_RATES.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {value}×
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
+                {formatTime(time)}
+                {!dock && (
+                  <span className="@max-[260px]:hidden text-muted-foreground">
+                    {" "}
+                    / {formatTime(duration)}
+                  </span>
+                )}
+              </span>
+            )}
+            <Select
+              value={rate}
+              onValueChange={(value) => {
+                if (value !== null) playback.setRate(value);
+              }}
+            >
+              <SelectTrigger
+                size="xs"
                 variant="ghost"
-                size="icon-xs"
-                className="shrink-0"
-                aria-label={`Loop ${label}`}
-                aria-pressed={loop}
-                title="Loop"
-                onClick={playback.toggleLoop}
+                className={`px-[5px] text-muted-foreground [&>svg]:hidden ${dock ? "text-xs" : "text-[11px]"}`}
+                aria-label={`${label} playback speed`}
+                title="Playback speed"
+                disabled={!canSeek}
               >
-                <RepeatIcon className={loop ? "" : "opacity-40"} />
-              </Button>
-            </>
-          )}
-          {playerRef && (
+                <SelectValue>{rate}×</SelectValue>
+              </SelectTrigger>
+              <SelectContent
+                container={fullscreen ? playerRef : undefined}
+                side="top"
+                align="end"
+                alignItemWithTrigger={false}
+                className="min-w-20"
+              >
+                {PLAYBACK_RATES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value}×
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               variant="ghost"
               size="icon-xs"
-              className="ml-auto shrink-0"
-              aria-label={`${fullscreen ? "Exit fullscreen" : "Fullscreen"} ${label}`}
-              title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-              disabled={!document.fullscreenEnabled}
-              onClick={() => {
-                const player = playerRef.current!;
-                void (
-                  document.fullscreenElement === player
-                    ? document.exitFullscreen()
-                    : player.requestFullscreen()
-                ).catch(() => {});
-              }}
+              className="shrink-0"
+              aria-label={`Loop ${label}`}
+              aria-pressed={loop}
+              title="Loop"
+              onClick={playback.toggleLoop}
             >
-              {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+              <RepeatIcon className={loop ? "" : "opacity-40"} />
             </Button>
-          )}
-        </div>
+          </>
+        )}
+        {playerRef && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="ml-auto shrink-0"
+            aria-label={`${fullscreen ? "Exit fullscreen" : "Fullscreen"} ${label}`}
+            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            disabled={!document.fullscreenEnabled}
+            onClick={() => {
+              const player = playerRef.current!;
+              void (
+                document.fullscreenElement === player
+                  ? document.exitFullscreen()
+                  : player.requestFullscreen()
+              ).catch(() => {});
+            }}
+          >
+            {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+          </Button>
+        )}
       </div>
       {dock && status && (
         <p role="status" className="sr-only">

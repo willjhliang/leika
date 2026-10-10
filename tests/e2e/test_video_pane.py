@@ -302,4 +302,4 @@ def test_video_control_hover_geometry(
                 speedText.left - text.right, loop.left - speedText.right,
                 fullscreen.left - loop.right];
         }""")
-        assert all(8 <= gap <= 12 for gap in gaps), gaps
+        assert gaps == pytest.approx([12] * len(gaps), abs=0.5), gaps

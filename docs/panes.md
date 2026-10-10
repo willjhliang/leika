@@ -388,7 +388,9 @@ Without a label, the dock component is one full-width 32px row: play/pause,
 previous/next frame, seek, elapsed time, speed and loop. Elapsed time stays
 visible; hover over it for total duration. Pass a label, for example
 `server.gui.add_video_controls("Playback", sync_group="episode")`, for a standard
-24px labelled row containing only play/pause, seek, speed and loop. The label
+24px labelled row containing only play/pause, seek, speed and loop. Both dock
+layouts and video overlays use 12px gaps between icon bounds, text and the
+timeline, with 24px button targets. The label
 uses the same left column and styling as other GUI controls. Update
 `controls.label` to switch layouts; `None` restores the full row.
 

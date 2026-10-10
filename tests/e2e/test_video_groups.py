@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Page, expect
 
 import leika
@@ -160,12 +161,25 @@ def test_dock_label_selects_standard_row_layout_without_resetting_playback(
             const row = el.getBoundingClientRect();
             const slider = el.querySelector('[data-slot="slider"]').getBoundingClientRect();
             const buttons = [...el.querySelectorAll('button')].map(b => b.getBoundingClientRect());
+            const contents = [...el.querySelectorAll(
+                '[data-slot="button"], [data-slot="slider"], span.tabular-nums, [data-slot="select-trigger"]'
+            )].map(item => {
+                const content = item.querySelector(
+                    '[data-slot="slider-track"], [data-slot="select-value"], svg'
+                );
+                if (content) return content.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(item);
+                return range.getBoundingClientRect();
+            });
             return {sliderWidth: slider.width,
+                gaps: contents.slice(1).map((item, i) => item.left - contents[i].right),
                 fits: buttons.every(b => b.left >= row.left && b.right <= row.right &&
                     b.top >= row.top && b.bottom <= row.bottom)};
         }""")
         assert geometry["sliderWidth"] >= 40, geometry
         assert geometry["fits"], geometry
+        assert geometry["gaps"] == pytest.approx([12] * len(geometry["gaps"]), abs=0.5)
 
     assert_fits(full)
     controls.label = "Timeline"
