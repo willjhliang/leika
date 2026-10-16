@@ -5,6 +5,7 @@ import asyncio
 import atexit
 import contextlib
 import dataclasses
+import http
 import logging
 import os
 import threading
@@ -23,8 +24,13 @@ from typing import (
 import msgspec.msgpack
 import websockets.datastructures
 import websockets.exceptions
+import websockets.legacy.server
 import zstandard
 from typing_extensions import override
+from websockets import Headers
+from websockets.headers import parse_subprotocol
+from websockets.http11 import Request
+from websockets.legacy.server import WebSocketServerProtocol
 from websockets.typing import Subprotocol
 
 from .._async_errors import (
@@ -32,7 +38,6 @@ from .._async_errors import (
     in_sync_user_callback,
     print_async_exception,
 )
-from . import _websocket
 from ._async_message_buffer import (
     _OUTGOING_BINARY_BUFFER_LIMIT,
     _OUTGOING_FRAME_LIMIT_BYTES,
@@ -45,7 +50,6 @@ from ._http_security import HttpRequestPolicy, _canonical_hostname, _normalize_a
 from ._http_server import HttpRequestHandler
 from ._messages import Message
 from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
-from ._websocket import ServerConnection
 
 
 class _WebsocketLogFilter(logging.Filter):
@@ -735,8 +739,49 @@ class WebsockServer(WebsockMessageHandler):
         next_client_id = 0
         active_client_ids: set[ClientId] = set()
 
+        class Protocol(WebSocketServerProtocol):
+            """Leika's HTTP and subprotocol hooks on the shared WebSockets API."""
+
+            async def process_request(
+                self, path: str, request_headers: Headers
+            ) -> tuple[http.HTTPStatus, Headers, bytes] | None:
+                response = await http_handler.response_for(self, Request(path, request_headers))
+                if response is None:
+                    return None
+                return (
+                    http.HTTPStatus(response.status_code),
+                    response.headers,
+                    bytes(response.body or b""),
+                )
+
+            def write_http_response(
+                self, status: http.HTTPStatus, headers: Headers, body: bytes | None = None
+            ) -> None:
+                # This covers ordinary HTTP, upgrades and upstream handshake errors.
+                http_handler.prepare_headers(status, headers)
+                super().write_http_response(status, headers, body)
+
+            def process_subprotocol(
+                self, headers: Headers, available_subprotocols: Sequence[Subprotocol] | None
+            ) -> Subprotocol | None:
+                offered = [
+                    protocol
+                    for value in headers.get_all("Sec-WebSocket-Protocol")
+                    for protocol in parse_subprotocol(value)
+                ]
+                prefix = (
+                    "viser-v"
+                    if self.path.startswith(VISER_PROXY_PREFIX)
+                    else "leika-v"
+                    if enforce_leika_subprotocol
+                    else None
+                )
+                return next(
+                    (p for p in offered if prefix is not None and p.startswith(prefix)), None
+                )
+
         async def _serve_admitted_connection(
-            connection: ServerConnection,
+            connection: WebSocketServerProtocol,
             client_id: ClientId,
         ) -> None:
             """Run one connection after its active-slot reservation succeeds."""
@@ -884,7 +929,7 @@ class WebsockServer(WebsockMessageHandler):
                     )
 
         async def ws_handler(
-            connection: ServerConnection,
+            connection: WebSocketServerProtocol,
         ) -> None:
             """Admit one bounded websocket connection and release it exactly once."""
             nonlocal next_client_id
@@ -901,9 +946,7 @@ class WebsockServer(WebsockMessageHandler):
                 await connection.close(1013, "Server connection capacity reached")
                 return
             try:
-                if connection.request is not None and connection.request.path.startswith(
-                    VISER_PROXY_PREFIX
-                ):
+                if connection.path.startswith(VISER_PROXY_PREFIX):
                     await self._viser_proxy.websocket(connection)
                 else:
                     await _serve_admitted_connection(connection, client_id)
@@ -914,40 +957,19 @@ class WebsockServer(WebsockMessageHandler):
         async def start_server() -> None:
             # Bind exactly the requested port. Callers that want availability
             # without a race use port=0 and let the OS select it.
-            async with _websocket.serve(
+            async with websockets.legacy.server.serve(
                 ws_handler,
                 host,
                 port,
+                create_protocol=Protocol,
                 logger=_WEBSOCKET_LOGGER,
-                # This limits inbound client frames. Uploads are paced
+                # This limits inbound client messages. Uploads are paced
                 # in 512 KiB parts; server-to-client pane images are not
                 # governed by this option.
                 max_size=_INCOMING_MESSAGE_LIMIT_BYTES,
                 max_queue=_INCOMING_MESSAGE_QUEUE_LIMIT,
                 # Compression can be too slow for our use cases.
                 compression=None,
-                # The handler also serves runtime-registered assets;
-                # keep it installed even without a static root or auth.
-                process_request=http_handler.process_request,
-                process_response=http_handler.process_response,
-                # The bundled client negotiates its private version token;
-                # custom low-level protocols use normal no-subprotocol sockets.
-                subprotocols=None,
-                select_subprotocol=(
-                    lambda connection, subprotocols: (
-                        next(
-                            (Subprotocol(p) for p in subprotocols if p.startswith("viser-v")), None
-                        )
-                        if connection.request is not None
-                        and connection.request.path.startswith(VISER_PROXY_PREFIX)
-                        else next(
-                            (Subprotocol(p) for p in subprotocols if p.startswith("leika-v")),
-                            None,
-                        )
-                        if enforce_leika_subprotocol
-                        else None
-                    )
-                ),
             ) as running_server:
                 server = running_server.server
                 if server is None:
@@ -1085,13 +1107,13 @@ def _metadata_payload_exceeds(value: object, limit: int) -> bool:
     return False
 
 
-async def _close_oversized_outgoing(websocket: ServerConnection) -> None:
+async def _close_oversized_outgoing(websocket: WebSocketServerProtocol) -> None:
     """Close one client cleanly when its batch exceeds the decoder contract."""
     await websocket.close(1009, "Outgoing message batch exceeds the client size limit.")
 
 
 async def _message_producer(
-    websocket: ServerConnection,
+    websocket: WebSocketServerProtocol,
     buffer: AsyncMessageBuffer,
     client_id: int,
     *,
@@ -1213,7 +1235,7 @@ async def _message_producer(
 
 
 async def _message_consumer(
-    websocket: ServerConnection,
+    websocket: WebSocketServerProtocol,
     handle_message: Callable[[Message], Awaitable[None]],
     message_class: type[Message],
 ) -> None:

@@ -90,9 +90,17 @@ job checks that the broad published lower bounds remain usable.
 
 ## Pinned simulator environments
 
-Leika supports WebSockets 12.0 as well as the modern server API (13.1 through
-16.x), and Pillow 11.3 through 12.x. WebSockets 12 uses a small adapter for
-HTTP hooks and subprotocol selection; upstream still owns framing and lifecycle.
+Leika uses the WebSockets 12 API on every supported version (12 through 17),
+and supports Pillow 11.3 through 12.x. There is one server implementation,
+imported explicitly from `websockets.legacy.server`, with native HTTP and
+subprotocol hooks. Upstream owns parsing, framing and connection shutdown;
+Leika owns request routing, response budgets and application policy. There is
+no version detection or compatibility adapter.
+
+The upstream legacy API remains available in newer releases but is deprecated
+and maintained until November 2029. See the
+[upstream migration policy](https://websockets.readthedocs.io/en/stable/howto/upgrade.html).
+Leika's dependency range covers tested releases, not unbounded future versions.
 The Viser proxy uses `httpcore[asyncio]>=1.0.9`, whose HTTP parser requires
 `h11>=0.16`. Leika does not import or require aiohttp.
 
@@ -122,7 +130,9 @@ floor: its older C response parser has a
 [memory safety advisory](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-cq5v-8q36-5273).
 
 CI runs the HTTP, auth, dispatch, resource/lifecycle and real-browser Viser tests
-under the simulator pins, alongside the modern locked environment. No simulator
+under the simulator pins, WebSockets 13 and the latest supported WebSockets,
+alongside the locked environment. Viser's own dependency range determines which
+Viser release can be installed with each transport version. No simulator
 or GPU is required for these transport tests. The eight-scene browser test checks
 geometry delivery, Leika controls, and reconnect replay on one forwarded port.
 Viser owns reconnect policy: the tested modern version retries when its iframe

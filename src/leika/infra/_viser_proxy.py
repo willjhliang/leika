@@ -21,9 +21,9 @@ from websockets import Headers
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.http11 import Request, Response
 from websockets.legacy.client import connect
+from websockets.legacy.server import WebSocketServerProtocol
 
 from ._http_security import _canonical_hostname, _is_loopback_host
-from ._websocket import ServerConnection
 
 VISER_PROXY_PREFIX = "/_leika/viser/"
 _MAX_HTTP_BYTES = 32 * 1024 * 1024
@@ -61,7 +61,7 @@ class ViserEndpoint:
     path: str
     host: str
     port: int
-    connections: set[ServerConnection] = dataclasses.field(default_factory=set)
+    connections: set[WebSocketServerProtocol] = dataclasses.field(default_factory=set)
 
 
 class ViserProxy:
@@ -214,9 +214,8 @@ class ViserProxy:
         except (httpcore.NetworkError, httpcore.ProtocolError, httpcore.TimeoutException):
             return Response(http.HTTPStatus.BAD_GATEWAY, "VISER UNAVAILABLE", Headers())
 
-    async def websocket(self, connection: ServerConnection) -> None:
-        assert connection.request is not None
-        matched = self.match(connection.request.path)
+    async def websocket(self, connection: WebSocketServerProtocol) -> None:
+        matched = self.match(connection.path)
         if matched is None:
             await connection.close(1008, "Viser pane is unavailable")
             return

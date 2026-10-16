@@ -20,6 +20,7 @@ from urllib.parse import unquote as _url_unquote
 
 from websockets import Headers
 from websockets.http11 import Request, Response
+from websockets.legacy.server import WebSocketServerProtocol
 
 from .._client_autobuild import _BUILD_BACKUP_DIR_NAME
 from .._file_transfer import read_regular_file_snapshot
@@ -27,7 +28,6 @@ from ._auth import HttpPasswordGuard
 from ._http_assets import _HTTP_ASSET_URL_PREFIX, HttpAssetRegistry
 from ._http_security import HttpRequestPolicy
 from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
-from ._websocket import ServerConnection
 
 
 def _single_byte_range(value: str, size: int) -> tuple[int, int] | None | Literal[False]:
@@ -169,7 +169,7 @@ class _HttpResponseBudget:
         self._bytes = 0
         self._reserved_from_connection: dict[object, int] = {}
 
-    def try_reserve(self, connection: ServerConnection, size: int) -> bool:
+    def try_reserve(self, connection: WebSocketServerProtocol, size: int) -> bool:
         """Reserve one forced-close response until its transport closes."""
         if type(size) is not int or size < 0:
             raise ValueError("size must be a non-negative integer")
@@ -193,7 +193,7 @@ class _HttpResponseBudget:
             raise
         return True
 
-    def try_resize(self, connection: ServerConnection, size: int) -> bool:
+    def try_resize(self, connection: WebSocketServerProtocol, size: int) -> bool:
         """Change one admitted owner to its final response-body size."""
         if type(size) is not int or size < 0:
             raise ValueError("size must be a non-negative integer")
@@ -207,7 +207,7 @@ class _HttpResponseBudget:
         self._bytes = proposed
         return True
 
-    def release(self, connection: ServerConnection) -> None:
+    def release(self, connection: WebSocketServerProtocol) -> None:
         """Release one owner; safe when its transport callback runs later."""
         reserved = self._reserved_from_connection.pop(connection, 0)
         self._bytes -= reserved
@@ -364,21 +364,19 @@ class HttpRequestHandler:
             _HTTP_RESPONSE_IN_FLIGHT_MAX_RESPONSES,
         )
 
-    def process_response(
-        self, connection: ServerConnection, request: Request, response: Response
-    ) -> Response:
+    def prepare_headers(self, status: http.HTTPStatus, headers: Headers) -> None:
         if self._auth_guard is not None:
             # Never let a shared cache turn one authenticated response into
             # data served to a later anonymous client, regardless of asset type.
             for name in ("Cache-Control", "CDN-Cache-Control"):
-                if name in response.headers:
-                    del response.headers[name]
-                response.headers[name] = "no-store"
-        return self._policy.secure_response(response)
+                if name in headers:
+                    del headers[name]
+                headers[name] = "no-store"
+        self._policy.secure_headers(status, headers)
 
-    async def process_request(
+    async def response_for(
         self,
-        connection: ServerConnection,
+        connection: WebSocketServerProtocol,
         request: Request,
     ) -> Response | None:
         upgrades = request.headers.get_all("Upgrade")
@@ -423,7 +421,7 @@ class HttpRequestHandler:
         return await self._static_response(connection, request)
 
     def _asset_response(
-        self, connection: ServerConnection, request: Request, url_path: str
+        self, connection: WebSocketServerProtocol, request: Request, url_path: str
     ) -> Response:
         """Serve immutable assets, including bounded single byte ranges for media."""
         payload = self._assets.get(url_path[len(_HTTP_ASSET_URL_PREFIX) :])
@@ -464,7 +462,9 @@ class HttpRequestHandler:
         headers["Content-Length"] = str(end - start)
         return Response(status, status.phrase, headers, payload[start:end])
 
-    async def _static_response(self, connection: ServerConnection, request: Request) -> Response:
+    async def _static_response(
+        self, connection: WebSocketServerProtocol, request: Request
+    ) -> Response:
         """Read a contained static file and apply representation cache semantics."""
         # No files to serve: only the websocket (and the guard above)
         # live on this port.
