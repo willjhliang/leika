@@ -5,6 +5,11 @@ versioning.
 
 ## Unreleased
 
+- Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
+  Native Viser panes support Viser 0.2.11 through the same authenticated port,
+  including its worker assets. The proxy now uses HTTPcore instead of aiohttp;
+  image decoding is restricted to Leika's PNG/JPEG formats.
+
 - Settings **Rendering** offers persistent Auto, Performance, and Quality presets
   for native image panes. Auto adapts to measured connection throughput, independently
   of display size, preserving JPEG quality and at least 70% of source dimensions.

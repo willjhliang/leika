@@ -98,6 +98,30 @@ jobs:
       - name: Ensure floor resolution leaves the universal lock unchanged
         run: git diff --exit-code -- uv.lock
 
+  simulator-compatibility:
+    runs-on: ubuntu-24.04
+    name: Isaac 5.1 dependency compatibility (no simulator)
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-client
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+      - name: Install with simulator-owned pins
+        run: |
+          uv venv --python 3.11
+          uv pip install -e '.[dev]' aiohttp -c tests/constraints/isaac51.txt
+          uv pip check
+          .venv/bin/python -m playwright install chromium --with-deps
+      - name: Transport, image and browser compatibility
+        run: |
+          .venv/bin/python -m pytest -q tests/test_http_serving.py tests/test_auth.py \
+            tests/test_infra_dispatch.py tests/test_viser_proxy.py \
+            tests/test_server_lifecycle.py tests/test_rendering.py tests/test_image_encoding.py
+          .venv/bin/python -m pytest -q tests/e2e/test_viser_pane.py
+
   dependency-audit:
     runs-on: ubuntu-24.04
     name: Audit ${{ matrix.extra }} dependencies on Python ${{ matrix.python-version }}

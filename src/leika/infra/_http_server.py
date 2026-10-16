@@ -19,7 +19,6 @@ from typing import Literal
 from urllib.parse import unquote as _url_unquote
 
 from websockets import Headers
-from websockets.asyncio.server import ServerConnection
 from websockets.http11 import Request, Response
 
 from .._client_autobuild import _BUILD_BACKUP_DIR_NAME
@@ -28,6 +27,7 @@ from ._auth import HttpPasswordGuard
 from ._http_assets import _HTTP_ASSET_URL_PREFIX, HttpAssetRegistry
 from ._http_security import HttpRequestPolicy
 from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
+from ._websocket import ServerConnection
 
 
 def _single_byte_range(value: str, size: int) -> tuple[int, int] | None | Literal[False]:

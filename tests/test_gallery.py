@@ -42,7 +42,7 @@ def _use_test_registry(monkeypatch: pytest.MonkeyPatch, *slugs: str) -> frozense
 
 def _plotly_metrics(path: Path) -> tuple[float, float]:
     with Image.open(path) as source:
-        pixels = source.convert("RGB").get_flattened_data()
+        pixels = list(source.convert("RGB").getdata())
     total = len(pixels)
     trace_pixels = sum(blue > red + 20 and blue > green + 10 for red, green, blue in pixels)
     dark_surface_pixels = sum(max(red, green, blue) < 80 for red, green, blue in pixels)

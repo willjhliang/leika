@@ -86,7 +86,7 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
             raise OSError("ready server failed during shutdown")
 
     monkeypatch.setattr(
-        infra_impl.websockets.asyncio.server,
+        infra_impl._websocket,
         "serve",
         lambda *args, **kwargs: FailingServeContext(),
     )

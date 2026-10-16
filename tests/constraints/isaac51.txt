@@ -1,0 +1,8 @@
+# Simulator-owned versions. This is a compatibility test input, not a full
+# Isaac installation or a recommended general-purpose dependency lock.
+numpy==1.26.0
+pillow==11.3.0
+websockets==12.0
+aiohttp==3.11.11
+typing-extensions==4.12.2
+viser==0.2.11

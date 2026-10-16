@@ -68,8 +68,8 @@ def test_late_public_message_subclass_invalidates_deserialization_lookup() -> No
 
 
 def test_duplicate_public_message_type_names_are_rejected_deterministically() -> None:
-    # Class objects remain in ``__subclasses__()`` after creation, so isolate
-    # this intentionally invalid graph from the rest of the test process.
+    # Isolate the intentionally invalid graph from the rest of the test process.
+    # Keep both classes alive: __subclasses__() contains weak references.
     script = textwrap.dedent(
         """
         import dataclasses
@@ -91,8 +91,7 @@ def test_duplicate_public_message_type_names_are_rejected_deterministically() ->
                     return "second"
             return DuplicateWireName
 
-        make_first()
-        make_second()
+        classes = (make_first(), make_second())
         Message._subclass_from_type_string()
         """
     )

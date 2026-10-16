@@ -272,6 +272,8 @@ def _add_security_headers(response: Response, *, allow_embedding: bool) -> Respo
     # closes the transport after the response. Spell that contract explicitly
     # so clients never attempt a second request against the same reservation.
     if response.status_code != http.HTTPStatus.SWITCHING_PROTOCOLS:
+        if "Connection" in response.headers:
+            del response.headers["Connection"]
         response.headers["Connection"] = "close"
     if not allow_embedding:
         response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")

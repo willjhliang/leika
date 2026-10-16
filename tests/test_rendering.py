@@ -22,6 +22,15 @@ def source_image(format="jpeg"):
     return encode_image_binary(pixels, format, 85)[1]
 
 
+def test_rendering_never_dispatches_to_other_pillow_decoders(server):
+    from PIL import UnidentifiedImageError
+
+    data = BytesIO()
+    Image.new("RGB", (8, 8)).save(data, format="BMP")
+    with pytest.raises(UnidentifiedImageError):
+        render_image(data.getvalue(), "performance", (4, 4), "fit", server)
+
+
 @pytest.mark.parametrize(
     "mode,size",
     [("quality", (160, 120)), ("auto", None), ("auto", (160, 120)), ("auto", (1280, 960))],

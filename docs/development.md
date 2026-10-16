@@ -88,6 +88,46 @@ universal `uv.lock` is tracked for repeatable development and CI across every
 supported Python version; CI uses `--locked`, while a separate lowest-direct
 job checks that the broad published lower bounds remain usable.
 
+## Pinned simulator environments
+
+Leika supports WebSockets 12.0 as well as the modern server API (13.1 through
+16.x), and Pillow 11.3 through 12.x. WebSockets 12 uses a small adapter for
+HTTP hooks and subprotocol selection; upstream still owns framing and lifecycle.
+The Viser proxy uses `httpcore[asyncio]>=1.0.9`, whose HTTP parser requires
+`h11>=0.16`. Leika does not import or require aiohttp.
+
+For Isaac Sim 5.1's Python 3.11 environment, install the source revision or its
+locally built wheel with the checked-in compatibility constraints:
+
+```bash
+python -m pip install -c tests/constraints/isaac51.txt . viser
+python -m pip check
+```
+
+This selects Viser 0.2.11, the last release before its WebSockets 13.1 minimum.
+Viser remains optional. `ViserServer(host="127.0.0.1", port=...)` and
+`server.panes.add_viser(scene, ...)` retain the same integration API. Legacy Vite
+asset URLs, including worker URLs, stay inside the pane's proxy path; rewritten
+HTML/JavaScript is fetched without compression and charged to the HTTP budget.
+Other assets retain their encoding and range handling. Keep simulator-owned pins
+in place; these constraints are test inputs, not a complete simulator lock.
+
+The old Pillow release has known vulnerabilities outside Leika's image surface.
+Leika only encodes and decodes PNG/JPEG and explicitly restricts `Image.open`
+to those formats. This follows the format restriction in Pillow's
+[FITS advisory](https://github.com/python-pillow/Pillow/security/advisories/GHSA-whj4-6x5x-4v2j)
+and excludes the PSD/EPS decoders as well. It does not secure other applications
+using Pillow. The proxy replacement preserves the reason for the former aiohttp
+floor: its older C response parser has a
+[memory safety advisory](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-cq5v-8q36-5273).
+
+CI runs the HTTP, auth, dispatch, resource/lifecycle and real-browser Viser tests
+under the simulator pins, alongside the modern locked environment. No simulator
+or GPU is required for these transport tests. The eight-scene browser test checks
+geometry delivery, Leika controls, and reconnect replay on one forwarded port.
+Viser owns reconnect policy: the tested modern version retries when its iframe
+regains focus; Viser 0.2.11 retries in the background as well.
+
 ## Documentation
 
 ```bash

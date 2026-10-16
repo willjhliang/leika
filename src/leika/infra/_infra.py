@@ -21,12 +21,10 @@ from typing import (
 )
 
 import msgspec.msgpack
-import websockets.asyncio.server
 import websockets.datastructures
 import websockets.exceptions
 import zstandard
 from typing_extensions import override
-from websockets.asyncio.server import ServerConnection
 from websockets.typing import Subprotocol
 
 from .._async_errors import (
@@ -34,6 +32,7 @@ from .._async_errors import (
     in_sync_user_callback,
     print_async_exception,
 )
+from . import _websocket
 from ._async_message_buffer import (
     _OUTGOING_BINARY_BUFFER_LIMIT,
     _OUTGOING_FRAME_LIMIT_BYTES,
@@ -46,6 +45,7 @@ from ._http_security import HttpRequestPolicy, _canonical_hostname, _normalize_a
 from ._http_server import HttpRequestHandler
 from ._messages import Message
 from ._viser_proxy import VISER_PROXY_PREFIX, ViserProxy
+from ._websocket import ServerConnection
 
 
 class _WebsocketLogFilter(logging.Filter):
@@ -736,7 +736,7 @@ class WebsockServer(WebsockMessageHandler):
         active_client_ids: set[ClientId] = set()
 
         async def _serve_admitted_connection(
-            connection: websockets.asyncio.server.ServerConnection,
+            connection: ServerConnection,
             client_id: ClientId,
         ) -> None:
             """Run one connection after its active-slot reservation succeeds."""
@@ -884,7 +884,7 @@ class WebsockServer(WebsockMessageHandler):
                     )
 
         async def ws_handler(
-            connection: websockets.asyncio.server.ServerConnection,
+            connection: ServerConnection,
         ) -> None:
             """Admit one bounded websocket connection and release it exactly once."""
             nonlocal next_client_id
@@ -914,7 +914,7 @@ class WebsockServer(WebsockMessageHandler):
         async def start_server() -> None:
             # Bind exactly the requested port. Callers that want availability
             # without a race use port=0 and let the OS select it.
-            async with websockets.asyncio.server.serve(
+            async with _websocket.serve(
                 ws_handler,
                 host,
                 port,

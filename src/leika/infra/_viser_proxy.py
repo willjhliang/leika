@@ -9,24 +9,51 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import http
+import re
 import threading
 import uuid
 from collections.abc import Callable
 from urllib.parse import unquote
 
-import aiohttp
+import httpcore
 import msgspec
 from websockets import Headers
-from websockets.asyncio.server import ServerConnection
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.http11 import Request, Response
-from yarl import URL
+from websockets.legacy.client import connect
 
 from ._http_security import _canonical_hostname, _is_loopback_host
+from ._websocket import ServerConnection
 
 VISER_PROXY_PREFIX = "/_leika/viser/"
 _MAX_HTTP_BYTES = 32 * 1024 * 1024
 _MAX_UPSTREAM_MESSAGE_BYTES = 64 * 1024 * 1024
+_ROOT_ASSET_URL = re.compile(rb"""(["'])(/(?:assets/|logo\.svg|manifest\.json))""")
+
+
+def _rebase_assets(payload: bytes, prefix: str, reserve: Callable[[int], bool]) -> bytes | None:
+    """Scope Viser's older Vite bundles to their pane, including worker URLs."""
+    replacement = prefix.encode("ascii")
+    count = sum(1 for _ in _ROOT_ASSET_URL.finditer(payload))
+    if not count:
+        return payload
+    size = len(payload) + count * (len(replacement) - 1)
+    # re.sub retains the source and replacement fragments while joining the
+    # result. Charge all three, before creating any replacement fragments.
+    if size > _MAX_HTTP_BYTES or not reserve(len(payload) + 2 * size):
+        return None
+    return _ROOT_ASSET_URL.sub(lambda m: m[1] + replacement + m[2][1:], payload)
+
+
+class _LoopbackConnect(connect):
+    """Never follow a backend redirect beyond its registered endpoint.
+
+    The legacy client supports the entire declared WebSockets range and never
+    reads proxy settings from the environment.
+    """
+
+    def handle_redirect(self, uri: str) -> None:
+        raise InvalidHandshake("Embedded Viser redirects are not allowed")
 
 
 @dataclasses.dataclass(eq=False)
@@ -42,7 +69,7 @@ class ViserProxy:
         self._protected = protected
         self._lock = threading.Lock()
         self._endpoints: dict[str, ViserEndpoint] = {}
-        self._session: aiohttp.ClientSession | None = None
+        self._session: httpcore.AsyncConnectionPool | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def register(self, host: str, port: int) -> str:
@@ -93,22 +120,18 @@ class ViserProxy:
             return None
         return endpoint, "/" + suffix + (separator + query if separator else "")
 
-    def _client(self) -> aiohttp.ClientSession:
+    def _client(self) -> httpcore.AsyncConnectionPool:
         if self._session is None:
             self._loop = asyncio.get_running_loop()
-            self._session = aiohttp.ClientSession(
-                auto_decompress=False,
-                cookie_jar=aiohttp.DummyCookieJar(),
-                trust_env=False,
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=15),
-                connector=aiohttp.TCPConnector(limit=16),
-            )
+            # A raw HTTP transport has no cookies, redirect handling,
+            # decompression, environment proxies or ambient credentials.
+            self._session = httpcore.AsyncConnectionPool(max_connections=16)
         return self._session
 
     @staticmethod
-    def _url(endpoint: ViserEndpoint, path: str) -> URL:
+    def _url(endpoint: ViserEndpoint, path: str) -> str:
         host = f"[{endpoint.host}]" if ":" in endpoint.host else endpoint.host
-        return URL(f"http://{host}:{endpoint.port}{path}", encoded=True)
+        return f"http://{host}:{endpoint.port}{path}"
 
     async def http_response(self, request: Request, reserve: Callable[[int], bool]) -> Response:
         matched = self.match(request.path)
@@ -116,17 +139,34 @@ class ViserProxy:
             return Response(http.HTTPStatus.NOT_FOUND, "NOT FOUND", Headers())
         endpoint, path = matched
         headers = {}
-        for name in ("Accept", "Accept-Encoding", "If-None-Match", "Range"):
+        # Text assets may need their root URLs rebased. Fetch raw identity
+        # representations so neither compressed data nor partial ranges are
+        # accidentally treated as editable source.
+        asset_path = path.partition("?")[0]
+        rebase = asset_path == "/" or asset_path.endswith((".html", ".js"))
+        forwarded = (
+            ("Accept",) if rebase else ("Accept", "Accept-Encoding", "If-None-Match", "Range")
+        )
+        for name in forwarded:
             values = request.headers.get_all(name)
             if len(values) == 1:
                 headers[name] = values[0]
+        if rebase:
+            headers["Accept-Encoding"] = "identity"
         try:
-            async with self._client().get(
-                self._url(endpoint, path), headers=headers, allow_redirects=False
+            async with self._client().stream(
+                "GET",
+                self._url(endpoint, path),
+                headers=headers,
+                extensions={"timeout": {"connect": 5, "read": 15, "write": 15, "pool": 5}},
             ) as upstream:
                 # Only representation headers cross the boundary. Never cookies,
                 # redirects, CORS grants or backend connection/security policies.
                 outgoing = Headers()
+                upstream_headers = Headers(
+                    (name.decode("ascii"), value.decode("latin-1"))
+                    for name, value in upstream.headers
+                )
                 for name in (
                     "Content-Type",
                     "Content-Encoding",
@@ -134,13 +174,14 @@ class ViserProxy:
                     "Content-Range",
                     "Accept-Ranges",
                 ):
-                    if name in upstream.headers:
-                        outgoing[name] = upstream.headers[name]
+                    values = upstream_headers.get_all(name)
+                    if len(values) == 1:
+                        outgoing[name] = values[0]
                 outgoing["Content-Security-Policy"] = "frame-ancestors 'self'"
                 outgoing["Cache-Control"] = "no-store"
                 chunks: list[bytes] = []
                 size = 0
-                async for chunk in upstream.content.iter_chunked(128 * 1024):
+                async for chunk in upstream.aiter_stream():
                     size += len(chunk)
                     if size > _MAX_HTTP_BYTES or not reserve(2 * size):
                         return Response(
@@ -149,9 +190,28 @@ class ViserProxy:
                     chunks.append(chunk)
                 payload = b"".join(chunks)
                 chunks.clear()
+                chunk = b""
+                content_type = outgoing.get("Content-Type", "").partition(";")[0]
+                if rebase and content_type in (
+                    "text/html",
+                    "application/javascript",
+                    "text/javascript",
+                ):
+                    if outgoing.get("Content-Encoding", "identity") != "identity":
+                        return Response(
+                            http.HTTPStatus.BAD_GATEWAY, "ENCODED VISER ASSET", Headers()
+                        )
+                    payload = _rebase_assets(payload, endpoint.path, reserve)
+                    if payload is None:
+                        return Response(
+                            http.HTTPStatus.SERVICE_UNAVAILABLE, "SERVER BUSY", Headers()
+                        )
+                    if "ETag" in outgoing:
+                        del outgoing["ETag"]
                 reserve(len(payload))
-                return Response(upstream.status, upstream.reason or "", outgoing, payload)
-        except (aiohttp.ClientError, TimeoutError):
+                reason = upstream.extensions.get("reason_phrase", b"").decode("ascii", "replace")
+                return Response(upstream.status, reason, outgoing, payload)
+        except (httpcore.NetworkError, httpcore.ProtocolError, httpcore.TimeoutException):
             return Response(http.HTTPStatus.BAD_GATEWAY, "VISER UNAVAILABLE", Headers())
 
     async def websocket(self, connection: ServerConnection) -> None:
@@ -171,12 +231,14 @@ class ViserProxy:
             return
         tasks: list[asyncio.Task[None]] = []
         try:
-            protocols = [connection.subprotocol] if connection.subprotocol else []
-            async with self._client().ws_connect(
-                self._url(endpoint, path),
-                protocols=protocols,
-                max_msg_size=_MAX_UPSTREAM_MESSAGE_BYTES,
-                compress=0,
+            protocols = [connection.subprotocol] if connection.subprotocol else None
+            async with _LoopbackConnect(
+                self._url(endpoint, path).replace("http:", "ws:", 1),
+                subprotocols=protocols,
+                max_size=_MAX_UPSTREAM_MESSAGE_BYTES,
+                max_queue=1,
+                open_timeout=5,
+                compression=None,
             ) as upstream:
 
                 async def from_client() -> None:
@@ -196,22 +258,17 @@ class ViserProxy:
                             ):
                                 await connection.close(1008, "Use Leika's authenticated sharing")
                                 return
-                            await upstream.send_bytes(message)
-                        else:
-                            await upstream.send_str(message)
+                        await upstream.send(message)
 
                 async def from_server() -> None:
                     async for message in upstream:
-                        if message.type in (aiohttp.WSMsgType.BINARY, aiohttp.WSMsgType.TEXT):
-                            await connection.send(message.data)
-                        elif message.type == aiohttp.WSMsgType.ERROR:
-                            return
+                        await connection.send(message)
 
                 tasks = [asyncio.create_task(from_client()), asyncio.create_task(from_server())]
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
-        except (aiohttp.ClientError, TimeoutError, ConnectionClosed):
+        except (OSError, TimeoutError, ConnectionClosed, InvalidHandshake):
             await connection.close(1011, "Viser connection closed")
         finally:
             for task in tasks:
@@ -222,5 +279,5 @@ class ViserProxy:
 
     async def close(self) -> None:
         if self._session is not None:
-            await self._session.close()
+            await self._session.aclose()
             self._session = None
