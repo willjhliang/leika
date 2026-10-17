@@ -123,3 +123,20 @@ def test_video_playback_adapter_keeps_browser_clock(server: leika.Server) -> Non
         server.gui.add_playback(sync_group="episode", duration=2)  # type: ignore[call-overload]
     with pytest.raises(ValueError):
         server.gui.add_playback()  # type: ignore[call-overload]
+
+
+def test_playback_retains_one_valid_state_when_duration_changes(server: leika.Server) -> None:
+    bar = server.gui.add_playback(duration=0)
+    bar.update(duration=10, fps=10)
+    bar._command("step", 1)
+    bar.update(duration=0, time=0, buffering=True)
+    bar.update(duration=0.85, time=0, buffering=False)
+    bar.label = "Simulation"
+    updates = [
+        message.updates
+        for message in server._websock_server.get_message_buffer().message_from_id.values()
+        if isinstance(message, _messages.GuiUpdateMessage) and message.uuid == bar.id
+    ]
+    assert len(updates) == 1
+    assert updates[0]["time"] == 0 and updates[0]["duration"] == 0.85
+    assert updates[0]["label"] == "Simulation" and not updates[0]["buffering"]

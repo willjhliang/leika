@@ -844,8 +844,16 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
             with gui_api._gui_resource_transaction_locked(
                 self._impl.uuid, self._impl.value, candidate
             ):
+                # Playback bounds and playhead are coupled. Retain one complete
+                # state so a reconnect cannot replay an old seek against the
+                # initial duration, or against a subsequently shortened one.
+                published = (
+                    dataclasses.asdict(candidate)
+                    if isinstance(candidate, GuiPlaybackProps)
+                    else normalized
+                )
                 gui_api._websock_interface.queue_message_or_raise(
-                    GuiUpdateMessage(self._impl.uuid, normalized)
+                    GuiUpdateMessage(self._impl.uuid, published)
                 )
                 self._impl.props = candidate
             if "disabled" in normalized:

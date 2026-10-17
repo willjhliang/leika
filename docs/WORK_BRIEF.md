@@ -39,7 +39,11 @@ The installed local0.4.0 wheel is built from772adb42249a19fd530da7eda86a2bf8d9a8
 It retains compatibility with Isaac-owned WebSockets12/Pillow11.3 and Viser0.2.11.
 All Babble package versions are unchanged and pip check passes. The development
 guide owns [dependency support](development.md#pinned-simulator-environments).
-There is no pending implementation or integration work. No source was pushed.
+A Python-only reconnect correction is validated and awaiting a rebuilt wheel
+and Babble installation. Playback updates publish one full state, preventing
+retained seek/duration deltas from replaying an invalid timeline after content
+replacement. Python1014tests, type/lint/docs checks pass; the browser regression
+covers repeated duration replacement and reconnect. No source was pushed.
 
 `build/playback.json` records source revision, artifact hashes, validation and
 installation. Its wheel SHA256 is
