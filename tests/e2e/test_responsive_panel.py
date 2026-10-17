@@ -57,39 +57,6 @@ def test_mobile_control_sheet_expansion_survives_refresh(
     assert page_errors == []
 
 
-def test_initial_hover_panel_preserves_right_inset(
-    leika_server: leika.Server,
-    page: Page,
-    page_errors: list[str],
-) -> None:
-    # The panel width is a constant, so the width the client mounts with is the
-    # width it keeps once the theme message arrives -- no resize on connect.
-    leika_server.gui.configure_theme(control_layout="floating", theme="dark")
-    leika_server.gui.add_text("Ready", initial_value="yes")
-    leika_server.gui.add_command("Open command palette", lambda: None)
-
-    page.goto(leika_server.url)
-    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-    page.wait_for_function(
-        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-    )
-
-    panel = page.get_by_test_id("control-panel")
-    expect(panel).to_be_visible(timeout=5_000)
-    expect(panel).to_have_css("width", "320px")
-    bounds = panel.bounding_box()
-    viewport = page.viewport_size
-    assert bounds is not None and viewport is not None
-    assert abs(viewport["width"] - bounds["x"] - bounds["width"] - 15.0) <= 0.5
-
-    # The handle carries the connection status alone: no action buttons, and
-    # no connection settings view behind them.
-    expect(page.get_by_role("button", name="Commands")).to_have_count(0)
-    expect(page.get_by_role("button", name="Connection settings")).to_have_count(0)
-    expect(page.get_by_text("Server URL", exact=True)).to_have_count(0)
-    assert page_errors == []
-
-
 def test_nested_gui_tab_detaches_with_live_content(
     leika_server: leika.Server,
     page: Page,

@@ -158,26 +158,6 @@ def _minimal_sdist(
             archive.addfile(info)
 
 
-@pytest.mark.parametrize("authors", [[], [{"name": "Missing email"}], [{"email": "x@y.z"}]])
-def test_metadata_author_policy_requires_name_and_email(authors: list[dict[str, str]]) -> None:
-    project = _artifact_metadata.project_metadata()
-    project["authors"] = authors
-
-    with pytest.raises(RuntimeError, match="authors must each declare a name and email"):
-        _artifact_metadata.expected_author_email(project)
-
-
-@pytest.mark.parametrize("readme", [None, {"file": "README.md"}, "README.adoc"])
-def test_metadata_readme_policy_requires_a_supported_file_path(readme: object) -> None:
-    project = _artifact_metadata.project_metadata()
-    project["readme"] = readme
-
-    with pytest.raises(
-        RuntimeError, match="readme (must be a file path|has an unsupported suffix)"
-    ):
-        _artifact_metadata.expected_description_content_type(project)
-
-
 def test_wheel_rejects_duplicate_member(tmp_path: Path) -> None:
     wheel = tmp_path / "leika-0.4.0-py3-none-any.whl"
     with pytest.warns(UserWarning, match="Duplicate name"):

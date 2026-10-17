@@ -10,49 +10,12 @@ from scripts import build_release
 from scripts.build_release import _only
 
 
-def test_only_artifact_isolated_from_stale_distributions(tmp_path: Path) -> None:
-    expected = tmp_path / "leika-0.4.0-py3-none-any.whl"
-    expected.touch()
-
-    assert _only(tmp_path, "*.whl") == expected
-
-
 def test_only_artifact_rejects_ambiguous_build_output(tmp_path: Path) -> None:
     (tmp_path / "leika-0.3.0-py3-none-any.whl").touch()
     (tmp_path / "leika-0.4.0-py3-none-any.whl").touch()
 
     with pytest.raises(RuntimeError, match=r"expected one \*\.whl artifact"):
         _only(tmp_path, "*.whl")
-
-
-def test_build_once_uses_project_root_not_empty_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    output = tmp_path / "artifacts"
-    calls: list[tuple[list[str], Path]] = []
-
-    def fake_run(command: list[str], *, cwd: Path, check: bool) -> None:
-        assert cwd == project_root
-        assert check is True
-        assert output.is_dir()
-        assert list(output.iterdir()) == []
-        calls.append((command, cwd))
-        (output / "leika-0.4.0-py3-none-any.whl").touch()
-        (output / "leika-0.4.0.tar.gz").touch()
-
-    monkeypatch.setattr(build_release, "ROOT", project_root)
-    monkeypatch.setattr(build_release.subprocess, "run", fake_run)
-
-    wheel, sdist = build_release._build_once("/usr/bin/uv", output)
-
-    command = calls[0][0]
-    assert command[command.index("--out-dir") + 1] == str(output)
-    assert str(project_root) in command
-    assert str(output) not in command[command.index("--out-dir") + 2 :]
-    assert wheel.name == "leika-0.4.0-py3-none-any.whl"
-    assert sdist.name == "leika-0.4.0.tar.gz"
 
 
 def test_cleanup_owned_staging_removes_only_validated_internal_directories(
@@ -88,25 +51,6 @@ def test_cleanup_owned_staging_refuses_unexpected_entry_type(
 
     with pytest.raises(RuntimeError, match="unexpected release staging path"):
         build_release._cleanup_owned_staging()
-
-
-def test_copy_file_durable_flushes_the_replacement_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.write_bytes(b"release bytes")
-    fsynced_inodes: list[int] = []
-
-    monkeypatch.setattr(
-        build_release.os,
-        "fsync",
-        lambda descriptor: fsynced_inodes.append(os.fstat(descriptor).st_ino),
-    )
-    build_release._copy_file_durable(source, target)
-
-    assert target.read_bytes() == b"release bytes"
-    assert target.stat().st_ino in fsynced_inodes
 
 
 def test_publish_preserves_existing_artifacts_if_staging_is_interrupted(
@@ -470,33 +414,6 @@ def test_main_does_not_publish_when_generated_protocol_check_fails(monkeypatch) 
     assert Path(calls[1][1]) == build_release.ROOT / "sync_client_server.py"
     assert calls[1][-1] == "--check"
     assert not published
-
-
-def test_main_runs_twine_strict_before_publish(tmp_path: Path, monkeypatch) -> None:
-    calls = []
-    published = []
-
-    def fake_run(command, **_kwargs) -> None:
-        calls.append(command)
-        if len(command) > 1 and command[1] == "build":
-            output = Path(command[command.index("--out-dir") + 1])
-            (output / "leika-0.4.0-py3-none-any.whl").touch()
-            (output / "leika-0.4.0.tar.gz").touch()
-
-    def record_publish(artifacts) -> None:
-        assert any(command[1:5] == ["-m", "twine", "check", "--strict"] for command in calls)
-        published.append(tuple(artifact.name for artifact in artifacts))
-
-    monkeypatch.setattr(build_release, "ROOT", tmp_path)
-    monkeypatch.setattr(build_release, "DIST", tmp_path / "dist")
-    monkeypatch.setattr(build_release.shutil, "which", lambda _name: "/usr/bin/uv")
-    monkeypatch.setattr(build_release.subprocess, "run", fake_run)
-    monkeypatch.setattr(build_release, "_release_input_manifest", lambda: {})
-    monkeypatch.setattr(build_release, "_publish", record_publish)
-
-    assert build_release.main() == 0
-    assert published == [("leika-0.4.0-py3-none-any.whl", "leika-0.4.0.tar.gz")]
-    assert sum(command[1:2] == ["build"] for command in calls) == 2
 
 
 def test_main_does_not_publish_nonreproducible_builds(

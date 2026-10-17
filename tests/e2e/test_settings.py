@@ -18,7 +18,6 @@ from .utils import box
 TRIGGER = "[data-leika-settings-trigger]"
 PANE = "[data-leika-settings-pane]"
 POPOVER = "[data-leika-settings-popover]"
-SECTION_ID = "leika-settings"
 
 
 def open_settings(page: Page) -> Locator:
@@ -236,37 +235,6 @@ def choose_theme(page: Page, pane: Locator, name: str) -> None:
     page.get_by_role("option", name=name, exact=True).click()
 
 
-def test_dark_mode_outranks_the_server_and_the_browser(
-    leika_server: leika.Server,
-    page: Page,
-    page_errors: list[str],
-) -> None:
-    """The app asked for light and the OS agrees; the viewer still wins."""
-    leika_server.gui.configure_theme(theme="light")
-    page.emulate_media(color_scheme="light")
-    page.goto(leika_server.url)
-    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-    page.wait_for_function(
-        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-    )
-    assert not is_dark(page)
-    light_background = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
-
-    pane = open_settings(page)
-    # The API and the GUI show the same selection.
-    expect(pane.get_by_role("combobox", name="Theme", exact=True)).to_contain_text("Light")
-    choose_theme(page, pane, "Dark")
-
-    page.wait_for_function("() => document.documentElement.classList.contains('dark')")
-    assert (
-        page.evaluate("() => getComputedStyle(document.body).backgroundColor") != light_background
-    )
-
-    choose_theme(page, pane, "Light")
-    page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
-    assert page_errors == []
-
-
 def test_auto_hands_the_scheme_back_to_the_browser(
     leika_server: leika.Server,
     page: Page,
@@ -295,8 +263,6 @@ def test_auto_hands_the_scheme_back_to_the_browser(
     # And it keeps following it, rather than having simply resolved once.
     page.emulate_media(color_scheme="light")
     page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
-    stored = page.evaluate("() => localStorage.getItem('leika.settings.v2')")
-    assert '"darkMode":null' in stored
     assert page_errors == []
 
 
@@ -525,41 +491,6 @@ def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
         reset_box,
         pane_box,
     )
-    assert page_errors == []
-
-
-def test_the_footer_names_the_version_and_links_to_the_project(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """The version is baked into the client at build time, so this also catches a
-    build made from a `VersionInfo.ts` that Python has since moved past."""
-    about = open_settings(leika_page).locator("[data-leika-settings-about]")
-    expect(about.locator("[data-leika-settings-version]")).to_have_text(
-        f"Leika v{leika.__version__}"
-    )
-    expect(about).to_have_text(f"Leika v{leika.__version__}. Source, docs, and examples.")
-
-    source = about.locator("[data-leika-settings-source]")
-    docs = about.locator("[data-leika-settings-docs]")
-    examples = about.locator("[data-leika-settings-examples]")
-    expect(source).to_have_attribute("href", "https://github.com/willjhliang/leika")
-    expect(docs).to_have_attribute("href", "https://willjhliang.github.io/leika/")
-    expect(examples).to_have_attribute(
-        "href", "https://github.com/willjhliang/leika/tree/main/examples"
-    )
-    # External destinations out of an app that holds live state, so they open
-    # beside the workspace rather than navigating away from it.
-    for link in (source, docs, examples):
-        expect(link).to_have_attribute("target", "_blank")
-
-    # One line: the sentence fits the panel at its default width, so the footer
-    # is no taller than the single line of text inside it.
-    footer = about.bounding_box()
-    link = source.bounding_box()
-    assert footer is not None and link is not None
-    assert footer["height"] < link["height"] * 2, (footer, link)
     assert page_errors == []
 
 

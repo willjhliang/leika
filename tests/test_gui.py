@@ -145,25 +145,6 @@ def test_client_local_gui_resolves_only_its_live_owner(server: leika.Server) -> 
     assert replacement.gui._resolve_client(client_id) is None
 
 
-def test_a_multiline_text_input_is_the_height_it_asks_for(
-    server: leika.Server,
-) -> None:
-    """``rows`` is a height, so it is fixed and it is assignable -- and it is a
-    height in LINES, which starts at one. Left out it is None, and what that
-    comes to is the field's business: three lines to type in, and as tall as
-    the text when the text is only being read."""
-    note = server.gui.add_text("Note", "", multiline=True)
-    assert (note.multiline, note.rows) == (True, None)
-    tall = server.gui.add_text("Body", "", multiline=True, rows=12)
-    assert tall.rows == 12
-    tall.rows = 6
-    assert tall.rows == 6
-
-    for bad in (0, -1):
-        with pytest.raises(ValueError, match="height in lines"):
-            server.gui.add_text("Bad", "", multiline=True, rows=bad)
-
-
 def test_text_is_read_or_written_and_renders_markdown_when_read(
     server: leika.Server,
 ) -> None:
@@ -893,36 +874,6 @@ def test_gui_html_enforces_browser_utf16_limit_on_create_and_update(
         server.gui.add_html(123)  # type: ignore[arg-type]
 
 
-def test_commands_notifications_and_modal(server: leika.Server) -> None:
-    triggered: list[bool] = []
-    command = server.gui.add_command(
-        "Run",
-        lambda *_: triggered.append(True),
-        description="Run the action",
-        hotkey="R",
-        icon=leika.Icon.PLAY,
-    )
-    assert command.label == "Run"
-    assert command.description == "Run the action"
-    command.label = "Run now"
-    command.disabled = True
-    assert command.label == "Run now"
-    assert command.disabled is True
-
-    notification = server.gui.add_notification(
-        "Working", "Please wait", loading=True, auto_close_seconds=None
-    )
-    notification.body = "Done"
-    notification.loading = False
-    notification.auto_close_seconds = 1.0
-    notification.remove()
-
-    with server.gui.add_modal("Details") as modal:
-        server.gui.add_html("<strong>Content</strong>")
-    modal.close()
-    command.remove()
-
-
 def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
     server: leika.Server,
 ) -> None:
@@ -970,20 +921,13 @@ def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
     assert notification._impl.props.body == ""
 
 
-def test_removing_root_components_unlinks_the_owner_registry(server: leika.Server) -> None:
-    root = server.gui._container_handle_from_uuid["root"]
-    children_before = dict(root._children)
-    live_before = server.gui._live_component_count
-
-    for index in range(4):
-        handle = server.gui.add_button(f"Temporary {index}")
-        assert root._children[handle.id] is handle
-
-        handle.remove()
-
-        assert handle.id not in root._children
-        assert root._children == children_before
-        assert server.gui._live_component_count == live_before
+def test_removed_control_can_be_collected_while_server_is_alive(server: leika.Server) -> None:
+    handle = server.gui.add_button("Temporary")
+    reference = weakref.ref(handle)
+    handle.remove()
+    del handle
+    gc.collect()
+    assert reference() is None
 
 
 def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
@@ -3733,29 +3677,6 @@ def test_slider_marks_are_bounded_and_transactionally_validated(
     with pytest.raises(RuntimeError, match="closed"):
         labeled.update(_marks=(_messages.GuiSliderMark(1.0, "new"),))
     assert labeled._impl.props == before
-
-
-def test_gui_image_encodes_and_retains_one_private_snapshot(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    caller = np.zeros((2, 3, 3), dtype=np.uint8)
-    encoded_snapshots: list[np.ndarray] = []
-
-    def encode(snapshot: np.ndarray, *_: Any, **__: Any) -> tuple[str, bytes]:
-        assert snapshot is not caller
-        encoded_snapshots.append(snapshot)
-        caller.fill(255)
-        return "png", b"encoded"
-
-    monkeypatch.setattr(gui_api_impl, "encode_image_binary", encode)
-    monkeypatch.setattr(gui_handles_impl, "encode_image_binary", encode)
-    handle = server.gui.add_image(caller)
-    assert handle._image is encoded_snapshots[-1]
-    assert np.count_nonzero(handle.image) == 0
-
-    caller.fill(0)
-    handle.image = caller
-    assert np.count_nonzero(handle.image) == 0
 
 
 def test_gui_text_constructor_matches_live_utf16_and_unicode_validation(

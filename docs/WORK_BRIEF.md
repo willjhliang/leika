@@ -6,22 +6,19 @@ orphan: true
 
 ## Test cleanup
 
-Test cleanup is complete. The suite retains functional API, transport, resource
-lifetime, state-transition and browser interaction coverage. Duplicate static
-component renders, cosmetic geometry checks, helper-only docking checks, repeated
-parameter grids and implementation-shape assertions were removed. Shared preview
-assertions now check pointer access to the dialog. Container tests no longer need
-Plotly, and text preflight tests compare against real JSON serialization.
+Test cleanup is complete. Generated-protocol checks compile and execute the
+TypeScript validator; packaging checks use real bundle files; lifecycle checks
+verify collection of removed controls; iframe privacy checks inspect browser
+requests. Tests for source snippets, helper-call choreography and duplicate
+behavior were removed. Runtime code and dependencies are unchanged.
 
-The two passes removed 375 collected cases, including 285 in the deeper pass.
-The suite now collects 1,049 Python unit, 926 frontend unit and 242 browser cases.
-Runtime code and dependency support are unchanged. No test cleanup work is pending.
+The retained suites contain 1,009 Python tests, 907 frontend tests and 238 browser
+cases. Validation passed all Python and frontend tests plus 105 selected Chromium
+cases covering the affected flows. TypeScript, ESLint, Ruff and documentation
+checks passed. The generated-protocol execution test uses the existing frontend
+toolchain and skips when that toolchain is absent.
 
-Validation passed: all retained Python and frontend unit cases and 128 selected
-Chromium interaction cases. Four Python cases initially failed while automatic
-client builds encountered unused test imports; they passed after those imports
-were removed. Type checking, lint and formatting pass. Logs are under
-`/tmp/leika-lean-*.log`; collection is in `/tmp/leika-lean-python-after.txt`.
+No Leika cleanup work is pending. The Babble handoff remains with its owner below.
 
 ## Dependency compatibility status and ownership
 

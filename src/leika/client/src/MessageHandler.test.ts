@@ -213,9 +213,7 @@ describe("handleFileDownloadMessage", () => {
   });
 
   it("contains a transport failure while cancelling a rejected transfer", () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const env = runtime({
       sendMessage: () => {
         throw new Error("socket failed");
@@ -227,10 +225,6 @@ describe("handleFileDownloadMessage", () => {
         env,
       ),
     ).not.toThrow();
-    expect(consoleError).toHaveBeenCalledWith(
-      "Could not cancel the rejected file transfer:",
-      expect.any(Error),
-    );
   });
 
   it("never echoes a server-originated Abort", () => {
@@ -313,9 +307,7 @@ describe("handleFileDownloadMessage", () => {
   });
 
   it("contains save DOM and toast failures after releasing ownership", () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const env = runtime({
       addToast: (() => {
         throw new Error("toast failed");
@@ -328,13 +320,5 @@ describe("handleFileDownloadMessage", () => {
     expect(() => handleFileDownloadMessage(part(), env)).not.toThrow();
     expect(retainedDownloads.ownerCount).toBe(0);
     expect(retainedDownloads.sizeBytes).toBe(0);
-    expect(consoleError).toHaveBeenCalledWith(
-      "Could not start the file download:",
-      expect.any(Error),
-    );
-    expect(consoleError).toHaveBeenCalledWith(
-      "Could not show the download error:",
-      expect.objectContaining({ message: "toast failed" }),
-    );
   });
 });

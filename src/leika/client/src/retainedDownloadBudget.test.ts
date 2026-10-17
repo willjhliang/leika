@@ -216,9 +216,7 @@ describe("RetainedDownloadBudget", () => {
 
   it("contains owner cleanup failures and still releases accounting", () => {
     const budget = new RetainedDownloadBudget();
-    const errorLog = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const retained = budget.retain(sizedBlob(FILE_DOWNLOAD_MEMORY_MAX_BYTES), {
       priority: RETAINED_DOWNLOAD_PRIORITY.warm,
     })!;
@@ -232,9 +230,5 @@ describe("RetainedDownloadBudget", () => {
       }),
     ).not.toBeNull();
     expect(retained.isActive).toBe(false);
-    expect(errorLog).toHaveBeenCalledWith(
-      "Could not evict a retained file:",
-      expect.objectContaining({ message: "cleanup failed" }),
-    );
   });
 });

@@ -22,11 +22,15 @@ def test_viser_pane_renders_an_iframe_and_repoints(
     Leika server itself; the iframe's src is deterministic and no viser
     installation is needed."""
 
-    handle = leika_server.panes.add_viser(
-        leika_server.url,
-        pane_id="viser",
-        title="Scene",
-    )
+    with leika_page.expect_request(
+        lambda request: request.is_navigation_request() and request.frame.parent_frame is not None
+    ) as navigation:
+        handle = leika_server.panes.add_viser(
+            leika_server.url,
+            pane_id="viser",
+            title="Scene",
+        )
+    assert navigation.value.header_value("referer") is None
     pane = leika_page.locator('[data-viewport-pane="viser"]')
     expect(pane).to_be_visible(timeout=5_000)
     expect(leika_page.locator('[data-viewport-pane-title="viser"]')).to_have_text("Scene")

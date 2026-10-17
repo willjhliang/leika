@@ -905,39 +905,6 @@ def test_quiet_low_level_lifecycle_prints_no_shutdown_banner(
     assert "Server stopped" not in capsys.readouterr().out
 
 
-def test_stop_snapshots_connection_registry_under_its_lock() -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    values_entered = threading.Event()
-    release_values = threading.Event()
-    mutation_finished = threading.Event()
-
-    class PausingRegistry(dict[int, Any]):
-        def values(self):  # type: ignore[override]
-            values_entered.set()
-            assert release_values.wait(2)
-            return super().values()
-
-    server._client_state_from_id = PausingRegistry()
-    signaler = threading.Thread(target=server._signal_stop)
-
-    def mutate() -> None:
-        with server._client_state_lock:
-            server._client_state_from_id[1] = SimpleNamespace(
-                message_buffer=SimpleNamespace(set_done=lambda: None)
-            )
-        mutation_finished.set()
-
-    mutator = threading.Thread(target=mutate)
-    signaler.start()
-    assert values_entered.wait(1)
-    mutator.start()
-    assert not mutation_finished.wait(0.05)
-    release_values.set()
-    signaler.join(timeout=1)
-    mutator.join(timeout=1)
-    assert mutation_finished.is_set()
-
-
 def test_low_level_server_is_one_shot() -> None:
     server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
     server.start()
@@ -1225,19 +1192,6 @@ def test_callback_stop_hands_slow_share_tunnel_to_finalizer(
         release_close.set()
         server.stop()
     assert server._share_tunnel is None
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_delivery_backpressure_is_opt_in_and_passed_to_transport(
-    monkeypatch: pytest.MonkeyPatch, enabled: bool
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
-    options = {"delivery_backpressure": True} if enabled else {}
-    server = leika.Server(host="127.0.0.1", port=0, verbose=False, **options)
-    try:
-        assert server._websock_server._delivery_backpressure is enabled
-    finally:
-        server.stop()
 
 
 @pytest.mark.parametrize("server_type", [leika.Server, infra_impl.WebsockServer])

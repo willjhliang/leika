@@ -1,7 +1,9 @@
 import dataclasses
 import json
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple, TypedDict
 
 import numpy as np
@@ -61,94 +63,6 @@ def test_dynamic_message_subclass_invalidates_protocol_fingerprint() -> None:
 
     after = protocol_fingerprint(_FingerprintRoot)
     assert after != before
-    assert "LateFingerprintMessage" in (
-        __import__(
-            "leika.infra._typescript_interface_gen",
-            fromlist=["generate_typescript_interfaces"],
-        ).generate_typescript_interfaces(_FingerprintRoot)
-    )
-
-
-def test_runtime_validator_is_generated_from_nested_protocol_annotations() -> None:
-    @dataclasses.dataclass
-    class NestedRuntimeValue:
-        enabled: bool
-
-    class _RuntimeRoot(Message):
-        pass
-
-    @dataclasses.dataclass
-    class RuntimeValidationMessage(_RuntimeRoot):
-        count: int
-        ratio: float
-        nested: NestedRuntimeValue
-        choice: Literal["one", "two"]
-        pair: tuple[str, int]
-        values: dict[str, Any]
-        samples: npt.NDArray[np.float32]
-
-        def redundancy_key(self) -> str:
-            return "runtime-validation"
-
-    source = generate_typescript_interfaces(_RuntimeRoot)
-
-    assert "export function validateMessage" in source
-    assert 'Number.isSafeInteger(message["count"])' in source
-    assert 'Number.isFinite(message["ratio"])' in source
-    assert '"samples": Float32Array' in source
-    assert "pending.push(..." not in source
-    assert "Object.values(" not in source
-
-
-def test_literal_rich_struct_validator_keeps_record_guards_and_grouping() -> None:
-    @dataclasses.dataclass
-    class LiteralRichValue:
-        mode: Literal["one", "two", None]
-        enabled: Literal[True, False]
-
-    class _LiteralRoot(Message):
-        pass
-
-    @dataclasses.dataclass
-    class LiteralRichMessage(_LiteralRoot):
-        value: LiteralRichValue
-
-        def redundancy_key(self) -> str:
-            return "literal-rich"
-
-    source = generate_typescript_interfaces(_LiteralRoot)
-    validator = source.split("function isProtocolStruct0(value: unknown): boolean {", 1)[1].split(
-        "\n}\n", 1
-    )[0]
-    assert "isProtocolRecord(value) &&" in validator
-    assert "Object.keys(value).length === 2 &&" in validator
-    assert 'Object.hasOwn(value, "mode") &&' in validator
-    assert 'Object.hasOwn(value, "enabled") &&' in validator
-    assert (
-        '(value["mode"] === "one" || value["mode"] === "two" || value["mode"] === null)'
-    ) in validator
-    assert '(value["enabled"] === true || value["enabled"] === false)' in validator
-
-
-def test_runtime_validator_bounds_and_rejects_dangerous_identity_keys() -> None:
-    class _IdentityRoot(Message):
-        pass
-
-    @dataclasses.dataclass
-    class IdentityMessage(_IdentityRoot):
-        uuid: str
-        pane_ids: list[str]
-
-        def redundancy_key(self) -> str:
-            return "identity"
-
-    source = generate_typescript_interfaces(_IdentityRoot)
-    assert "PROTOCOL_IDENTIFIER_MAX_CODE_UNITS = 1024" in source
-    assert "value.length > 0" in source
-    assert 'value !== "__proto__"' in source
-    assert "D800" in source
-    assert 'isProtocolIdentifier(message["uuid"])' in source
-    assert 'message["pane_ids"].every(isProtocolIdentifier)' in source
 
 
 def test_generator_rejects_duplicate_wire_type_names() -> None:
@@ -180,16 +94,6 @@ def test_generator_rejects_numpy_dtypes_the_browser_cannot_decode() -> None:
     assert _get_ts_type(npt.NDArray[np.bool_]) == "Uint8Array<ArrayBuffer>"
     with pytest.raises(TypeError, match="Unsupported browser numpy dtype"):
         _get_ts_type(npt.NDArray[np.complex64])
-
-
-def test_typescript_literals_and_mapping_keys_are_json_escaped() -> None:
-    separator = "\u2028"
-    literal = f"quote'\"\\{separator}"
-    expected = json.dumps(literal, ensure_ascii=True)
-    assert _get_ts_type(Literal[None, literal]) == f"null | {expected}"
-
-    WeirdKeys = TypedDict("WeirdKeys", {literal: str})
-    assert _get_ts_type(WeirdKeys) == "{" + expected + ": string}"
 
 
 @pytest.mark.parametrize("literal", [object(), 1 << 60, float("inf"), float("nan")])
@@ -256,29 +160,6 @@ def test_generator_rejects_typescript_reserved_message_names(reserved: str) -> N
         generate_typescript_interfaces(_ReservedNameRoot)
 
 
-def test_generator_uses_canonical_dataclass_field_order_for_inheritance() -> None:
-    class _OrderRoot(Message):
-        pass
-
-    @dataclasses.dataclass
-    class OrderedBase(_OrderRoot):
-        base_value: int
-
-        def redundancy_key(self) -> str:
-            return "base"
-
-    @dataclasses.dataclass
-    class OrderedChild(OrderedBase):
-        child_value: str
-
-        def redundancy_key(self) -> str:
-            return "child"
-
-    source = generate_typescript_interfaces(_OrderRoot)
-    child = source.split("export interface OrderedChild", 1)[1].split("}", 1)[0]
-    assert child.index('"base_value"') < child.index('"child_value"')
-
-
 def test_generator_rejects_a_reserved_wire_discriminant_field() -> None:
     class _ReservedRoot(Message):
         pass
@@ -292,3 +173,98 @@ def test_generator_rejects_a_reserved_wire_discriminant_field() -> None:
 
     with pytest.raises(TypeError, match="reserved 'type' field"):
         generate_typescript_interfaces(_ReservedRoot)
+
+
+def test_generated_protocol_compiles_and_validates_messages(tmp_path: Path) -> None:
+    client = Path(__file__).resolve().parents[1] / "src/leika/client"
+    node = shutil.which("node") or str(client / ".nodeenv/bin/node")
+    compiler = client / "node_modules/typescript/bin/tsc"
+    if not Path(node).is_file() or not compiler.is_file():
+        pytest.skip("requires the frontend Node and TypeScript toolchain")
+
+    escaped_text = "quote'\"\\\u2028"
+    WeirdKeys = TypedDict("WeirdKeys", {escaped_text: str})
+
+    @dataclasses.dataclass
+    class Options:
+        mode: Literal["one", "two", None]
+        enabled: Literal[True, False]
+
+    class _Root(Message):
+        pass
+
+    @dataclasses.dataclass
+    class Base(_Root):
+        uuid: str
+
+        def redundancy_key(self) -> str:
+            return self.uuid
+
+    @dataclasses.dataclass
+    class Payload(Base):
+        count: int
+        ratio: float
+        options: Options
+        pair: tuple[str, int]
+        values: dict[str, Any]
+        pane_ids: list[str]
+        samples: npt.NDArray[np.float32]
+        escaped: Literal[escaped_text]
+        keyed: WeirdKeys
+
+    source = tmp_path / "protocol.ts"
+    source.write_text(
+        generate_typescript_interfaces(_Root)
+        + "\nconst escaped = "
+        + json.dumps(escaped_text)
+        + ";\n"
+        + r"""
+const valid: Payload = {
+  type: "Payload", uuid: "pane", count: 3, ratio: 0.5,
+  options: {mode: "two", enabled: true}, pair: ["label", 2],
+  values: {nested: [null, 1, "text"]}, samples: new Float32Array([1, 2]),
+  escaped, keyed: {[escaped]: "value"}, pane_ids: ["pane"],
+};
+validateMessage(valid);
+validateMessage({...valid, options: {mode: null, enabled: false}});
+for (const invalid of [
+  {...valid, count: 1.5}, {...valid, ratio: Infinity},
+  {...valid, options: null}, {...valid, options: {mode: "unknown", enabled: true}},
+  {...valid, options: {mode: "one", enabled: "yes"}},
+  {...valid, pair: ["label"]}, {...valid, samples: new Uint8Array([1, 2])},
+  {...valid, uuid: "__proto__"}, {...valid, uuid: "x".repeat(PROTOCOL_IDENTIFIER_MAX_CODE_UNITS + 1)},
+  {...valid, uuid: "\ud800"}, {...valid, unexpected: true},
+  {...valid, escaped: "wrong"}, {...valid, keyed: {[escaped]: 42}},
+  {...valid, pane_ids: ["__proto__"]},
+]) {
+  let rejected = false;
+  try { validateMessage(invalid); } catch { rejected = true; }
+  if (!rejected) throw new Error(`accepted invalid message: ${JSON.stringify(invalid)}`);
+}
+""",
+        encoding="utf-8",
+    )
+    compiled = subprocess.run(
+        [
+            node,
+            str(compiler),
+            str(source),
+            "--strict",
+            "--skipLibCheck",
+            "--target",
+            "ES2022",
+            "--module",
+            "commonjs",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    executed = subprocess.run(
+        [node, str(source.with_suffix(".js"))],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert executed.returncode == 0, executed.stdout + executed.stderr

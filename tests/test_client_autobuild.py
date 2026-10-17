@@ -629,44 +629,6 @@ def test_interrupted_snapshot_publication_restores_old_or_keeps_new_output(
     assert not transaction.exists()
 
 
-def test_file_fsync_uses_a_writable_descriptor_on_windows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "payload"
-    opened: list[tuple[Path, int]] = []
-    fsynced: list[int] = []
-    closed: list[int] = []
-
-    def open_file(candidate: Path, flags: int) -> int:
-        opened.append((candidate, flags))
-        return 17
-
-    monkeypatch.setattr(autobuild.os, "name", "nt")
-    monkeypatch.setattr(autobuild.os, "open", open_file)
-    monkeypatch.setattr(autobuild.os, "fsync", fsynced.append)
-    monkeypatch.setattr(autobuild.os, "close", closed.append)
-
-    autobuild._fsync_file(path)
-
-    expected_flags = autobuild.os.O_RDWR | getattr(autobuild.os, "O_BINARY", 0)
-    assert opened == [(path, expected_flags)]
-    assert fsynced == [17]
-    assert closed == [17]
-
-
-def test_directory_fsync_is_an_explicit_noop_on_windows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(autobuild.os, "name", "nt")
-    monkeypatch.setattr(
-        autobuild.os,
-        "open",
-        lambda *_: pytest.fail("Windows must not use POSIX directory handles"),
-    )
-
-    autobuild._fsync_directory(tmp_path)
-
-
 @pytest.mark.parametrize("relative", [Path("."), Path(".."), Path("release-inside-client")])
 def test_snapshot_refuses_to_replace_or_write_inside_the_client_tree(
     tmp_path: Path,

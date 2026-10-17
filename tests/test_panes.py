@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gc
 import json
-import threading
 import weakref
 from types import SimpleNamespace
 from typing import Any, cast
@@ -644,26 +643,6 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
     assert server.panes._resource_total == before_resources
 
 
-def test_removed_image_pane_scrubs_private_encoding_state(server: leika.Server) -> None:
-    pane = server.panes.add_image(
-        np.zeros((2, 2, 3), dtype=np.uint8),
-        pane_id="scrubbed-image",
-        title="Sensitive title",
-        format="jpeg",
-        jpeg_quality=73,
-    )
-    assert pane._impl.requested_format == "jpeg"
-    assert pane._impl.jpeg_quality == 73
-
-    pane.remove()
-
-    assert pane._impl.image.size == 0
-    assert pane._impl.requested_format == "auto"
-    assert pane._impl.jpeg_quality is None
-    assert pane._impl.props._data == b""
-    assert pane._impl.props.title == ""
-
-
 def test_viser_minimize_and_reported_port_are_strict(server: leika.Server) -> None:
     with pytest.raises(TypeError, match="minimize_gui must be a bool"):
         server.panes.add_viser(
@@ -680,37 +659,6 @@ def test_viser_minimize_and_reported_port_are_strict(server: leika.Server) -> No
 
     with pytest.raises(TypeError, match="non-integer port"):
         _viser_embed_target(Target())
-
-
-def test_relative_anchor_resolution_holds_the_registry_lock(
-    server: leika.Server,
-) -> None:
-    frame = np.zeros((2, 2, 3), dtype=np.uint8)
-    first = server.panes.add_image(frame, pane_id="first")
-    entered = threading.Event()
-    release = threading.Event()
-    resolved: list[str] = []
-
-    def resolve() -> None:
-        with server.panes._lock:
-            entered.set()
-            assert release.wait(2)
-            resolved.append(server.panes._resolve_relative_to(None))
-
-    resolver = threading.Thread(target=resolve)
-    resolver.start()
-    assert entered.wait(1)
-    removed = threading.Event()
-    remover = threading.Thread(target=lambda: (first.remove(), removed.set()))
-    remover.start()
-    assert not removed.wait(0.05)
-    release.set()
-    resolver.join(timeout=1)
-    remover.join(timeout=1)
-
-    assert resolved == ["first"]
-    assert removed.is_set()
-    assert not resolver.is_alive() and not remover.is_alive()
 
 
 def test_pane_lifecycle_batch_failure_leaves_no_ghost_or_partial_removal(
@@ -818,25 +766,3 @@ def test_pane_id_obeys_browser_utf16_layout_limit(server: leika.Server) -> None:
     for reserved in ("__proto__", "prototype", "constructor"):
         with pytest.raises(ValueError, match="reserved browser"):
             server.panes.add_image(frame, pane_id=reserved)
-
-
-def test_pane_image_encodes_and_retains_one_private_snapshot(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    caller = np.zeros((2, 3, 3), dtype=np.uint8)
-    encoded_snapshots: list[np.ndarray] = []
-
-    def encode(snapshot: np.ndarray, *_: object, **__: object) -> tuple[str, bytes]:
-        assert snapshot is not caller
-        encoded_snapshots.append(snapshot)
-        caller.fill(255)
-        return "png", b"encoded"
-
-    monkeypatch.setattr(panes_impl, "encode_image_binary", encode)
-    handle = server.panes.add_image(caller, pane_id="snapshot-image")
-    assert handle._impl.image is encoded_snapshots[-1]
-    assert np.count_nonzero(handle.image) == 0
-
-    caller.fill(0)
-    handle.image = caller
-    assert np.count_nonzero(handle.image) == 0

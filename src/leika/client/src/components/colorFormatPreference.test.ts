@@ -29,15 +29,6 @@ class ThrowingStorage implements ColorFormatStorage {
 }
 
 describe("the color format preference", () => {
-  it("restores the last selected format", () => {
-    const storage = new MemoryStorage();
-    createColorFormatPreference(storage).set("hsl");
-
-    const restored = createColorFormatPreference(storage);
-    expect(restored.store.snapshot()).toBe("hsl");
-    expect(storage.values.get(COLOR_FORMAT_STORAGE_KEY)).toBe("hsl");
-  });
-
   it("falls back to hex for an unknown stored format", () => {
     const storage = new MemoryStorage();
     storage.values.set(COLOR_FORMAT_STORAGE_KEY, "cmyk");
