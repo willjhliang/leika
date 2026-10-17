@@ -31,22 +31,6 @@ function renderRadioList({
 }
 
 describe("RadioListComponent", () => {
-  it("keeps editable fields outside the composite radio group", () => {
-    const markup = renderRadioList();
-    expect(markup.match(/data-leika-radio-list-radio/g)).toHaveLength(2);
-    expect(markup.match(/data-slot="radio-group-item"/g)).toHaveLength(2);
-    const entries = [
-      ...markup.matchAll(/<input[^>]*data-leika-radio-list-entry[^>]*>/g),
-    ].map((match) => match[0]);
-    expect(entries[0]).toContain('value="Default"');
-    expect(entries[1]).toContain('value="Comfortable"');
-    expect(markup).toContain("<fieldset");
-    expect(markup).toContain(">Density</legend>");
-    expect(markup).not.toContain('data-slot="radio-group"');
-    expect(markup).not.toContain('role="radiogroup"');
-    expect(markup.match(/name="leika-radio-list-density"/g)).toHaveLength(2);
-  });
-
   it("selects exactly the configured radio", () => {
     const markup = renderRadioList();
     const radioInputs = [...markup.matchAll(/<input[^>]*>/g)]
@@ -58,20 +42,6 @@ describe("RadioListComponent", () => {
     expect(radioInputs[0]).not.toContain('checked=""');
     expect(radioInputs[1]).toContain('checked=""');
     expect(markup.match(/data-slot="radio-group-indicator"/g)).toHaveLength(1);
-  });
-
-  it("uses the checklist-style editable stack", () => {
-    const markup = renderRadioList({
-      value: [
-        ["a", false],
-        ["b", true],
-        ["c", false],
-      ],
-    });
-    expect(markup.match(/data-leika-list-grip/g)).toHaveLength(3);
-    expect(markup.match(/data-leika-list-remove/g)).toHaveLength(3);
-    expect(markup.match(/data-leika-list-add/g)).toHaveLength(1);
-    expect(markup.match(/-mt-px/g)).toHaveLength(2);
   });
 
   it("frozen, shows labels and radios without editable list controls", () => {
@@ -89,15 +59,6 @@ describe("RadioListComponent", () => {
   it("disables every radio through the group", () => {
     const markup = renderRadioList({ disabled: true });
     expect(markup.match(/data-disabled=""/g)?.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("takes the full row when it has no label", () => {
-    expect(renderRadioList({ label: null })).not.toContain(
-      "data-leika-gui-row",
-    );
-    expect(renderRadioList({ label: "Density" })).toContain(
-      "data-leika-gui-row",
-    );
   });
 
   it("names and bounds every editable choice", () => {

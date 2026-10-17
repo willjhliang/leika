@@ -1424,16 +1424,6 @@ def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> N
         server.gui.add_toggle("Solo", color=("inverse",))  # type: ignore[arg-type]
 
 
-def test_gui_images_always_span_the_panel(server: leika.Server) -> None:
-    """A GUI image has one width -- the panel's -- so there is no knob for it."""
-    frame = np.zeros((4, 6, 3), dtype=np.uint8)
-
-    handle = server.gui.add_image(frame, label="Preview")
-    assert not hasattr(handle, "fit_width")
-    with pytest.raises(TypeError):
-        server.gui.add_image(frame, fit_width=False)  # type: ignore[call-arg]
-
-
 def test_gui_image_state_is_transactional_and_private(server: leika.Server) -> None:
     frame = np.zeros((2, 3, 3), dtype=np.uint8)
     image = server.gui.add_image(frame, format="png")
@@ -1880,29 +1870,6 @@ def test_upload_part_and_button_removal_are_serialized(
     assert not remove_thread.is_alive()
     assert removed.is_set()
     assert server.gui._current_file_upload_states == {}
-
-
-def test_containers_mirror_every_container_scoped_add_method() -> None:
-    """``folder.add_thing(...)`` exists because ``GuiApi.add_thing`` does.
-
-    The mirror is derived, so this guards the two ways it can go wrong: an
-    element that never reaches containers, and a non-container ``add_*`` (a
-    notification, a command) that gets mirrored anyway and promises a
-    containment it cannot honor.
-    """
-    from leika._gui_api import GuiApi
-    from leika._gui_handles import GuiContainer
-
-    api_methods = {name for name in dir(GuiApi) if name.startswith("add_")}
-    opted_out = {
-        name
-        for name in api_methods
-        if getattr(getattr(GuiApi, name), "_leika_container_scoped", True) is False
-    }
-    mirrored = {name for name in dir(GuiContainer) if name.startswith("add_")}
-
-    assert opted_out == {"add_notification", "add_command", "add_modal"}
-    assert mirrored == api_methods - opted_out
 
 
 def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) -> None:

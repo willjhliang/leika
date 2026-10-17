@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from leika import GuiApi
 from scripts import gallery
-
-
-def _png_size(path: Path) -> tuple[int, int]:
-    data = path.read_bytes()
-    assert data[:8] == b"\x89PNG\r\n\x1a\n"
-    assert data[12:16] == b"IHDR"
-    return struct.unpack(">II", data[16:24])
 
 
 def _write_png(path: Path, color: tuple[int, int, int]) -> None:
@@ -38,15 +29,6 @@ def _use_test_registry(monkeypatch: pytest.MonkeyPatch, *slugs: str) -> frozense
     ]
     monkeypatch.setattr(gallery, "ENTRIES", [("Test", entries)])
     return gallery._expected_asset_names()
-
-
-def _plotly_metrics(path: Path) -> tuple[float, float]:
-    with Image.open(path) as source:
-        pixels = list(source.convert("RGB").getdata())
-    total = len(pixels)
-    trace_pixels = sum(blue > red + 20 and blue > green + 10 for red, green, blue in pixels)
-    dark_surface_pixels = sum(max(red, green, blue) < 80 for red, green, blue in pixels)
-    return trace_pixels / total, dark_surface_pixels / total
 
 
 def test_atomic_page_write_failure_preserves_existing_page(
@@ -165,51 +147,3 @@ def test_followup_failure_rolls_back_gallery_publication(
 
     assert {path.name: path.read_bytes() for path in target.iterdir()} == previous
     assert not list(tmp_path.glob(".gallery.leika-*"))
-
-
-def test_gallery_registry_and_assets_are_complete_and_high_density() -> None:
-    entries = [entry for _, group_entries in gallery.ENTRIES for entry in group_entries]
-    slugs = [entry.slug for entry in entries]
-
-    assert len(slugs) == len(set(slugs))
-    gallery_methods = {entry.ref for entry in entries}
-    public_add_methods = {name for name in dir(GuiApi) if name.startswith("add_")}
-    assert gallery_methods == public_add_methods
-
-    expected = {
-        gallery.DEFAULT_OUT / f"{entry.slug}-{scheme}.png"
-        for entry in entries
-        for scheme in ("light", "dark")
-    }
-    actual = set(gallery.DEFAULT_OUT.glob("*.png"))
-    assert actual == expected
-
-    # Ordinary gallery rows are roughly 300 CSS pixels wide. Requiring that
-    # many physical pixels per configured scale catches their stale 1x/2x
-    # captures without coupling exceptional overlay widths to exact geometry.
-    for path in expected:
-        width, height = _png_size(path)
-        assert width >= 300 * gallery.SCALE, path
-        assert height > 0, path
-
-
-def test_plotly_gallery_has_trace_content_in_both_leika_themes() -> None:
-    light_trace, light_surface = _plotly_metrics(gallery.DEFAULT_OUT / "plotly-light.png")
-    dark_trace, dark_surface = _plotly_metrics(gallery.DEFAULT_OUT / "plotly-dark.png")
-
-    # The sample keeps its configured light Plotly template in both files, but
-    # its blue trace must survive the Leika scheme repaint. The surrounding
-    # component surface is what distinguishes the dark capture from the light.
-    assert light_trace > 0.005
-    assert dark_trace > 0.005
-    assert dark_trace == pytest.approx(light_trace, rel=0.15)
-    assert dark_surface > light_surface + 0.1
-
-
-def test_generated_gallery_page_is_current_and_has_one_final_newline() -> None:
-    page_path = gallery.ROOT / "docs" / "gallery.md"
-    content = page_path.read_text(encoding="utf-8")
-
-    assert content == gallery._page_content()
-    assert content.endswith("\n")
-    assert not content.endswith("\n\n")

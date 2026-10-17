@@ -43,19 +43,28 @@ def test_home_fallback_and_normalization(tmp_path: Path, monkeypatch: pytest.Mon
 @pytest.mark.parametrize(
     "payload",
     [
-        "{broken", "null", '"dashboard.example"', '{"allowed_hosts": []}',
-        '["*"]', '["*.example"]', '["http://dashboard.example"]',
-        '["dashboard.example:8080"]', '["dashboard.example/path"]', '[1]',
+        "{broken",
+        "null",
+        '"dashboard.example"',
+        '{"allowed_hosts": []}',
+        '["*"]',
+        '["*.example"]',
+        '["http://dashboard.example"]',
+        '["dashboard.example:8080"]',
+        '["dashboard.example/path"]',
+        "[1]",
         '["Dashboard.Example", "dashboard.example."]',
         json.dumps([f"host-{index}.example" for index in range(257)]),
     ],
 )
 def test_bad_config_fails_before_client_build(
-    payload: str, monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_config(payload)
     monkeypatch.setattr(
-        leika._client_autobuild, "ensure_client_is_built",
+        leika._client_autobuild,
+        "ensure_client_is_built",
         lambda: pytest.fail("invalid host configuration must fail before client build"),
     )
     with pytest.raises(ValueError, match="allowed_hosts.json"):
@@ -75,7 +84,6 @@ def test_unreadable_config_reports_path(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(Path, "read_text", denied)
     with pytest.raises(ValueError, match="allowed_hosts.json.*denied"):
         _configured_allowed_hosts(None)
-
 
 
 def test_non_utf8_config_reports_path() -> None:
@@ -119,10 +127,14 @@ def test_persistent_names_work_for_http_and_websockets_without_daemon(
             try:
                 if origin == "http://unlisted.example":
                     with pytest.raises(InvalidStatus) as rejected:
-                        connect(url, sock=sock, origin=origin, subprotocols=[protocol], open_timeout=3)
+                        connect(
+                            url, sock=sock, origin=origin, subprotocols=[protocol], open_timeout=3
+                        )
                     assert rejected.value.response.status_code == 403
                 else:
-                    with connect(url, sock=sock, origin=origin, subprotocols=[protocol], open_timeout=3):
+                    with connect(
+                        url, sock=sock, origin=origin, subprotocols=[protocol], open_timeout=3
+                    ):
                         pass
             finally:
                 sock.close()

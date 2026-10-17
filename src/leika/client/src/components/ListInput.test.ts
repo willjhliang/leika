@@ -39,48 +39,6 @@ describe("ListInputComponent", () => {
     expect(values).toEqual(["alpha", "beta", "gamma"]);
   });
 
-  it("gives every entry a grip and a remove, and the list an add", () => {
-    const markup = renderList();
-    expect(markup.match(/data-leika-list-grip/g)).toHaveLength(2);
-    expect(markup.match(/data-leika-list-remove/g)).toHaveLength(2);
-    expect(markup.match(/data-leika-list-add/g)).toHaveLength(1);
-  });
-
-  it("hugs its entries into one block, ends rounded and insides square", () => {
-    const markup = renderList({ value: ["a", "b", "c"] });
-    const boxes = [
-      ...markup.matchAll(/<input[^>]*data-leika-list-entry[^>]*>/g),
-    ].map((match) => match[0]);
-    expect(boxes).toHaveLength(3);
-    // First keeps its top, last keeps its bottom, the middle keeps neither.
-    expect(boxes[0]).toContain("rounded-b-none");
-    expect(boxes[0]).not.toContain("rounded-t-none");
-    expect(boxes[1]).toContain("rounded-t-none");
-    expect(boxes[1]).toContain("rounded-b-none");
-    expect(boxes[2]).toContain("rounded-t-none");
-    expect(boxes[2]).not.toContain("rounded-b-none");
-    // And they share an edge rather than each drawing its own.
-    expect(markup.match(/-mt-px/g)).toHaveLength(2);
-  });
-
-  it("keeps both of an entry's controls inside its box, as bare icons", () => {
-    const markup = renderList({ value: ["a"] });
-    // Neither is a button of its own: the panel's Button leaves a `data-slot`,
-    // and the only one in a list is the Add underneath.
-    expect(markup.match(/data-slot="button"/g)).toHaveLength(1);
-    const row = markup.slice(
-      markup.indexOf("data-leika-list-item"),
-      markup.indexOf("data-leika-list-add"),
-    );
-    expect(row).toContain("data-leika-list-grip");
-    expect(row).toContain("data-leika-list-remove");
-    // Both sit over the box, which makes room for them as they arrive -- and
-    // an entry too long for what is left of it ends in an ellipsis.
-    expect(row).toContain("absolute");
-    expect(row).toContain("group-hover/entry:pr-10");
-    expect(row).toContain("text-ellipsis");
-  });
-
   it("frozen, is its entries and nothing else", () => {
     // The length and the order are fixed, so the controls that would change
     // them are not drawn -- a dead grip is worse than no grip.
@@ -99,11 +57,6 @@ describe("ListInputComponent", () => {
     const markup = renderList({ disabled: true });
     // Two entries, two grips, two removes, one add.
     expect(markup.match(DISABLED)).toHaveLength(7);
-  });
-
-  it("takes the row when it has no label to sit beside", () => {
-    expect(renderList({ label: null })).not.toContain("data-leika-gui-row");
-    expect(renderList({ label: "Tags" })).toContain("data-leika-gui-row");
   });
 
   it("names each entry for assistive technology, by its place", () => {

@@ -52,31 +52,6 @@ describe("ChecklistComponent", () => {
     expect(boxes[1]).toContain('aria-checked="true"');
   });
 
-  it("is a list underneath: the entries hug, and every one can be moved", () => {
-    // The words are still the viewer's to write, so the rows are the list's
-    // rows -- one block, ends rounded, insides square, with a grip and a
-    // remove on each and an add underneath.
-    const markup = renderChecklist({
-      value: [
-        ["a", false],
-        ["b", false],
-        ["c", false],
-      ],
-    });
-    const boxes = [
-      ...markup.matchAll(/<input[^>]*data-leika-checklist-entry[^>]*>/g),
-    ].map((match) => match[0]);
-    expect(boxes[0]).toContain("rounded-b-none");
-    expect(boxes[0]).not.toContain("rounded-t-none");
-    expect(boxes[1]).toContain("rounded-t-none");
-    expect(boxes[1]).toContain("rounded-b-none");
-    expect(boxes[2]).not.toContain("rounded-b-none");
-    expect(markup.match(/-mt-px/g)).toHaveLength(2);
-    expect(markup.match(/data-leika-list-grip/g)).toHaveLength(3);
-    expect(markup.match(/data-leika-list-remove/g)).toHaveLength(3);
-    expect(markup.match(/data-leika-list-add/g)).toHaveLength(1);
-  });
-
   it("frozen, is words with boxes rather than fields to type in", () => {
     // What a checklist is asked for is the ticks, so frozen fixes the words
     // too -- and with nothing to write, nothing is drawn as writable.
@@ -105,15 +80,6 @@ describe("ChecklistComponent", () => {
     expect(
       renderChecklist({ disabled: true, frozen: true }).match(DISABLED),
     ).toHaveLength(2);
-  });
-
-  it("takes the row when it has no label to sit beside", () => {
-    expect(renderChecklist({ label: null })).not.toContain(
-      "data-leika-gui-row",
-    );
-    expect(renderChecklist({ label: "Preflight" })).toContain(
-      "data-leika-gui-row",
-    );
   });
 
   it("names each entry for assistive technology, by its place", () => {

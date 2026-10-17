@@ -43,7 +43,6 @@ describe("SliderAnnotations", () => {
     expect(
       markup.match(/left:100%;transform:translateX\(-100%\)/g),
     ).toHaveLength(2);
-    expect(markup).toContain("truncate");
     // Rendered without a browser there is nothing to measure, and a label asks
     // for room by its own text. The cap until then is the track itself, which
     // the anchoring makes exactly the width at which a label reaches an end

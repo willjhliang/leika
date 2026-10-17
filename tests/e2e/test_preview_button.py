@@ -1053,45 +1053,6 @@ def test_a_picture_preview_is_the_shape_of_the_picture(
     assert page_errors == []
 
 
-def test_a_document_is_set_larger_than_the_panel_sets_it(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    # The same markdown, in a panel row and in a preview. The document takes
-    # its size from whatever shows it: the panel's own size in a row, and a
-    # reading size in a dialog that has nothing else in it.
-    leika_server.gui.add_text(
-        "Notes",
-        "# Heading\n\nSome prose.\n",
-        editable=False,
-        markdown=True,
-        multiline=True,
-    )
-    leika_server.gui.add_preview_button(
-        "Show notes", b"# Heading\n\nSome prose.\n", filename="notes.md"
-    )
-
-    def size_of(scope: Locator, selector: str) -> float:
-        return scope.locator(selector).evaluate("(el) => parseFloat(getComputedStyle(el).fontSize)")
-
-    panel = preview_page.locator("[data-leika-text-markdown]")
-    expect(panel.locator("h1")).to_be_visible(timeout=15_000)
-    panel_body = size_of(panel, "p")
-    panel_heading = size_of(panel, "h1")
-    # The panel's text size, not the browser's default.
-    assert panel_body < 16.0, panel_body
-
-    _press(preview_page, "Show notes")
-    dialog = _dialog(preview_page)
-    expect(dialog).to_be_visible()
-    preview_body = size_of(dialog, "p")
-    preview_heading = size_of(dialog, "h1")
-
-    assert preview_body > panel_body
-    # Everything scales together: the heading keeps its ratio to the body.
-    assert preview_heading / preview_body == pytest.approx(panel_heading / panel_body, rel=0.01)
-    assert page_errors == []
-
-
 def test_a_file_with_no_viewer_says_what_it_is(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:

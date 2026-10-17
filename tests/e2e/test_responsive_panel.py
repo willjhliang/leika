@@ -90,7 +90,7 @@ def test_initial_hover_panel_preserves_right_inset(
     assert page_errors == []
 
 
-def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
+def test_nested_gui_tab_detaches_with_live_content(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -98,7 +98,7 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     leika_server.gui.configure_theme(control_layout="floating", theme="dark")
     tabs = leika_server.gui.add_tab_group()
     with tabs.add_tab("Nested tab"):
-        leika_server.gui.add_text("Nested content", initial_value="ready")
+        field = leika_server.gui.add_text("Nested content", initial_value="ready")
 
     page.goto(leika_server.url)
     page.wait_for_function(
@@ -106,16 +106,6 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     )
     nested_content = page.get_by_text("Nested content", exact=True)
     expect(nested_content).to_be_visible(timeout=5_000)
-    card_content_ancestors = nested_content.locator("xpath=ancestor::*[@data-slot='card-content']")
-    expect(card_content_ancestors).to_have_count(1)
-
-    panel = page.get_by_test_id("control-panel")
-    expect(panel).to_have_attribute("data-slot", "card")
-    expect(page.locator('[data-slot="card"] [data-slot="card"]')).to_have_count(0)
-    control_group = panel.locator("[data-dock-group]").first
-    expect(control_group).to_be_visible()
-    expect(control_group.locator(':scope > [data-slot="tabs"]')).to_have_count(0)
-
     nested_tab = page.get_by_role("tab", name="Nested tab")
     nested_tab.hover()
     # The tab's grip is the tab's drag; its face belongs to the strip.
@@ -131,7 +121,9 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     expect(page.locator("[data-floating-window]")).to_have_count(2)
     torn_window = nested_content.locator("xpath=ancestor::*[@data-floating-window][1]")
     expect(torn_window).to_be_visible()
-    expect(card_content_ancestors).to_have_count(1)
+    expect(torn_window.get_by_role("textbox")).to_have_value("ready")
+    field.value = "updated"
+    expect(torn_window.get_by_role("textbox")).to_have_value("updated")
     assert page_errors == []
 
 
@@ -496,85 +488,4 @@ def test_nested_sections_expand_and_collapse(
     page.keyboard.press("Enter")
     expect(sibling_trigger).to_have_attribute("aria-expanded", "true")
     expect(sibling_contents).to_be_visible()
-    assert page_errors == []
-
-
-def test_empty_panel_body_leaves_no_gap_under_the_header(
-    leika_server: leika.Server,
-    page: Page,
-    page_errors: list[str],
-) -> None:
-    """A panel with nothing to show is just its header inside the card.
-
-    The body stays mounted at zero height so its intrinsic-size transition can
-    be measured, which leaves it a flex item -- and the header/body gap hanging
-    below a lone "Connecting..." or "Inactive" header, unbalanced by the card's
-    padding. The gap belongs to the body, so it goes when the body has nothing
-    in it, and the header runs on to the bottom of the card instead.
-
-    The gap is the header's own bottom padding rather than a gap between flex
-    items, so that pressing it lands on the header: it is title bar to look at
-    and has to be title bar to the pointer too.
-    """
-    leika_server.gui.configure_theme(control_layout="floating")
-    page.goto(leika_server.url)
-    page.wait_for_selector('[data-testid="control-panel"]', timeout=15_000)
-
-    frame = page.locator("[data-dock-group]").filter(
-        has=page.get_by_test_id("control-panel-handle")
-    )
-    measure = """el => {
-        const header = el.querySelector('[data-dock-header]');
-        return {
-            // Below the title: the gap, or the card's own inset once the header
-            // is the last thing in the card and has taken that inset over.
-            underTitle: getComputedStyle(header).paddingBottom,
-            // The frame is exactly its header when nothing follows it.
-            trailingSpace: Math.round(
-                el.getBoundingClientRect().bottom
-                - header.getBoundingClientRect().bottom
-            ),
-        };
-    }"""
-    expect(frame).to_be_visible(timeout=5_000)
-    assert frame.evaluate(measure) == {"underTitle": "16px", "trailingSpace": 0}
-
-    # A populated body earns the gap back: it now has something to separate.
-    leika_server.gui.add_text("Ready", initial_value="yes")
-    expect(page.get_by_text("Ready")).to_be_visible(timeout=5_000)
-    assert frame.evaluate(measure)["underTitle"] == "8px"
-    assert page_errors == []
-
-
-def test_panel_header_spacing_matches_the_field_spacing(
-    leika_server: leika.Server,
-    page: Page,
-    page_errors: list[str],
-) -> None:
-    """The title and controls follow the same vertical rhythm as the rows."""
-    leika_server.gui.configure_theme(control_layout="floating")
-    leika_server.gui.set_panel_label("Controls")
-    leika_server.gui.add_text("First", initial_value="one")
-    leika_server.gui.add_text("Second", initial_value="two")
-
-    page.goto(leika_server.url)
-    panel = page.get_by_test_id("control-panel")
-    expect(panel).to_be_visible(timeout=15_000)
-    expect(page.get_by_text("Second", exact=True)).to_be_visible(timeout=5_000)
-
-    spacing = panel.evaluate(
-        """panel => {
-            const header = panel.querySelector('[data-leika-panel-header]');
-            const rows = [...panel.querySelectorAll('[data-leika-gui-row]')];
-            const centerY = element => {
-                const box = element.getBoundingClientRect();
-                return box.top + box.height / 2;
-            };
-            return {
-                headerToFirst: centerY(rows[0]) - centerY(header),
-                firstToSecond: centerY(rows[1]) - centerY(rows[0]),
-            };
-        }"""
-    )
-    assert spacing["headerToFirst"] == pytest.approx(spacing["firstToSecond"], abs=0.5)
     assert page_errors == []

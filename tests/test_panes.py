@@ -557,14 +557,6 @@ def test_viser_lifecycle(server: leika.Server) -> None:
         server.panes.add_viser(fake, pane_id="row-viser")
 
 
-def test_only_v1_pane_types_are_exposed(server: leika.Server) -> None:
-    # add_matplotlib relays a figure the caller composed, which is what panes
-    # are for. A generic URL pane would make Leika a frame host for arbitrary
-    # pages, and a scene API would make it a 3D engine; both stay out.
-    for name in ("add_url", "add_scene"):
-        assert not hasattr(server.panes, name)
-
-
 @pytest.mark.parametrize("factory", ["direct", "group", "grid"])
 @pytest.mark.parametrize(
     ("keyword", "value", "message"),

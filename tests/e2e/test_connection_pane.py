@@ -126,22 +126,14 @@ def test_the_badge_still_opens_on_a_phone(
     assert page_errors == []
 
 
-def test_connected_and_inactive_fit_their_own_labels(
+def test_connection_badge_reports_connection_loss(
     leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
-    """The short connection states size the pill from their own contents."""
+    """The badge reports a lost connection while the browser tab is hidden."""
     badge = leika_page.locator(TRIGGER)
     label = badge.locator("[data-leika-connection-label]")
     expect(label).to_have_text("Connected")
     expect(badge).to_have_attribute("aria-label", "Connected; connection details")
-    padding = badge.evaluate(
-        "element => { const style = getComputedStyle(element); "
-        "return [style.paddingLeft, style.paddingRight]; }"
-    )
-    assert padding == ["4px", "8px"]
-    connected_bounds = badge.bounding_box()
-    assert connected_bounds is not None
-
     # Headless browsers do not consistently hide a page when another one is
     # brought forward. Model a hidden tab, whose closed connection is inactive
     # until it becomes visible again.
@@ -154,117 +146,4 @@ def test_connected_and_inactive_fit_their_own_labels(
     leika_server.stop()
     expect(label).to_have_text("Inactive", timeout=15_000)
     expect(badge).to_have_attribute("aria-label", "Inactive; connection details")
-    inactive_bounds = badge.bounding_box()
-    assert inactive_bounds is not None
-
-    assert inactive_bounds["width"] < connected_bounds["width"]
-    assert page_errors == []
-
-
-def _style(locator: Locator, prop: str) -> str:
-    return locator.evaluate(f"element => getComputedStyle(element).{prop}")
-
-
-def _focused(page: Page, selector: str) -> bool:
-    return page.evaluate(
-        "selector => document.activeElement === document.querySelector(selector)",
-        selector,
-    )
-
-
-def _settled(locator: Locator, prop: str) -> str:
-    """The value a property lands on, rather than one it passes through.
-
-    Both controls fade between fills over 150ms, so a style read straight after
-    a click is a frame of the animation -- and comparing two of those compares
-    where each happened to be, not what either settles at.
-
-    WebKit can expose two identical pre-transition frames before serializing an
-    interpolated color in another color space, so repeated-value polling is not
-    proof that the transition has finished. Wait on the browser's animation.
-    """
-    return locator.evaluate(
-        """async (element, property) => {
-          const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
-          getComputedStyle(element)[property];
-          await frame();
-          await frame();
-          await Promise.all(
-            element.getAnimations().map(animation =>
-              animation.finished.catch(() => undefined),
-            ),
-          );
-          return getComputedStyle(element)[property];
-        }""",
-        prop,
-    )
-
-
-def test_the_badge_wears_the_same_states_as_the_gear(
-    leika_server: leika.Server, leika_page: Page, page_errors: list[str]
-) -> None:
-    """Two popouts hang off this header, and a reader learns one control from
-    the other: resting, hovered and open have to look -- and move -- alike.
-
-    Every reading is taken with the pointer parked away from both, since a
-    control keeps its hover while the pointer sits where it clicked.
-    """
-    del leika_server
-    away = lambda: leika_page.mouse.move(0, 0)  # noqa: E731
-    badge = leika_page.locator(TRIGGER)
-    gear = leika_page.locator("[data-leika-settings-trigger]")
-    expect(badge).to_be_visible(timeout=5_000)
-
-    # Resting: the same secondary fill.
-    resting = _settled(badge, "backgroundColor")
-    assert resting == _settled(gear, "backgroundColor")
-
-    # And the same easing between states, so neither snaps while the other
-    # fades.
-    for prop in ("transitionProperty", "transitionDuration", "transitionTimingFunction"):
-        assert _style(badge, prop) == _style(gear, prop), prop
-
-    # Focused from the keyboard: this client shows focus as a border color
-    # rather than a halo, and the border that changes is the pill's own -- so
-    # the pill has to BE the button. Wrapped in one, the state would sit on an
-    # ancestor, and the selector Tailwind writes for that loses to the pill's
-    # transparent border without a word.
-    resting_border = _style(badge, "borderColor")
-    # A one-page workspace has a static title, so the gear is the first
-    # interactive item in the header.
-    leika_page.keyboard.press("Tab")
-    assert _focused(leika_page, "[data-leika-settings-trigger]")
-    gear_focus_border = _settled(gear, "borderColor")
-    assert gear_focus_border != resting_border
-
-    leika_page.keyboard.press("Tab")  # then the badge
-    assert _focused(leika_page, TRIGGER)
-    assert _settled(badge, "borderColor") == gear_focus_border
-    badge.blur()
-
-    # Hovered: a step off the resting fill, the same step the gear takes --
-    # rather than the badge sitting inert under a pointer that says it can be
-    # pressed.
-    leika_page.locator(TRIGGER).hover()
-    expect(badge).not_to_have_css("background-color", resting)
-    hovered = _settled(badge, "backgroundColor")
-    away()
-    gear.hover()
-    assert hovered == _settled(gear, "backgroundColor")
-    away()
-
-    # Open: filled with the accent, printed in the accent's foreground.
-    gear.click()
-    away()
-    accent = _settled(gear, "backgroundColor")
-    accent_text = _settled(gear, "color")
-    leika_page.keyboard.press("Escape")
-
-    open_connection(leika_page)
-    away()
-    assert _settled(badge, "backgroundColor") == accent
-    assert _settled(badge.locator("[data-leika-connection-label]"), "color") == accent_text
-
-    leika_page.keyboard.press("Escape")
-    expect(badge).to_have_css("background-color", resting)
     assert page_errors == []

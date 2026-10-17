@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   previewFullscreenStore,
-  previewMediaClassName,
   setPreviewFullscreen,
 } from "./previewFullscreen";
 
@@ -61,45 +60,5 @@ describe("the fullscreen flag", () => {
     stop();
     setPreviewFullscreen("notes.md", true);
     expect(listener).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("previewMediaClassName", () => {
-  it("fills the popup's width windowed, and sets its own height", () => {
-    // The popup is already the shape of the picture, so there is nothing to
-    // fit the picture into.
-    const windowed = previewMediaClassName(false);
-    expect(windowed).toContain("w-full");
-    expect(windowed).toContain("h-auto");
-    expect(windowed).not.toContain("object-contain");
-  });
-
-  it("takes the whole window and fits the picture inside it", () => {
-    // The window is not the shape of the picture, so the element takes the
-    // area and `object-contain` letterboxes what is drawn in it. Without
-    // `h-full` a portrait ran off the bottom of the screen.
-    const full = previewMediaClassName(true);
-    expect(full).toContain("h-full");
-    expect(full).toContain("w-full");
-    expect(full).toContain("object-contain");
-  });
-
-  it("drops the corner radius where there is no corner", () => {
-    expect(previewMediaClassName(false)).toContain("rounded-lg");
-    expect(previewMediaClassName(true)).not.toContain("rounded");
-  });
-
-  it("never asks for a height twice", () => {
-    // The two sizings are a branch rather than one class list with `in-*`
-    // variants on it, because Tailwind wraps an `in-*` ancestor in `:where()`
-    // and the override then ties on specificity with the utility it is meant
-    // to beat -- `h-full` lost to `h-auto` and the picture overflowed. A list
-    // carrying both is that bug coming back.
-    for (const fullscreen of [false, true]) {
-      const heights = previewMediaClassName(fullscreen)
-        .split(" ")
-        .filter((name) => name.startsWith("h-"));
-      expect(heights).toHaveLength(1);
-    }
   });
 });

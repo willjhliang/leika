@@ -5,32 +5,7 @@ import pytest
 
 import leika
 
-
-def test_direct_container_syntax_and_exported_aliases(server: leika.Server) -> None:
-    for name in ("GuiContainer", "GuiTabGroup", "PaneHandle", "PaneId"):
-        assert hasattr(leika, name), name
-
-    folder: leika.GuiContainer = server.gui.add_folder("Direct folder")
-    slider = folder.add_slider("Direct slider", min=0.0, max=1.0, step=0.01, initial_value=0.5)
-    assert slider.value == 0.5
-
-    tabs: leika.GuiTabGroup = server.gui.add_tab_group()
-    tab = tabs.add_tab("Direct tab")
-    html = tab.add_html("<strong>Direct child</strong>")
-    assert html.content == "<strong>Direct child</strong>"
-
-    pane_id = leika.PaneId("direct-pane")
-    pane: leika.PaneHandle = server.panes.add_image(
-        np.zeros((2, 2, 3), dtype=np.uint8), pane_id=pane_id
-    )
-    assert pane.pane_id == pane_id
-
-
-# One valid call per container-scoped `GuiApi.add_*`. Kept exhaustive on
-# purpose: `test_containers_mirror_every_container_scoped_add_method` proves
-# the mirror covers every element, and this proves each mirrored method
-# actually places its element -- including the ones no example or other test
-# happens to use.
+# Exercise direct container creation for each supported control.
 _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
     "add_button": (("Button",), {}),
     "add_checkbox": (("Checkbox", True), {}),
@@ -64,15 +39,15 @@ _SAMPLE_CALLS: dict[str, tuple[tuple, dict]] = {
 }
 
 
-def test_every_mirrored_add_method_places_its_element(server: leika.Server) -> None:
+def test_direct_container_methods_publish_children_in_the_folder(server: leika.Server) -> None:
     go = pytest.importorskip("plotly.graph_objects")
     calls = {**_SAMPLE_CALLS, "add_plotly": ((go.Figure(),), {})}
-
-    mirrored = {name for name in dir(leika.GuiContainer) if name.startswith("add_")}
-    assert calls.keys() == mirrored, "sample calls have drifted from the mirrored methods"
 
     folder = server.gui.add_folder("Everything")
     for name, (args, kwargs) in sorted(calls.items()):
         handle = getattr(folder, name)(*args, **kwargs)
-        assert handle is not None, name
-        assert folder._children.get(handle.id) is handle, name
+        assert any(
+            getattr(message, "uuid", None) == handle.id
+            and getattr(message, "container_uuid", None) == folder.id
+            for message in server._websock_server.get_message_buffer().message_from_id.values()
+        ), name

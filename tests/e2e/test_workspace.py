@@ -170,48 +170,6 @@ def test_pane_drop_preview_matches_committed_vertical_split(
     assert page_errors == []
 
 
-def test_pane_header_is_a_square_bar_across_the_pane_top(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """The title is a bar spanning the pane's full width, styled like the
-    dock: card surface, left-aligned label, and no rounding anywhere -- every
-    corner of the bar sits on a pane seam, where a radius would show the
-    canvas through a notch.
-    """
-    row = leika_server.panes.add_row()
-    row.add_image(np.zeros((24, 32, 3), dtype=np.uint8), pane_id="left", title="Left")
-    expect(leika_page.locator('[data-viewport-pane="left"]')).to_be_visible(timeout=5_000)
-
-    header = leika_page.locator('[data-viewport-pane-header="left"]')
-    geometry = header.evaluate(
-        """el => {
-            const style = getComputedStyle(el);
-            const pane = el.closest('[data-viewport-pane]').getBoundingClientRect();
-            const self = el.getBoundingClientRect();
-            return {
-                topLeft: style.borderTopLeftRadius,
-                topRight: style.borderTopRightRadius,
-                bottomLeft: style.borderBottomLeftRadius,
-                bottomRight: style.borderBottomRightRadius,
-                spansPaneWidth:
-                    Math.abs(self.left - pane.left) < 1 &&
-                    Math.abs(self.right - pane.right) < 1 &&
-                    Math.abs(self.top - pane.top) < 1,
-            };
-        }"""
-    )
-    assert geometry == {
-        "topLeft": "0px",
-        "topRight": "0px",
-        "bottomLeft": "0px",
-        "bottomRight": "0px",
-        "spansPaneWidth": True,
-    }
-    assert page_errors == []
-
-
 @pytest.mark.plotly
 def test_plotly_pane_updates_without_remount(
     leika_server: leika.Server,

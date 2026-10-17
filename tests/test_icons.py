@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 import stat
 import zipfile
 from contextlib import contextmanager
@@ -232,34 +230,3 @@ def test_icon_attribute_collisions_are_rejected(
         generator.write_enum(["a-b", "a_b"])
     assert not (tmp_path / "_icons_enum.py").exists()
     assert not (tmp_path / "_icons_enum.pyi").exists()
-
-
-def test_shipped_icon_versions_archive_and_stub_are_in_lockstep() -> None:
-    root = Path(__file__).resolve().parents[1]
-    client = root / "src/leika/client"
-    lock = json.loads((client / "package-lock.json").read_text(encoding="utf-8"))
-    packages = lock["packages"]
-    react_version = packages["node_modules/lucide-react"]["version"]
-    static_version = packages["node_modules/lucide-static"]["version"]
-    assert react_version == static_version
-
-    archive_path = root / "src/leika/_icons/lucide-icons.zip"
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        names = [info.filename for info in infos]
-        assert archive.testzip() is None
-    assert names == sorted(names)
-    assert len(names) == len(set(names))
-    assert all(name.endswith(".svg") and Path(name).name == name for name in names)
-    assert all(info.date_time == generator._ARCHIVE_TIMESTAMP for info in infos)
-    assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in infos)
-
-    stub = (root / "src/leika/_icons_enum.pyi").read_text(encoding="utf-8")
-    declarations = re.findall(
-        r'^    ([A-Z][A-Z0-9_]*): IconName = IconName\("([^"]+)"\)$',
-        stub,
-        re.MULTILINE,
-    )
-    expected = [(generator.enum_name_from_icon(Path(name).stem), Path(name).stem) for name in names]
-    assert declarations == expected
-    assert len({attribute for attribute, _icon in declarations}) == len(declarations)

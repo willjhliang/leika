@@ -2,13 +2,25 @@
 orphan: true
 ---
 
-# Dependency compatibility work
+# Leika work brief
 
-## Status and ownership
+## Test cleanup
+
+Complete: removed 90 source-shape, cosmetic-only and redundant test cases.
+Mixed tests now check published pane/control messages and live detached-tab content
+instead of private implementation classes or DOM composition. Runtime code and
+dependency support are unchanged; no cleanup work remains pending.
+
+Validation passed: all 1,083 Python unit tests, all 1,161 frontend unit tests, and
+64 selected Chromium interaction tests. Test lint/formatting, client type checking,
+documentation checks and the strict documentation build pass. Logs are under
+`/tmp/leika-cleanup-*.log`.
+
+## Dependency compatibility status and ownership
 
 Leika's implementation and validation are complete at `6271be3`. The
 [development guide](development.md#pinned-simulator-environments) owns dependency
-support policy and implementation decisions. No further Leika changes are pending.
+support policy and implementation decisions. No dependency implementation work is pending.
 
 The Babble agent owns installation, viewer integration and native Isaac validation
 under the original handoff, `/tmp/babble-leika-handoff.md`. This Leika task did not
