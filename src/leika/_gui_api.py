@@ -890,7 +890,14 @@ class GuiApi(GuiContainer):
                 handle._command(message.action, message.value)
             except (TypeError, ValueError, OverflowError):
                 return
-            event = PlaybackEvent(client, client_id, handle, message.action, handle.state)
+            event = PlaybackEvent(
+                client,
+                client_id,
+                handle,
+                message.action,
+                message.value if message.action in ("seek", "step", "speed") else None,
+                handle.state,
+            )
             callbacks = tuple(handle._impl.update_cb)
         for callback in callbacks:
             await self._server._await_user_callback(callback, event)

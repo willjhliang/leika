@@ -500,7 +500,9 @@ owns frame caching or any simulation reset needed to realize the requested time.
 
 `on_update` runs after an accepted browser command (`play`, `pause`, `seek`,
 `step`, `speed` or `loop`). Regular functions run in the callback pool and async
-functions run in the event loop. `event.state` is immutable. Programmatic
+functions run in the event loop. `event.state` is immutable. `event.value` retains the requested seek time, step
+direction (-1/+1), or speed; other actions carry `None`. This lets asynchronous
+applications queue relative steps even while a reset or seek is pending. Programmatic
 assignments, `update(...)`, and `advance(...)` do **not** invoke callbacks, so
 publishing progress cannot create an input feedback loop. For queued simulator
 work, consume these events on the simulator's owning thread.

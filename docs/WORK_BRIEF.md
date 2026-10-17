@@ -9,7 +9,7 @@ orphan: true
 The playback bar now supports custom Python content. `gui.add_playback(duration=...)`
 provides a Python-owned timeline with command events and explicit progress;
 `gui.add_playback(sync_group=...)` uses the existing browser video clock. Both
-render one shared control component. Commands carry immutable state snapshots;
+render one shared control component. Commands carry immutable state snapshots and the original numeric intent;
 programmatic progress is silent. The application owns its clock and can use
 `advance(seconds)` or publish simulation time directly. Existing video clocks
 remain browser-local.

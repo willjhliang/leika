@@ -3646,6 +3646,8 @@ class PlaybackEvent:
     client_id: ClientId
     target: GuiPlaybackHandle
     action: PlaybackAction
+    value: float | None
+    """Requested seek time, step direction (-1/+1), or speed; otherwise None."""
     state: PlaybackState
 
 

@@ -57,6 +57,9 @@ def test_playback_commands_preserve_steps_and_snapshot_events(
     assert all(not e.state.playing for e in events[1:6])
     assert bar.time == 1.05 and bar.speed == 2 and not bar.loop
     assert events[0].state.playing and events[0].state.time == 0
+    assert events[0].value is None
+    assert all(e.value == 1 for e in events[1:6])
+    assert events[-1].value == 1.026  # Retain intent before frame quantization.
     bar.time = 0.7
     bar.advance(1)
     assert len(events) == 9  # Publishing progress never feeds back as user input.
