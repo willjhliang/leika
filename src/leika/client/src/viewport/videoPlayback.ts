@@ -2,16 +2,7 @@ import { createStore } from "../store";
 import { displayedViewportPage } from "./viewportSelectors";
 import type { ViewportVideoPane, ViewportState } from "./ViewportState";
 
-export interface PlaybackState {
-  time: number;
-  duration: number;
-  paused: boolean;
-  rate: number;
-  loop: boolean;
-  fps: number | null;
-  buffering: boolean;
-  error: boolean;
-}
+import type { PlaybackState } from "./playbackController";
 
 type Member = {
   video: HTMLVideoElement;

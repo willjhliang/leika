@@ -4,6 +4,23 @@ orphan: true
 
 # Leika work brief
 
+## General playback
+
+The playback bar now supports custom Python content. `gui.add_playback(duration=...)`
+provides a Python-owned timeline with command events and explicit progress;
+`gui.add_playback(sync_group=...)` uses the existing browser video clock. Both
+render one shared control component. Commands carry immutable state snapshots;
+programmatic progress is silent. The application owns its clock and can use
+`advance(seconds)` or publish simulation time directly. Existing video clocks
+remain browser-local.
+
+Validation: 1,013 Python tests, 907 frontend tests, 15 existing video browser
+cases and one custom playback browser case pass. Locked type checking, Ruff,
+ESLint, TypeScript, documentation and gallery generation pass. Full and compact
+controls were inspected in light/dark themes. Packaging and Babble integration
+are the next authorized actions; preserve the previous compatibility artifact.
+
+
 ## Test cleanup
 
 Test cleanup is complete. Generated-protocol checks compile and execute the

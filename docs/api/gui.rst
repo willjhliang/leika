@@ -21,3 +21,13 @@ Sanitize all untrusted content before passing it to this method.
 
 .. autoclass:: GuiVideoControlsHandle
    :members:
+
+.. autoclass:: GuiPlaybackHandle
+   :members:
+   :inherited-members: update, remove
+
+.. autoclass:: PlaybackState
+   :members:
+
+.. autoclass:: PlaybackEvent
+   :members:

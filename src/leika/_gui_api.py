@@ -76,6 +76,7 @@ from ._gui_handles import (
     GuiModalHandle,
     GuiMultiSliderHandle,
     GuiNumberHandle,
+    GuiPlaybackHandle,
     GuiPlotlyHandle,
     GuiPopupHandle,
     GuiPreviewButtonHandle,
@@ -93,6 +94,7 @@ from ._gui_handles import (
     GuiVector2Handle,
     GuiVector3Handle,
     GuiVideoControlsHandle,
+    PlaybackEvent,
     PreviewContent,
     SupportsRemoveProtocol,
     UploadedFile,
@@ -491,6 +493,7 @@ class GuiApi(GuiContainer):
         self._notification_text_units = 0
         self._is_server_scope = isinstance(owner, Server)
         self._gui_input_handle_from_uuid: dict[str, _GuiInputHandle[Any]] = {}
+        self._playback_handle_from_uuid: dict[str, GuiPlaybackHandle] = {}
         self._container_handle_from_uuid: dict[str, GuiContainerProtocol] = {
             "root": _RootGuiContainer({})
         }
@@ -512,6 +515,9 @@ class GuiApi(GuiContainer):
 
         self._websock_interface.register_handler(
             _messages.GuiUpdateMessage, self._handle_gui_updates
+        )
+        self._websock_interface.register_handler(
+            _messages.GuiPlaybackCommandMessage, self._handle_playback_command
         )
         self._websock_interface.register_handler(
             _messages.GuiRefreshMessage, self._handle_gui_refresh
@@ -865,6 +871,27 @@ class GuiApi(GuiContainer):
             if not accepted:
                 handle._finish_file_press()
         # User code never runs under the registry/state lock.
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
+
+    async def _handle_playback_command(
+        self, client_id: ClientId, message: _messages.GuiPlaybackCommandMessage
+    ) -> None:
+        client = self._resolve_client(client_id)
+        if client is None:
+            return
+        with self._lock:
+            handle = self._playback_handle_from_uuid.get(message.uuid)
+            if handle is None or handle._impl.removed or handle.disabled or not handle.visible:
+                return
+            if handle.duration == 0:
+                return
+            try:
+                handle._command(message.action, message.value)
+            except (TypeError, ValueError, OverflowError):
+                return
+            event = PlaybackEvent(client, client_id, handle, message.action, handle.state)
+            callbacks = tuple(handle._impl.update_cb)
         for callback in callbacks:
             await self._server._await_user_callback(callback, event)
 
@@ -1526,6 +1553,7 @@ class GuiApi(GuiContainer):
             self._notification_text_units_from_uuid.clear()
             self._notification_text_units = 0
             self._gui_input_handle_from_uuid.clear()
+            self._playback_handle_from_uuid.clear()
             self._container_handle_from_uuid = {"root": _RootGuiContainer({})}
             self._container_depth_from_uuid = {"root": 0}
             # Defensive release for any record not reachable from a corrupted tree.
@@ -2271,6 +2299,117 @@ class GuiApi(GuiContainer):
             ),
         )
         return handle
+
+    @overload
+    def add_playback(
+        self,
+        label: str | None = None,
+        *,
+        sync_group: str,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiVideoControlsHandle: ...
+
+    @overload
+    def add_playback(
+        self,
+        label: str | None = None,
+        *,
+        duration: float,
+        time: float = 0.0,
+        playing: bool = False,
+        speed: float = 1.0,
+        loop: bool = True,
+        fps: float | None = None,
+        buffering: bool = False,
+        disabled: bool = False,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiPlaybackHandle: ...
+
+    def add_playback(
+        self,
+        label: str | None = None,
+        *,
+        sync_group: str | None = None,
+        duration: float | None = None,
+        time: float = 0.0,
+        playing: bool = False,
+        speed: float = 1.0,
+        loop: bool = True,
+        fps: float | None = None,
+        buffering: bool = False,
+        disabled: bool = False,
+        order: float | None = None,
+        visible: bool = True,
+    ) -> GuiPlaybackHandle | GuiVideoControlsHandle:
+        """Add play/pause, seek, speed, loop and optional frame-step controls.
+
+        For videos, pass only ``sync_group="episode"`` and give video panes
+        that same group. The browser owns playback; duration and frame rate
+        come from the videos. Returns :class:`GuiVideoControlsHandle`.
+
+        For custom content, pass ``duration`` in seconds. Python owns the clock
+        and receives browser commands through ``handle.on_update``. Publish
+        actual progress with ``handle.time = seconds``, or call
+        ``handle.advance(elapsed_seconds)`` in your render loop. No automatic
+        background work runs. Returns :class:`GuiPlaybackHandle`.
+
+        ``fps`` enables frame stepping. ``buffering`` indicates that content is
+        being prepared without disabling pause or seek. ``duration=0`` disables
+        transport until content is ready. All time values are seconds.
+
+        With ``label=None`` the full row includes previous/next frame and time;
+        a label selects the compact row. State of Python-controlled playback
+        follows the GUI scope: shared on ``server.gui``, private on ``client.gui``.
+        Video playback stays local to each browser.
+        """
+        if sync_group is not None:
+            if (
+                duration is not None
+                or time != 0
+                or playing
+                or speed != 1
+                or not loop
+                or fps is not None
+                or buffering
+                or disabled
+            ):
+                raise ValueError(
+                    "video playback settings belong on video panes; pass only sync_group, label, order and visible"
+                )
+            return self.add_video_controls(
+                label, sync_group=sync_group, order=order, visible=visible
+            )
+        if duration is None:
+            raise ValueError("pass duration for custom playback or sync_group for videos")
+        message = _messages.GuiPlaybackMessage(
+            uuid=_make_uuid(),
+            container_uuid=self._get_container_uuid(),
+            props=_messages.GuiPlaybackProps(
+                order=self._apply_default_order(order),
+                label=label,
+                visible=visible,
+                disabled=disabled,
+                time=time,
+                duration=duration,
+                playing=playing,
+                speed=speed,
+                loop=loop,
+                fps=fps,
+                buffering=buffering,
+            ),
+        )
+        return GuiPlaybackHandle(
+            _GuiHandleState(
+                message.uuid,
+                self,
+                None,
+                props=message.props,
+                parent_container_id=message.container_uuid,
+                create_message=message,
+            )
+        )
 
     def add_video_controls(
         self,

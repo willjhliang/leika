@@ -71,6 +71,7 @@ from ._messages import (
     GuiListProps,
     GuiMultiSliderProps,
     GuiNumberProps,
+    GuiPlaybackProps,
     GuiPlotlyProps,
     GuiPopupProps,
     GuiPreviewImageMessage,
@@ -96,6 +97,7 @@ from ._messages import (
     GuiVector2Props,
     GuiVector3Props,
     GuiVideoControlsProps,
+    PlaybackAction,
     RemoveCommandMessage,
     _normalize_key_modifier,
 )
@@ -528,6 +530,17 @@ def _validate_gui_props_candidate(handle: Any, props: Any) -> None:
                 "choose a smaller child order"
             )
 
+    if isinstance(props, GuiPlaybackProps):
+        for name in ("time", "duration"):
+            _finite_number(getattr(props, name), name)
+        if not 0 <= props.time <= props.duration:
+            raise ValueError("playback requires 0 <= time <= duration")
+        _positive_number(props.speed, "speed")
+        if props.fps is not None:
+            _positive_number(props.fps, "fps")
+        for name in ("visible", "disabled", "playing", "loop", "buffering"):
+            if type(getattr(props, name)) is not bool:
+                raise TypeError(f"{name} must be a bool")
     if isinstance(props, GuiVideoControlsProps):
         validate_layout_id(props.sync_group, "sync_group")
     if isinstance(props, GuiPlotlyProps):
@@ -709,6 +722,8 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
                     gui_api._container_depth_from_uuid[self._impl.uuid] = component_depth
                 if is_input:
                     input_registry[self._impl.uuid] = self
+                if isinstance(self, GuiPlaybackHandle):
+                    gui_api._playback_handle_from_uuid[self._impl.uuid] = self
                 if owning_form is not None:
                     owning_form._initial_field_uuids.add(self._impl.uuid)
                 create_message = self._impl.create_message
@@ -731,6 +746,7 @@ class _GuiHandle(Generic[T], AssignablePropsBase[_GuiHandleState]):
                     gui_api._retained_extra_bytes_from_gui_uuid[self._impl.uuid] = old_extra
                 if is_input:
                     input_registry.pop(self._impl.uuid, None)
+                gui_api._playback_handle_from_uuid.pop(self._impl.uuid, None)
                 if owning_form is not None:
                     owning_form._initial_field_uuids.discard(self._impl.uuid)
                 self._impl.owning_form_uuid = None
@@ -2848,6 +2864,7 @@ def _retire_gui_handle_without_queue_locked(handle: _GuiHandle[Any]) -> None:
     gui_api._live_component_count -= 1
     gui_api._release_gui_resource_locked(handle._impl.uuid)
     gui_api._gui_input_handle_from_uuid.pop(handle._impl.uuid, None)
+    gui_api._playback_handle_from_uuid.pop(handle._impl.uuid, None)
     gui_api._container_handle_from_uuid.pop(handle._impl.uuid, None)
     gui_api._container_depth_from_uuid.pop(handle._impl.uuid, None)
     parent = gui_api._container_handle_from_uuid.get(handle._impl.parent_container_id)
@@ -2884,6 +2901,7 @@ def _discard_gui_subtree(
             gui_api._live_component_count -= 1
             gui_api._release_gui_resource_locked(child._impl.uuid)
             gui_api._gui_input_handle_from_uuid.pop(child._impl.uuid, None)
+            gui_api._playback_handle_from_uuid.pop(child._impl.uuid, None)
             if isinstance(child, GuiUploadButtonHandle):
                 gui_api._discard_file_uploads(source_component_uuid=child._impl.uuid)
             if isinstance(child, GuiPreviewButtonHandle):
@@ -3605,6 +3623,131 @@ class GuiHtmlHandle(_GuiHandle[None], GuiHtmlProps):
         if name == "content":
             value = _validate_gui_html_content(value)
         super().__setattr__(name, value)
+
+
+@dataclasses.dataclass(frozen=True)
+class PlaybackState:
+    """Immutable snapshot of a Python-controlled timeline, with times in seconds."""
+
+    time: float
+    duration: float
+    playing: bool
+    speed: float
+    loop: bool
+    fps: float | None
+    buffering: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class PlaybackEvent:
+    """One accepted browser command and its resulting state, before user code runs."""
+
+    client: ClientHandle
+    client_id: ClientId
+    target: GuiPlaybackHandle
+    action: PlaybackAction
+    state: PlaybackState
+
+
+class GuiPlaybackHandle(_GuiHandle[None], GuiPlaybackProps):
+    """Playback controls with an application-owned clock.
+
+    Assign ``time``, ``playing``, ``speed``, ``loop``, ``duration``, ``fps`` or
+    ``buffering``, or use ``update(...)`` to publish several together. These
+    assignments do not invoke callbacks. Browser commands update the handle
+    first, then call :meth:`on_update` with an immutable state snapshot.
+
+    No background clock or simulator is started. Call :meth:`advance` from
+    your render loop, or publish the actual time of a simulator yourself.
+    A server GUI shares state across browsers; a client GUI keeps it private.
+    Hiding the control does not pause application work.
+    """
+
+    @property
+    def state(self) -> PlaybackState:
+        """A consistent snapshot; safe to keep after the next update."""
+        with self._impl.gui_api._lock:
+            if self._impl.removed:
+                raise RuntimeError("Cannot read a removed playback handle")
+            props = self._impl.props
+            return PlaybackState(
+                **{f.name: getattr(props, f.name) for f in dataclasses.fields(PlaybackState)}
+            )
+
+    def on_update(
+        self, func: Callable[[PlaybackEvent], NoneOrCoroutine]
+    ) -> Callable[[PlaybackEvent], NoneOrCoroutine]:
+        """Register a browser-command callback. Programmatic updates are silent.
+
+        Regular functions run in the callback pool; async functions run in
+        the event loop. Use ``event.state`` to read the accepted command's
+        snapshot, rather than a handle that another thread may have advanced.
+        """
+        if not callable(func):
+            raise TypeError("callback must be callable")
+        with self._impl.gui_api._lock:
+            if self._impl.removed:
+                raise RuntimeError("Cannot register a callback on a removed handle")
+            _append_gui_callback_locked(self._impl.update_cb, func, "playback")
+        return func
+
+    def remove_update_callback(self, callback: Literal["all"] | Callable = "all") -> None:
+        """Remove one callback, or all callbacks."""
+        with self._impl.gui_api._lock:
+            if callback == "all":
+                self._impl.update_cb.clear()
+            else:
+                self._impl.update_cb[:] = [cb for cb in self._impl.update_cb if cb != callback]
+
+    def advance(self, seconds: float) -> PlaybackState:
+        """Advance by elapsed wall time × speed, respecting pause, buffering and loop.
+
+        Returns the resulting state. At the end, a non-looping timeline stops
+        on its final frame. A looping timeline wraps. This does not call
+        callbacks; render the returned time from your application loop.
+        """
+        _finite_number(seconds, "seconds")
+        if seconds < 0:
+            raise ValueError("seconds must be nonnegative")
+        with self._impl.gui_api._lock:
+            state = self.state
+            if not state.playing or state.buffering or self.disabled or state.duration == 0:
+                return state
+            target = state.time + seconds * state.speed
+            _finite_number(target, "advanced time")
+            if target >= state.duration:
+                if state.loop:
+                    target %= state.duration
+                else:
+                    self.update(time=state.duration, playing=False)
+                    return self.state
+            self.time = target
+            return self.state
+
+    def _command(self, action: PlaybackAction, value: float) -> None:
+        """Apply a validated intent against current state, never a stale browser copy."""
+        _finite_number(value, "value")
+        state = self.state
+        if action == "play":
+            self.update(playing=True, time=0.0 if state.time >= state.duration else state.time)
+        elif action == "pause":
+            self.playing = False
+        elif action == "seek":
+            target = max(0.0, min(value, state.duration))
+            if state.fps is not None:
+                target = min(state.duration, math.floor(target * state.fps + 0.5) / state.fps)
+            self.time = target
+        elif action == "step":
+            if state.fps is None or value not in (-1, 1):
+                raise ValueError("step requires fps and a direction of -1 or 1")
+            target = (math.floor(state.time * state.fps + 0.5) + value) / state.fps
+            self.update(time=max(0.0, min(target, state.duration)), playing=False)
+        elif action == "speed":
+            self.speed = value
+        elif action == "loop":
+            self.loop = not state.loop
+        else:
+            raise ValueError("unknown playback command")
 
 
 class GuiVideoControlsHandle(_GuiHandle[None], GuiVideoControlsProps):

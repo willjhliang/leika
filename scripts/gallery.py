@@ -66,6 +66,18 @@ ENTRIES = [
                 )""",
             ),
             Entry(
+                slug="playback",
+                title="Playback",
+                ref="add_playback",
+                code="gui.add_playback(duration=10, time=2.5, fps=30)",
+            ),
+            Entry(
+                slug="playback-labelled",
+                title="Labelled playback",
+                ref="add_playback",
+                code='gui.add_playback("Playback", duration=10, time=2.5, fps=30)',
+            ),
+            Entry(
                 slug="video-controls",
                 title="Video controls",
                 ref="add_video_controls",
