@@ -25,29 +25,28 @@ browser case. Final event tests and24tests against Babble's installed simulator
 pins pass. Locked type checks, Ruff, ESLint, TypeScript, docs, gallery and
 reproducible wheel/sdist checks pass. Both interface layouts were visually checked.
 
-Babble integrates the bar at5362e79 and has103tests passing. Its viewer caches the
-current rollout's poses for seeking and looping; reset is a separate simulation
-action. Ant rendered interaction and ABC control/focused-render checks pass.
-The full ABC grid loaded but its SwiftShader screenshot exceeded60s. This is not
-a desktop rendering performance measurement. The installed CPU preview remains
-on8092 with the user's ABC checkpoint; temporary8093 is closed. Babble's own
-work brief and browser receipts own the detailed integration state.
+Babble7c8f5e0 uses warm CPU workers, retires obsolete Viser geometry, and keeps
+its timeline state valid across environment replacement.107Babbletests pass;
+staging browser checks cover CPU switches, steps, pending-selection replacement,
+full/balanced detail, fresh reconnect and the rendered ABC grid. Babble's work
+brief owns the live preview identity and selection. Native Isaac processes still
+restart on selection changes; no new GPU validation was run for this correction.
 
 ## Dependency compatibility and artifacts
 
-The installed local0.4.0 wheel is built from772adb42249a19fd530da7eda86a2bf8d9a8a29a.
+The installed local0.4.0 wheel is built frome3a3015de8e8db271aec734400f22866c7397708.
 It retains compatibility with Isaac-owned WebSockets12/Pillow11.3 and Viser0.2.11.
 All Babble package versions are unchanged and pip check passes. The development
 guide owns [dependency support](development.md#pinned-simulator-environments).
-A Python-only reconnect correction is validated and awaiting a rebuilt wheel
-and Babble installation. Playback updates publish one full state, preventing
-retained seek/duration deltas from replaying an invalid timeline after content
-replacement. Python1014tests, type/lint/docs checks pass; the browser regression
-covers repeated duration replacement and reconnect. No source was pushed.
+Playback publishes one complete state, preventing retained seek/duration deltas
+from replaying an invalid timeline after content replacement. The correction is
+committed, reproducibly packaged and installed in Babble.1014Python tests,
+2browser playback tests and5tests against the installed simulator pins pass;
+type, lint, docs and archive checks pass. No source was pushed.
 
-`build/playback.json` records source revision, artifact hashes, validation and
-installation. Its wheel SHA256 is
-`3ad085a6febc686ff4da625d3b06b5eb5f3f8186bd09b717838fe29273a9491c`.
+`build/playback-reconnect.json` records source, artifact hashes and validation.
+Its wheel SHA256 is
+`7e2780977e104a36e1a233668ceeac1828227e956d5a306a1e5738c5e7298950`.
 Two independent builds match byte-for-byte; archive validators and Twine pass.
 The package still reports0.4.0 and differs from PyPI0.4.0, so identify the local
 artifact by revision and hash. Babble's docs/VIEWER.md owns its installation steps.
