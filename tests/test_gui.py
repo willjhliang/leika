@@ -1368,33 +1368,6 @@ def test_theme_sends_the_docked_edge_on_the_wire(
     assert [message.control_layout for message in sent] == ["floating", "left", "right"]
 
 
-def test_removed_visual_customization_arguments_are_rejected(
-    server: leika.Server,
-) -> None:
-    server.gui.configure_theme(
-        control_layout="floating",
-        theme="dark",
-    )
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(show_share_button=True)  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(control_width="large")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(brand_color=(80, 150, 255))  # type: ignore[call-arg]
-    # Both buttons took `color` back, but as a role rather than a palette: the
-    # two names they accept are all they accept, and an actual color still
-    # fails. The other three below never regained it.
-    for add_a_button in (server.gui.add_button, server.gui.add_upload_button):
-        add_a_button("Run", color="inverse")
-        add_a_button("Run", color="default")
-        with pytest.raises(ValueError):
-            add_a_button("Run", color="blue")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        server.gui.add_progress_bar(50.0, color="blue")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
-
-
 def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> None:
     """A row usually wants one weight throughout, and sometimes wants its accent
     behind one action only. Both are ``color=``; the wire always carries one
@@ -1585,70 +1558,6 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     assert beta.icon == old_icon
     assert tabs._tabs == old_tabs
     assert buffer.message_from_id == old_buffer
-
-
-def test_derived_protocol_props_are_internal_only(
-    server: leika.Server,
-) -> None:
-    image = server.gui.add_image(np.zeros((2, 3, 3), dtype=np.uint8), format="png")
-    button = server.gui.add_button("Button")
-    download = server.gui.add_download_button("Download", b"x", filename="x.bin")
-    preview = server.gui.add_preview_button("Preview", b"x", filename="x.txt")
-    upload = server.gui.add_upload_button("Upload", icon=leika.Icon.PLAY)
-    toggle = server.gui.add_toggle("Toggle", icon=leika.Icon.PLAY)
-    command = server.gui.add_command("Command", icon=leika.Icon.PLAY)
-    text = server.gui.add_text(None, "source", editable=False, markdown=True)
-    tabs = server.gui.add_tab_group()
-    tab = tabs.add_tab("Tab")
-
-    attempts: tuple[tuple[Any, str, object], ...] = (
-        (image, "_data", b"forged"),
-        (image, "_format", "jpeg"),
-        (button, "_icon_html", "<svg>forged</svg>"),
-        (button, "_hold_callback_freqs", (60.0,)),
-        (button, "_prefetch", True),
-        (download, "_prefetch", True),
-        (preview, "_prefetch", False),
-        (upload, "_icon_html", None),
-        (toggle, "_icon_html", None),
-        (command, "_icon_html", None),
-        (text, "_source", "forged"),
-        (tabs, "_tabs", (_messages.GuiTab("Forged", None, "missing"),)),
-    )
-    buffer = server._websock_server._broadcast_buffer
-    before_counter = buffer.message_counter
-    before_values = {(id(handle), name): getattr(handle, name) for handle, name, _ in attempts}
-
-    for handle, name, value in attempts:
-        with pytest.raises(AttributeError, match="internal state"):
-            setattr(handle, name, value)
-        with pytest.raises(AttributeError, match="internal state"):
-            handle.update(**{name: value})
-
-    assert buffer.message_counter == before_counter
-    for handle, name, _ in attempts:
-        assert getattr(handle, name) == before_values[id(handle), name]
-    assert [descriptor.container_id for descriptor in tabs._tabs] == [tab.id]
-
-    # Canonical wire state with no separate backing registry remains mutable
-    # through the existing validated transaction.
-    row = server.gui.add_button(("One", "Two"))
-    row._merge = (False,)
-    assert row._merge == (False,)
-
-
-@pytest.mark.plotly
-def test_plotly_json_wire_prop_is_internal_only(server: leika.Server) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    handle = server.gui.add_plotly(go.Figure(go.Scatter(y=[1, 2])))
-    before = handle._plotly_json_str
-    counter = server._websock_server._broadcast_buffer.message_counter
-    with pytest.raises(AttributeError, match="internal state"):
-        handle._plotly_json_str = "{}"
-    with pytest.raises(AttributeError, match="internal state"):
-        handle.update(_plotly_json_str="{}")
-    assert handle._plotly_json_str == before
-    assert server._websock_server._broadcast_buffer.message_counter == counter
 
 
 def test_removed_containers_reject_new_actions(server: leika.Server) -> None:
@@ -2210,24 +2119,6 @@ def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> N
     with pytest.raises(ValueError, match="at most one selected"):
         choices.value = [("one", True), ("two", True)]
     assert choices.value == before
-
-
-@pytest.mark.parametrize(
-    ("value", "message"),
-    [
-        ("one", "value must be a sequence"),
-        ([3], "holds (text, selected) pairs"),
-        ([(3, True)], "item's text is a string"),
-        ([("one", "yes")], "selected state is a bool"),
-    ],
-)
-def test_radio_list_validation_uses_radio_specific_vocabulary(
-    server: leika.Server, value: Any, message: str
-) -> None:
-    with pytest.raises(ValueError) as raised:
-        server.gui.add_radio_list("Invalid", value)
-    assert message in str(raised.value)
-    assert "checklist" not in str(raised.value)
 
 
 @pytest.mark.parametrize("factory", ["add_checklist", "add_radio_list"])

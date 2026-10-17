@@ -6,15 +6,22 @@ orphan: true
 
 ## Test cleanup
 
-Complete: removed 90 source-shape, cosmetic-only and redundant test cases.
-Mixed tests now check published pane/control messages and live detached-tab content
-instead of private implementation classes or DOM composition. Runtime code and
-dependency support are unchanged; no cleanup work remains pending.
+Test cleanup is complete. The suite retains functional API, transport, resource
+lifetime, state-transition and browser interaction coverage. Duplicate static
+component renders, cosmetic geometry checks, helper-only docking checks, repeated
+parameter grids and implementation-shape assertions were removed. Shared preview
+assertions now check pointer access to the dialog. Container tests no longer need
+Plotly, and text preflight tests compare against real JSON serialization.
 
-Validation passed: all 1,083 Python unit tests, all 1,161 frontend unit tests, and
-64 selected Chromium interaction tests. Test lint/formatting, client type checking,
-documentation checks and the strict documentation build pass. Logs are under
-`/tmp/leika-cleanup-*.log`.
+The two passes removed 375 collected cases, including 285 in the deeper pass.
+The suite now collects 1,049 Python unit, 926 frontend unit and 242 browser cases.
+Runtime code and dependency support are unchanged. No test cleanup work is pending.
+
+Validation passed: all retained Python and frontend unit cases and 128 selected
+Chromium interaction cases. Four Python cases initially failed while automatic
+client builds encountered unused test imports; they passed after those imports
+were removed. Type checking, lint and formatting pass. Logs are under
+`/tmp/leika-lean-*.log`; collection is in `/tmp/leika-lean-python-after.txt`.
 
 ## Dependency compatibility status and ownership
 

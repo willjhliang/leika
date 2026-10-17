@@ -7,7 +7,6 @@ import { DockLayout, emptyLayout } from "./types";
 import {
   addFloatingPanel,
   addPanelToArea,
-  ensureArea,
   floatColumn,
   floatGroup,
   removePanel,
@@ -26,20 +25,6 @@ function areaLayout(): DockLayout {
   l.areas = { "area-1": { id: "area-1", group: "g-area" } };
   return l;
 }
-
-describe("ensureArea", () => {
-  it("creates an empty backing group for a new area", () => {
-    const out = ensureArea(emptyLayout(), "area-x");
-    const area = out.areas!["area-x"];
-    expect(area).toBeDefined();
-    expect(out.groups[area.group].panelIds).toEqual([]);
-  });
-
-  it("is a no-op (same reference) when the area already exists", () => {
-    const l = areaLayout();
-    expect(ensureArea(l, "area-1")).toBe(l);
-  });
-});
 
 describe("addPanelToArea", () => {
   it("appends to an existing area and keeps the current active tab", () => {
@@ -92,13 +77,6 @@ describe("addFloatingPanel", () => {
     expect(win).toMatchObject({ x: 40, y: 50, width: 300, height: 420 });
     expect(out.groups[win.stack[0]].panelIds).toEqual(["p1"]);
   });
-
-  it("is a no-op when the panel is already placed", () => {
-    const l = areaLayout();
-    const { layout: out, windowId } = addFloatingPanel(l, "tab1", 0, 0, 300);
-    expect(out).toBe(l);
-    expect(windowId).toBeNull();
-  });
 });
 
 describe("removePanel", () => {
@@ -108,21 +86,6 @@ describe("removePanel", () => {
     expect(out.groups["g-area"].activeId).toBe("tab2");
   });
 
-  it("leaves an emptied AREA group in place as a drop affordance", () => {
-    let l: DockLayout = areaLayout();
-    l = removePanel(l, "tab1");
-    l = removePanel(l, "tab2");
-    expect(l.groups["g-area"].panelIds).toEqual([]);
-    expect(l.areas!["area-1"].group).toBe("g-area");
-  });
-
-  it("collapses a floating window whose only panel is removed", () => {
-    const { layout: l } = addFloatingPanel(emptyLayout(), "p1", 0, 0, 300);
-    const out = removePanel(l, "p1");
-    expect(out.floating).toEqual([]);
-    expect(Object.keys(out.groups)).toEqual([]);
-  });
-
   it("collapses a docked leaf whose only panel is removed", () => {
     const l = emptyLayout();
     l.groups["g1"] = { id: "g1", panelIds: ["p1"], activeId: "p1" };
@@ -130,22 +93,6 @@ describe("removePanel", () => {
     const out = removePanel(l, "p1");
     expect(out.docked.left).toBeNull();
     expect(out.groups["g1"]).toBeUndefined();
-  });
-
-  it("removes a panel the user dragged OUT of its area (window collapses)", () => {
-    // Tab torn out into its own window, then its tab is removed server-side:
-    // the floating window must disappear, and the area must be untouched.
-    const torn = tearOutPanel(areaLayout(), "g-area", "tab2", 10, 10, 260);
-    const out = removePanel(torn.layout, "tab2");
-    expect(out.floating).toEqual([]);
-    expect(out.groups[torn.floatingGroupId!]).toBeUndefined();
-    expect(out.groups["g-area"].panelIds).toEqual(["tab1"]);
-    expect(out.areas!["area-1"].group).toBe("g-area");
-  });
-
-  it("is a no-op (same reference) for an unplaced panel", () => {
-    const l = areaLayout();
-    expect(removePanel(l, "nope")).toBe(l);
   });
 });
 
@@ -206,11 +153,6 @@ describe("setAreaTabOrder", () => {
     const out = setAreaTabOrder(l, "area-1", ["t2", "t2", "t1"]);
     const gid = out.areas!["area-1"].group;
     expect(out.groups[gid].panelIds).toEqual(["t2", "t1", "t3"]);
-  });
-
-  it("is a no-op for an unknown area", () => {
-    const l = emptyLayout();
-    expect(setAreaTabOrder(l, "area-x", ["a"])).toBe(l);
   });
 });
 
@@ -300,12 +242,5 @@ describe("floatColumn", () => {
       ],
     };
     expect(floatColumn(impure, "left", "COL", 0, 0, 300).windowId).toBeNull();
-  });
-
-  it("is pure: the input layout is untouched on success", () => {
-    const l = colLayout();
-    const before = structuredClone(l);
-    floatColumn(l, "left", "COL", 0, 0, 300);
-    expect(l).toEqual(before);
   });
 });

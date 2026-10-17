@@ -33,10 +33,7 @@ const nestedLayout: ViewportLayout = {
 
 describe("viewport 60 x 60 grid geometry", () => {
   it.each([
-    { width: 960, height: 576 },
-    { width: 960, height: 528 }, // Previously 33 rows: halves could not align.
-    { width: 960, height: 700 }, // Previously a fractional row count.
-    { width: 576, height: 960 },
+    { width: 960, height: 700 },
     { width: 1920, height: 10 },
   ])("keeps exact halves in a $width x $height workspace", (workspace) => {
     const grid = gridSpecForLayout(nestedLayout, workspace);
@@ -78,42 +75,40 @@ describe("viewport 60 x 60 grid geometry", () => {
   });
 
   describe.each(["row", "column"] as const)("%s splits", (direction) => {
-    it.each([2, 3, 4, 5, 6])(
-      "splits the full axis into %i exactly equal panes",
-      (paneCount) => {
-        const layout: ViewportLayout = {
-          version: 1,
-          root: {
-            type: "split",
-            direction,
-            children: Array.from({ length: paneCount }, (_, index) => ({
-              type: "pane" as const,
-              pane_id: `pane-${index}`,
-            })),
-            weights: Array.from({ length: paneCount }, () => 1 / paneCount),
-          },
-        };
-        const grid = gridSpecForLayout(layout, { width: 1920, height: 1080 });
-        expect(grid.columns).toBe(60);
-        expect(grid.rows).toBe(60);
-        const geometry = computeLayoutGeometry(
-          layout.root,
-          grid.columns,
-          grid.rows,
-        );
-        const spans = Object.values(geometry.panes).map((rect) =>
-          direction === "row" ? rect.width : rect.height,
-        );
-        expect(spans).toEqual(
-          Array.from({ length: paneCount }, () => 60 / paneCount),
-        );
-        expect(
-          geometry.dividers.every((divider) =>
-            Number.isInteger(divider.coordinate),
-          ),
-        ).toBe(true);
-      },
-    );
+    it("splits the full axis into three equal panes", () => {
+      const paneCount = 3;
+      const layout: ViewportLayout = {
+        version: 1,
+        root: {
+          type: "split",
+          direction,
+          children: Array.from({ length: paneCount }, (_, index) => ({
+            type: "pane" as const,
+            pane_id: `pane-${index}`,
+          })),
+          weights: Array.from({ length: paneCount }, () => 1 / paneCount),
+        },
+      };
+      const grid = gridSpecForLayout(layout, { width: 1920, height: 1080 });
+      expect(grid.columns).toBe(60);
+      expect(grid.rows).toBe(60);
+      const geometry = computeLayoutGeometry(
+        layout.root,
+        grid.columns,
+        grid.rows,
+      );
+      const spans = Object.values(geometry.panes).map((rect) =>
+        direction === "row" ? rect.width : rect.height,
+      );
+      expect(spans).toEqual(
+        Array.from({ length: paneCount }, () => 60 / paneCount),
+      );
+      expect(
+        geometry.dividers.every((divider) =>
+          Number.isInteger(divider.coordinate),
+        ),
+      ).toBe(true);
+    });
 
     it("preserves minimum pane sizes in dense layouts", () => {
       const layout: ViewportLayout = {

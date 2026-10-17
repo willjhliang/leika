@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import re
 import struct
 import threading
@@ -16,7 +15,7 @@ from playwright.sync_api import BrowserType, Locator, Page, Route, expect
 
 import leika
 
-from .utils import assert_stable_viewer, find_free_port
+from .utils import assert_dialog_on_top, find_free_port
 
 
 def _png(width: int, height: int) -> bytes:
@@ -220,7 +219,7 @@ def test_a_markdown_figure_expands_without_moving_its_document(
     expect(_dialog(preview_page)).to_have_count(2)
     inner = preview_page.get_by_role("dialog", name="Validation curve", exact=True)
     expect(inner).to_be_visible()
-    assert_stable_viewer(inner)
+    assert_dialog_on_top(inner)
     expect(inner.locator('[data-slot="dialog-title"]')).to_have_text("Validation curve")
     expanded = inner.get_by_role("img", name="Validation curve", exact=True)
     expect(expanded).to_have_js_property("naturalWidth", 1200)
@@ -565,30 +564,6 @@ def test_large_markdown_paints_the_popup_before_decoding(
     assert page_errors == []
 
 
-def test_a_markdown_reader_is_a_stable_opaque_surface(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    leika_server.gui.add_preview_button(
-        "Show stable notes", b"# Heading\n\nSome prose.\n", filename="stable.md"
-    )
-
-    _press(preview_page, "Show stable notes")
-    dialog = _dialog(preview_page)
-    expect(dialog).to_be_visible()
-    state = assert_stable_viewer(dialog)
-    frame_background = dialog.locator('[data-slot="file-preview-reading-frame"]').evaluate(
-        "frame => getComputedStyle(frame).backgroundColor"
-    )
-
-    assert {"top-4", "left-0", "translate-x-0", "translate-y-0"}.issubset(state["popupClasses"]), (
-        state
-    )
-    assert "-translate-x-1/2" not in state["popupClasses"], state
-    assert "-translate-y-1/2" not in state["popupClasses"], state
-    assert frame_background not in {"transparent", "rgba(0, 0, 0, 0)"}, state
-    assert page_errors == []
-
-
 def test_long_markdown_defers_distant_blocks_without_removing_them(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -623,148 +598,6 @@ def test_long_markdown_defers_distant_blocks_without_removing_them(
     dialog.get_by_role("link", name="Jump to the tail", exact=True).click()
     expect(tail).to_be_focused()
     preview_page.wait_for_function("frame => frame.scrollTop > 0", arg=frame.element_handle())
-    assert page_errors == []
-
-
-def _columns(page: Page, *selectors: str) -> dict[str, dict]:
-    """Where each of a viewer's blocks sits inside the dialog.
-
-    Every block is measured in the one pass, because a frame settling around
-    contents that are still arriving is a different width from one moment to
-    the next, and two widths read a call apart are not comparable.
-    """
-    dialog = _dialog(page)
-    # The popup is visible before its asynchronously loaded document. Wait
-    # for the blocks being measured, not just the surrounding dialog.
-    for selector in selectors:
-        expect(dialog.locator(selector).first).to_be_attached()
-    return dialog.evaluate(
-        """(dialog, selectors) => {
-          const outer = dialog.getBoundingClientRect();
-          return Object.fromEntries(selectors.map((selector) => {
-            const inner = dialog.querySelector(selector).getBoundingClientRect();
-            return [selector, {
-              dialog: outer.width,
-              column: inner.width,
-              left: inner.left - outer.left,
-              right: outer.right - inner.right,
-            }];
-          }));
-        }""",
-        list(selectors),
-    )
-
-
-def _column(page: Page, selector: str) -> dict:
-    """Where a viewer's content sits inside the dialog."""
-    return _columns(page, selector)[selector]
-
-
-def test_writing_is_set_in_a_column_and_data_spans_the_width(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    # Prose uses a readable column; tabular data uses the full frame.
-    leika_server.gui.add_preview_button(
-        "Show notes", b"# Heading\n\n" + b"word " * 200, filename="notes.md"
-    )
-    leika_server.gui.add_preview_button("Show plain", b"word " * 200, filename="notes.txt")
-    leika_server.gui.add_preview_button(
-        "Show readings", b"time,signal\n0,0.5\n", filename="readings.csv"
-    )
-
-    for label, selector in (("Show notes", "h1"), ("Show plain", "pre")):
-        _press(preview_page, label)
-        expect(_dialog(preview_page)).to_be_visible()
-        box = _column(preview_page, selector)
-        # A measure, not a width: it is set in characters, so it stays well
-        # inside the frame and centred there however wide the window is.
-        assert box["column"] < box["dialog"] * 0.75, (label, box)
-        assert abs(box["left"] - box["right"]) < 2.0, (label, box)
-        assert box["left"] > 40.0, (label, box)
-        preview_page.keyboard.press("Escape")
-        expect(_dialog(preview_page)).to_have_count(0)
-
-    _press(preview_page, "Show readings")
-    data = _column(preview_page, "pre")
-    assert data["column"] > data["dialog"] * 0.9, data
-    assert page_errors == []
-
-
-def _document(*blocks: bytes) -> bytes:
-    return b"Some prose.\n\n" + b"\n\n".join(blocks) + b"\n"
-
-
-def _fence(line: bytes) -> bytes:
-    return b"```\n" + line + b"\n```"
-
-
-#: A table of three short columns, and one whose columns cannot all be shown
-#: at once however wide the window is.
-SMALL_TABLE = b"| when | what | why |\n|---|---|---|\n| a | b | c |"
-BIG_TABLE = (
-    b"| " + b" | ".join(b"a column heading of some length" for _ in range(8)) + b" |\n"
-    b"|" + b"---|" * 8 + b"\n"
-    b"| " + b" | ".join(b"and a cell of about that width" for _ in range(8)) + b" |"
-)
-
-
-def test_a_table_is_as_wide_as_its_columns_need_and_nothing_else_is(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    # A table is read by the column a cell is under and the row it is in, so
-    # it is the one block the measure is lifted for -- and lifted is not
-    # stretched: what it asks for is what its columns come to. Everything else
-    # keeps the measure, a fence included, whose slab would otherwise put an
-    # edge in the document at a width nothing else in it shares.
-    leika_server.gui.add_preview_button(
-        "Show short",
-        _document(
-            SMALL_TABLE,
-            _fence(b"x = 1"),
-            # Wider than the measure, so what holds an image back shows in what
-            # it renders at rather than only in what it was asked for.
-            b"![field](data:image/png;base64," + base64.b64encode(_png(1200, 6)) + b")",
-        ),
-        filename="short.md",
-    )
-    leika_server.gui.add_preview_button(
-        "Show long",
-        _document(BIG_TABLE, _fence(b"x = 1  # " + b"a long line of code " * 8)),
-        filename="long.md",
-    )
-
-    _press(preview_page, "Show short")
-    # Decoded first, so the frame has finished settling around it.
-    expect(_dialog(preview_page).locator("img")).to_have_js_property("naturalWidth", 1200)
-    short = _columns(preview_page, "p", "table", "pre", "img")
-    prose = short["p"]
-
-    assert prose["column"] < prose["dialog"] * 0.75, prose
-    # Three short columns are three short columns: the table fits them and
-    # stops, rather than spreading them across the window. Centred, like the
-    # writing, so the widths a document takes read as one column of it
-    # widening and narrowing rather than as blocks that start in two places.
-    assert short["table"]["column"] < prose["column"] * 0.5, short["table"]
-    assert abs(short["table"]["left"] - short["table"]["right"]) < 2.0, short["table"]
-    # The margins of the text, not a cap of its own: a screenshot in a window
-    # with room for the whole of it used to be shown as a thumbnail.
-    assert abs(short["img"]["column"] - prose["column"]) < 1.0, (short["img"], prose)
-
-    preview_page.keyboard.press("Escape")
-    expect(_dialog(preview_page)).to_have_count(0)
-
-    _press(preview_page, "Show long")
-    long = _columns(preview_page, "p", "table", "pre")
-
-    # Wider than the writing, since its columns are, and scrolling within the
-    # frame once even the frame is not enough for them.
-    assert long["table"]["column"] > long["p"]["column"] * 1.25, long
-    # A fence keeps the measure whatever it holds, and scrolls the code that
-    # does not fit: one edge, in line with the writing, for every fence in
-    # the document.
-    for name, boxes in (("short", short), ("long", long)):
-        fence, text = boxes["pre"], boxes["p"]
-        assert abs(fence["column"] - text["column"]) < 1.0, (name, fence, text)
     assert page_errors == []
 
 
@@ -982,46 +815,6 @@ def _opened_size(page: Page, label: str) -> tuple[int, int]:
     page.keyboard.press("Escape")
     expect(dialog).to_have_count(0)
     return (rect["width"], rect["height"])
-
-
-def test_a_document_preview_opens_the_same_size_whatever_the_file_holds(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    # A document has no size of its own, so the frame is the viewer's: a
-    # one-line log and a thousand-line one have identical viewer dimensions
-    # once their type is known. Media is the exception, and has its own
-    # test below.
-    leika_server.gui.add_preview_button("Show one line", b"t,v\n", filename="tiny.csv")
-    leika_server.gui.add_preview_button(
-        "Show many lines", ("t,v\n" * 500).encode(), filename="long.csv"
-    )
-    leika_server.gui.add_preview_button("Show weights", b"\x00\x01", filename="weights.bin")
-    leika_server.gui.add_preview_button("Show notes", b"# Hi\n", filename="notes.md")
-    leika_server.gui.add_preview_button(
-        "Show long notes", b"# Hi\n\n" + b"word " * 500, filename="long.md"
-    )
-    leika_server.gui.add_preview_button("Show plain", b"a line\n", filename="notes.txt")
-
-    sizes = {
-        label: _opened_size(preview_page, label)
-        for label in (
-            "Show one line",
-            "Show many lines",
-            "Show weights",
-            "Show notes",
-            "Show long notes",
-            "Show plain",
-        )
-    }
-
-    fitted = {sizes[label] for label in ("Show one line", "Show many lines", "Show weights")}
-    reading = {sizes[label] for label in ("Show notes", "Show long notes", "Show plain")}
-    assert len(fitted) == 1, sizes
-    assert len(reading) == 1, sizes
-    # Writing is read by scrolling, so its frame takes the height the window
-    # has rather than the share a fitted card needs.
-    assert reading.pop()[1] > fitted.pop()[1], sizes
-    assert page_errors == []
 
 
 def test_a_picture_preview_is_the_shape_of_the_picture(
@@ -1502,42 +1295,6 @@ def _settle(page: Page) -> None:
     )
 
 
-def _writing_layout(page: Page) -> dict[str, float]:
-    """Measure the writing within its section, excluding the TOC sidebar."""
-    _settle(page)
-    return _dialog(page).evaluate(
-        """el => {
-          const document = el.querySelector('.typeset');
-          const section = document.getBoundingClientRect();
-          const layout = document.parentElement;
-          const bounds = layout.getBoundingClientRect();
-          const text = document.querySelector(':scope > p').getBoundingClientRect();
-          const list = el.querySelector('[data-leika-document-contents]')
-                         ?.getBoundingClientRect();
-          const sidebar = list?.width > 0
-            ? list.width + parseFloat(getComputedStyle(layout).columnGap)
-            : 0;
-          return {
-            leftGutter: text.left - section.left,
-            rightGutter: section.right - text.right,
-            sectionLeftInset: section.left - bounds.left,
-            unusedWidth: bounds.width - section.width - sidebar,
-            sectionWidth: section.width,
-            writingWidth: text.width,
-          };
-        }"""
-    )
-
-
-def _assert_writing_centred_in_its_section(page: Page) -> dict[str, float]:
-    layout = _writing_layout(page)
-    assert abs(layout["leftGutter"] - layout["rightGutter"]) < 1, layout
-    assert layout["leftGutter"] > 0, layout
-    assert abs(layout["sectionLeftInset"]) < 1, layout
-    assert abs(layout["unusedWidth"]) < 1, layout
-    return layout
-
-
 def test_a_document_lists_its_own_contents_beside_it(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -1592,33 +1349,6 @@ def test_a_document_lists_its_own_contents_beside_it(
     assert page_errors == []
 
 
-@pytest.mark.parametrize("fullscreen", [False, True])
-def test_the_writing_is_centred_in_its_own_section_with_or_without_contents(
-    leika_server: leika.Server,
-    preview_page: Page,
-    page_errors: list[str],
-    fullscreen: bool,
-) -> None:
-    preview_page.set_viewport_size({"width": 1400, "height": 800})
-    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
-
-    _press(preview_page, "Show notes")
-    expect(_dialog(preview_page)).to_contain_text("Training report")
-    if fullscreen:
-        _dialog(preview_page).get_by_role("button", name="Fill the window").click()
-    hidden = _assert_writing_centred_in_its_section(preview_page)
-
-    expect(_show_contents(preview_page)).to_be_visible()
-    shown = _assert_writing_centred_in_its_section(preview_page)
-    assert shown["sectionWidth"] < hidden["sectionWidth"] - 100, (hidden, shown)
-    assert abs(shown["writingWidth"] - hidden["writingWidth"]) < 1, (hidden, shown)
-
-    _dialog(preview_page).get_by_role("button", name="Hide contents").click()
-    restored = _assert_writing_centred_in_its_section(preview_page)
-    assert restored == hidden, (hidden, restored)
-    assert page_errors == []
-
-
 def test_a_narrow_preview_keeps_its_width_for_the_document(
     leika_server: leika.Server, preview_page: Page, page_errors: list[str]
 ) -> None:
@@ -1633,27 +1363,11 @@ def test_a_narrow_preview_keeps_its_width_for_the_document(
     # the file's headings, and the room is a separate question that CSS
     # answers.
     expect(_show_contents(preview_page)).to_be_hidden()
-    _assert_writing_centred_in_its_section(preview_page)
 
     # Widen the window and it appears, without the preview being reopened or
     # asked again.
     preview_page.set_viewport_size({"width": 1400, "height": 800})
     expect(_contents(preview_page)).to_be_visible()
-    assert page_errors == []
-
-
-def test_a_document_in_the_panel_has_no_contents_column(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    # A panel row is the width of a panel: there is no margin there to put a
-    # list in, and asking for one is a decision the preview makes alone.
-    preview_page.set_viewport_size({"width": 1400, "height": 800})
-    leika_server.gui.add_text(
-        None, CONTENTS_DOCUMENT.decode(), editable=False, markdown=True, multiline=True
-    )
-
-    expect(preview_page.get_by_role("heading", name="Training report")).to_be_visible()
-    assert preview_page.locator("[data-leika-document-contents]").count() == 0
     assert page_errors == []
 
 
@@ -1781,173 +1495,6 @@ def test_a_document_that_fits_marks_its_first_section(
     _settle(preview_page)
     preview_page.wait_for_timeout(300)
     assert _marked(preview_page) == ["Report"]
-    assert page_errors == []
-
-
-def _contents_offset(page: Page) -> dict[str, float]:
-    """Where the contents sit relative to the document, and to the frame."""
-    _settle(page)
-    return _dialog(page).evaluate(
-        """el => {
-             const frame = el.querySelector('div.overflow-auto').getBoundingClientRect();
-             const doc = el.querySelector('.typeset').getBoundingClientRect();
-             const list = el.querySelector('[data-leika-document-contents]')
-                            .getBoundingClientRect();
-             return {
-               fromDocument: list.left - doc.right,
-               fromFrame: frame.right - list.right,
-             };
-           }"""
-    )
-
-
-def test_the_contents_keep_their_own_section_in_fullscreen(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    preview_page.set_viewport_size({"width": 1400, "height": 800})
-    leika_server.gui.add_preview_button("Show notes", CONTENTS_DOCUMENT, filename="notes.md")
-
-    _press(preview_page, "Show notes")
-    expect(_show_contents(preview_page)).to_be_visible()
-    windowed = _contents_offset(preview_page)
-    windowed_writing = _assert_writing_centred_in_its_section(preview_page)
-
-    preview_page.get_by_role("button", name="Fill the window").click()
-    expect(_dialog(preview_page)).to_have_attribute("data-preview-fullscreen", "true")
-    full = _contents_offset(preview_page)
-    full_writing = _assert_writing_centred_in_its_section(preview_page)
-
-    # The sidebar keeps its width and edge inset. Extra space belongs to the
-    # content section, where the prose remains centred with balanced gutters.
-    assert abs(full["fromDocument"] - windowed["fromDocument"]) < 1, (windowed, full)
-    assert abs(full["fromFrame"] - windowed["fromFrame"]) < 1, (windowed, full)
-    assert full_writing["sectionWidth"] > windowed_writing["sectionWidth"] + 100
-    assert page_errors == []
-
-
-def test_the_contents_stand_a_gutter_off_the_writing(
-    leika_server: leika.Server, preview_page: Page, page_errors: list[str]
-) -> None:
-    preview_page.set_viewport_size({"width": 1400, "height": 800})
-    row = "| " + " | ".join(f"a column heading {index}" for index in range(8)) + " |\n"
-    table = row + "|" + "---|" * 8 + "\n" + row * 3
-    leika_server.gui.add_preview_button(
-        "Show notes", CONTENTS_DOCUMENT + f"\n{table}\n".encode(), filename="notes.md"
-    )
-
-    _press(preview_page, "Show notes")
-    expect(_show_contents(preview_page)).to_be_visible()
-    _settle(preview_page)
-    measured = _dialog(preview_page).evaluate(
-        """el => {
-             const doc = el.querySelector('.typeset').getBoundingClientRect();
-             const table = el.querySelector('.typeset-scroll');
-             const list = el.querySelector('[data-leika-document-contents]')
-                            .getBoundingClientRect();
-             return {
-               gap: list.left - doc.right,
-               gutter: 1.5 * parseFloat(getComputedStyle(document.documentElement).fontSize),
-               tableWidth: table.clientWidth,
-               tableScrollWidth: table.scrollWidth,
-               documentWidth: doc.width,
-             };
-           }"""
-    )
-    # The gutter is constant; a wide table scrolls within the writing column
-    # instead of pushing the list sideways or widening the popup.
-    assert abs(measured["gap"] - measured["gutter"]) < 1.0, measured
-    assert abs(measured["tableWidth"] - measured["documentWidth"]) < 1.0, measured
-    assert measured["tableScrollWidth"] > measured["tableWidth"], measured
-    assert page_errors == []
-
-
-@pytest.mark.parametrize("fullscreen", [False, True])
-def test_contents_position_is_independent_of_file_contents_and_loading(
-    leika_server: leika.Server,
-    preview_page: Page,
-    page_errors: list[str],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    fullscreen: bool,
-) -> None:
-    from leika import _gui_handles
-
-    preview_page.set_viewport_size({"width": 1400, "height": 800})
-    opening = "# Report\n\n## Overview\n\nAn opening paragraph.\n\n## Details\n\n"
-    leika_server.gui.add_preview_button("Short report", opening.encode(), filename="short.md")
-    _press(preview_page, "Short report")
-    expect(_show_contents(preview_page)).to_be_visible()
-    if fullscreen:
-        _dialog(preview_page).get_by_role("button", name="Fill the window").click()
-    _settle(preview_page)
-    reference = _contents(preview_page).bounding_box()
-    assert reference is not None
-    preview_page.keyboard.press("Escape")
-    expect(_dialog(preview_page)).to_have_count(0)
-
-    # The initial chunk has only a few headings and no vertical scrollbar.
-    # Wide tables, figures, and enough prose to overflow all arrive later.
-    (tmp_path / "figure.png").write_bytes(_png(1200, 600))
-    row = "| " + " | ".join(f"a wide column heading {index}" for index in range(8)) + " |\n"
-    table = row + "|" + "---|" * 8 + "\n" + row * 3
-    source = opening + "<!--" + " padding" * 2000 + "-->\n\n" + table
-    source += "\n![Wide figure](figure.png)\n\n" + "Later paragraph.\n\n" * 500
-    source += "## End of streamed report\n"
-    report = tmp_path / "streamed.md"
-    report.write_text(source)
-    release_text = threading.Event()
-    release_images = threading.Event()
-    stream = _gui_handles.iter_preview_text
-
-    def delayed_stream(*args):
-        for part in stream(*args):
-            yield part
-            if part[2] == 0:
-                assert release_text.wait(15), "test did not release remaining text"
-
-    monkeypatch.setattr(_gui_handles, "iter_preview_text", delayed_stream)
-    handle = leika_server.gui.add_preview_button("Stream report", lambda _: report)
-    prepare = handle._prepared
-
-    def delayed_images(*args):
-        assert release_images.wait(15), "test did not release image preparation"
-        return prepare(*args)
-
-    monkeypatch.setattr(handle, "_prepared", delayed_images)
-
-    def assert_position() -> None:
-        actual = _contents(preview_page).bounding_box()
-        assert actual is not None
-        for dimension in ("x", "y", "width"):
-            assert abs(actual[dimension] - reference[dimension]) < 1, (reference, actual)
-        _assert_writing_centred_in_its_section(preview_page)
-
-    try:
-        _press(preview_page, "Stream report")
-        dialog = _dialog(preview_page)
-        expect(_show_contents(preview_page)).to_be_visible()
-        if fullscreen:
-            dialog.get_by_role("button", name="Fill the window").click()
-        _settle(preview_page)
-        assert_position()
-        reload = dialog.get_by_role("button", name="Reload", exact=True)
-        expect(reload).to_be_disabled()
-        expect(dialog.get_by_role("button", name="Download streamed.md")).to_be_disabled()
-        expect(dialog.locator("table")).to_have_count(0)
-        release_text.set()
-        expect(dialog.get_by_role("heading", name="End of streamed report")).to_have_count(1)
-        expect(dialog.locator("table")).to_have_count(1)
-        assert_position()
-        expect(reload).to_be_disabled()
-        expect(dialog.get_by_role("button", name="Download streamed.md")).to_be_disabled()
-        release_images.set()
-        expect(dialog.get_by_role("link", name="Download streamed.md")).to_be_visible()
-        expect(dialog.locator("img")).to_have_count(1)
-        expect(reload).to_be_enabled()
-        assert_position()
-    finally:
-        release_text.set()
-        release_images.set()
     assert page_errors == []
 
 

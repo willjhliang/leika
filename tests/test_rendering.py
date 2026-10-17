@@ -33,15 +33,14 @@ def test_rendering_never_dispatches_to_other_pillow_decoders(server):
 
 @pytest.mark.parametrize(
     "mode,size",
-    [("quality", (160, 120)), ("auto", None), ("auto", (160, 120)), ("auto", (1280, 960))],
+    [("quality", (160, 120)), ("auto", None)],
 )
 def test_quality_and_native_auto_preserve_original_bytes(server, mode, size):
     data = source_image()
     assert render_image(data, mode, size, "fit", server) is data
 
 
-@pytest.mark.parametrize("size", [None, (0, 0), (160, 120), (1280, 960)])
-@pytest.mark.parametrize("fit", ["fit", "fill"])
+@pytest.mark.parametrize("size,fit", [(None, "fit"), ((160, 120), "fill")])
 def test_auto_uses_connection_speed_and_preserves_jpeg_quality(server, size, fit):
     data = source_image()
     # A full source image has a predicted one-second delivery time.

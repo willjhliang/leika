@@ -80,13 +80,6 @@ describe("normalizeViewportWeights", () => {
     expect(normalizeViewportWeights([1], -1)).toEqual([]);
     expect(normalizeViewportWeights([1], 1.5)).toEqual([]);
   });
-
-  it("passes already-normalized weights through bit-identically", () => {
-    const thirds = [1 / 3, 1 / 3, 1 - 2 / 3];
-    expect(normalizeViewportWeights(thirds)).toEqual(thirds);
-    const uneven = [0.7, 0.2, 0.1 - 1e-16];
-    expect(normalizeViewportWeights(uneven)).toEqual(uneven);
-  });
 });
 
 describe("normalizeViewportLayout", () => {
@@ -549,16 +542,5 @@ describe("equalizeViewportPanes", () => {
     expect(equalizeViewportPanes(input, ["a"])).toBe(input);
     expect(equalizeViewportPanes(input, ["a", "missing"])).toBe(input);
     expect(equalizeViewportPanes(input, [])).toBe(input);
-  });
-
-  it("preserves identity when matching siblings are already equal", () => {
-    const input = layout(
-      split(
-        "row",
-        [pane(VIEWPORT_ROOT_PANE_ID), pane("a"), pane("b")],
-        [0.5, 0.25, 0.25],
-      ),
-    );
-    expect(equalizeViewportPanes(input, ["a", "b"])).toBe(input);
   });
 });

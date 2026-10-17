@@ -145,12 +145,6 @@ def _parts(messages: List[Any]) -> List[_messages.FileTransferPart]:
     return [m for m in messages if isinstance(m, _messages.FileTransferPart)]
 
 
-def test_save_immediately_defaults_to_false() -> None:
-    # The documented default is the link-in-a-notification flow, not a forced
-    # save; the client reads the disposition to choose between them.
-    assert _start(_send("report.csv", b"a,b\n1,2\n")).disposition == "link"
-
-
 @pytest.mark.parametrize("value", [1, 0, "yes", None])
 def test_save_immediately_requires_an_exact_bool(value: object) -> None:
     client = _Client()
@@ -169,33 +163,24 @@ def test_save_immediately_is_forwarded() -> None:
     assert _start(messages).disposition == "save"
 
 
-def test_filename_and_inferred_mime_type_are_sent() -> None:
-    start = _start(_send("report.csv", b"a,b\n1,2\n"))
-    assert start.filename == "report.csv"
-    assert start.mime_type == "text/csv"
-
-
 def test_unknown_extension_falls_back_to_octet_stream() -> None:
     assert _start(_send("blob.unknownext", b"\x00\x01")).mime_type == "application/octet-stream"
 
 
 def test_content_is_chunked_and_reassembles() -> None:
     content = bytes(range(256)) * 4
-    messages = _send("data.bin", content, chunk_size=100)
+    messages = _send("report.csv", content, chunk_size=100)
     start, parts = _start(messages), _parts(messages)
 
+    assert messages == [start, *parts]
+    assert start.filename == "report.csv"
+    assert start.mime_type == "text/csv"
+    assert start.disposition == "link"
     assert start.size_bytes == len(content)
     assert start.part_count == len(parts)
     assert [part.part_index for part in parts] == list(range(len(parts)))
     assert all(part.transfer_uuid == start.transfer_uuid for part in parts)
     assert b"".join(part.content for part in parts) == content
-
-
-def test_start_precedes_every_part() -> None:
-    # The client errors out on a part for an unknown transfer.
-    messages = _send("data.bin", b"0123456789", chunk_size=3)
-    assert isinstance(messages[0], _messages.FileTransferStartDownload)
-    assert len(messages) == 1 + len(_parts(messages))
 
 
 def test_oversize_button_preview_cancels_its_pending_popup() -> None:

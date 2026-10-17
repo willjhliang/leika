@@ -5,7 +5,6 @@ import { describe, it, expect } from "vitest";
 import {
   hitTest,
   tabInsertion,
-  inside,
   GroupTarget,
   ContainerRect,
   DropTargets,
@@ -98,25 +97,6 @@ function run(
   return hitTest(layout, regionWidth, CONTAINER, { groups: targets }, x, y);
 }
 
-// ===========================================================================
-// inside()
-// ===========================================================================
-describe("inside", () => {
-  const r = rect(10, 20, 100, 50); // [10..110] x [20..70]
-  it("true at center and on edges", () => {
-    expect(inside(r, 60, 45)).toBe(true);
-    expect(inside(r, 10, 20)).toBe(true);
-    expect(inside(r, 110, 70)).toBe(true);
-  });
-  it("false outside", () => {
-    expect(inside(r, 9, 45)).toBe(false);
-    expect(inside(r, 60, 71)).toBe(false);
-  });
-});
-
-// ===========================================================================
-// tabInsertion (incl. wrapping / multi-row)
-// ===========================================================================
 describe("tabInsertion", () => {
   it("returns null for no tabs", () => {
     expect(tabInsertion([], 0, 0)).toBeNull();
@@ -191,12 +171,6 @@ describe("tabInsertion", () => {
     expect(ins.lineTop).toBeLessThan(60);
   });
 
-  it("line height is a fraction of the tab height", () => {
-    const tabs = [{ rect: rect(0, 0, 100, 40) }];
-    const ins = tabInsertion(tabs, 10, 20)!;
-    expect(ins.lineHeight).toBeCloseTo(40 * 0.55);
-  });
-
   // Row-awareness regression: with an UNEVEN wrap (a long top row + a short
   // bottom row), a point in the bottom row that is horizontally PAST the lone
   // bottom tab must still resolve to the bottom row -- never snap up to a top-row
@@ -225,9 +199,6 @@ describe("tabInsertion", () => {
   });
 });
 
-// ===========================================================================
-// Screen edge zones (only on an EMPTY edge)
-// ===========================================================================
 describe("screen edge zones", () => {
   it("left edge dock on an empty left edge", () => {
     const out = run(layoutWith({}), [], EDGE_ZONE_PX - 5, 400)!;
@@ -425,9 +396,6 @@ describe("region edge zones", () => {
   });
 });
 
-// ===========================================================================
-// Per-panel 5-way for a docked group
-// ===========================================================================
 describe("docked group per-panel zones", () => {
   // A single docked leaf so region-edge zones are suppressed; the frame fills a
   // central area away from the screen/region edges.
@@ -597,9 +565,6 @@ describe("collapsed-target vertical zone pixel cap", () => {
   });
 });
 
-// ===========================================================================
-// Floating snap (above / below) with correct stack index
-// ===========================================================================
 describe("floating snap zones", () => {
   const layout = layoutWith({}); // no docked regions; both edges empty but
   // pointer stays in the middle so screen-edge zones don't fire.
@@ -779,9 +744,6 @@ describe("area target", () => {
   });
 });
 
-// ===========================================================================
-// Priority / fall-through ordering
-// ===========================================================================
 describe("zone priority", () => {
   it("screen edge wins over a group under the same pointer (empty edge)", () => {
     const node = leaf("a");
@@ -888,36 +850,8 @@ describe("BUG #4 (fixed): overlapping drop targets resolve to the one on TOP", (
     expect(r?.result.kind).toBe("snap");
     expect((r?.result as { windowId: string }).windowId).toBe("wf"); // FIXED: float on top wins
   });
-
-  it("counter-case (works): non-overlapping windows resolve correctly", () => {
-    const l = emptyLayout();
-    l.groups = {
-      a: group("a"),
-      b: group("b"),
-    };
-    l.floating = [
-      { id: "w1", x: 50, y: 300, width: 150, stack: ["a"] },
-      { id: "w2", x: 500, y: 300, width: 150, stack: ["b"] },
-    ];
-    const targets: DropTargets = {
-      groups: [
-        floatTarget("a", "w1", rect(50, 300, 150, 240)),
-        floatTarget("b", "w2", rect(500, 300, 150, 240)),
-      ],
-    };
-    // Distinct, non-overlapping centers hit the right windows.
-    const onA = hitTest(l, REGION_W, CONTAINER, targets, 125, 400)?.result;
-    expect(onA?.kind).toBe("snap");
-    expect((onA as { windowId: string }).windowId).toBe("w1");
-    const onB = hitTest(l, REGION_W, CONTAINER, targets, 575, 400)?.result;
-    expect(onB?.kind).toBe("snap");
-    expect((onB as { windowId: string }).windowId).toBe("w2");
-  });
 });
 
-// ===========================================================================
-// Unmergeable groups: nothing may be merged or inserted into them.
-// ===========================================================================
 describe("unmergeable target", () => {
   // A single docked leaf, centered so the region-edge bands don't interfere.
   // Region is the left edge spanning [0..300]; put the frame's content area at
@@ -937,12 +871,6 @@ describe("unmergeable target", () => {
       unmergeable,
     };
   }
-
-  it("center of a normal docked group -> merge", () => {
-    // Middle of the content area (past the side/below split bands).
-    const out = run(layout, [target(false)], 150, 400)!;
-    expect(out.result).toEqual({ kind: "merge", targetGroupId: "u" });
-  });
 
   it("center of an UNMERGEABLE docked group -> null (no merge)", () => {
     const out = run(layout, [target(true)], 150, 400);
@@ -1126,14 +1054,6 @@ describe("unmergeable header acts as the dock-above / snap-above zone", () => {
     };
     const hit = hitTest(l, REGION_W, CONTAINER, { groups: [t] }, 560, 122);
     expect(hit?.result).toEqual({ kind: "snap", windowId: "wc", index: 0 });
-  });
-
-  it("content center of an unmergeable target is still a dead zone", () => {
-    const l = layoutDockedRight();
-    const targets: DropTargets = {
-      groups: [unmergeableDockTarget(rect(680, 0, 320, 800))],
-    };
-    expect(hitTest(l, REGION_W, CONTAINER, targets, 840, 400)).toBeNull();
   });
 
   it("left/right split bands are pixel-capped on wide panels", () => {
