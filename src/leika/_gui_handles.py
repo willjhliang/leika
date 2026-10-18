@@ -101,11 +101,7 @@ from ._messages import (
     RemoveCommandMessage,
     _normalize_key_modifier,
 )
-from ._plotly import (
-    _plotly_figure_from_json,
-    _plotly_json_with_config,
-    _plotly_payload_from_json,
-)
+from ._plotly import plotly_figure, plotly_json
 from ._transport._websocket import ClientId
 from ._validation import utf16_code_unit_length_exceeds, validate_layout_id
 from ._validation import validate_finite_number as _finite_number
@@ -502,7 +498,7 @@ def _ancestor_form_locked(handle: Any) -> GuiFormHandle | None:
 
 def _validate_gui_props_candidate(handle: Any, props: Any) -> None:
     """Enforce constructor invariants for one prospective live-props state."""
-    specialized_strings = {"content", "_source", "_plotly_json_str"}
+    specialized_strings = {"content", "_source", "_plotly_json_str", "_theme_templates"}
     for field in dataclasses.fields(props):
         item = getattr(props, field.name)
         if field.name not in specialized_strings and isinstance(item, str):
@@ -1809,6 +1805,7 @@ _DERIVED_PROTOCOL_PROP_NAMES = frozenset(
         "_prefetch",
         "_source",
         "_tabs",
+        "_theme_templates",
     }
 )
 """Wire-only fields whose public mutation would desynchronize owned state."""
@@ -3769,7 +3766,14 @@ class GuiDividerHandle(_GuiHandle[None], GuiDividerProps):
 
 
 class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
-    """Handle backed only by bounded JSON, never by the caller's mutable Figure."""
+    """Handle backed only by serialized JSON, never by the caller's mutable Figure."""
+
+    _config: dict[str, Any] | None
+    """The private Plotly config every serialization of this plot carries."""
+
+    def __init__(self, _impl: _GuiHandleState, _config: dict[str, Any] | None) -> None:
+        object.__setattr__(self, "_config", _config)
+        super().__init__(impl=_impl)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "aspect":
@@ -3784,31 +3788,18 @@ class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
             if self._impl.removed:
                 raise RuntimeError("Cannot read figure from a removed GuiPlotlyHandle.")
             source = cast(GuiPlotlyProps, self._impl.props)._plotly_json_str
-        with gui_api._server._reserve_renderer_preparation():
-            figure = _plotly_figure_from_json(source)
-        with gui_api._lock:
-            if self._impl.removed:
-                raise RuntimeError("Cannot read figure from a removed GuiPlotlyHandle.")
-        return figure
+        return plotly_figure(source)
 
     @figure.setter
     def figure(self, figure: go.Figure) -> None:
         gui_api = self._impl.gui_api
-        with gui_api._lock:
-            if self._impl.removed:
-                raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
-            source = cast(GuiPlotlyProps, self._impl.props)._plotly_json_str
-        # Plotly can copy and encode a large graph. Never wait for renderer
-        # preparation while holding the GUI registry/resource lock.
-        with gui_api._server._reserve_renderer_preparation():
-            _, config = _plotly_payload_from_json(source)
-            json_str = _plotly_json_with_config(figure, config)
+        if self._impl.removed:
+            raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
+        json_str = plotly_json(figure, self._config)
         with gui_api._lock:
             if self._impl.removed:
                 raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
             props = cast(GuiPlotlyProps, self._impl.props)
-            if props._plotly_json_str != source:
-                raise RuntimeError("Plotly figure changed during serialization")
             old_json = props._plotly_json_str
             props._plotly_json_str = json_str
             try:

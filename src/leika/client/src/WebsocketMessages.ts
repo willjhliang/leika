@@ -123,6 +123,7 @@ export interface GuiPlotlyMessage {
   props: {
     order: number;
     _plotly_json_str: string;
+    _theme_templates: string;
     aspect: number;
     visible: boolean;
   };
@@ -1380,4 +1381,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "7a3cca6ed910";
+export const LEIKA_PROTOCOL = "fb026827e2d1";

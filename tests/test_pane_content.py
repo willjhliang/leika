@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -196,7 +197,7 @@ def test_cleared_image_keeps_default_quality_after_one_frame_override(server, mo
     assert pane.format == "jpeg" and pane.fit == "fill"
 
 
-def test_cleared_plotly_restores_bounded_config_without_retaining_figure(server):
+def test_cleared_plotly_restores_config_without_retaining_figure(server):
     go = pytest.importorskip("plotly.graph_objects")
     pane = server.panes.add_plotly(
         go.Figure(data=[go.Scatter(y=[1, 2])]), config={"displayModeBar": False}
@@ -206,6 +207,5 @@ def test_cleared_plotly_restores_bounded_config_without_retaining_figure(server)
     assert old._impl.props._plotly_json_str == ""
     assert pane._impl.resume_options == {"config": {"displayModeBar": False}}
     pane.update(go.Figure(data=[go.Scatter(y=[3, 4])]))
-    _, config = _panes._plotly_payload_from_json(pane._impl.props._plotly_json_str)
-    assert config == {"displayModeBar": False}
+    assert json.loads(pane._impl.props._plotly_json_str)["config"] == {"displayModeBar": False}
     assert list(pane.figure.data[0].y) == [3, 4]

@@ -161,29 +161,21 @@ server.panes.add_plotly(figure, config={"displayModeBar": False})
 ```
 
 A figure that never had a template assigned picks up one matched to the
-viewer's light or dark theme; an explicit template is left alone. For large
-scatters, Plotly's own `scattergl` traces render on the GPU.
-
-Serialized Plotly source is limited to 16,777,216 UTF-16 code units
-(16 Mi-characters), including the figure and theme template. Creation or update
-raises `ValueError` before publishing a larger figure; downsample or simplify it
-before sending.
+viewer's light or dark theme; an explicit template is left alone. GUI plots
+from `server.gui.add_plotly` follow the same rule. For large scatters, Plotly's
+own `scattergl` traces render on the GPU.
 
 Plotly figures and configuration are trusted server-authored input to Plotly
 itself. They can intentionally refer to external maps or images through
 Plotly's schemas; Leika's direct-image URL and raster checks do not sanitize
 those third-party renderer fields.
 
-The server loads Plotly's runtime source from a stable regular-file snapshot,
-requires valid UTF-8, and caps that source at 32 MiB before sending it to a
-client.
+The first Plotly figure queues Plotly's browser runtime once; browsers that
+connect later receive it with the rest of the workspace.
 
-Adding or assigning a figure synchronously preflights at most 500,000 values and
-4,096 configuration items, then stores bounded, detached JSON. Do not mutate an
-exact Plotly figure concurrently while that snapshot is taken. A successful
-call is independent of later caller mutation and of later changes to Plotly's
-global default template; the handle's `figure` getter reconstructs a fresh,
-independent figure on each read.
+Adding or assigning a figure stores its serialized JSON, so later changes to
+the figure reach the pane only when you assign it again. The handle's `figure`
+getter rebuilds a fresh, independent figure on each read.
 
 ### viser scenes
 

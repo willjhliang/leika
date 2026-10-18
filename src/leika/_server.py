@@ -24,13 +24,8 @@ from ._async_errors import (
 )
 from ._client_handle import ClientHandle
 from ._executor import BoundedThreadPoolExecutor
-from ._file_transfer import (
-    PREVIEW_MAX_BYTES,
-    read_regular_file_snapshot,
-    validate_file_display_name,
-)
+from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_api import GuiApi
-from ._gui_resources import _GuiResourceCost
 from ._notification_handle import NotificationHandle
 from ._pages import Pages, _normalize_legacy_page_label
 from ._share import CloudflaredTunnel, ShareTunnelError
@@ -42,7 +37,7 @@ from ._transport._http_security import (
     _is_loopback_host,
 )
 from ._transport._websocket import ClientId, WebsockClientConnection, WebsockServer
-from ._validation import utf16_code_unit_length, validate_layout_id
+from ._validation import validate_layout_id
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 from ._validation import validate_positive_integer as _validate_positive_integer
 
@@ -61,32 +56,7 @@ _SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
 _CALLBACK_EXECUTOR_MAX_PENDING = 256
 _TRANSFER_EXECUTOR_MAX_PENDING = 16
 _TRANSFER_EXECUTOR_MAX_RETAINED_BYTES = 256 * 1024 * 1024
-_PLOTLY_JS_MAX_BYTES = 32 * 1024 * 1024
-"""Maximum stable UTF-8 source loaded from an installed Plotly runtime."""
 _PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
-
-
-def _load_plotly_js() -> str:
-    """Read the browser runtime used by every Plotly surface on this server."""
-    try:
-        import plotly
-    except ImportError as error:
-        raise ImportError(
-            "You must have the `plotly` package installed to use Plotly elements."
-        ) from error
-
-    plotly_file = plotly.__file__
-    if plotly_file is None:
-        raise ImportError("Could not locate the installed `plotly` package.")
-    plotly_path = Path(plotly_file).parent / "package_data" / "plotly.min.js"
-    try:
-        payload = read_regular_file_snapshot(plotly_path, _PLOTLY_JS_MAX_BYTES)
-    except FileNotFoundError as error:
-        raise ImportError(f"Could not find plotly.min.js at {plotly_path}.") from error
-    try:
-        return payload.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError("plotly.min.js must contain valid UTF-8") from error
 
 
 class Server:
@@ -201,17 +171,11 @@ class Server:
         self._gui_order_counter = 0
         self._gui_order_lock = threading.Lock()
         self._gui_resource_lock = threading.Lock()
-        self._renderer_preparation_condition = threading.Condition(threading.Lock())
-        self._renderer_preparation_active = False
-        self._renderer_preparation_local = threading.local()
         self._gui_retained_units_and_bytes = 0
         self._gui_decoded_pixels = 0
         self._page_global_decoded_pixels = 0
-        self._plotly_js_lock = threading.Lock()
-        self._plotly_js_source: str | None = None
-        self._plotly_resource_cost = _GuiResourceCost()
-        self._plotly_js_required_globally = False
-        self._plotly_js_sent_client_ids: set[ClientId] = set()
+        self._plotly_lock = threading.Lock()
+        self._plotly_runtime_queued = False
 
         server = WebsockServer(
             host,
@@ -310,9 +274,6 @@ class Server:
         with self._client_lock:
             self._connected_clients[conn.client_id] = client
             callbacks = tuple(self._client_connect_cb)
-        # The connection-local queue is registered before user callbacks,
-        # so their Plotly messages cannot overtake this bootstrap.
-        self._initialize_plotly_connection(conn)
         for callback in callbacks:
             await self._await_user_callback(callback, client)
 
@@ -320,7 +281,6 @@ class Server:
         with self._client_lock:
             client = self._connected_clients.pop(conn.client_id, None)
             callbacks = tuple(self._client_disconnect_cb)
-        self._discard_plotly_connection(conn.client_id)
         if client is None:
             return
         client._cancel_all_outgoing_file_transfers()
@@ -407,29 +367,6 @@ class Server:
                 raise RuntimeError("upload reservation accounting underflow")
             self._file_upload_bytes_reserved -= size_bytes
 
-    @contextlib.contextmanager
-    def _reserve_renderer_preparation(self) -> Iterator[None]:
-        """Serialize bounded Plotly/Matplotlib output ownership per server."""
-        if getattr(self._renderer_preparation_local, "active", False):
-            raise RuntimeError("Renderer preparation cannot re-enter the same server.")
-        self._renderer_preparation_local.active = True
-        acquired = False
-        try:
-            with self._renderer_preparation_condition:
-                while not self._stopped and self._renderer_preparation_active:
-                    self._renderer_preparation_condition.wait()
-                if self._stopped:
-                    raise RuntimeError("The server stopped during renderer preparation.")
-                self._renderer_preparation_active = True
-                acquired = True
-            yield
-        finally:
-            if acquired:
-                with self._renderer_preparation_condition:
-                    self._renderer_preparation_active = False
-                    self._renderer_preparation_condition.notify_all()
-            self._renderer_preparation_local.active = False
-
     def _replace_gui_resource_cost(
         self,
         old: Any,
@@ -464,72 +401,22 @@ class Server:
             self._gui_order_counter += 1
             return self._gui_order_counter
 
-    def _queue_plotly_js_locked(self, connection: WebsockClientConnection) -> None:
-        """Queue the cached runtime once for one browser connection. Lock held."""
-        client_id = connection.client_id
-        if client_id in self._plotly_js_sent_client_ids:
-            return
-        source = self._plotly_js_source
-        if source is None:
-            raise RuntimeError("Plotly runtime must be loaded before it is queued.")
-        if connection.queue_message(_messages.RunJavascriptMessage(source=source)) is False:
-            return
-        self._plotly_js_sent_client_ids.add(client_id)
-
-    def _ensure_plotly_js_loaded_locked(self) -> None:
-        """Load, validate, and account the shared runtime once. Lock held."""
-
-        if self._plotly_js_source is not None:
-            return
-        source = _load_plotly_js()
-        cost = _GuiResourceCost(
-            text_units=utf16_code_unit_length(source),
-            payload_bytes=len(source.encode("utf-8")),
-        )
-        self._replace_gui_resource_cost(self._plotly_resource_cost, cost, page_global=False)
-        self._plotly_resource_cost = cost
-        self._plotly_js_source = source
-
-    def _ensure_plotly_js_sent(self, connection: WebsockClientConnection | None) -> None:
-        """Initialize one client, or every current and future client, once."""
-        with self._plotly_js_lock:
-            self._ensure_plotly_js_loaded_locked()
-
-            if connection is not None:
-                self._queue_plotly_js_locked(connection)
+    def _ensure_plotly_runtime(self) -> None:
+        """Queue Plotly's browser runtime once; replay brings it to later browsers."""
+        with self._plotly_lock:
+            if self._plotly_runtime_queued:
                 return
-
-            self._plotly_js_required_globally = True
-            with self._client_lock:
-                connections = tuple(
-                    client._websock_connection for client in self._connected_clients.values()
-                )
-            for client_connection in connections:
-                self._queue_plotly_js_locked(client_connection)
-
-    def _ensure_page_plotly_js_sent(self, page_id: str) -> None:
-        """Initialize only browsers currently requesting a Plotly pane's page."""
-
-        with self._plotly_js_lock:
-            self._ensure_plotly_js_loaded_locked()
-        with self._client_lock:
-            connections = tuple(
-                client._websock_connection for client in self._connected_clients.values()
+            try:
+                import plotly
+            except ImportError as error:
+                raise ImportError(
+                    "You must have the `plotly` package installed to use Plotly elements."
+                ) from error
+            runtime = Path(plotly.__file__ or "").parent / "package_data" / "plotly.min.js"
+            self._websock_server.queue_message_or_raise(
+                _messages.RunJavascriptMessage(source=runtime.read_text("utf-8"))
             )
-        for connection in connections:
-            if connection.delivery_scope() == page_id:
-                self._ensure_plotly_js_sent(connection)
-
-    def _initialize_plotly_connection(self, connection: WebsockClientConnection) -> None:
-        """Apply a prior global Plotly requirement to a new connection."""
-        with self._plotly_js_lock:
-            if self._plotly_js_required_globally:
-                self._queue_plotly_js_locked(connection)
-
-    def _discard_plotly_connection(self, client_id: ClientId) -> None:
-        """Forget per-connection delivery state when a browser disconnects."""
-        with self._plotly_js_lock:
-            self._plotly_js_sent_client_ids.discard(client_id)
+            self._plotly_runtime_queued = True
 
     def _handle_file_transfer_abort(
         self, client_id: ClientId, message: _messages.FileTransferAbort
@@ -562,7 +449,7 @@ class Server:
         if client is None:
             return
         with page.panes._lock:
-            subscribed = client._websock_connection.request_delivery_scope(
+            client._websock_connection.request_delivery_scope(
                 message.page_id,
                 _messages.PageStreamBeginMessage(
                     page_id=message.page_id, generation=message.generation
@@ -571,8 +458,6 @@ class Server:
                     page_id=message.page_id, generation=message.generation
                 ),
             )
-            if subscribed and page.panes._has_plotly_pane_locked():
-                self._ensure_plotly_js_sent(client._websock_connection)
 
     def _refresh_rendering(self, client: ClientHandle, pane_id: str | None = None) -> None:
         # Re-publish current content on the SAME ordered broadcast producer.
@@ -805,8 +690,6 @@ class Server:
             callback_active = self._active_user_callbacks > 0
 
         if first_request:
-            with self._renderer_preparation_condition:
-                self._renderer_preparation_condition.notify_all()
             with self._client_lock:
                 clients = tuple(self._connected_clients.values())
             for client in clients:
@@ -818,13 +701,6 @@ class Server:
             pages = getattr(self, "pages", None)
             if pages is not None:
                 pages._retire_without_queue()
-            with self._plotly_js_lock:
-                self._replace_gui_resource_cost(
-                    self._plotly_resource_cost, _GuiResourceCost(), page_global=False
-                )
-                self._plotly_resource_cost = _GuiResourceCost()
-                self._plotly_js_source = None
-                self._plotly_js_sent_client_ids.clear()
 
         server_thread = self._websock_server._server_thread
         if (

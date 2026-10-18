@@ -232,11 +232,6 @@ The final transfer remains the complete downloadable document. Reopened cached
 documents mount in batches of 96 blocks; following an internal link completes
 mounting before resolving its target. Image decoding remains viewport-bound.
 
-Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
-code units (16 Mi-characters). Public creation, update, and assignment preflight
-that bound and raise `ValueError` before publication. The bundled client repeats
-the check and shows a visible status if a payload bypasses the Python boundary.
-
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
 Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update
 raise `ValueError` before publishing a larger source. The bundled client also
@@ -254,16 +249,15 @@ Markdown does not fetch external images; only a
 bounded data image or the exact hash-and-dimensions URL Leika emits for a
 registered picture can render inline.
 
-Plotly figures are preflighted through 500,000 values, configurations through
-4,096 items, and the combined detached JSON snapshot through the size ceiling
-above. A successful synchronous add or assignment stores its own snapshot, and
-the public getter reconstructs an independent figure without consulting later
-global-template changes. Exact Plotly figures and ndarray sources must not be
-mutated concurrently while that snapshot is being taken.
+GUI plots and Plotly panes share one serializer. Adding or assigning a figure
+stores its JSON with a private copy of the config, and the getter rebuilds an
+independent figure from it. A figure without a template, or with Plotly's stock
+default, is sent without one and follows the viewer's light or dark theme. The
+first figure queues Plotly's browser runtime once, as a retained message that
+later browsers receive on connect.
 
-The Plotly bounds do not sanitize renderer semantics: figures and configuration
-remain trusted, server-authored input to a third-party renderer and may
-intentionally reference external maps or images. Likewise, `GuiApi.add_html`
+Plotly figures and configuration remain trusted, server-authored input to a
+third-party renderer and may intentionally reference external maps or images. Likewise, `GuiApi.add_html`
 injects trusted raw HTML without sanitization; callers must sanitize untrusted
 content first.
 
@@ -318,7 +312,7 @@ Leika is a simple data workspace. The client carries GUI, control panel, layout,
 image, SVG, and Plotly renderers, and CI checks that the shipped wheel and its
 browser dependencies stay within that surface. Those renderers back the four pane
 types in [Panes](panes.md). Matplotlib sources are held weakly, while ndarray
-and Plotly assignments detach bounded snapshots as described above.
+and Plotly assignments store their own copies as described above.
 
 External Viser pages embed as intentionally unsandboxed iframes because their
 clients require scripts, workers, and storage. They use a no-referrer policy,

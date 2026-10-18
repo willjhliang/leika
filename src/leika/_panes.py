@@ -14,7 +14,7 @@ import warnings
 import weakref
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, NewType, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, NewType, TypeVar, cast
 
 import numpy as np
 from typing_extensions import TypeAlias
@@ -22,12 +22,7 @@ from typing_extensions import TypeAlias
 from . import _messages
 from ._gui_resources import _GuiResourceCost
 from ._image_encoding import _validate_image_encoding_options, prepare_image
-from ._plotly import (
-    _plotly_figure_from_json,
-    _plotly_json_for_pane,
-    _plotly_payload_from_json,
-    _plotly_theme_templates_json,
-)
+from ._plotly import plotly_config, plotly_figure, plotly_json, plotly_theme_templates
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -374,6 +369,7 @@ class _PlotlyPaneHandleState:
     pane_id: str
     props: _messages.ViewportPlotlyProps
     api: Panes
+    config: dict[str, Any] | None
     removed: bool = False
 
 
@@ -775,8 +771,7 @@ class _MatplotlibPaneContent(_PaneContent[_MatplotlibPaneHandleState]):
         if loading is not None:
             loading = _validate_loading(loading)
         figure_ref = _matplotlib_figure_ref(figure)
-        with self._impl.api._owner._reserve_renderer_preparation():
-            svg = _matplotlib_svg(figure)
+        svg = _matplotlib_svg(figure)
         with self._impl.api._lock:
             # Serialization can be expensive. Recheck after taking the lock so
             # a concurrent remove cannot queue an update for a reused pane ID.
@@ -808,15 +803,10 @@ class _PlotlyPaneContent(_PaneContent[_PlotlyPaneHandleState]):
     def figure(self) -> go.Figure:
         """Independent snapshot of the displayed figure. Assign it to publish edits."""
 
-        api = self._impl.api
-        with api._lock:
+        with self._impl.api._lock:
             self._check_not_removed()
             source = self._impl.props._plotly_json_str
-        with api._owner._reserve_renderer_preparation():
-            figure = _plotly_figure_from_json(source)
-        with api._lock:
-            self._check_not_removed()
-        return figure
+        return plotly_figure(source)
 
     @figure.setter
     def figure(self, figure: go.Figure) -> None:
@@ -826,18 +816,12 @@ class _PlotlyPaneContent(_PaneContent[_PlotlyPaneHandleState]):
         api = self._impl.api
         if loading is not None:
             loading = _validate_loading(loading)
-        with api._lock:
-            self._check_not_removed()
-            source = self._impl.props._plotly_json_str
-        with api._owner._reserve_renderer_preparation():
-            _, config = _plotly_payload_from_json(source)
-            json_str, _ = _plotly_json_for_pane(figure, config)
+        self._check_not_removed()
+        json_str = plotly_json(figure, self._impl.config)
         with api._lock:
             # Serialization can be expensive. Recheck after taking the lock so
             # a concurrent remove cannot queue an update for a reused pane ID.
             self._check_not_removed()
-            if self._impl.props._plotly_json_str != source:
-                raise RuntimeError("Plotly figure changed during serialization")
             updates: dict[str, Any] = {"_plotly_json_str": json_str}
             if loading is not None:
                 updates["loading"] = loading
@@ -1085,8 +1069,7 @@ class PaneHandle(_PaneContent[_PaneStateT]):
                 kind = "matplotlib"
             elif isinstance(state, _PlotlyPaneHandleState):
                 kind = "plotly"
-                _, config = _plotly_payload_from_json(state.props._plotly_json_str)
-                options = dict(config=config)
+                options = dict(config=state.config)
             elif isinstance(state, _ViserPaneHandleState):
                 kind = "viser"
                 options = dict(minimize_gui=state.minimize_gui)
@@ -1921,7 +1904,6 @@ class Panes:
         handle: PaneHandle[Any],
         create_message: _messages._ViewportPaneCreateMessage,
         relative_to: str,
-        before_publish: Callable[[], None] | None = None,
         replacement: _PaneReplacement | None = None,
     ) -> None:
         """Register a new pane handle and queue its creation messages."""
@@ -1930,7 +1912,7 @@ class Panes:
             if self._terminal:
                 raise RuntimeError("Panes is no longer active.")
             if replacement is not None:
-                self._replace_pane_locked(handle, create_message, replacement, before_publish)
+                self._replace_pane_locked(handle, create_message, replacement)
                 return
             if pane_id in self._handle_from_pane_id:
                 raise ValueError(f"Pane ID {pane_id!r} already exists.")
@@ -1942,8 +1924,6 @@ class Panes:
                 old_resource = self._set_resource_locked(pane_id, _pane_resource_cost(handle))
                 self._handle_from_pane_id[pane_id] = handle
                 try:
-                    if before_publish is not None:
-                        before_publish()
                     self._websock_interface.queue_messages_or_raise(
                         (
                             _messages.ViewportPaneMessage(
@@ -1970,20 +1950,11 @@ class Panes:
                 self._aggregate.release_pane(viser=is_viser)
                 raise
 
-    def _has_plotly_pane_locked(self) -> bool:
-        """Return whether this registry owns a live Plotly pane. Lock held."""
-
-        return any(
-            isinstance(handle._impl, _PlotlyPaneHandleState)
-            for handle in self._handle_from_pane_id.values()
-        )
-
     def _replace_pane_locked(
         self,
         prepared: PaneHandle[Any],
         message: _messages._ViewportPaneCreateMessage,
         replacement: _PaneReplacement,
-        before_publish: Callable[[], None] | None,
     ) -> None:
         target, expected, loading = replacement.handle, replacement.content, replacement.loading
         target._check_not_removed()
@@ -2002,8 +1973,6 @@ class Panes:
             ),
             self._resource_transaction_locked(prepared),
         ):
-            if before_publish is not None:
-                before_publish()
             messages: list[_messages.Message] = [message]
             if getattr(target, "_refresh_controls", None):
                 messages.append(target._update_message({}))
@@ -2278,8 +2247,7 @@ class Panes:
         pane_id = self._validate_pane_declaration(pane_id, placement)
 
         figure_ref = _matplotlib_figure_ref(figure)
-        with self._owner._reserve_renderer_preparation():
-            svg = _matplotlib_svg(figure)
+        svg = _matplotlib_svg(figure)
         props = _messages.ViewportMatplotlibProps(
             _svg=svg,
             title=title,
@@ -2344,9 +2312,8 @@ class Panes:
         Args:
             figure: Plotly figure to snapshot and display. The pane does
                 not retain this mutable object; its ``figure`` getter rebuilds
-                an independent copy from bounded JSON. Assign that copy back
-                to publish edits. The final JSON must fit the bundled browser's
-                16,777,216 UTF-16-code-unit render limit.
+                an independent copy from the serialized JSON. Assign that copy
+                back to publish edits.
             config: Plotly config dict merged into the figure JSON. Controls
                 display options like ``{"displayModeBar": False}``. Values
                 must be JSON-serializable. See
@@ -2394,12 +2361,12 @@ class Panes:
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
 
-        with self._owner._reserve_renderer_preparation():
-            plotly_json, _ = _plotly_json_for_pane(figure, config)
-            theme_templates = _plotly_theme_templates_json()
+        config = plotly_config(config)
+        json_str = plotly_json(figure, config)
+        self._owner._ensure_plotly_runtime()
         props = _messages.ViewportPlotlyProps(
-            _plotly_json_str=plotly_json,
-            _theme_templates=theme_templates,
+            _plotly_json_str=json_str,
+            _theme_templates=plotly_theme_templates(),
             title=title,
             visible=visible,
             loading=loading,
@@ -2409,6 +2376,7 @@ class Panes:
                 pane_id=pane_id,
                 props=copy.deepcopy(props),
                 api=self,
+                config=config,
             )
         )
         relative_to = self._resolve_relative_to(relative_to)
@@ -2425,7 +2393,6 @@ class Panes:
             ),
             relative_to,
             replacement=replacement,
-            before_publish=lambda: self._owner._ensure_page_plotly_js_sent(self._page_id),
         )
         return handle
 

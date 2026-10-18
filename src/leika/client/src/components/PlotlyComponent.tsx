@@ -1,28 +1,50 @@
 import React from "react";
 
 import { GuiPlotlyMessage } from "../WebsocketMessages";
+import { useColorScheme } from "../hooks/useColorScheme";
 import { useElementSize } from "../hooks/useElementSize";
 import { usePlotlyRenderer } from "../hooks/usePlotlyRenderer";
-import { parsePlotlyFigure } from "../viewport/plotlyPayload";
+import {
+  parsePlotlyFigure,
+  parsePlotlyThemeTemplates,
+} from "../viewport/plotlyPayload";
 import { MediaPreview, MediaSurface } from "./MediaPreview";
 
 const PlotWithAspect = React.memo(function PlotWithAspect({
   jsonStr,
+  themeTemplates,
   aspect,
   onExpand,
 }: {
   jsonStr: string;
+  themeTemplates: string;
   /** Width divided by height. */
   aspect: number;
   onExpand?: () => void;
 }) {
   const { ref, width } = useElementSize();
+  // Figures without an explicit template follow the Leika theme.
+  const colorScheme = useColorScheme();
   const parseResult = React.useMemo(
     () => parsePlotlyFigure(jsonStr),
     [jsonStr],
   );
+  const themeParseResult = React.useMemo(
+    () => parsePlotlyThemeTemplates(themeTemplates),
+    [themeTemplates],
+  );
   const plot = parseResult.ok ? parseResult.value : null;
-  const parseError = parseResult.ok ? null : parseResult.error;
+  const templates = themeParseResult.ok ? themeParseResult.value : null;
+  const parseError = !parseResult.ok
+    ? parseResult.error
+    : !themeParseResult.ok
+      ? themeParseResult.error
+      : null;
+  const template =
+    plot?.layout.template ??
+    (templates === null
+      ? undefined
+      : (templates[colorScheme] ?? templates.light));
   const aspectError =
     Number.isFinite(aspect) && aspect > 0
       ? null
@@ -36,11 +58,12 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
             figure: plot,
             layout: {
               ...plot.layout,
+              template,
               width,
               height: width / displayAspect,
             },
           },
-    [plot, width, displayAspect, aspectError],
+    [plot, template, width, displayAspect, aspectError],
   );
   const { plotRef, message: plotlyMessage } = usePlotlyRenderer({
     request,
@@ -76,7 +99,11 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
 
 export default function PlotlyComponent({
   uuid,
-  props: { _plotly_json_str: plotlyJsonString, aspect },
+  props: {
+    _plotly_json_str: plotlyJsonString,
+    _theme_templates: themeTemplates,
+    aspect,
+  },
 }: GuiPlotlyMessage) {
   const [opened, setOpened] = React.useState(false);
   // Stable, so the memo above can actually skip re-renders of the inline copy.
@@ -85,6 +112,7 @@ export default function PlotlyComponent({
     <>
       <PlotWithAspect
         jsonStr={plotlyJsonString}
+        themeTemplates={themeTemplates}
         aspect={aspect}
         onExpand={expand}
       />
@@ -97,7 +125,11 @@ export default function PlotlyComponent({
         title="Plot"
         rememberAs={uuid}
       >
-        <PlotWithAspect jsonStr={plotlyJsonString} aspect={aspect} />
+        <PlotWithAspect
+          jsonStr={plotlyJsonString}
+          themeTemplates={themeTemplates}
+          aspect={aspect}
+        />
       </MediaPreview>
     </>
   );

@@ -131,7 +131,7 @@ from ._notification_handle import (
     _NotificationHandleState,
     validate_auto_close_seconds,
 )
-from ._plotly import _plotly_json_and_config
+from ._plotly import plotly_config, plotly_json, plotly_theme_templates
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -471,7 +471,6 @@ class GuiApi(GuiContainer):
         self._event_loop = event_loop
         server = owner if isinstance(owner, Server) else owner._server
         self._server = server
-        self._plotly_connection = None if isinstance(owner, Server) else owner._websock_connection
         self._next_order = server._next_gui_order
 
         self._websock_interface = (
@@ -2551,10 +2550,6 @@ class GuiApi(GuiContainer):
             _user_format=format,
         )
 
-    def _ensure_plotly_js_sent(self) -> None:
-        """Ensure every recipient of this API can render Plotly figures."""
-        self._server._ensure_plotly_js_sent(self._plotly_connection)
-
     def add_plotly(
         self,
         figure: go.Figure,
@@ -2570,8 +2565,9 @@ class GuiApi(GuiContainer):
         Args:
             figure: Plotly figure to snapshot and display. The handle does
                 not retain this mutable object; its ``figure`` getter rebuilds
-                an independent copy from bounded JSON. The final JSON must fit
-                the bundled browser's 16,777,216 UTF-16-code-unit render limit.
+                an independent copy from the serialized JSON. A figure without
+                a template, or with Plotly's stock default, follows the
+                viewer's light or dark theme.
             config: Plotly config dict merged into the figure JSON. Controls
                 display options like ``{"displayModeBar": False}``. Values
                 must be JSON-serializable. See
@@ -2590,18 +2586,17 @@ class GuiApi(GuiContainer):
             raise TypeError("visible must be a bool")
         if order is not None:
             _validate_number(order, "order")
-        with self._server._reserve_renderer_preparation():
-            plotly_json, _ = _plotly_json_and_config(figure, config)
-
-        # Plotly must be available before the valid figure creation message.
-        self._ensure_plotly_js_sent()
+        config = plotly_config(config)
+        json_str = plotly_json(figure, config)
+        self._server._ensure_plotly_runtime()
 
         message = _messages.GuiPlotlyMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiPlotlyProps(
                 order=self._apply_default_order(order),
-                _plotly_json_str=plotly_json,
+                _plotly_json_str=json_str,
+                _theme_templates=plotly_theme_templates(),
                 aspect=aspect,
                 visible=visible,
             ),
@@ -2614,7 +2609,8 @@ class GuiApi(GuiContainer):
                 props=message.props,
                 parent_container_id=message.container_uuid,
                 create_message=message,
-            )
+            ),
+            _config=config,
         )
 
     @overload

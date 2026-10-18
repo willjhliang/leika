@@ -9,7 +9,7 @@ import threading
 import time
 import weakref
 from collections import deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Sequence
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +23,6 @@ import leika._gui_api as gui_api_impl
 import leika._gui_handles as gui_handles_impl
 import leika._gui_resources as gui_resources_impl
 import leika._notification_handle as notification_impl
-import leika._plotly as plotly_impl
 from leika import _messages
 from leika._server import ClientHandle
 from leika._transport._websocket import ClientId
@@ -1865,63 +1864,24 @@ def test_media_elements_are_created_from_their_content(
     assert plotly_messages[0].props._plotly_json_str.startswith("{")
 
 
-def test_plotly_bootstrap_is_owned_once_across_scopes_and_connections(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Local, global, and pane APIs share one bootstrap per browser."""
+def test_plotly_runtime_is_queued_once_for_every_scope(server: leika.Server) -> None:
+    """Local, global, and pane plots share one replayed runtime."""
     plotly = pytest.importorskip("plotly.graph_objects")
-    bootstrap = "window.Plotly = {};"
-    load_count = 0
+    queued: list[_messages.Message] = []
+    connection = _client_connection_stub(server, ClientId(101), queued)
+    client = ClientHandle(connection, server)  # type: ignore[arg-type]
 
-    def load_plotly_js() -> str:
-        nonlocal load_count
-        load_count += 1
-        return bootstrap
+    def runtimes() -> list[_messages.Message]:
+        broadcast = server._websock_server._broadcast_buffer.message_from_id.values()
+        return [m for m in broadcast if isinstance(m, _messages.RunJavascriptMessage)]
 
-    monkeypatch.setattr("leika._server._load_plotly_js", load_plotly_js)
-
-    def connect(client_id: int) -> tuple[ClientHandle, list[_messages.Message]]:
-        queued: list[_messages.Message] = []
-        connection = _client_connection_stub(server, ClientId(client_id), queued)
-        client = ClientHandle(connection, server)  # type: ignore[arg-type]
-        with server._client_lock:
-            server._connected_clients[connection.client_id] = client
-        return client, queued
-
-    def bootstraps(messages: list[_messages.Message]) -> list[str]:
-        return [
-            message.source
-            for message in messages
-            if isinstance(message, _messages.RunJavascriptMessage)
-        ]
-
-    first, first_messages = connect(101)
-    _, second_messages = connect(102)
-
-    # A client-local figure initializes that client, not its peers.
-    first.gui.add_plotly(plotly.Figure())
-    assert bootstraps(first_messages) == [bootstrap]
-    assert bootstraps(second_messages) == []
-
-    # A later global figure fills only the missing recipient. A pane uses the
-    # same global scope and must not enqueue the runtime again.
+    assert runtimes() == []
+    client.gui.add_plotly(plotly.Figure())
     server.gui.add_plotly(plotly.Figure())
-    server.panes.add_plotly(plotly.Figure(), pane_id="plotly-bootstrap-test")
-    assert bootstraps(first_messages) == [bootstrap]
-    assert bootstraps(second_messages) == [bootstrap]
-
-    # Once Plotly is globally required, each later connection is initialized
-    # before its local GUI can enqueue a figure.
-    late, late_messages = connect(103)
-    server._initialize_plotly_connection(late._websock_connection)
-    late.gui.add_plotly(plotly.Figure())
-    assert bootstraps(late_messages) == [bootstrap]
-
-    broadcast_messages = server._websock_server._broadcast_buffer.message_from_id.values()
-    assert not any(
-        isinstance(message, _messages.RunJavascriptMessage) for message in broadcast_messages
-    )
-    assert load_count == 1
+    server.panes.add_plotly(plotly.Figure(), pane_id="plotly-runtime-test")
+    assert len(runtimes()) == 1
+    assert "Plotly" in runtimes()[0].source
+    assert not any(isinstance(m, _messages.RunJavascriptMessage) for m in queued)
 
 
 def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
@@ -2729,58 +2689,6 @@ def test_notification_update_and_remove_are_linearized(
     assert [type(message) for message in sent] == [_messages.RemoveNotificationMessage]
 
 
-@pytest.mark.plotly
-def test_plotly_json_enforces_browser_utf16_limit_transactionally(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    initial = go.Figure(go.Scatter(y=[1, 2]))
-    handle = server.gui.add_plotly(initial)
-    old_json = handle._impl.props._plotly_json_str
-
-    oversized = go.Figure(go.Scatter(text=["x" * 10_000], y=[1]))
-    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 1000)
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        handle.figure = oversized
-    assert handle.figure is not initial
-    assert tuple(handle.figure.data[0].y) == (1, 2)
-    assert handle._impl.props._plotly_json_str == old_json
-
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        server.gui.add_plotly(oversized)
-
-    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
-    assert plotly_impl._validate_plotly_json_size("\U0001f600") == "\U0001f600"
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        plotly_impl._validate_plotly_json_size("\U0001f600x")
-
-
-def test_plotly_runtime_loader_is_bounded_and_requires_utf8(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import sys
-
-    import leika._server as server_impl
-
-    package = tmp_path / "plotly"
-    runtime = package / "package_data" / "plotly.min.js"
-    runtime.parent.mkdir(parents=True)
-    runtime.write_bytes(b"x" * 8)
-    monkeypatch.setitem(
-        sys.modules, "plotly", SimpleNamespace(__file__=str(package / "__init__.py"))
-    )
-    monkeypatch.setattr(server_impl, "_PLOTLY_JS_MAX_BYTES", 8)
-    assert server_impl._load_plotly_js() == "x" * 8
-
-    runtime.write_bytes(b"x" * 9)
-    with pytest.raises(ValueError, match="byte limit"):
-        server_impl._load_plotly_js()
-
-    runtime.write_bytes(b"\xff")
-    with pytest.raises(ValueError, match="valid UTF-8"):
-        server_impl._load_plotly_js()
-
-
 def test_notification_expiry_mirrors_browser_updates_and_is_race_safe() -> None:
     from leika._notification_handle import (
         NotificationHandle,
@@ -3495,25 +3403,6 @@ def test_notification_timeout_matches_javascript_timer_range(
         server.gui.add_notification("Too long", auto_close_seconds=maximum + 0.001)
 
 
-@pytest.mark.plotly
-def test_plotly_size_is_checked_before_config_json_parse(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    from plotly.basedatatypes import BaseFigure
-
-    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 2)
-    monkeypatch.setattr(BaseFigure, "to_json", lambda self: "xxx")
-    monkeypatch.setattr(plotly_impl, "_plotly_graph_json_upper_bound", lambda *roots: 0)
-    monkeypatch.setattr(
-        plotly_impl.json,
-        "loads",
-        lambda _: pytest.fail("oversized Plotly JSON was parsed"),
-    )
-    with pytest.raises(ValueError, match="Plotly figure exceeds"):
-        plotly_impl._plotly_json_with_config(go.Figure(), {})
-
-
 def test_live_multi_slider_values_are_bounded_before_materialization(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3714,174 +3603,7 @@ def test_programmatic_callback_snapshot_accounting_releases_on_terminal(
 
 
 @pytest.mark.plotly
-def test_plotly_preflight_bounds_normal_graphs_before_serializer_hooks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    from plotly.basedatatypes import BaseFigure
-
-    normal_array = np.arange(100_000, dtype=np.float64)
-    normal = go.Figure(go.Scatter(x=normal_array, y=normal_array))
-    json_str, _ = plotly_impl._plotly_json_and_config(normal, None)
-    assert '"x"' in json_str and '"y"' in json_str
-
-    normal_list = list(range(100_000))
-    plotly_impl._plotly_graph_json_upper_bound(
-        *plotly_impl._plotly_figure_raw_graph(go.Figure(go.Scatter(x=normal_list, y=normal_list)))
-    )
-    assert plotly_impl._plotly_graph_json_upper_bound(np.zeros((100, 100), dtype=np.uint8)) > 0
-
-    reached_serializer = False
-
-    def forbidden(_: object) -> str:
-        nonlocal reached_serializer
-        reached_serializer = True
-        raise AssertionError("oversized Plotly graph reached serializer")
-
-    monkeypatch.setattr(BaseFigure, "to_json", forbidden)
-    oversized_list = go.Figure(go.Scatter(x=[0] * 500_001))
-    oversized_array = go.Figure(go.Scatter(x=np.zeros(500_001, dtype=np.bool_)))
-    oversized_frame = go.Figure(frames=[go.Frame(data=[go.Scatter(x=[0] * 500_001)])])
-    nested = np.zeros((16_384,) + (1,) * 31, dtype=np.uint8)
-    oversized_nested = go.Figure()
-    object.__getattribute__(oversized_nested, "__dict__")["_data"] = [
-        {"type": "scatter", "x": nested}
-    ]
-    for figure in (
-        oversized_list,
-        oversized_array,
-        oversized_frame,
-        oversized_nested,
-    ):
-        with pytest.raises(ValueError, match="too many values"):
-            plotly_impl._plotly_json_with_config(figure, None)
-    assert not reached_serializer
-
-
-@pytest.mark.plotly
-def test_plotly_preflight_rejects_dynamic_serialization_hooks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    from plotly.graph_objs import Frame
-    from plotly.graph_objs.layout import Template
-
-    hook_calls = 0
-
-    def hostile_hook() -> dict[str, Any]:
-        nonlocal hook_calls
-        hook_calls += 1
-        raise AssertionError("dynamic Plotly hook ran")
-
-    instance_shadow = go.Figure()
-    instance_shadow.to_dict = hostile_hook
-    with pytest.raises(TypeError, match="instance Plotly serialization overrides"):
-        plotly_impl._plotly_json_with_config(instance_shadow, None)
-
-    class HostileFigure(go.Figure):
-        def __getattribute__(self, name: str) -> Any:
-            if name in ("to_dict", "to_json"):
-                hostile_hook()
-            return super().__getattribute__(name)
-
-    with pytest.raises(TypeError, match="exact plotly.graph_objects.Figure"):
-        plotly_impl._plotly_json_with_config(HostileFigure(), None)
-
-    class HostileMeta(type):
-        def __getattribute__(cls, name: str) -> Any:
-            if name in ("to_dict", "to_json", "__getattribute__"):
-                hostile_hook()
-            return super().__getattribute__(name)
-
-    class HostileMetaFigure(go.Figure, metaclass=HostileMeta):
-        pass
-
-    with pytest.raises(TypeError, match="exact plotly.graph_objects.Figure"):
-        plotly_impl._plotly_json_with_config(HostileMetaFigure(), None)
-
-    class HostileFrame(Frame):
-        def __getattribute__(self, name: str) -> Any:
-            if name == "_props":
-                hostile_hook()
-            return super().__getattribute__(name)
-
-    framed = go.Figure()
-    object.__getattribute__(framed, "__dict__")["_frame_objs"] = [HostileFrame()]
-    with pytest.raises(TypeError, match="custom Plotly frame"):
-        plotly_impl._plotly_json_with_config(framed, None)
-
-    class HostileTemplate(Template):
-        def __getattribute__(self, name: str) -> Any:
-            if name == "_props":
-                hostile_hook()
-            return super().__getattribute__(name)
-
-    with pytest.raises(TypeError, match="exact stock Template"):
-        plotly_impl._bounded_plotly_template_dict(HostileTemplate())
-
-    import datetime
-
-    class HostileDate(datetime.date):
-        def isoformat(self) -> str:
-            hostile_hook()
-            return ""
-
-    with pytest.raises(TypeError, match="unsupported Plotly value"):
-        plotly_impl._plotly_graph_json_upper_bound(HostileDate(2025, 1, 1))
-
-    class HostileNumpyScalar(np.float64):
-        def __getattribute__(self, name: str) -> Any:
-            if name in ("dtype", "item", "tolist"):
-                hostile_hook()
-            return super().__getattribute__(name)
-
-    with pytest.raises(TypeError, match="custom numpy scalar subclasses"):
-        plotly_impl._plotly_graph_json_upper_bound(HostileNumpyScalar(1.0))
-    assert hook_calls == 0
-
-    # Normal exact stock templates still use the same raw property snapshot.
-    pio = pytest.importorskip("plotly.io")
-    stock = pio.templates["plotly_white"]
-    expected = stock.to_plotly_json()
-    assert plotly_impl._bounded_plotly_template_dict(stock) == expected
-
-
-@pytest.mark.plotly
-def test_plotly_public_paths_reject_subclass_data_descriptors_without_hooks(
-    server: leika.Server,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    hook_calls = 0
-
-    class DescriptorFigure(go.Figure):
-        @property
-        def _data(self) -> Any:
-            nonlocal hook_calls
-            hook_calls += 1
-            raise AssertionError("Plotly data descriptor ran")
-
-    hostile = object.__new__(DescriptorFigure)
-    gui = server.gui.add_plotly(go.Figure(go.Scatter(y=[1])))
-    pane = server.panes.add_plotly(go.Figure(go.Scatter(y=[2])), pane_id="exact-figure")
-    gui_json = gui._impl.props._plotly_json_str
-    pane_json = pane._impl.props._plotly_json_str
-
-    for operation in (
-        lambda: server.gui.add_plotly(hostile),
-        lambda: server.panes.add_plotly(hostile, pane_id="hostile-subclass"),
-        lambda: setattr(gui, "figure", hostile),
-        lambda: setattr(pane, "figure", hostile),
-    ):
-        with pytest.raises(TypeError, match="exact plotly.graph_objects.Figure"):
-            operation()
-    assert hook_calls == 0
-    assert gui._impl.props._plotly_json_str == gui_json
-    assert pane._impl.props._plotly_json_str == pane_json
-    assert "hostile-subclass" not in server.panes._handle_from_pane_id
-
-
-@pytest.mark.plotly
-def test_plotly_config_snapshot_is_bounded_and_isolated_across_scopes(
+def test_plotly_config_snapshot_is_isolated_across_scopes(
     server: leika.Server,
 ) -> None:
     go = pytest.importorskip("plotly.graph_objects")
@@ -3916,7 +3638,7 @@ def test_plotly_config_snapshot_is_bounded_and_isolated_across_scopes(
 
 
 @pytest.mark.plotly
-def test_plotly_handles_retain_only_bounded_independent_json_snapshots(
+def test_plotly_handles_retain_only_independent_json_snapshots(
     server: leika.Server,
 ) -> None:
     go = pytest.importorskip("plotly.graph_objects")
@@ -3939,7 +3661,7 @@ def test_plotly_handles_retain_only_bounded_independent_json_snapshots(
     assert pane_read is not pane_source and len(pane_read.data) == 1
 
     # Mutating a getter result is also caller-local until it is explicitly
-    # assigned back, so it cannot expand retained state behind the ledger.
+    # assigned back.
     gui_read.add_trace(go.Bar(y=[7]))
     pane_read.add_trace(go.Scatter(y=[6]))
     assert len(gui.figure.data) == 1
@@ -3970,7 +3692,6 @@ def test_plotly_snapshot_getters_ignore_mutable_global_default_template(
     old_default = pio.templates.default
     pio.templates[template_name] = go.layout.Template(layout={"title": {"text": "global" * 2_000}})
     pio.templates.default = template_name
-    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 500)
     try:
         gui_read = gui.figure
         pane_read = pane.figure
@@ -3986,148 +3707,6 @@ def test_plotly_snapshot_getters_ignore_mutable_global_default_template(
     finally:
         pio.templates.default = old_default
         del pio.templates[template_name]
-
-
-@pytest.mark.plotly
-def test_plotly_config_materialization_and_renderer_reentry_are_bounded(
-    server: leika.Server,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-
-    class LyingMapping(Mapping[str, Any]):
-        yielded = 0
-
-        def __len__(self) -> int:
-            return 1
-
-        def __iter__(self) -> Iterator[str]:
-            return iter(())
-
-        def __getitem__(self, key: str) -> Any:
-            raise KeyError(key)
-
-        def items(self) -> Iterator[tuple[str, Any]]:
-            while True:
-                self.yielded += 1
-                yield f"k{self.yielded}", False
-
-    lying = LyingMapping()
-    with pytest.raises(ValueError, match="length"):
-        server.gui.add_plotly(go.Figure(), config=lying)
-    assert lying.yielded == plotly_impl._PLOTLY_CONFIG_MAX_ITEMS + 1
-
-    class ReentrantMapping(Mapping[str, Any]):
-        def __len__(self) -> int:
-            server.gui.add_plotly(go.Figure())
-            return 0
-
-        def __iter__(self) -> Iterator[str]:
-            return iter(())
-
-        def __getitem__(self, key: str) -> Any:
-            raise KeyError(key)
-
-    with pytest.raises(RuntimeError, match="cannot re-enter"):
-        server.gui.add_plotly(go.Figure(), config=ReentrantMapping())
-
-    class ReentrantFigure:
-        def savefig(self, output: Any, *, format: str) -> None:
-            del output, format
-            server.panes.add_matplotlib(self)
-
-    with pytest.raises(RuntimeError, match="cannot re-enter"):
-        server.panes.add_matplotlib(ReentrantFigure(), pane_id="reentrant-renderer")
-
-    # Every exceptional path releases ownership for later renderers.
-    server.gui.add_plotly(go.Figure())
-
-
-@pytest.mark.plotly
-def test_plotly_raw_graph_rejects_injected_base_types_without_hooks(
-    server: leika.Server,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    called: list[str] = []
-
-    class HostileScatter(go.Scatter):
-        def __deepcopy__(self, memo: dict[int, object]) -> object:
-            del memo
-            called.append("trace")
-            raise AssertionError("trace deepcopy hook ran")
-
-    class HostileLayout(go.Layout):
-        def __deepcopy__(self, memo: dict[int, object]) -> object:
-            del memo
-            called.append("layout")
-            raise AssertionError("layout deepcopy hook ran")
-
-    trace_figure = go.Figure()
-    trace_figure.__dict__["_data"] = [HostileScatter(y=[1, 2])]
-    with pytest.raises(TypeError, match="unsupported Plotly value"):
-        server.gui.add_plotly(trace_figure)
-
-    layout_figure = go.Figure()
-    layout_figure.__dict__["_layout"] = HostileLayout(title="unsafe")
-    with pytest.raises(TypeError, match="unsupported Plotly value"):
-        server.panes.add_plotly(layout_figure)
-
-    assert called == []
-
-
-@pytest.mark.plotly
-def test_plotly_global_templates_are_preflighted_before_copy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pio = pytest.importorskip("plotly.io")
-    from plotly.basedatatypes import BasePlotlyType
-
-    monkeypatch.setattr(plotly_impl, "_theme_templates_json", None)
-    monkeypatch.setattr(plotly_impl, "_PLOTLY_JSON_MAX_UTF16_CODE_UNITS", 100)
-    huge = pio.templates["plotly_white"]
-    monkeypatch.setitem(
-        huge.__dict__["_orphan_props"],
-        "oversized",
-        "x" * 1000,
-    )
-    copied = False
-
-    def forbidden(_: object) -> dict[str, Any]:
-        nonlocal copied
-        copied = True
-        raise AssertionError("oversized template was copied")
-
-    monkeypatch.setattr(BasePlotlyType, "to_plotly_json", forbidden)
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        plotly_impl._plotly_theme_templates_json()
-    assert not copied
-
-
-def test_renderer_preparation_admission_is_serialized(
-    server: leika.Server,
-) -> None:
-    renderer_entered = threading.Event()
-    renderer_release = threading.Event()
-    renderer_second = threading.Event()
-
-    def own_renderer() -> None:
-        with server._reserve_renderer_preparation():
-            renderer_entered.set()
-            assert renderer_release.wait(2)
-
-    def wait_renderer() -> None:
-        with server._reserve_renderer_preparation():
-            renderer_second.set()
-
-    first = threading.Thread(target=own_renderer)
-    second = threading.Thread(target=wait_renderer)
-    first.start()
-    assert renderer_entered.wait(1)
-    second.start()
-    assert not renderer_second.wait(0.05)
-    renderer_release.set()
-    first.join(2)
-    second.join(2)
-    assert renderer_second.is_set()
 
 
 def test_refresh_bindings_acknowledge_same_value_and_bound_client_history(server):
