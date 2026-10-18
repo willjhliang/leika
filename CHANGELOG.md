@@ -5,6 +5,8 @@ versioning.
 
 ## Unreleased
 
+- Browser: the colour picker's remembered output format resets once, and
+  command palette search ranks commands with cmdk's built-in matching.
 - Browser: downloads and uploads no longer meet browser-side size, part or
   count limits or filename and MIME re-checks; the server's own limits apply.
   A file link toast now stays usable across a reconnect until it is closed.
