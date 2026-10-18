@@ -9,8 +9,9 @@ Every consumer installs Leika the same way: a regular install of this checkout,
 `leika @ file:///mnt/amlfs-01/home/wiliang/leika`, listed in the requirements
 it installs from (Babble `requirements-viewer.txt`, do_anything
 `requirements.txt`, lwm `requirements/overrides.txt` and its compiled lock).
-All three were installed from `main` at `3f86560` and pass their viewer tests;
-the version stays 0.4.0 until the user releases.
+All three were installed from `main` at `417941c` and pass their viewer tests
+(Babble 16, do_anything 55, lwm 49); the version stays 0.4.0 until the user
+releases.
 
 Downstream consumers are Babble (`babble/viewer/app.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
@@ -114,18 +115,13 @@ Each outcome is reviewed, validated and committed with its tests and docs.
    end to end and the aliases removed; rendering presets, pane-size reporting,
    `delivery_backpressure`, Viser `_port`, the frame timestamp and the root-pane
    sentinel removed. 608 Python, 358 client, 207 browser tests pass.
-4. **Wave 4.** Make the docs describe current behavior, run full validation and
-   a final review, then roll out to the consumers.
-
-Wave 4 code items: rows, columns and grids accept then reject
-`placement`/`relative_to` (shared adder signature); `PlotlyComponent` still
-re-validates server JSON and aspects; Viser 0.2.11 requests a font at the
-server root (a cosmetic 404 outside the proxy path); browser text and list
-entry caps in `guiConstants.ts` that Python no longer shares;
-`_handle_gui_refresh` reaches into `page.panes` internals; browser input gaps
-(a button update with `False` fires `on_click`, an upload in flight completes
-after its button is disabled, preview reload and watch run on disabled or
-hidden buttons); `add_dropdown` validates its options twice.
+4. **Wave 4 (merged at `417941c`).** Pane `add_*` methods take only the
+   parameters they support (no per-pane `placement`/`relative_to`; groups take
+   `relative_to`); the browser trusts server Plotly JSON and has no entry caps;
+   one input acceptance rule covers presses, uploads and previews; dropdown
+   options validate once; the Viser proxy scopes root-absolute CSS URLs (the
+   font loads through the pane); docs describe current behavior. 608 Python,
+   354 client, 206 browser tests pass.
 
 Local work uses the `leika` conda environment (Python 3.13 and Node 24 from
 conda-forge, Leika installed editable with
@@ -150,9 +146,7 @@ change.
 
 ## Next actions
 
-Wave 4 runs in one agent: the code items above, then the docs pass. Review,
-validate and merge it, then roll out to all three consumers; the GUI API
-changes don't touch the calls they use.
-
-The user asked to ration usage: one agent for wave 4, selective diff review,
-full checks once per merge, a lean docs pass.
+The simplification series is merged and rolled out; the visualizers this
+session owns run on `417941c` (lwm jobs at attempts 3 and 4, Babble PID
+3764283). Open for the user: whether per-pane left/top placement hints should
+return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
