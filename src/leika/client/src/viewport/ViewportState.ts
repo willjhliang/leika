@@ -3,22 +3,18 @@ import React from "react";
 import { ImageFit } from "../ClientSettings";
 import { createStore, Store } from "../store";
 import {
-  VIEWPORT_ROOT_PANE_ID,
-  ViewportDropRegion,
   ViewportLayout,
   collectViewportPaneIds,
   equalizeViewportPanes,
   hasViewportPane,
-  insertViewportPane,
   normalizeViewportLayout,
+  placeViewportPane,
   reconcileViewportLayout,
   removeViewportPane,
   sameViewportLayout,
 } from "./layoutModel";
 import { parseBoundedPersistedJson } from "../persistenceLimits";
 import type { Message } from "../WebsocketMessages";
-
-export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
 interface RefreshableProps {
   _refresh_controls?: readonly string[];
@@ -84,20 +80,11 @@ export interface ViewportVideoProps extends RefreshableProps {
 }
 
 export interface ViewportViserProps extends RefreshableProps {
-  /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
-  _url: string | null;
-  /** Viser server port; the host is derived from the page's hostname. Null
-   * for URL-based targets. Exactly one of _url/_port is set. */
-  _port: number | null;
+  /** Same-origin proxy path or absolute embed URL, rendered near-verbatim. */
+  _url: string;
   title: string;
   visible: boolean;
   loading: boolean | string;
-}
-
-export interface ViewportRootPane {
-  kind: "root";
-  paneId: typeof VIEWPORT_ROOT_PANE_ID;
-  visible: boolean;
 }
 
 export interface ViewportImagePane extends RefreshablePane {
@@ -130,16 +117,14 @@ export interface ViewportViserPane extends RefreshablePane {
   props: ViewportViserProps;
 }
 
-/** Server-declared panes that render content other than the 3D hidden root. */
-export type ViewportContentPane =
+/** A server-declared pane and its content. */
+export type ViewportPane =
   | ViewportEmptyPane
   | ViewportImagePane
   | ViewportMatplotlibPane
   | ViewportPlotlyPane
   | ViewportViserPane
   | ViewportVideoPane;
-
-export type ViewportPane = ViewportRootPane | ViewportContentPane;
 
 export interface ViewportPageState {
   pageId: string;
@@ -269,20 +254,11 @@ function browserStorage(): ViewportLayoutStorage | null {
 }
 
 export function initialViewportLayout(): ViewportLayout {
-  return {
-    version: 1,
-    root: { type: "pane", pane_id: VIEWPORT_ROOT_PANE_ID },
-  };
+  return { version: 1, root: null };
 }
 
 export function initialViewportPanes(): Record<string, ViewportPane> {
-  const panes = Object.create(null) as Record<string, ViewportPane>;
-  panes[VIEWPORT_ROOT_PANE_ID] = {
-    kind: "root",
-    paneId: VIEWPORT_ROOT_PANE_ID,
-    visible: true,
-  };
-  return panes;
+  return Object.create(null) as Record<string, ViewportPane>;
 }
 
 function initialState(interactionEpoch = 0): ViewportState {
@@ -308,9 +284,7 @@ function copyPaneRecord(
   );
 }
 
-function contentPaneFromMessage(
-  message: ViewportPaneCreateMessage,
-): ViewportContentPane {
+function paneFromMessage(message: ViewportPaneCreateMessage): ViewportPane {
   switch (message.type) {
     case "ViewportPaneMessage":
     case "ViewportEmptyMessage":
@@ -333,9 +307,9 @@ function contentPaneFromMessage(
 }
 
 function detachViewportPaneBinary(
-  pane: ViewportContentPane,
+  pane: ViewportPane,
   previous?: ViewportPane,
-): ViewportContentPane {
+): ViewportPane {
   if (pane.kind !== "image" || pane.props._data === null) return pane;
   // Reuse bytes already detached from their wire frame when only title,
   // visibility, loading or fit changes. New incoming buffers still get copied.
@@ -347,13 +321,6 @@ function detachViewportPaneBinary(
   };
 }
 
-function paneIsVisible(pane: ViewportPane | undefined): boolean {
-  return (
-    pane === undefined ||
-    (pane.kind === "root" ? pane.visible : pane.props.visible)
-  );
-}
-
 function retainedPaneIds(
   layout: ViewportLayout,
   panes: Record<string, ViewportPane>,
@@ -361,16 +328,8 @@ function retainedPaneIds(
 ): string[] {
   return collectViewportPaneIds(layout).filter(
     (paneId) =>
-      paneIsVisible(panes[paneId]) &&
-      (paneId === VIEWPORT_ROOT_PANE_ID ||
-        authoritativePaneIds === null ||
-        authoritativePaneIds.has(paneId)),
-  );
-}
-
-function rootPaneIsVisible(panes: Record<string, ViewportPane>): boolean {
-  return !Object.values(panes).some(
-    (pane) => pane.kind !== "root" && pane.props.visible,
+      (panes[paneId]?.props.visible ?? true) &&
+      (authoritativePaneIds === null || authoritativePaneIds.has(paneId)),
   );
 }
 
@@ -378,12 +337,11 @@ function reconcilePaneLayout(
   layout: ViewportLayout,
   panes: Record<string, ViewportPane>,
   authoritativePaneIds: ReadonlySet<string> | null,
-  omittedPaneId?: string,
 ): ViewportLayout {
-  const paneIds = retainedPaneIds(layout, panes, authoritativePaneIds).filter(
-    (paneId) => paneId !== omittedPaneId,
+  return reconcileViewportLayout(
+    layout,
+    retainedPaneIds(layout, panes, authoritativePaneIds),
   );
-  return reconcileViewportLayout(layout, paneIds, rootPaneIsVisible(panes));
 }
 
 /** Per-viewer page catalog, pane registries, and browser-owned layout store. */
@@ -482,7 +440,7 @@ export function createViewportState(
     const page = streamedPage(message.page_id);
     if (page === undefined) return;
     const paneId = message.pane_id;
-    const pane = contentPaneFromMessage(message);
+    const pane = paneFromMessage(message);
     const authoritativePaneIds =
       authoritativePanesByPage.get(page.pageId) ?? null;
     authoritativePaneIds?.add(paneId);
@@ -501,15 +459,10 @@ export function createViewportState(
         // instead of replacing that layout with creation-time hints.
         layout = savedLayout;
       } else {
-        const layoutPaneIds = collectViewportPaneIds(layout);
-        const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
-        const relativeTo = hasViewportPane(layout, message.relative_to)
-          ? message.relative_to
-          : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID);
-        layout = insertViewportPane(
+        layout = placeViewportPane(
           layout,
           paneId,
-          relativeTo,
+          message.relative_to,
           message.placement,
         );
         if (message.equalize_group.length > 0) {
@@ -803,11 +756,7 @@ export function createViewportState(
       const panes = copyPaneRecord(page.panes);
       let changed = false;
       for (const [paneId, pane] of Object.entries(panes)) {
-        if (
-          pane.kind === "root" ||
-          !pane.props._refresh_controls?.includes(uuid)
-        )
-          continue;
+        if (!pane.props._refresh_controls?.includes(uuid)) continue;
         panes[paneId] = {
           ...pane,
           refreshPending: {
@@ -824,8 +773,7 @@ export function createViewportState(
     updatePane: (pageId, paneId, updates) => {
       const page = streamedPage(pageId);
       const pane = page?.panes[paneId];
-      if (page === undefined || pane === undefined || pane.kind === "root")
-        return;
+      if (page === undefined || pane === undefined) return;
       const revision = updates._refresh_revision ?? 0;
       const pending = pane.refreshPending;
       if (
@@ -835,13 +783,9 @@ export function createViewportState(
           (pending?.minimumRevision ?? pane.props._refresh_revision ?? 0)
       )
         return;
-      const hasContent = [
-        "_data",
-        "_svg",
-        "_plotly_json_str",
-        "_url",
-        "_port",
-      ].some((key) => Object.hasOwn(updates, key));
+      const hasContent = ["_data", "_svg", "_plotly_json_str", "_url"].some(
+        (key) => Object.hasOwn(updates, key),
+      );
       if (
         pending === undefined &&
         Object.entries(updates).every(([key, value]) =>
@@ -855,7 +799,7 @@ export function createViewportState(
           ...pane,
           props: { ...pane.props, ...updates },
           refreshPending: hasContent ? undefined : pending,
-        } as ViewportContentPane,
+        } as ViewportPane,
         pane,
       );
       panes[paneId] = updatedPane;
@@ -863,20 +807,9 @@ export function createViewportState(
       if (updatedPane.props.visible !== pane.props.visible) {
         if (updatedPane.props.visible) {
           const savedLayout = readLayout(page.pageId);
-          if (hasViewportPane(savedLayout, paneId)) {
-            layout = savedLayout;
-          } else {
-            const layoutPaneIds = collectViewportPaneIds(layout);
-            const fallbackPaneId = layoutPaneIds[layoutPaneIds.length - 1];
-            layout = insertViewportPane(
-              layout,
-              paneId,
-              hasViewportPane(layout, VIEWPORT_ROOT_PANE_ID)
-                ? VIEWPORT_ROOT_PANE_ID
-                : (fallbackPaneId ?? VIEWPORT_ROOT_PANE_ID),
-              "right",
-            );
-          }
+          layout = hasViewportPane(savedLayout, paneId)
+            ? savedLayout
+            : placeViewportPane(layout, paneId, null, "right");
         } else {
           layout = removeViewportPane(layout, paneId);
         }
@@ -899,7 +832,6 @@ export function createViewportState(
         removeViewportPane(page.layout, paneId),
         panes,
         authoritativePanesByPage.get(pageId) ?? null,
-        paneId,
       );
       replacePage({ ...page, panes, layout });
     },
@@ -912,8 +844,7 @@ export function createViewportState(
       authoritativePanesByPage.set(pageId, ids);
       const panes = copyPaneRecord(page.panes);
       for (const paneId of Object.keys(panes)) {
-        if (paneId !== VIEWPORT_ROOT_PANE_ID && !ids.has(paneId))
-          delete panes[paneId];
+        if (!ids.has(paneId)) delete panes[paneId];
       }
       const layout = reconcilePaneLayout(page.layout, panes, ids);
       // The first empty snapshot only establishes a newly declared page's

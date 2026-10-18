@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import ipaddress
 import math
 import secrets
@@ -78,13 +77,9 @@ class Server:
     ``allow_embedding=True`` only for an intentional iframe or notebook
     :meth:`show` use.
 
-    Browser rendering preferences automatically enable delivery backpressure.
-    Set ``delivery_backpressure=True`` to enable it for other clients too.
-    Each outbound producer waits for transport receipt before sending another
-    batch, allowing pending updates to coalesce instead of buffering old frames
-    in the network. This can lower playback rate on high-latency connections;
-    it acknowledges byte delivery, not browser rendering. Non-browser clients
-    retain the default of False unless explicitly enabled.
+    Each connection's queues wait for the browser's receipt of a batch before
+    sending it the next, so pending updates coalesce instead of queuing old
+    frames in the network. A high-latency connection gets fewer, newer frames.
     """
 
     def __init__(
@@ -99,7 +94,6 @@ class Server:
         allow_embedding: bool = False,
         share: bool = False,
         verbose: bool = True,
-        delivery_backpressure: bool = False,
     ) -> None:
         if type(host) is not str or _canonical_hostname(host) is None:
             raise ValueError("host must be a valid DNS name or IP address.")
@@ -118,8 +112,6 @@ class Server:
             raise TypeError("share must be a bool.")
         if not isinstance(verbose, bool):
             raise TypeError("verbose must be a bool.")
-        if not isinstance(delivery_backpressure, bool):
-            raise TypeError("delivery_backpressure must be a bool.")
         normalized_allowed_hosts = _configured_allowed_hosts(allowed_hosts)
         # Sharing means the dashboard carries data worth protecting, and a
         # non-loopback bind would serve that same data as unencrypted HTTP to
@@ -176,14 +168,11 @@ class Server:
             password=password,
             allowed_hosts=normalized_allowed_hosts,
             allow_embedding=allow_embedding,
-            delivery_backpressure=delivery_backpressure,
         )
         self._websock_server = server
         self._event_loop = server._broadcast_buffer.event_loop
         server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
-        server.register_handler(_messages.PaneViewportMessage, self._handle_pane_viewport)
-        server.register_handler(_messages.RenderingSettingsMessage, self._handle_rendering_settings)
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
         try:
@@ -409,75 +398,6 @@ class Server:
                     page_id=message.page_id, generation=message.generation
                 ),
             )
-
-    def _refresh_rendering(self, client: ClientHandle, pane_id: str | None = None) -> None:
-        # Re-publish current content on the SAME ordered broadcast producer.
-        # A private replay could overtake a newer live update. Other browsers
-        # see their own encoding of this harmless same-content refresh.
-        page_id = client._websock_connection.delivery_scope()
-        if page_id is None:
-            return
-        with self.pages._lock:
-            page = self.pages._page_from_page_id.get(page_id)
-        if page is None:
-            return
-        with page.panes._lock:
-            for handle in page.panes._handle_from_pane_id.values():
-                if handle._renderer._kind == "image" and (
-                    pane_id is None or handle.pane_id == pane_id
-                ):
-                    handle._queue_update(dataclasses.asdict(handle._props))
-
-    def _handle_rendering_settings(
-        self, client_id: ClientId, message: _messages.RenderingSettingsMessage
-    ) -> None:
-        if message.rendering not in ("auto", "performance", "quality") or message.image_fit not in (
-            "fit",
-            "fill",
-            "stretch",
-        ):
-            return
-        with self._client_lock:
-            client = self._connected_clients.get(client_id)
-        if client is None:
-            return
-        with client._pane_size_lock:
-            changed = (client._rendering, client._image_fit) != (
-                message.rendering,
-                message.image_fit,
-            )
-            client._rendering, client._image_fit = message.rendering, message.image_fit
-        state = client._websock_connection._state
-        state.prepare_outgoing = client._prepare_rendering
-        state.rendering_backpressure = True
-        if changed:
-            self._refresh_rendering(client)
-
-    def _handle_pane_viewport(
-        self, client_id: ClientId, message: _messages.PaneViewportMessage
-    ) -> None:
-        if any(type(n) is not int or not 0 <= n <= 8192 for n in (message.width, message.height)):
-            return
-        with self.pages._lock:
-            page = self.pages._page_from_page_id.get(message.page_id)
-        if page is None:
-            return
-        with page.panes._lock:
-            if message.pane_id not in page.panes._handle_from_pane_id:
-                return
-        with self._client_lock:
-            client = self._connected_clients.get(client_id)
-        if client is None or client._websock_connection.delivery_scope() != message.page_id:
-            return
-        with client._pane_size_lock:
-            # Only one page is streamed per client. Bound stale, removed IDs too.
-            key = (message.page_id, message.pane_id)
-            if key not in client._pane_sizes and len(client._pane_sizes) >= 128:
-                client._pane_sizes.pop(next(iter(client._pane_sizes)))
-            previous = client._pane_sizes.get(key)
-            client._pane_sizes[key] = message.width, message.height
-        if previous != (message.width, message.height) and message.width and message.height:
-            self._refresh_rendering(client, message.pane_id)
 
     def _handle_client_ping(
         self, client_id: ClientId, message: _messages.ClientPingMessage

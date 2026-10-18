@@ -12,8 +12,8 @@ const copyingDecoder: HybridZstdDecoder = {
   decode: (data) => data.slice(),
 };
 
-function frame(envelope: unknown): ArrayBuffer {
-  const payload = encode(envelope);
+function frame(messages: unknown[]): ArrayBuffer {
+  const payload = encode(messages);
   const buffer = new ArrayBuffer(HYBRID_HEADER_BYTES + payload.byteLength);
   new DataView(buffer).setBigUint64(0, BigInt(payload.byteLength), true);
   new Uint8Array(buffer).set(payload, HYBRID_HEADER_BYTES);
@@ -28,12 +28,12 @@ const update = {
 
 describe("decodeHybridMessage", () => {
   it("decodes the messages of one frame", () => {
-    const buffer = frame({ messages: [update], timestampSec: 12.5 });
+    const buffer = frame([update]);
     expect(decodeHybridMessage(buffer, copyingDecoder)).toEqual([update]);
   });
 
   it("hands the decoder only the compressed bytes and their decompressed size", () => {
-    const buffer = frame({ messages: [], timestampSec: 0 });
+    const buffer = frame([]);
     const calls: [number, number][] = [];
     decodeHybridMessage(buffer, {
       decode: (data, size) => {

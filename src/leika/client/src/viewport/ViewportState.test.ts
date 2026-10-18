@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  VIEWPORT_ROOT_PANE_ID,
-  collectViewportPaneIds,
-  dropViewportPane,
-} from "./layoutModel";
+import { collectViewportPaneIds, dropViewportPane } from "./layoutModel";
 import {
   activeViewportPageStorageKey,
   isViewportPageReady,
@@ -120,7 +116,7 @@ function imageDeclaration(
       fit: "fit",
     },
     placement: "right",
-    relative_to: VIEWPORT_ROOT_PANE_ID,
+    relative_to: null,
     equalize_group: [],
     ...overrides,
   };
@@ -135,25 +131,22 @@ function viserDeclaration(
     page_id: DEFAULT_PAGE_ID,
     pane_id: paneId,
     props: {
-      _url: null,
-      _port: 8080,
+      _url: "/_leika/viser/1/",
       title: paneId,
       visible: true,
       loading: false,
     },
     placement: "right",
-    relative_to: VIEWPORT_ROOT_PANE_ID,
+    relative_to: null,
     equalize_group: [],
     ...overrides,
   };
 }
 
-describe("createViewportState hidden root lifecycle", () => {
-  it("uses a blank root only while there are no visible content panes", () => {
+describe("createViewportState pane lifecycle", () => {
+  it("leaves the layout empty while no pane is visible", () => {
     const { actions, getState } = createViewportHarness();
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
 
     actions.addPane(imageDeclaration("first"));
     expect(collectViewportPaneIds(getState().layout)).toEqual(["first"]);
@@ -166,18 +159,14 @@ describe("createViewportState hidden root lifecycle", () => {
 
     actions.removePane("first");
     actions.removePane("second");
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
   });
 
   it("removes hidden panes and deterministically restores them", () => {
     const { actions, getState } = createViewportHarness();
     actions.addPane(imageDeclaration("image"));
     actions.updatePane("image", { visible: false });
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
     actions.updatePane("image", { visible: true });
     expect(collectViewportPaneIds(getState().layout)).toEqual(["image"]);
   });
@@ -249,16 +238,15 @@ describe("createViewportState hidden root lifecycle", () => {
     expect(replaced.props._data[0]).toBe(99);
   });
 
-  it("re-points a viser pane between port and URL targets", () => {
+  it("re-points a viser pane between proxied and URL targets", () => {
     const { actions, getState } = createViewportHarness();
     actions.addPane(viserDeclaration("viser"));
     expect(collectViewportPaneIds(getState().layout)).toEqual(["viser"]);
     const layout = getState().layout;
     const url = "http://viser.example.com:9000";
-    actions.updatePane("viser", { _url: url, _port: null });
+    actions.updatePane("viser", { _url: url });
     const pane = getState().panes.viser;
     expect(pane?.kind === "viser" ? pane.props._url : undefined).toBe(url);
-    expect(pane?.kind === "viser" ? pane.props._port : undefined).toBeNull();
     expect(getState().layout).toBe(layout);
   });
 });
@@ -285,15 +273,9 @@ describe("createViewportState persistence", () => {
     ).toBe(true);
 
     actions.setPersistenceWorkspace("workspace-b");
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
     actions.setPersistenceWorkspace("workspace-a");
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-      "b",
-      "a",
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual(["b", "a"]);
     expect(getState().panes.a).toBeUndefined();
     actions.addPane(imageDeclaration("a"));
     actions.addPane(imageDeclaration("b"));
@@ -310,9 +292,7 @@ describe("createViewportState persistence", () => {
     const { actions, getState } = createViewportHarness(storage);
     actions.setPersistenceServer("ws://server");
     actions.setPersistenceWorkspace("broken");
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
   });
 });
 
@@ -331,9 +311,7 @@ describe("createViewportState snapshot reconciliation", () => {
     const { actions, getState } = createViewportHarness();
     actions.setPaneSnapshot(["future"]);
     expect(getState().panes.future).toBeUndefined();
-    expect(collectViewportPaneIds(getState().layout)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(collectViewportPaneIds(getState().layout)).toEqual([]);
     actions.addPane(imageDeclaration("future"));
     expect(collectViewportPaneIds(getState().layout)).toEqual(["future"]);
   });
@@ -607,9 +585,7 @@ describe("createViewportState pages", () => {
     expect(coldTransition.transitionPage?.pageId).toBe(DEFAULT_PAGE_ID);
     expect(coldTransition.transitionPage?.panes.main?.kind).toBe("image");
     expect(coldTransition.warmPage).toBeNull();
-    expect(Object.keys(coldTransition.pages.analysis.panes)).toEqual([
-      VIEWPORT_ROOT_PANE_ID,
-    ]);
+    expect(Object.keys(coldTransition.pages.analysis.panes)).toEqual([]);
 
     viewportActions.beginPageStream("diagnostics", 4);
     viewportActions.addPane(
@@ -767,17 +743,17 @@ describe("createViewportState pages", () => {
 
     expect(
       collectViewportPaneIds(getViewportState().pages.default.layout),
-    ).toEqual([VIEWPORT_ROOT_PANE_ID, "saved"]);
+    ).toEqual(["saved"]);
     expect(
       collectViewportPaneIds(getViewportState().pages.analysis.layout),
-    ).toEqual([VIEWPORT_ROOT_PANE_ID]);
+    ).toEqual([]);
 
     // A live client sees PageCreate + the page's empty baseline before the
     // caller can add panes. That bootstrap must not erase the saved position.
     viewportActions.setPaneSnapshot(DEFAULT_PAGE_ID, []);
     expect(
       collectViewportPaneIds(getViewportState().pages.default.layout),
-    ).toEqual([VIEWPORT_ROOT_PANE_ID]);
+    ).toEqual([]);
     viewportActions.addPane(imageDeclaration("saved"));
     expect(
       collectViewportPaneIds(getViewportState().pages.default.layout),
@@ -881,7 +857,7 @@ it("replaces a video pane's source in place", () => {
     page_id: DEFAULT_PAGE_ID,
     pane_id: "videos",
     placement: "right" as const,
-    relative_to: VIEWPORT_ROOT_PANE_ID,
+    relative_to: null,
     equalize_group: [],
     props: {
       _url: "/task.mp4",

@@ -1410,7 +1410,9 @@ class _ViewportPaneCreateMessage(
     page_id: str
     pane_id: str
     placement: Literal["left", "right", "top", "bottom"]
-    relative_to: str
+    relative_to: Optional[str]
+    """Pane to split beside; None, or a pane the browser no longer shows, means
+    its last pane, and a pane added to an empty workspace fills it."""
     equalize_group: Tuple[str, ...]
     """Sibling pane IDs whose combined share, including this pane's, is
     redistributed equally on insertion. Empty for standalone panes."""
@@ -1517,11 +1519,9 @@ class ViewportVideoMessage(_ViewportPaneCreateMessage):
 class ViewportViserProps:
     """Properties for an embedded viser pane."""
 
-    _url: Optional[str]
-    """Absolute embed URL, rendered near-verbatim. None for port-based targets."""
-    _port: Optional[int]
-    """Viser server port; the client derives the host from the page's hostname.
-    None for URL-based targets. Exactly one of _url/_port is set."""
+    _url: str
+    """Embed URL: Leika's same-origin proxy path for a local Viser server, or
+    the caller's absolute URL, rendered near-verbatim."""
     title: str
     visible: bool
     loading: bool | str
@@ -1567,7 +1567,6 @@ class ViewportPaneSnapshotMessage(_PageScopedMessage):
     """Authoritative pane IDs used to reconcile browser-persisted layouts."""
 
     page_id: str
-    # The hidden layout root sentinel is implicit and deliberately excluded.
     pane_ids: Tuple[str, ...]
 
     @override
@@ -1725,24 +1724,6 @@ class FileTransferPartAck(Message):
     transfer_uuid: str
     transferred_bytes: int
     total_bytes: int
-
-
-@dataclasses.dataclass
-class RenderingSettingsMessage(Message):
-    """Browser-owned rendering preferences, resent on every connection."""
-
-    rendering: Literal["auto", "performance", "quality"]
-    image_fit: Literal["fit", "fill", "stretch"]
-
-
-@dataclasses.dataclass
-class PaneViewportMessage(Message):
-    """Browser pane content dimensions in physical pixels; zero when hidden."""
-
-    page_id: str
-    pane_id: str
-    width: int
-    height: int
 
 
 @dataclasses.dataclass

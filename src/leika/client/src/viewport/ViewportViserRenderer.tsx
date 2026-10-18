@@ -11,14 +11,9 @@ export function ViewportViserRenderer({ pane }: { pane: ViewportViserPane }) {
   // Viser renders the darkMode URL flag, so the embed follows Leika's theme.
   const colorScheme = useColorScheme();
   const src = React.useMemo(() => {
-    // Port-based targets connect to the viser server on whatever hostname
-    // this page was loaded from; the Python-side host is unusable because
-    // viser binds 0.0.0.0. URL targets are used near-verbatim (new URL()
-    // normalizes, e.g. adding a trailing slash).
-    const base =
-      pane.props._url !== null
-        ? pane.props._url
-        : `${window.location.protocol}//${window.location.hostname}:${pane.props._port}/`;
+    // A same-origin proxy path or an absolute URL, used near-verbatim (new
+    // URL() normalizes, e.g. adding a trailing slash).
+    const base = pane.props._url;
     try {
       // Viser's darkMode flag is presence-based, so following Leika's theme
       // means removing it as well as adding it.
@@ -32,7 +27,7 @@ export function ViewportViserRenderer({ pane }: { pane: ViewportViserPane }) {
       // iframe src it just fails to load, minus theme forwarding.
       return base;
     }
-  }, [pane.props._url, pane.props._port, colorScheme]);
+  }, [pane.props._url, colorScheme]);
   return (
     <div
       style={{

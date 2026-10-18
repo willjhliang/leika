@@ -806,7 +806,7 @@ export interface ViewportPaneMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: { title: string; visible: boolean; loading: boolean | string };
 }
@@ -819,7 +819,7 @@ export interface ViewportEmptyMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: { title: string; visible: boolean; loading: boolean | string };
 }
@@ -832,7 +832,7 @@ export interface ViewportImageMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _data: Uint8Array<ArrayBuffer>;
@@ -852,7 +852,7 @@ export interface ViewportMatplotlibMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _svg: string;
@@ -870,7 +870,7 @@ export interface ViewportPlotlyMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _plotly_json_str: string;
@@ -889,7 +889,7 @@ export interface ViewportVideoMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _url: string;
@@ -913,11 +913,10 @@ export interface ViewportViserMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
-    _url: string | null;
-    _port: number | null;
+    _url: string;
     title: string;
     visible: boolean;
     loading: boolean | string;
@@ -1086,26 +1085,6 @@ export interface FileTransferPartAck {
   transfer_uuid: string;
   transferred_bytes: number;
   total_bytes: number;
-}
-/** Browser-owned rendering preferences, resent on every connection.
- *
- * (automatically generated)
- */
-export interface RenderingSettingsMessage {
-  type: "RenderingSettingsMessage";
-  rendering: "auto" | "performance" | "quality";
-  image_fit: "fit" | "fill" | "stretch";
-}
-/** Browser pane content dimensions in physical pixels; zero when hidden.
- *
- * (automatically generated)
- */
-export interface PaneViewportMessage {
-  type: "PaneViewportMessage";
-  page_id: string;
-  pane_id: string;
-  width: number;
-  height: number;
 }
 /** Message from client->server asking to be answered as soon as possible.
  *
@@ -1303,8 +1282,6 @@ export type Message =
   | FileTransferPart
   | FileTransferAbort
   | FileTransferPartAck
-  | RenderingSettingsMessage
-  | PaneViewportMessage
   | ClientPingMessage
   | ServerPongMessage
   | RegisterCommandMessage
@@ -1381,4 +1358,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "fb026827e2d1";
+export const LEIKA_PROTOCOL = "210f639dece1";

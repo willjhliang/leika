@@ -15,8 +15,6 @@ import {
 
 export type ViewportSplitDirection = "row" | "column";
 
-export const VIEWPORT_ROOT_PANE_ID = "__leika_root__";
-
 export interface ViewportLayoutPane {
   type: "pane";
   pane_id: string;
@@ -32,10 +30,11 @@ export interface ViewportLayoutSplit {
 
 export type ViewportLayoutNode = ViewportLayoutPane | ViewportLayoutSplit;
 
-/** Versioned persistence contract for a complete viewport layout. */
+/** Versioned persistence contract for a complete viewport layout. A null
+ * root holds no panes, and the workspace shows its background. */
 export interface ViewportLayout {
   version: 1;
-  root: ViewportLayoutNode;
+  root: ViewportLayoutNode | null;
 }
 
 export type ViewportDropRegion = "center" | "top" | "bottom" | "left" | "right";
@@ -56,8 +55,8 @@ export function normalizeViewportWeights(
   if (!Number.isInteger(childCount) || childCount <= 0) return [];
 
   // Already-normalized weights pass through bit-identical, so repeated
-  // normalization (reconnect reconciles, root visibility passes) cannot
-  // introduce epsilon drift that defeats layout equality checks.
+  // normalization (reconnect reconciles, visibility passes) cannot introduce
+  // epsilon drift that defeats layout equality checks.
   if (
     weights.length === childCount &&
     weights.every(isPositiveFinite) &&
@@ -87,7 +86,7 @@ export function normalizeViewportWeights(
 
 /** In-order pane IDs in a layout. */
 export function collectViewportPaneIds(layout: ViewportLayout): string[] {
-  return collectPaneIds(layout.root);
+  return layout.root === null ? [] : collectPaneIds(layout.root);
 }
 
 function collectPaneIds(node: ViewportLayoutNode): string[] {
@@ -99,7 +98,7 @@ export function hasViewportPane(
   layout: ViewportLayout,
   paneId: string,
 ): boolean {
-  return hasPane(layout.root, paneId);
+  return layout.root !== null && hasPane(layout.root, paneId);
 }
 
 function hasPane(node: ViewportLayoutNode, paneId: string): boolean {
@@ -234,23 +233,15 @@ function parseLayout(
  * Membership is reconciled separately when the server snapshot arrives.
  */
 export function normalizeViewportLayout(value: unknown): ViewportLayout {
-  const seenPaneIds = new Set<string>();
   const serializedRoot =
     isRecord(value) && value.version === 1 ? value.root : undefined;
-  let layout = parseLayout(serializedRoot, {
+  const root = parseLayout(serializedRoot, {
     allowedPaneIds: null,
-    seenPaneIds,
+    seenPaneIds: new Set<string>(),
     seenObjects: new WeakSet<object>(),
     visitedNodes: 0,
   });
-
-  if (!seenPaneIds.has(VIEWPORT_ROOT_PANE_ID)) {
-    layout =
-      layout === null
-        ? pane(VIEWPORT_ROOT_PANE_ID)
-        : makeSplit("row", [pane(VIEWPORT_ROOT_PANE_ID), layout], [1, 1]);
-  }
-  return { version: 1, root: layout! };
+  return { version: 1, root };
 }
 
 /**
@@ -259,33 +250,24 @@ export function normalizeViewportLayout(value: unknown): ViewportLayout {
  *
  * Unknown and duplicate leaves are removed. Malformed splits are collapsed,
  * weights are repaired, and missing panes are inserted in deterministic
- * `visiblePaneIds` order. The root is retained as a fallback when no other
- * pane is visible.
+ * `visiblePaneIds` order. With no visible panes the layout is empty.
  */
 export function reconcileViewportLayout(
   value: unknown,
   visiblePaneIds: readonly string[],
-  rootVisible = true,
 ): ViewportLayout {
-  const rootPaneId = VIEWPORT_ROOT_PANE_ID;
-  const contentPaneIds: string[] = [];
-  const uniquePaneIds = new Set<string>();
+  const orderedPaneIds: string[] = [];
+  const allowedPaneIds = new Set<string>();
   for (const paneId of visiblePaneIds) {
     if (
-      contentPaneIds.length >= MAX_LAYOUT_ITEMS - 1 ||
-      paneId === rootPaneId ||
+      orderedPaneIds.length >= MAX_LAYOUT_ITEMS ||
       !isBoundedLayoutId(paneId) ||
-      uniquePaneIds.has(paneId)
+      allowedPaneIds.has(paneId)
     )
       continue;
-    uniquePaneIds.add(paneId);
-    contentPaneIds.push(paneId);
+    allowedPaneIds.add(paneId);
+    orderedPaneIds.push(paneId);
   }
-  const orderedPaneIds = [
-    ...(rootVisible || contentPaneIds.length === 0 ? [rootPaneId] : []),
-    ...contentPaneIds,
-  ];
-  const allowedPaneIds = new Set(orderedPaneIds);
   const seenPaneIds = new Set<string>();
   const serializedRoot =
     isRecord(value) && value.version === 1 ? value.root : undefined;
@@ -296,7 +278,8 @@ export function reconcileViewportLayout(
     visitedNodes: 0,
   });
 
-  const firstPaneId = orderedPaneIds[0]!;
+  const firstPaneId = orderedPaneIds[0];
+  if (firstPaneId === undefined) return { version: 1, root: null };
   if (!seenPaneIds.has(firstPaneId)) {
     layout =
       layout === null
@@ -320,11 +303,11 @@ export function reconcileViewportLayout(
 }
 
 function sameLayoutNode(
-  left: ViewportLayoutNode,
-  right: ViewportLayoutNode,
+  left: ViewportLayoutNode | null,
+  right: ViewportLayoutNode | null,
 ): boolean {
   if (left === right) return true;
-  if (left.type !== right.type) return false;
+  if (left === null || right === null || left.type !== right.type) return false;
   if (left.type === "pane" && right.type === "pane") {
     return left.pane_id === right.pane_id;
   }
@@ -383,11 +366,9 @@ export function removeViewportPane(
   layout: ViewportLayout,
   paneId: string,
 ): ViewportLayout {
-  if (paneId === VIEWPORT_ROOT_PANE_ID) return layout;
-  const root = removePane(layout.root, paneId).layout;
-  // A reconciled layout always contains the protected root sentinel, so removal
-  // cannot empty it. Preserve the input defensively for malformed callers.
-  return root === null || root === layout.root ? layout : { ...layout, root };
+  if (layout.root === null) return layout;
+  const result = removePane(layout.root, paneId);
+  return result.removed ? { ...layout, root: result.layout } : layout;
 }
 
 function regionDirection(
@@ -563,8 +544,29 @@ export function insertViewportPane(
   targetPaneId: string,
   region: Exclude<ViewportDropRegion, "center">,
 ): ViewportLayout {
+  if (layout.root === null) return layout;
   const root = insertPaneAtEdge(layout.root, paneId, targetPaneId, region);
   return root === layout.root ? layout : { ...layout, root };
+}
+
+/**
+ * Place a pane that is not yet in the layout at an edge of `relativeTo`, or
+ * of the last pane when that one is absent. In an empty layout the pane fills
+ * the workspace.
+ */
+export function placeViewportPane(
+  layout: ViewportLayout,
+  paneId: string,
+  relativeTo: string | null,
+  region: Exclude<ViewportDropRegion, "center">,
+): ViewportLayout {
+  if (layout.root === null) return { ...layout, root: pane(paneId) };
+  const paneIds = collectPaneIds(layout.root);
+  const target =
+    relativeTo !== null && paneIds.includes(relativeTo)
+      ? relativeTo
+      : paneIds[paneIds.length - 1];
+  return insertViewportPane(layout, paneId, target, region);
 }
 
 function swapPaneIds(
@@ -600,9 +602,10 @@ export function dropViewportPane(
     return insertViewportPane(layout, paneId, targetPaneId, region);
   }
   if (
+    layout.root === null ||
     paneId === targetPaneId ||
-    !hasViewportPane(layout, paneId) ||
-    !hasViewportPane(layout, targetPaneId)
+    !hasPane(layout.root, paneId) ||
+    !hasPane(layout.root, targetPaneId)
   ) {
     return layout;
   }
@@ -653,6 +656,7 @@ export function setViewportSplitWeights(
   path: ViewportLayoutPath,
   weights: readonly unknown[],
 ): ViewportLayout {
+  if (layout.root === null) return layout;
   const root = setSplitWeightsAtPath(layout.root, path, weights);
   return root === layout.root ? layout : { ...layout, root };
 }
@@ -701,7 +705,7 @@ export function equalizeViewportPanes(
   layout: ViewportLayout,
   paneIds: readonly string[],
 ): ViewportLayout {
-  if (paneIds.length < 2) return layout;
+  if (paneIds.length < 2 || layout.root === null) return layout;
   const root = equalizePanesInNode(layout.root, new Set(paneIds));
   return root === layout.root ? layout : { ...layout, root };
 }

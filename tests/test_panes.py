@@ -13,6 +13,8 @@ import leika
 import leika._messages as messages
 from leika._panes import _viser_embed_target
 
+from .utils import queued_messages
+
 
 def test_image_fit_defers_to_the_viewer_until_python_names_one(
     server: leika.Server,
@@ -127,6 +129,23 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
         server.panes.add_image(original, pane_id=cast(Any, 4))
 
 
+def test_has_viewers_follows_visibility_and_page_subscriptions(server: leika.Server) -> None:
+    pane = server.panes.add_image(np.zeros((2, 2, 3), dtype=np.uint8))
+    scope: list[str | None] = [None]
+    connection = SimpleNamespace(delivery_scope=lambda: scope[0])
+    server._connected_clients[1] = cast(Any, SimpleNamespace(_websock_connection=connection))
+    try:
+        assert not pane.has_viewers
+        scope[0] = "another-page"
+        assert not pane.has_viewers
+        scope[0] = pane._panes._page_id
+        assert pane.has_viewers
+        pane.visible = False
+        assert not pane.has_viewers
+    finally:
+        del server._connected_clients[1]
+
+
 def test_row_column_and_grid_helpers(server: leika.Server) -> None:
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     row = server.panes.add_row()
@@ -163,14 +182,14 @@ def test_image_update_can_change_loading_in_one_message(server: leika.Server) ->
     original = np.zeros((2, 3, 3), dtype=np.uint8)
     pane = server.panes.add_image(original, pane_id="coupled", loading=True)
     buffer = server._websock_server.get_message_buffer()
-    before_ids = set(buffer.message_from_id)
+    before_ids = set(queued_messages(buffer))
 
     replacement = np.full((3, 4, 3), 127, dtype=np.uint8)
     pane.update(replacement, loading=False)
 
     queued = [
         message
-        for message_id, message in buffer.message_from_id.items()
+        for message_id, message in queued_messages(buffer).items()
         if message_id not in before_ids
     ]
     assert len(queued) == 1
@@ -322,11 +341,11 @@ def test_matplotlib_sources_must_support_weak_references_transactionally(
             raise AssertionError("non-weak source reached renderer")
 
     buffer = server._websock_server.get_message_buffer()
-    before_messages = buffer.message_from_id.copy()
+    before_messages = queued_messages(buffer)
     with pytest.raises(TypeError, match="weak reference"):
         server.panes.add_matplotlib(NonWeakFigure(), pane_id="non-weak")
     assert "non-weak" not in server.panes._handle_from_pane_id
-    assert buffer.message_from_id == before_messages
+    assert queued_messages(buffer) == before_messages
 
     class Figure:
         def savefig(self, output: Any, *, format: str) -> None:
@@ -335,13 +354,13 @@ def test_matplotlib_sources_must_support_weak_references_transactionally(
 
     source = Figure()
     pane = server.panes.add_matplotlib(source, pane_id="weak-source")
-    before_messages = buffer.message_from_id.copy()
+    before_messages = queued_messages(buffer)
     before_svg = pane._props._svg
     with pytest.raises(TypeError, match="weak reference"):
         pane.figure = NonWeakFigure()
     assert pane.figure is source
     assert pane._props._svg == before_svg
-    assert buffer.message_from_id == before_messages
+    assert queued_messages(buffer) == before_messages
 
 
 def test_matplotlib_pane_does_not_retain_the_caller_figure(
@@ -367,19 +386,15 @@ def test_matplotlib_pane_does_not_retain_the_caller_figure(
 
 
 def test_viser_target_normalization() -> None:
-    assert _viser_embed_target("http://viser.example.com:8080") == (
-        "http://viser.example.com:8080",
-        None,
-    )
-    assert _viser_embed_target("https://tunnel.example.com/scene") == (
-        "https://tunnel.example.com/scene",
-        None,
+    assert _viser_embed_target("http://viser.example.com:8080") == "http://viser.example.com:8080"
+    assert (
+        _viser_embed_target("https://tunnel.example.com/scene")
+        == "https://tunnel.example.com/scene"
     )
 
-    # ViserServer duck type: only the port is kept, since viser binds 0.0.0.0
-    # and the browser derives the host from the page's own hostname.
+    # ViserServer duck type: its address, which Leika proxies.
     fake = SimpleNamespace(get_port=lambda: 8080, get_host=lambda: "0.0.0.0")
-    assert _viser_embed_target(fake) == (None, 8080)
+    assert _viser_embed_target(fake) == ("0.0.0.0", 8080)
 
     with pytest.raises(ValueError, match="absolute http"):
         _viser_embed_target("localhost:8080")
@@ -560,7 +575,7 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
     anchor = server.panes.add_image(frame, pane_id="boundary-anchor", fit="fill")
     buffer = server._websock_server.get_message_buffer()
     before_handles = server.panes._handle_from_pane_id.copy()
-    before_messages = buffer.message_from_id.copy()
+    before_messages = queued_messages(buffer)
 
     with pytest.raises(ValueError, match="format must be"):
         server.panes.add_image(frame, pane_id="subclass-format", format=cast(Any, String("png")))
@@ -589,7 +604,7 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
 
     assert anchor.fit == "fill"
     assert server.panes._handle_from_pane_id == before_handles
-    assert buffer.message_from_id == before_messages
+    assert queued_messages(buffer) == before_messages
 
 
 def test_viser_minimize_and_reported_port_are_strict(server: leika.Server) -> None:

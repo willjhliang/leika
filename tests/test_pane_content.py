@@ -12,9 +12,11 @@ import pytest
 
 from leika import _messages, _panes
 
+from .utils import queued_messages
+
 
 def retained(server):
-    return tuple(server._websock_server.get_message_buffer().message_from_id.values())
+    return tuple(queued_messages(server._websock_server.get_message_buffer()).values())
 
 
 def test_general_pane_replaces_content_and_replay_without_changing_identity(server):
@@ -32,6 +34,8 @@ def test_general_pane_replaces_content_and_replay_without_changing_identity(serv
     messages = retained(server)
     declarations = [m for m in messages if isinstance(m, _messages.ViewportPaneMessage)]
     assert [m.pane_id for m in declarations] == [p.pane_id for p in panes]
+    # The first pane fills the empty workspace; later ones split beside it.
+    assert declarations[0].relative_to is None
     assert declarations[1].relative_to == "slot-0"
     assert not any(
         isinstance(m, (_messages.ViewportImageMessage, _messages.ViewportVideoMessage))
@@ -159,7 +163,7 @@ def test_replacement_preserves_refresh_bindings_and_latest_metadata(server, monk
     pane.set_video("/movie.mp4")
     assert (pane.title, pane.visible, pane.loading) == ("Latest", False, "Preparing")
     updates = [m for m in retained(server) if isinstance(m, _messages.ViewportPaneUpdateMessage)]
-    assert updates[-1].updates["_refresh_controls"] == (control._impl.uuid,)
+    assert updates[-1].updates["_refresh_controls"] == [control._impl.uuid]
     pane.clear(loading=False)
     assert pane.loading is False and pane.title == "Latest"
 

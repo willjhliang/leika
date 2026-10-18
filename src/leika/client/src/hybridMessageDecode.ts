@@ -11,7 +11,7 @@ export interface HybridZstdDecoder {
 }
 
 /** Decode one server-to-browser frame: a size header, then a zstd frame of
- * the MessagePack envelope `{messages, timestampSec}`. */
+ * the MessagePack array of messages. */
 export function decodeHybridMessage(
   buffer: ArrayBuffer,
   zstdDecoder: HybridZstdDecoder,
@@ -21,5 +21,5 @@ export function decodeHybridMessage(
     new Uint8Array(buffer, HYBRID_HEADER_BYTES),
     decompressedSize,
   );
-  return (decode(decompressed) as { messages: Message[] }).messages;
+  return decode(decompressed) as Message[];
 }

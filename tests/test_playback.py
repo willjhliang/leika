@@ -10,6 +10,8 @@ import leika
 from leika import _messages
 from leika._transport._websocket import ClientId
 
+from .utils import queued_messages
+
 
 def test_playback_clock_pause_loop_and_buffering(server: leika.Server) -> None:
     bar = server.gui.add_playback(duration=2, fps=20, loop=False)
@@ -134,7 +136,7 @@ def test_playback_retains_one_valid_state_when_duration_changes(server: leika.Se
     bar.label = "Simulation"
     updates = [
         message.updates
-        for message in server._websock_server.get_message_buffer().message_from_id.values()
+        for message in queued_messages(server._websock_server.get_message_buffer()).values()
         if isinstance(message, _messages.GuiUpdateMessage) and message.uuid == bar.id
     ]
     assert len(updates) == 1

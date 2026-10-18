@@ -738,8 +738,3 @@ def test_tunnel_close_failure_does_not_skip_owned_shutdown_cleanup() -> None:
     server_thread = server._websock_server._server_thread
     assert server_thread is not None and not server_thread.is_alive()
     server.stop()
-
-
-def test_delivery_backpressure_rejects_non_boolean_before_start() -> None:
-    with pytest.raises(TypeError, match="delivery_backpressure must be a bool"):
-        leika.Server(host="127.0.0.1", port=0, delivery_backpressure="yes")  # type: ignore[arg-type]

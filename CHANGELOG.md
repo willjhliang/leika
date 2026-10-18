@@ -94,12 +94,9 @@ versioning.
   including its worker assets. The proxy now uses HTTPcore instead of aiohttp;
   image decoding is restricted to Leika's PNG/JPEG formats.
 
-- Settings **Rendering** offers persistent Auto, Performance, and Quality presets
-  for native image panes. Auto adapts to measured connection throughput, independently
-  of display size, preserving JPEG quality and at least 70% of source dimensions.
-  Encoding and receipt pacing are per browser; slow
-  connections do not lower other viewers' detail. Preset/size changes refresh
-  paused images. `PaneHandle.has_viewers` lets producers skip hidden routine work.
+- Each browser acknowledges a batch before it is sent the next from the same
+  queue, so queued updates coalesce on slow connections instead of building up.
+  `PaneHandle.has_viewers` lets producers skip hidden routine work.
 
 - Markdown figures appear in document order as each image becomes ready,
   without waiting for later images. Reopened previews mount the first blocks

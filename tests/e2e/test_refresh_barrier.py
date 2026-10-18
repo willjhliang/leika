@@ -57,8 +57,6 @@ def test_local_clear_drops_inflight_frames_rapid_changes_and_reconnect(
     page_errors,
 ):
     server = leika_server
-    # Exercise the same delivery mode as the LWM visualizer.
-    server._websock_server._delivery_backpressure = True
     image = np.random.default_rng(7).integers(0, 255, (600, 900, 3), dtype=np.uint8)
     pane = server.panes.add_image(image, pane_id="video", format="jpeg", jpeg_quality=85)
     choose = server.gui.add_button("Choose dataset")

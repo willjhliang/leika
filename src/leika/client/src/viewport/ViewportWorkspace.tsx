@@ -5,7 +5,6 @@ import { motionExceedsThreshold } from "../dragUtils";
 import { bindPointerGesture, tryCapture, tryRelease } from "../pointerGesture";
 import { prefersReducedMotion } from "../utils/motion";
 import {
-  VIEWPORT_ROOT_PANE_ID,
   type ViewportDropRegion,
   type ViewportLayout,
   dropViewportPane,
@@ -26,7 +25,7 @@ import {
   resizeLayoutAtGridLine,
 } from "./gridLayout";
 import { initialViewportLayout, isViewportPageReady } from "./ViewportState";
-import { panePositionStyle, paneTitle } from "./workspaceGeometry";
+import { panePositionStyle } from "./workspaceGeometry";
 import { ViewportPaneHost } from "./ViewportPaneHost";
 import { ViewportDivider } from "./ViewportDivider";
 import { displayedViewportPage } from "./viewportSelectors";
@@ -200,7 +199,7 @@ export function ViewportWorkspace() {
       const pane = displayedViewportPage(viewer.useViewport.get())?.panes[
         paneId
       ];
-      return pane === undefined ? "viewport pane" : paneTitle(pane);
+      return pane === undefined ? "viewport pane" : pane.props.title;
     },
     [viewer.useViewport],
   );
@@ -659,9 +658,6 @@ export function ViewportWorkspace() {
     [getPaneTitle, interactive, layout, viewer.viewportActions],
   );
 
-  const pristineRootOnly =
-    displayLayout.root.type === "pane" &&
-    displayLayout.root.pane_id === VIEWPORT_ROOT_PANE_ID;
   const canvasWidth = grid.columns * grid.cellWidth;
   const canvasHeight = grid.rows * grid.cellHeight;
   // Visibility changes layout, not renderer ownership. In particular an iframe
@@ -697,7 +693,8 @@ export function ViewportWorkspace() {
           minWidth: "100%",
           minHeight: "100%",
           overflow: "hidden",
-          background: "var(--border)",
+          // The seams between panes; an empty workspace shows its background.
+          background: displayLayout.root === null ? undefined : "var(--border)",
         }}
       >
         {retainedPaneIds.map((paneId) => {
@@ -712,7 +709,6 @@ export function ViewportWorkspace() {
               geometryTransition={paneGeometryTransition}
               isDragging={dragIndicator?.paneId === paneId}
               motionEnabled={motionEnabled}
-              hideChrome={pristineRootOnly || paneId === VIEWPORT_ROOT_PANE_ID}
               onHeaderPointerDown={beginPaneDrag}
               onHeaderKeyDown={swapPaneWithKeyboard}
             />

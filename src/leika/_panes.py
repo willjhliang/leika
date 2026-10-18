@@ -40,9 +40,6 @@ Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
 PaneLoading: TypeAlias = bool | str
 PaneId = NewType("PaneId", str)
 
-_ROOT_PANE_ID = "__leika_root__"
-"""Hidden layout sentinel used when no data pane can anchor a split."""
-
 
 def _validate_loading(value: object) -> PaneLoading:
     if type(value) is bool:
@@ -84,13 +81,12 @@ def _video_url(panes: Panes, source: Path | str) -> str:
     return source
 
 
-def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
-    """Normalize a viser target into ``(url, port)``, exactly one set.
+def _viser_embed_target(target: str | Any) -> str | tuple[str, int]:
+    """Normalize a viser target into an embed URL or a ``(host, port)`` address.
 
     Accepts an absolute http(s) URL, used near-verbatim, or a viser
     ``ViserServer``-like object, duck-typed on callable ``get_port()`` and
-    ``get_host()``. Only the port is returned for server objects; Leika
-    proxies them through its own origin.
+    ``get_host()``, whose address Leika proxies through its own origin.
     """
 
     if isinstance(target, str):
@@ -121,7 +117,7 @@ def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
         authority = host if port is None else f"{host}:{port}"
         return urllib.parse.urlunsplit(
             (parts.scheme.lower(), authority, parts.path, parts.query, "")
-        ), None
+        )
 
     get_port = getattr(target, "get_port", None)
     get_host = getattr(target, "get_host", None)
@@ -138,7 +134,7 @@ def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
             )
         if not 1 <= port <= 65535:
             raise ValueError(f"Viser server reported an invalid port: {port!r}.")
-        return None, port
+        return cast(str, get_host()), port
 
     raise TypeError(
         "target must be a viser ViserServer (an object with get_port() and "
@@ -344,7 +340,7 @@ class PaneHandle:
                             page_id=panes._page_id,
                             pane_id=self._pane_id,
                             placement="right",
-                            relative_to=_ROOT_PANE_ID,
+                            relative_to=None,
                             equalize_group=(),
                             props=props,
                         )
@@ -424,14 +420,15 @@ class PaneHandle:
 
     @property
     def has_viewers(self) -> bool:
-        """Whether a connected browser may be displaying this pane.
+        """Whether this pane is visible and a connected browser shows its page.
 
-        Unknown dimensions count as visible until the browser reports them.
         Applications can skip expensive routine work when False; explicit
         selection/loading updates should still publish their new content.
         """
+        page_id = self._panes._page_id
         return self.visible and any(
-            client.pane_size(self) != (0, 0) for client in self._panes._owner.clients.values()
+            client._websock_connection.delivery_scope() == page_id
+            for client in self._panes._owner.clients.values()
         )
 
     def invalidate_on(self, *controls: Any) -> None:
@@ -816,7 +813,7 @@ class ViserPaneHandle(PaneHandle):
     _kind = "viser"
     _props_type = _messages.ViewportViserProps
     _message_type = _messages.ViewportViserMessage
-    _update_fields = ("_url", "_port")
+    _update_fields = ("_url",)
 
     @staticmethod
     def _validate(minimize_gui: object) -> dict[str, Any]:
@@ -828,16 +825,15 @@ class ViserPaneHandle(PaneHandle):
     def _prepare(
         panes: Panes, value: Any, settings: dict[str, Any], previous: Any
     ) -> tuple[dict[str, Any], Any]:
-        url, port = _viser_embed_target(value)
-        if port is None:
-            return {"_url": url, "_port": None}, None
-        address = (value.get_host(), port)
+        address = _viser_embed_target(value)
+        if isinstance(address, str):
+            return {"_url": address}, None
         if isinstance(previous, _ViserRoute) and previous.address == address:
             # The same server keeps its route, so the embedded client stays loaded.
             route = previous
         else:
             route = _ViserRoute(panes._websock_interface._viser_proxy.register(*address), address)
-        return {"_url": route.path, "_port": None}, route
+        return {"_url": route.path}, route
 
     @staticmethod
     def _published(value: Any, settings: dict[str, Any]) -> None:
@@ -845,7 +841,7 @@ class ViserPaneHandle(PaneHandle):
             _minimize_viser_gui(value)
 
     @property
-    def url(self) -> str | None:
+    def url(self) -> str:
         """Embed URL shown in the pane; a same-origin path for local servers,
         or the explicit URL supplied by the caller."""
         with self._panes._lock:
@@ -878,7 +874,7 @@ class _PaneAdder:
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Edge, anchor pane, and equally divided siblings for the next pane. Lock held."""
         raise NotImplementedError
 
@@ -904,8 +900,6 @@ class _PaneAdder:
             raise TypeError("visible must be a bool")
         loading = _validate_loading(loading)
         pane_id = str(uuid.uuid4()) if pane_id is None else validate_layout_id(pane_id, "Pane ID")
-        if pane_id == _ROOT_PANE_ID:
-            raise ValueError(f"Pane ID {pane_id!r} is reserved.")
         fields, source = handle_type._prepare(panes, value, settings, None)
         try:
             with panes._lock:
@@ -1309,7 +1303,7 @@ class PaneGroup(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Attach to the group's last visible member and equalize with the visible ones.
 
         Hidden and removed members cannot anchor placement, so with none
@@ -1368,7 +1362,7 @@ class PaneGrid(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         return self._next_group()._place(placement, relative_to)
 
     def _placed(self, handle: PaneHandle) -> None:
@@ -1398,21 +1392,21 @@ class Panes(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         placement = "right" if placement is None else placement
         if type(placement) is not str or placement not in ("left", "right", "top", "bottom"):
             raise ValueError("placement must be left, right, top, or bottom.")
         return placement, self._resolve_relative_to(relative_to), ()
 
     def _visible_pane_ids(self) -> set[str]:
-        return {_ROOT_PANE_ID} | {
+        return {
             pane_id
             for pane_id, handle in self._handle_from_pane_id.items()
             if handle._props.visible
         }
 
-    def _resolve_relative_to(self, relative_to: str | None) -> str:
-        """Resolve ``None`` placement to the latest visible pane. Lock held."""
+    def _resolve_relative_to(self, relative_to: str | None) -> str | None:
+        """Resolve ``None`` placement to the latest visible pane, if any. Lock held."""
         if relative_to is not None:
             relative_to = validate_layout_id(relative_to, "relative_to")
             if relative_to not in self._visible_pane_ids():
@@ -1421,7 +1415,7 @@ class Panes(_PaneAdder):
         for pane_id, handle in reversed(self._handle_from_pane_id.items()):
             if handle._props.visible:
                 return pane_id
-        return _ROOT_PANE_ID
+        return None
 
     def _snapshot_message(
         self, pane_ids: tuple[str, ...] | None = None

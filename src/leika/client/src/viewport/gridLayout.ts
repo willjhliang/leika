@@ -82,8 +82,9 @@ export function gridSpecForLayout(
   layout: ViewportLayout,
   workspace: WorkspaceSize,
 ): GridSpec {
-  const minimumColumns = minimumSubtreeSpan(layout.root, "row");
-  const minimumRows = minimumSubtreeSpan(layout.root, "column");
+  const { root } = layout;
+  const minimumColumns = root === null ? 0 : minimumSubtreeSpan(root, "row");
+  const minimumRows = root === null ? 0 : minimumSubtreeSpan(root, "column");
   const columns =
     Math.max(1, Math.ceil(minimumColumns / NOMINAL_GRID_DIVISIONS)) *
     NOMINAL_GRID_DIVISIONS;
@@ -149,7 +150,7 @@ function dividerKey(path: ViewportLayoutPath, dividerIndex: number): string {
 
 /** Resolve layout weights to integer internal grid lines and pane rectangles. */
 export function computeLayoutGeometry(
-  root: ViewportLayoutNode,
+  root: ViewportLayoutNode | null,
   columns: number,
   rows: number,
 ): LayoutGeometry {
@@ -206,7 +207,8 @@ export function computeLayoutGeometry(
     });
   };
 
-  visit(root, { x: 0, y: 0, width: columns, height: rows }, []);
+  if (root !== null)
+    visit(root, { x: 0, y: 0, width: columns, height: rows }, []);
   return { panes, dividers };
 }
 

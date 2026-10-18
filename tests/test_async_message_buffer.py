@@ -12,7 +12,7 @@ import pytest
 from leika import _messages
 from leika._transport import _message_buffer as buffer_impl
 from leika._transport._message_buffer import AsyncMessageBuffer, MessageWindow
-from leika._transport._websocket import _ClientHandleState, _message_producer
+from leika._transport._websocket import _message_producer
 
 Windows = AsyncGenerator[MessageWindow, None]
 _PANE_PROPS = _messages.ViewportEmptyProps("Pane", True, False)
@@ -55,8 +55,19 @@ def _live_buffer(persistent: bool = True, **kwargs: Any) -> AsyncMessageBuffer:
     )
 
 
-def _retained(buffer: AsyncMessageBuffer) -> list[_messages.Message]:
-    return list(buffer.message_from_id.values())
+def _retained(buffer: AsyncMessageBuffer) -> list[bytes]:
+    """The bytes of the queued or retained messages, in order."""
+    with buffer._lock:
+        return [record.data for record in buffer._queued.values()]
+
+
+def _wire(*messages: _messages.Message) -> list[bytes]:
+    """The bytes each message is queued as."""
+    return [message.encode() for message in messages]
+
+
+def _sent(window: MessageWindow) -> list[bytes]:
+    return [record.data for record in window.messages]
 
 
 def _streams(page_id: str, generation: int) -> tuple[_messages.Message, _messages.Message]:
@@ -86,13 +97,13 @@ def _text(uuid: str, container_uuid: str = "root") -> _messages.GuiTextMessage:
 
 async def _receive(
     buffer: AsyncMessageBuffer, windows: Windows, client_id: int, count: int
-) -> list[_messages.Message]:
-    """Exactly ``count`` messages from consecutive windows, each marked sent."""
-    received: list[_messages.Message] = []
+) -> list[bytes]:
+    """Exactly ``count`` messages' bytes from consecutive windows, each marked sent."""
+    received: list[bytes] = []
     while len(received) < count:
         window = await asyncio.wait_for(windows.__anext__(), timeout=1)
         buffer.mark_messages_sent(client_id, window.last_message_id)
-        received.extend(record.message for record in window.messages)
+        received.extend(_sent(window))
     assert len(received) == count
     return received
 
@@ -127,18 +138,18 @@ def test_closed_buffer_discards_queued_messages_and_rejects_new_ones() -> None:
     assert buffer.reserve_file_bytes(3)
     assert buffer.push_reserved_file_message(_messages.FileTransferPart(None, "t", 0, b"abc"), 3)
     assert buffer.push(_messages.GuiRemoveMessage("removed"))
-    assert len(buffer.message_from_id) == 2
+    assert len(buffer) == 2
 
     buffer.set_done()
 
     # Queued file parts give back the capacity they held.
     assert (buffer._file_bytes, buffer._file_parts) == (0, 0)
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
     assert not buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
     assert not buffer.push_many([_messages.ClientPingMessage(sent_ms=2.0)])
     assert not buffer.request_delivery_scope(1, "page", *_streams("page", 1))
     assert not buffer.reserve_file_bytes(1)
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
 
 
 def test_push_and_flush_coalesce_threadsafe_event_pulses() -> None:
@@ -171,7 +182,7 @@ def test_closed_event_loop_raises_before_any_state_changes() -> None:
         buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
     with pytest.raises(RuntimeError, match="loop is closed"):
         buffer.push_many([_messages.RunJavascriptMessage("a"), _messages.RunJavascriptMessage("b")])
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
 
     # Teardown on a closed loop neither raises nor schedules.
     buffer.atomic_start()
@@ -206,14 +217,14 @@ def test_flush_cuts_the_batching_delay() -> None:
         second = _messages.RunJavascriptMessage("second")
         windows = buffer.window_generator(1)
         assert buffer.push(first)
-        assert await _receive(buffer, windows, 1, 1) == [first]
+        assert await _receive(buffer, windows, 1, 1) == _wire(first)
 
         # The next window waits out the batching delay unless flushed.
         assert buffer.push(second)
         pending = await _pending(windows)
         buffer.flush()
         window = await asyncio.wait_for(pending, timeout=1)
-        assert [record.message for record in window.messages] == [second]
+        assert _sent(window) == _wire(second)
         await windows.aclose()
         buffer.set_done()
 
@@ -232,7 +243,7 @@ def test_validation_errors_surface_at_push_and_leave_the_buffer_unchanged() -> N
     with pytest.raises(TypeError, match="unsupported protocol value"):
         buffer.push(_messages.GuiUpdateMessage("field", {"value": object()}))
 
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
     assert loop.callbacks == []
 
 
@@ -247,7 +258,6 @@ def test_each_message_is_encoded_once_and_shared_by_every_client() -> None:
         (record,) = (await asyncio.wait_for(first.__anext__(), timeout=1)).messages
         (shared,) = (await asyncio.wait_for(second.__anext__(), timeout=1)).messages
         assert shared is record
-        assert record.message is message
         # The queued bytes are the message as it was pushed.
         assert msgspec.msgpack.decode(record.data) == {
             "type": "GuiUpdateMessage",
@@ -302,8 +312,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
     # A replacement takes the newest position; a tab's rename never moves its
     # declaration behind the children it contains.
     retained = _retained(buffer)
-    assert retained == [label, script, script, tab, child, snapshot_b, *newest]
-    assert retained[-1] is newest[-1]
+    assert retained == _wire(label, script, script, tab, child, snapshot_b, *newest)
 
 
 @pytest.mark.parametrize(
@@ -382,10 +391,12 @@ def test_removal_purges_entity_state_and_named_descendants(
     assert buffer.push(removal)
 
     # The connected client still needs the removal itself.
-    assert _retained(buffer) == [*survivors, removal]
-    (remove_id,) = [key for key, value in buffer.message_from_id.items() if value is removal]
+    assert _retained(buffer) == _wire(*survivors, removal)
+    (remove_id,) = [
+        key for key, record in buffer._queued.items() if record.data == removal.encode()
+    ]
     buffer.mark_messages_sent(1, remove_id)
-    assert _retained(buffer) == survivors
+    assert _retained(buffer) == _wire(*survivors)
 
 
 def test_recreated_entity_replays_without_its_purged_state() -> None:
@@ -407,9 +418,9 @@ def test_recreated_entity_replays_without_its_purged_state() -> None:
     recreated = _messages.GuiTabMessage("tab", "tabs", "New", None)
     assert buffer.push(recreated)
     retained = _retained(buffer)
-    assert retained[0] is group
-    assert retained[-1] is recreated
-    assert not any(isinstance(message, _messages.GuiTextMessage) for message in retained)
+    assert retained[0] == group.encode()
+    assert retained[-1] == recreated.encode()
+    assert _text("child", "tab").encode() not in retained
 
 
 def test_tombstone_waits_for_every_connected_client_then_is_collected() -> None:
@@ -418,19 +429,19 @@ def test_tombstone_waits_for_every_connected_client_then_is_collected() -> None:
     buffer.register_client(2)
     remove = _messages.GuiRemoveMessage("removed")
     assert buffer.push(remove)
-    assert _retained(buffer) == [remove]
+    assert _retained(buffer) == _wire(remove)
 
     buffer.mark_messages_sent(1, 0)
-    assert _retained(buffer) == [remove]
+    assert _retained(buffer) == _wire(remove)
     buffer.mark_messages_sent(2, 0)
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
 
 
 def test_tombstones_are_not_retained_when_no_client_needs_them() -> None:
     buffer = _buffer()
     for index in range(100):
         assert buffer.push(_messages.GuiRemoveMessage(f"removed-{index}"))
-    assert buffer.message_from_id == {}
+    assert len(buffer) == 0
 
 
 def test_failed_send_keeps_tombstone_until_disconnect() -> None:
@@ -443,15 +454,14 @@ def test_failed_send_keeps_tombstone_until_disconnect() -> None:
         class FailingSocket:
             async def send(self, frame: bytes) -> None:
                 assert frame
-                assert _retained(buffer) == [remove]
+                assert _retained(buffer) == _wire(remove)
                 raise RuntimeError("send failed")
 
-        state = _ClientHandleState(buffer, buffer)
         with pytest.raises(RuntimeError, match="send failed"):
-            await _message_producer(FailingSocket(), buffer, 7, state)  # type: ignore[arg-type]
+            await _message_producer(FailingSocket(), buffer, 7)  # type: ignore[arg-type]
 
         # The producer's exit unregistered the client, which released it.
-        assert buffer.message_from_id == {}
+        assert len(buffer) == 0
         buffer.set_done()
 
     asyncio.run(run())
@@ -467,12 +477,12 @@ def test_skipped_inactive_tombstone_advances_cursor_and_is_collected() -> None:
 
         windows = buffer.window_generator(1)
         window = await asyncio.wait_for(windows.__anext__(), timeout=1)
-        assert [record.message for record in window.messages] == [script]
+        assert _sent(window) == _wire(script)
         assert window.last_message_id == 1
-        assert inactive_remove in _retained(buffer)
+        assert inactive_remove.encode() in _retained(buffer)
 
         buffer.mark_messages_sent(1, window.last_message_id)
-        assert _retained(buffer) == [script]
+        assert _retained(buffer) == _wire(script)
         await windows.aclose()
         buffer.set_done()
 
@@ -485,18 +495,18 @@ def test_connection_local_buffer_drops_windowed_messages_and_persistent_buffer_r
         local = _live_buffer(persistent=False)
         assert local.push_many(messages)
         windows = local.window_generator(1)
-        assert await _receive(local, windows, 1, 2) == messages
-        assert local.message_from_id == {}
+        assert await _receive(local, windows, 1, 2) == _wire(*messages)
+        assert len(local) == 0
         await windows.aclose()
         local.set_done()
 
         retained = _live_buffer()
         assert retained.push_many(messages)
         early = retained.window_generator(1)
-        assert await _receive(retained, early, 1, 2) == messages
+        assert await _receive(retained, early, 1, 2) == _wire(*messages)
         late = retained.window_generator(2)
-        assert await _receive(retained, late, 2, 2) == messages
-        assert _retained(retained) == messages
+        assert await _receive(retained, late, 2, 2) == _wire(*messages)
+        assert _retained(retained) == _wire(*messages)
         await early.aclose()
         await late.aclose()
         retained.set_done()
@@ -512,12 +522,12 @@ def test_excluded_client_never_receives_its_own_echo() -> None:
         sender, other = buffer.window_generator(1), buffer.window_generator(2)
         assert buffer.push(echo)
 
-        assert await _receive(buffer, other, 2, 1) == [echo]
+        assert await _receive(buffer, other, 2, 1) == _wire(echo)
         pending = await _pending(sender)
         later = _messages.RunJavascriptMessage("later")
         assert buffer.push(later)
         window = await asyncio.wait_for(pending, timeout=1)
-        assert [record.message for record in window.messages] == [later]
+        assert _sent(window) == _wire(later)
         await sender.aclose()
         await other.aclose()
         buffer.set_done()
@@ -535,13 +545,13 @@ def test_unsubscribed_persistent_client_receives_only_global_messages() -> None:
         )
 
         windows = buffer.window_generator(1)
-        assert await _receive(buffer, windows, 1, 2) == [first_global, second_global]
+        assert await _receive(buffer, windows, 1, 2) == _wire(first_global, second_global)
 
         live_global = _messages.GuiUpdateMessage("component", {"value": "global"})
         assert buffer.push_many(
             (_Scoped("page-a", "live-a"), live_global, _Scoped("page-b", "live-b"))
         )
-        assert await _receive(buffer, windows, 1, 1) == [live_global]
+        assert await _receive(buffer, windows, 1, 1) == _wire(live_global)
         await windows.aclose()
         buffer.set_done()
 
@@ -558,17 +568,17 @@ def test_scope_subscription_frames_replay_and_live_delivery() -> None:
         begin, ready = _streams("page-a", 7)
         assert buffer.request_delivery_scope(1, "page-a", begin, ready)
         windows = buffer.window_generator(1)
-        assert await _receive(buffer, windows, 1, 2) == [begin, replayed]
+        assert await _receive(buffer, windows, 1, 2) == _wire(begin, replayed)
 
         # A replacement queued mid-replay arrives once, after the ready marker.
         replacement = _messages.ViewportPaneUpdateMessage("page-a", "pane", {"title": "new"})
         assert buffer.push(replacement)
-        assert await _receive(buffer, windows, 1, 2) == [ready, replacement]
+        assert await _receive(buffer, windows, 1, 2) == _wire(ready, replacement)
 
         selected = _Scoped("page-a", "selected-live")
         live_global = _messages.ClientPingMessage(sent_ms=2.0)
         assert buffer.push_many((_Scoped("page-b", "inactive-live"), selected, live_global))
-        assert await _receive(buffer, windows, 1, 2) == [selected, live_global]
+        assert await _receive(buffer, windows, 1, 2) == _wire(selected, live_global)
         await windows.aclose()
         buffer.set_done()
 
@@ -589,15 +599,15 @@ def test_scope_subscriptions_isolate_two_clients() -> None:
             assert buffer.request_delivery_scope(client_id, page_id, begin, ready)
             assert buffer.delivery_scope_from_client(client_id) == page_id
             windows = buffer.window_generator(client_id)
-            assert await _receive(buffer, windows, client_id, 3) == [begin, retained, ready]
+            assert await _receive(buffer, windows, client_id, 3) == _wire(begin, retained, ready)
             clients.append(windows)
 
         live_a = _Scoped("page-a", "live-a")
         live_b = _Scoped("page-b", "live-b")
         live_global = _messages.RunJavascriptMessage("shared-live")
         assert buffer.push_many((live_a, live_b, live_global))
-        assert await _receive(buffer, clients[0], 1, 2) == [live_a, live_global]
-        assert await _receive(buffer, clients[1], 2, 2) == [live_b, live_global]
+        assert await _receive(buffer, clients[0], 1, 2) == _wire(live_a, live_global)
+        assert await _receive(buffer, clients[1], 2, 2) == _wire(live_b, live_global)
         for windows in clients:
             await windows.aclose()
         buffer.set_done()
@@ -617,16 +627,16 @@ def test_rapid_scope_replacement_abandons_old_replay() -> None:
         begin_a, ready_a = _streams("page-a", 1)
         assert buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
         windows = buffer.window_generator(1)
-        assert await _receive(buffer, windows, 1, 2) == [begin_a, retained_a_first]
+        assert await _receive(buffer, windows, 1, 2) == _wire(begin_a, retained_a_first)
 
         begin_b, ready_b = _streams("page-b", 2)
         assert buffer.request_delivery_scope(1, "page-b", begin_b, ready_b)
-        assert await _receive(buffer, windows, 1, 3) == [begin_b, retained_b, ready_b]
+        assert await _receive(buffer, windows, 1, 3) == _wire(begin_b, retained_b, ready_b)
 
         live_b = _Scoped("page-b", "live-b")
         live_global = _messages.ClientPingMessage(sent_ms=3.0)
         assert buffer.push_many((_Scoped("page-a", "live-a"), live_b, live_global))
-        assert await _receive(buffer, windows, 1, 2) == [live_b, live_global]
+        assert await _receive(buffer, windows, 1, 2) == _wire(live_b, live_global)
         await windows.aclose()
         buffer.set_done()
 
@@ -659,11 +669,11 @@ def test_atomic_block_holds_connection_local_windows() -> None:
         buffer.atomic_start()
         windows = buffer.window_generator(1)
         pending = await _pending(windows)
-        assert _retained(buffer) == [queued]
+        assert _retained(buffer) == _wire(queued)
 
         buffer.atomic_end()
         window = await asyncio.wait_for(pending, timeout=1)
-        assert [record.message for record in window.messages] == [queued]
+        assert _sent(window) == _wire(queued)
         await windows.aclose()
         buffer.set_done()
 
@@ -687,13 +697,7 @@ def test_atomic_scope_request_waits_and_drains_global_prefix_first() -> None:
         pending = await _pending(windows)
         buffer.atomic_end()
         window = await asyncio.wait_for(pending, timeout=1)
-        assert [record.message for record in window.messages] == [
-            first_global,
-            second_global,
-            begin,
-            scoped,
-            ready,
-        ]
+        assert _sent(window) == _wire(first_global, second_global, begin, scoped, ready)
         await windows.aclose()
         buffer.set_done()
 
@@ -764,10 +768,10 @@ def test_reserved_windows_preserve_order_and_own_capacity_until_sent() -> None:
 
         windows = buffer.window_generator(1)
         window = await asyncio.wait_for(windows.__anext__(), timeout=1)
-        assert [record.message for record in window.messages] == [first, start, second]
+        assert _sent(window) == _wire(first, start, second)
         assert (window.file_bytes, window.file_parts) == (4, 2)
         # Leaving the queue does not free capacity; the completed send does.
-        assert buffer.message_from_id == {}
+        assert len(buffer) == 0
         assert (buffer._file_bytes, buffer._file_parts) == (4, 2)
         buffer.release_file_bytes(window.file_bytes, window.file_parts)
         assert (buffer._file_bytes, buffer._file_parts) == (0, 0)
@@ -785,14 +789,14 @@ def test_windows_split_at_the_message_count_in_order(persistent: bool) -> None:
         assert buffer.push_many(messages)
         windows = buffer.window_generator(1)
         sizes = []
-        received: list[_messages.Message] = []
+        received: list[bytes] = []
         while len(received) < len(messages):
             window = await asyncio.wait_for(windows.__anext__(), timeout=1)
             buffer.mark_messages_sent(1, window.last_message_id)
             sizes.append(len(window.messages))
-            received.extend(record.message for record in window.messages)
+            received.extend(_sent(window))
         assert sizes == [2, 2, 1]
-        assert received == messages
+        assert received == _wire(*messages)
         await windows.aclose()
         buffer.set_done()
 
@@ -810,9 +814,9 @@ def test_windows_stop_before_the_byte_limit_unless_empty(monkeypatch: pytest.Mon
         batches = []
         for _ in range(3):
             window = await asyncio.wait_for(windows.__anext__(), timeout=1)
-            batches.append([record.message for record in window.messages])
+            batches.append(_sent(window))
         # A message larger than the limit still goes, alone.
-        assert batches == [small[:2], small[2:], [large]]
+        assert batches == [_wire(*small[:2]), _wire(*small[2:]), _wire(large)]
         await windows.aclose()
         buffer.set_done()
 
@@ -828,7 +832,7 @@ def test_sparse_index_compaction_delivers_each_message_once(persistent: bool) ->
         for revision in range(1_000):
             assert buffer.push(_messages.GuiUpdateMessage("0", {"value": revision}))
         # Replaced IDs leave the replay index instead of accumulating.
-        assert len(buffer._ids) <= 2 * len(buffer.message_from_id)
+        assert len(buffer._ids) <= 2 * len(buffer)
         expected = _retained(buffer)
         assert len(expected) == 128
 
@@ -838,7 +842,7 @@ def test_sparse_index_compaction_delivers_each_message_once(persistent: bool) ->
         update = _messages.GuiUpdateMessage("0", {"value": "live"})
         assert buffer.push(update)
         window = await asyncio.wait_for(windows.__anext__(), timeout=1)
-        assert [record.message for record in window.messages] == [update]
+        assert _sent(window) == _wire(update)
         assert window.last_message_id == buffer._next_id - 1
         await windows.aclose()
         buffer.set_done()

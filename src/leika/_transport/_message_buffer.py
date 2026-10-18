@@ -22,13 +22,13 @@ _WINDOW_MAX_BYTES = 8 * 1024 * 1024
 
 @dataclasses.dataclass(frozen=True)
 class QueuedMessage:
-    """A message encoded once at push, with the routing it was queued under."""
+    """A message's bytes, encoded once at push, with the routing it was queued under."""
 
-    message: Message
     data: bytes
     redundancy_key: str | None
     entity: tuple[str, object] | None
     purge_entities: tuple[tuple[str, object], ...]
+    removal: bool
     delivery_scope: str | None
     excluded_client: int | None
     file_bytes: int = 0
@@ -36,11 +36,11 @@ class QueuedMessage:
     @classmethod
     def prepare(cls, message: Message, file_bytes: int = 0) -> QueuedMessage:
         return cls(
-            message,
             message.encode(),
             message.redundancy_key(),
             message.lifecycle_entity(),
             message.purge_entities(),
+            message.lifecycle_phase == "remove",
             message.delivery_scope(),
             message.excluded_self_client,
             file_bytes,
@@ -121,11 +121,10 @@ class AsyncMessageBuffer:
         self._file_bytes = 0
         self._file_parts = 0
 
-    @property
-    def message_from_id(self) -> dict[int, Message]:
-        """A snapshot of the queued or, when persistent, retained messages."""
+    def __len__(self) -> int:
+        """Number of queued or, when persistent, retained messages."""
         with self._lock:
-            return {message_id: record.message for message_id, record in self._queued.items()}
+            return len(self._queued)
 
     def push(self, message: Message) -> bool:
         """Queue one message, returning whether the buffer is still open."""
@@ -167,7 +166,7 @@ class AsyncMessageBuffer:
                     self._id_from_key[record.redundancy_key] = message_id
                 if record.entity is not None:
                     self._ids_from_entity.setdefault(record.entity, set()).add(message_id)
-                if self.persistent_messages and record.message.lifecycle_phase == "remove":
+                if self.persistent_messages and record.removal:
                     self._tombstones[message_id] = None
             self._prune_tombstones_locked()
             return True

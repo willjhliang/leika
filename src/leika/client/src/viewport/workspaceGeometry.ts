@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import type { GridRect, GridSpec } from "./gridLayout";
-import type { ViewportPane } from "./ViewportState";
 
 /** Where a grid line falls on screen, snapped to a whole pixel.
  *
@@ -29,8 +28,4 @@ export function panePositionStyle(
     height: gridLinePx(rect.y + rect.height, cellHeight) - top,
     visibility: cellWidth > 0 && cellHeight > 0 ? "visible" : "hidden",
   };
-}
-
-export function paneTitle(pane: ViewportPane): string {
-  return pane.kind === "root" ? "" : pane.props.title;
 }

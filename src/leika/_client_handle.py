@@ -7,7 +7,7 @@ import contextlib
 import mimetypes
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ContextManager, Sequence
+from typing import TYPE_CHECKING, Callable, ContextManager
 from uuid import uuid4
 
 from . import _messages
@@ -15,7 +15,6 @@ from ._async_errors import print_async_errors
 from ._file_transfer import PREVIEW_MAX_BYTES, file_parts, format_bytes, validate_file_send
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
-from ._rendering import RenderingMode, render_message
 from ._transport._websocket import WebsockClientConnection
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 
@@ -40,70 +39,8 @@ class ClientHandle:
         """Handle for interacting with the GUI."""
         self.client_id: int = conn.client_id
         """Unique ID for this client."""
-        self._rendering: RenderingMode = "auto"
-        self._image_fit = "fit"
-        self._pane_size_lock = threading.Lock()
-        self._pane_sizes: dict[tuple[str, str], tuple[int, int]] = {}
         self._transfer_lock = threading.Lock()
         self._transfer_cancel_from_uuid: dict[str, threading.Event] = {}
-
-    async def _prepare_rendering(
-        self, messages: Sequence[_messages.Message]
-    ) -> Sequence[_messages.Message]:
-        with self._pane_size_lock:
-            mode, fit = self._rendering, self._image_fit
-            sizes = self._pane_sizes.copy()
-        if mode == "quality" or not any(
-            isinstance(message, _messages.ViewportImageMessage)
-            or (
-                isinstance(message, _messages.ViewportPaneUpdateMessage)
-                and "_data" in message.updates
-            )
-            for message in messages
-        ):
-            return messages
-
-        delivery_rate = self.delivery_rate if mode == "auto" else None
-
-        def prepare() -> Sequence[_messages.Message]:
-            return tuple(
-                render_message(
-                    message,
-                    mode,
-                    sizes.get((getattr(message, "page_id", ""), getattr(message, "pane_id", ""))),
-                    fit,
-                    self._server,
-                    delivery_rate=delivery_rate,
-                )
-                for message in messages
-            )
-
-        return await asyncio.get_running_loop().run_in_executor(
-            self._server._thread_executor, prepare
-        )
-
-    @property
-    def delivery_rate(self) -> float | None:
-        """Smoothed received bytes/second, or None before a bulk receipt.
-
-        Available with browser rendering preferences or explicit server
-        ``delivery_backpressure``. Includes
-        round-trip delay, so this is conservative delivery throughput, not a
-        measurement of the physical link's maximum bandwidth.
-        """
-        return self._websock_connection._state.delivery_rate
-
-    def pane_size(self, pane) -> tuple[int, int] | None:
-        """Latest browser content size in physical pixels, or None if unknown.
-
-        A hidden pane reports (0, 0). A pane on another subscribed page also
-        returns (0, 0). Applications may use this hint to size streamed images.
-        """
-        page_id = pane._panes._page_id
-        if self._websock_connection.delivery_scope() != page_id:
-            return (0, 0)
-        with self._pane_size_lock:
-            return self._pane_sizes.get((page_id, str(pane.pane_id)))
 
     def _cancel_outgoing_file_transfer(self, transfer_uuid: str) -> None:
         """Honor a browser abort without echoing another abort back to it."""
