@@ -4,10 +4,7 @@ import { GuiPlotlyMessage } from "../WebsocketMessages";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useElementSize } from "../hooks/useElementSize";
 import { usePlotlyRenderer } from "../hooks/usePlotlyRenderer";
-import {
-  parsePlotlyFigure,
-  parsePlotlyThemeTemplates,
-} from "../viewport/plotlyPayload";
+import { plotlyFigure } from "../viewport/plotlyPayload";
 import { MediaPreview, MediaSurface } from "./MediaPreview";
 
 const PlotWithAspect = React.memo(function PlotWithAspect({
@@ -25,49 +22,19 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
   const { ref, width } = useElementSize();
   // Figures without an explicit template follow the Leika theme.
   const colorScheme = useColorScheme();
-  const parseResult = React.useMemo(
-    () => parsePlotlyFigure(jsonStr),
-    [jsonStr],
+  const figure = React.useMemo(
+    () => plotlyFigure(jsonStr, themeTemplates, colorScheme),
+    [jsonStr, themeTemplates, colorScheme],
   );
-  const themeParseResult = React.useMemo(
-    () => parsePlotlyThemeTemplates(themeTemplates),
-    [themeTemplates],
-  );
-  const plot = parseResult.ok ? parseResult.value : null;
-  const templates = themeParseResult.ok ? themeParseResult.value : null;
-  const parseError = !parseResult.ok
-    ? parseResult.error
-    : !themeParseResult.ok
-      ? themeParseResult.error
-      : null;
-  const template =
-    plot?.layout.template ??
-    (templates === null
-      ? undefined
-      : (templates[colorScheme] ?? templates.light));
-  const aspectError =
-    Number.isFinite(aspect) && aspect > 0
-      ? null
-      : "Plot aspect must be a positive number.";
-  const displayAspect = aspectError === null ? aspect : 1;
   const request = React.useMemo(
-    () =>
-      plot === null || aspectError !== null
-        ? null
-        : {
-            figure: plot,
-            layout: {
-              ...plot.layout,
-              template,
-              width,
-              height: width / displayAspect,
-            },
-          },
-    [plot, template, width, displayAspect, aspectError],
+    () => ({
+      figure,
+      layout: { ...figure.layout, width, height: width / aspect },
+    }),
+    [figure, width, aspect],
   );
   const { plotRef, message: plotlyMessage } = usePlotlyRenderer({
     request,
-    inputError: parseError ?? aspectError,
     ready: width > 0,
   });
 
@@ -80,7 +47,7 @@ const PlotWithAspect = React.memo(function PlotWithAspect({
     >
       <div
         ref={plotRef}
-        style={{ minHeight: width > 0 ? width / displayAspect : undefined }}
+        style={{ minHeight: width > 0 ? width / aspect : undefined }}
       />
       {plotlyMessage === null ? null : (
         <div

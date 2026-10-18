@@ -28,6 +28,11 @@ versioning.
   raises instead of setting a plain attribute. Programmatic callbacks run in
   the order the changes were made, without a queue cap. Slider `marks` and
   button and toggle `merge` are public properties.
+- GUI: text inputs and list entries no longer stop at a browser-side length or
+  entry count; each browser message is bounded by the 4 MiB inbound limit.
+- GUI: a browser update other than a press no longer fires a button's
+  `on_click`; disabling or hiding an upload button aborts an upload in flight;
+  and a disabled or hidden preview button no longer reloads or watches its file.
 - GUI (breaking): containers are filled only with `with container:`; the
   direct `folder.add_*(...)` methods are removed. Also removed:
   `leika.GuiTabGroup`, `GuiApi.set_panel_label()` (set
@@ -56,11 +61,17 @@ versioning.
 - Panes (breaking): pages and panes are no longer limited to 128 pages, 128
   panes, 16 Viser panes, shared payload, text and raster budgets, or the
   16 Mi-character Matplotlib SVG limit; `server.stop()` leaves pane handles
-  as they are instead of retiring them. `Panes`, rows, columns, and grids share
-  one set of `add_*` methods, so a row, column, or grid now raises `TypeError`
-  for `placement` or `relative_to` instead of not accepting them. `PaneHandle`
-  is no longer generic, video URLs are no longer limited to 16,384 characters,
-  and a removed pane keeps its last props.
+  as they are instead of retiring them. `PaneHandle` is no longer generic,
+  video URLs are no longer limited to 16,384 characters, and a removed pane
+  keeps its last props.
+- Panes (breaking): `Panes`, rows, columns, and grids share one set of `add_*`
+  methods, which no longer take `placement` or `relative_to`, and
+  `leika.Placement` is removed. A new pane splits off the latest visible pane;
+  to start beside a particular pane, use `add_row(relative_to=...)` (to its
+  right) or `add_column(relative_to=...)` (below it), which now raise
+  `ValueError` at creation for an unknown or hidden pane.
+- Viser: an embedded Viser 0.2 client loads its font through its pane's route
+  instead of requesting it from Leika's root.
 - Plotly: GUI plots now follow the viewer's light or dark theme like Plotly
   panes, through one shared serializer. Plotly's browser runtime is sent once
   to every browser after the first figure, including browsers viewing pages

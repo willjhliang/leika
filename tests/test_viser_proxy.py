@@ -206,12 +206,15 @@ def test_embedded_client_cannot_open_an_independent_tunnel(protected, kind):
 
 
 def test_legacy_asset_urls_stay_with_their_pane():
-    source = b'''<script src="/assets/app.js"></script> new Worker('/assets/worker.js')
+    source = b"""<script src="/assets/app.js"></script> new Worker('/assets/worker.js')
         new URL("/assets/sort.wasm", import.meta.url); "/logo.svg"; "/manifest.json";
-        "https://example.org/assets/remote.js"; "./assets/relative.js"'''
+        "https://example.org/assets/remote.js"; "./assets/relative.js"
+        @font-face{src:url(/Inter-VariableFont_slnt,wght.ttf)} url(//cdn.example.org/a.ttf)"""
     first = VISER_PROXY_PREFIX + "first/"
     rewritten = _rebase_assets(source, first)
-    assert rewritten.count(first.encode()) == 5
+    assert rewritten.count(first.encode()) == 6
+    assert b"url(" + first.encode() + b"Inter-VariableFont_slnt,wght.ttf)" in rewritten
+    assert b"url(//cdn.example.org/a.ttf)" in rewritten
     assert b'"https://example.org/assets/remote.js"' in rewritten
     assert b'"./assets/relative.js"' in rewritten
     assert first.encode() not in _rebase_assets(source, VISER_PROXY_PREFIX + "second/")

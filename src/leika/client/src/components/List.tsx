@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
-import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../ControlPanel/guiConstants";
 import { GuiListMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";
@@ -159,15 +158,9 @@ export default function ListComponent({
                 mark !== null && "pl-7",
               )}
               disabled={disabled}
-              maxLength={MAX_GUI_COLLECTION_ITEM_CODE_UNITS}
-              onChange={(event) => {
-                if (
-                  event.currentTarget.value.length >
-                  MAX_GUI_COLLECTION_ITEM_CODE_UNITS
-                )
-                  return;
-                rewrite(entry.place, event.currentTarget.value);
-              }}
+              onChange={(event) =>
+                rewrite(entry.place, event.currentTarget.value)
+              }
               data-leika-list-entry
             />
             {mark !== null && (

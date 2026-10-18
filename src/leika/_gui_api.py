@@ -68,7 +68,6 @@ from ._gui_handles import (
     _GuiHandle,
     _GuiHandleState,
     _make_uuid,
-    _options,
 )
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
@@ -446,10 +445,7 @@ class GuiApi:
             # A no-op or rejected value must also settle local invalidation.
             # The barrier and snapshot share the broadcast producer's ordering.
             for page in self._server.pages:
-                with page.panes._lock:
-                    handles = tuple(page.panes._handle_from_pane_id.values())
-                for handle in handles:
-                    handle._ack_refresh(message.uuid, message.request_id, client_id)
+                page.panes._ack_refresh(message.uuid, message.request_id, client_id)
 
     async def _handle_gui_updates(
         self,
@@ -554,16 +550,17 @@ class GuiApi:
         """The button a preview message names, and the client that sent it.
 
         None for every mismatch -- a stale uuid, another kind of button, a
-        client gone between queueing and dispatch -- so each preview message
-        can be a quiet return: the browser asks on its own account about a file
-        it was already sent, and nobody is waiting on an error.
+        button that takes no input now, a client gone between queueing and
+        dispatch -- so each preview message can be a quiet return: the browser
+        asks on its own account about a file it was already sent, and nobody is
+        waiting on an error.
         """
         client = self._resolve_client(client_id)
         if client is None:
             return None
         with self._lock:
             handle = self._handles.get(uuid)
-            if not isinstance(handle, GuiPreviewButtonHandle) or handle._impl.removed:
+            if not isinstance(handle, GuiPreviewButtonHandle) or not handle._accepts_input():
                 return None
             return handle, client
 
@@ -709,10 +706,7 @@ class GuiApi:
         if found is None:
             return
         handle, client = found
-        if handle._accepts_input():
-            self._queue_preview_work(
-                "warm", client_id, client, handle, lambda: handle._warm(client)
-            )
+        self._queue_preview_work("warm", client_id, client, handle, lambda: handle._warm(client))
 
     async def _handle_gui_preview_reload(
         self, client_id: ClientId, message: _messages.GuiPreviewReloadMessage
@@ -805,8 +799,6 @@ class GuiApi:
                 metadata_valid = False
             if not metadata_valid:
                 reason = "Invalid upload metadata."
-            elif not handle._accepts_input():
-                reason = "Upload target unavailable."
             elif message.size_bytes > _FILE_UPLOAD_MAX_BYTES:
                 reason = "Upload exceeds the 64 MiB limit."
             elif (client_id, transfer_uuid) in self._uploads or any(
@@ -845,7 +837,14 @@ class GuiApi:
     def _acknowledge_upload(
         self, client_id: ClientId, transfer_uuid: str, upload: _Upload
     ) -> Coroutine[Any, Any, None] | None:
-        """Acknowledge an upload's progress, committing its value once complete."""
+        """Acknowledge an upload's progress, committing its value once complete.
+
+        The upload is the button's next value, so it proceeds only while the
+        button accepts input: disabling or hiding it aborts the transfer."""
+        if not upload.handle._accepts_input():
+            self._uploads.pop((client_id, transfer_uuid), None)
+            self._abort_upload(client_id, transfer_uuid, "Upload target unavailable.")
+            return None
         done = len(upload.content) == upload.size
         acknowledged = self._queue_to_client(
             client_id,
@@ -1658,7 +1657,8 @@ class GuiApi:
 
         The handle's ``value`` is the last uploaded :class:`UploadedFile`, and
         ``on_upload`` callbacks run once each upload completes. Files are
-        limited to 64 MiB.
+        limited to 64 MiB, and disabling or hiding the button aborts an upload
+        in progress.
 
         Args:
             text: Text to display on the button itself.
@@ -2339,16 +2339,15 @@ class GuiApi:
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        option_tuple = _options(options, "Dropdown")
         return self._add_input(
             GuiDropdownHandle,
-            option_tuple[0] if initial_value is None else initial_value,
+            initial_value,
             label=label,
             hint=hint,
             disabled=disabled,
             visible=visible,
             order=order,
-            options=option_tuple,
+            options=options,
             searchable=searchable,
         )
 

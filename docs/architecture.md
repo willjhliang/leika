@@ -87,9 +87,9 @@ without mounting React. Their hooks own one session per mounted viewer, and
 Views subscribe to state and invoke actions; the state engines can be tested
 with the same actions and persistence adapters used by the application.
 
-Generated message definitions, icons, and vendored UI primitives remain under
-their existing generators. Build and release tooling remain separate from
-runtime orchestration; see [Development](development.md) for their entry points.
+Generated message definitions, icons, and vendored UI primitives come from
+their generators. Build and release tooling stay separate from runtime
+orchestration; see [Development](development.md) for their entry points.
 
 ## State flow
 
@@ -162,7 +162,9 @@ sends to Python is validated and bounded.
 Browser-to-server protocol messages are limited to 4 MiB, and each decoded
 message to 100,000 values, depth 64, and 4 MiB of strings and bytes. Each
 browser value is checked against the control it targets, and a disabled,
-hidden, or read-only input takes no new value.
+hidden, or read-only input takes no new value: a button takes only presses, an
+upload in flight aborts once its button stops taking input, and a preview
+button's reloads and file watches stop with it.
 
 In the other direction, a server-to-browser window carries at most 128 messages
 and takes no more once its encoded messages pass 8 MiB. The browser opens the socket on the page's
@@ -238,7 +240,7 @@ workspace-global. Switching pages therefore changes the page name in the panel
 header and the panes on the canvas without replacing the controls or moving the
 panel.
 
-Version-3 pane layouts are stored under a browser key containing the server
+Pane layouts are stored under a browser key containing the server
 URL, `workspace_id`, and `page_id`. The selected `page_id` is stored separately
 under the server URL and `workspace_id`, and so is the control panel's
 arrangement once the viewer moves, resizes, or collapses it; until then the
@@ -261,10 +263,9 @@ updates. Empty content uses that same path and allocates no renderer.
 ## Scope
 
 Leika is a simple data workspace. The client carries GUI, control panel, layout,
-image, SVG, and Plotly renderers, and CI checks that the shipped wheel and its
-browser dependencies stay within that surface. Those renderers back the four pane
-types in [Panes](panes.md). Matplotlib sources are held weakly, while ndarray
-and Plotly assignments store their own copies as described above.
+image, SVG, video, and Plotly renderers and an embedding frame for Viser, which
+back the pane types in [Panes](panes.md). Matplotlib sources are held weakly,
+while ndarray and Plotly assignments store their own copies as described above.
 
 External Viser pages embed as intentionally unsandboxed iframes because their
 clients require scripts, workers, and storage. They use a no-referrer policy,

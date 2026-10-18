@@ -9,7 +9,6 @@ import pytest
 from playwright.sync_api import Locator, Page, expect
 
 import leika
-from leika import _messages
 
 from .utils import assert_dialog_on_top, find_gui_input, find_gui_row, wait_until
 
@@ -792,38 +791,6 @@ def test_charts_read_aspect_as_width_over_height(
         return bounds["width"] / bounds["height"]
 
     assert ratio(plotly_plot) == pytest.approx(2.0, rel=0.15)
-    assert page_errors == []
-
-
-@pytest.mark.plotly
-def test_plotly_invalid_payload_is_visible_and_recovers(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """One malformed figure must not unmount the whole generated panel."""
-    go = pytest.importorskip("plotly.graph_objects")
-    handle = leika_server.gui.add_plotly(
-        go.Figure(go.Scatter(y=[1, 2, 1])), config={"staticPlot": True}
-    )
-    plot = leika_page.locator(".js-plotly-plot")
-    expect(plot).to_be_visible(timeout=15_000)
-
-    # Exercise explicit test-only wire injection: public/private property
-    # assignment cannot bypass the figure serializer, while the browser still
-    # has to contain a stale or corrupted payload rather than throwing from
-    # React render.
-    leika_server.gui._websock_interface.queue_message_or_raise(
-        _messages.GuiUpdateMessage(handle.id, {"_plotly_json_str": "{"})
-    )
-    error = leika_page.get_by_role("status").filter(has_text="Plotly data contains invalid JSON.")
-    expect(error).to_have_text("Plotly data contains invalid JSON.", timeout=5_000)
-    expect(error).to_be_visible()
-    expect(plot).to_have_count(0)
-
-    handle.figure = go.Figure(go.Bar(y=[3, 1, 2]))
-    expect(error).to_have_count(0, timeout=5_000)
-    expect(plot).to_be_visible(timeout=10_000)
     assert page_errors == []
 
 

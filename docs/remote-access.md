@@ -122,8 +122,7 @@ Quick tunnels are Cloudflare's free, anonymous tier and come with no uptime
 promise. Leika's built-in proxy trust is deliberately limited to the exact
 quick-tunnel hostname created by `share=True`. An independently launched or
 named Cloudflare tunnel is therefore not a drop-in replacement: its forwarded
-headers are rejected unless Leika gains an explicit trusted-proxy
-configuration for that deployment.
+headers are rejected.
 
 ## Mesh VPNs
 

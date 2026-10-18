@@ -66,12 +66,12 @@ def test_pages_scope_pane_ids_placement_updates_and_removal(
 
     assert main_pane.pane_id == diagnostics_pane.pane_id == "shared"
     with pytest.raises(ValueError, match="Unknown or hidden relative"):
-        diagnostics.panes.add_image(frame, pane_id="bad", relative_to="main-only")
+        diagnostics.panes.add_row(relative_to="main-only")
 
     main_only = server.panes.add_image(frame, pane_id="main-only")
     assert main_only.pane_id == "main-only"
     with pytest.raises(ValueError, match="Unknown or hidden relative"):
-        diagnostics.panes.add_image(frame, pane_id="still-bad", relative_to="main-only")
+        diagnostics.panes.add_column(relative_to="main-only")
 
     main_pane.title = "Renamed main"
     diagnostics_pane.title = "Renamed diagnostics"

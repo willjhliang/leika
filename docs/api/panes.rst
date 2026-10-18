@@ -59,5 +59,3 @@ Types
 .. autodata:: ImageFit
 
 .. autodata:: PaneLoading
-
-.. autodata:: Placement

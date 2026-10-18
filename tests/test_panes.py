@@ -164,18 +164,26 @@ def test_row_column_and_grid_helpers(server: leika.Server) -> None:
         "grid-b",
     ]
 
-    with pytest.raises(TypeError, match="places its own panes"):
-        row.add_image(frame, relative_to=first.pane_id)
-    with pytest.raises(TypeError, match="places its own panes"):
-        grid.add_pane(placement="left")
+    declared = {
+        message.pane_id: (message.placement, message.relative_to, message.equalize_group)
+        for message in queued_messages(server._websock_server.get_message_buffer()).values()
+        if isinstance(message, messages.ViewportPaneMessage)
+    }
+    assert declared == {
+        "row-a": ("right", None, ()),
+        "row-b": ("right", "row-a", ("row-a",)),
+        "column-a": ("bottom", "row-b", ()),
+        "grid-a": ("right", "column-a", ()),
+        "grid-b": ("right", "grid-a", ("grid-a",)),
+    }
 
     with pytest.raises(ValueError):
         server.panes.add_grid(columns=0)
     for columns in (True, 1.5):
         with pytest.raises(ValueError, match="positive integer"):
             server.panes.add_grid(columns=cast(Any, columns))
-    with pytest.raises(ValueError):
-        server.panes.add_image(frame, relative_to="missing")
+    with pytest.raises(ValueError, match="Unknown or hidden relative"):
+        server.panes.add_row(relative_to="missing")
 
 
 def test_image_update_can_change_loading_in_one_message(server: leika.Server) -> None:
@@ -585,16 +593,6 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
         )
     with pytest.raises(ValueError, match="fit must be"):
         server.panes.add_image(frame, pane_id="subclass-fit", fit=cast(Any, String("fit")))
-    with pytest.raises(ValueError, match="placement must be"):
-        server.panes.add_image(
-            frame, pane_id="subclass-placement", placement=cast(Any, String("right"))
-        )
-    with pytest.raises(TypeError, match="relative_to must be a string"):
-        server.panes.add_image(
-            frame,
-            pane_id="subclass-relative",
-            relative_to=cast(Any, String(anchor.pane_id)),
-        )
     with pytest.raises(TypeError, match="relative_to must be a string"):
         server.panes.add_row(relative_to=cast(Any, String(anchor.pane_id)))
     with pytest.raises(ValueError, match="columns must be a positive integer"):

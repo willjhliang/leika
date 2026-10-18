@@ -45,15 +45,11 @@ helpers never cross a page boundary.
 The selected page is browser-local: viewers can look at different pages of the
 same running server, and their selections are restored independently. Pages
 scope pane payload transport as well as pane layouts: a browser receives live
-pane payloads only for its selected page. To avoid a blank canvas while a
-switch replays, the browser keeps at most one inactive page's detached source
-model as a warm cache. While hidden, that cache has no renderer DOM, decoded
-raster/GPU resources, or Viser iframe. A cached target appears immediately with
-its last received content; an uncached target leaves the
-outgoing page visible. Either stale view is inert until a separately staged
-replay reaches `Ready`, then the current model replaces it. Every page's
-layout remains preserved. `server.gui` and each client's GUI remain workspace-wide,
-so the same controls stay available while viewers switch pages.
+pane payloads only for its selected page. During a switch the previous view
+stays on screen, inert, until the new page has replayed; see
+[Architecture](architecture.md#state-flow). `server.gui` and each client's GUI
+are workspace-wide, so the same controls stay available while viewers switch
+pages.
 
 ## Pane types
 
@@ -88,7 +84,7 @@ from the corresponding `add_*` method; title, visibility and placement stay
 with the pane. `loading=None` preserves the current overlay; pass
 `loading=False` to reveal prepared content in the same change.
 
-Existing convenience methods remain unchanged:
+A typed handle's `update` changes content of its own kind:
 
 ```python
 video = server.panes.add_video(video_path, sync_group="episode", fps=30)
@@ -124,11 +120,6 @@ Floating-point arrays are read as 0 to 1 and integer arrays as 0 to 255.
 changes to it do not reach the pane; do not mutate it from another thread while
 the call runs.
 
-The browser decodes file-preview, Markdown, and registered-asset images itself;
-one it cannot decode shows its ordinary broken-image state. Markdown avoids
-external image URLs; Leika assets carry their measured dimensions in their
-registered URL.
-
 ### matplotlib figures
 
 ```python
@@ -160,9 +151,7 @@ from `server.gui.add_plotly` follow the same rule. For large scatters, Plotly's
 own `scattergl` traces render on the GPU.
 
 Plotly figures and configuration are trusted server-authored input to Plotly
-itself. They can intentionally refer to external maps or images through
-Plotly's schemas; Leika's direct-image URL and raster checks do not sanitize
-those third-party renderer fields.
+itself, and can refer to external maps or images through Plotly's schemas.
 
 The first Plotly figure queues Plotly's browser runtime once; browsers that
 connect later receive it with the rest of the workspace.
@@ -266,7 +255,6 @@ computation must still decide when to produce an update.
 Setting `visible=False` removes a pane from the active page's layout while
 retaining its renderer. Showing it again preserves the Viser iframe and native
 video playback position and manual pause state. `remove()` disposes the renderer.
-Inactive pages still follow the bounded page-cache lifecycle described above.
 
 Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the
@@ -278,10 +266,11 @@ warning and is otherwise a harmless no-op.
 
 ## Layout
 
-By default each new pane splits off the last visible one. `placement` and
-`relative_to` steer that, and the row, column, and grid helpers divide space
-equally instead. Their `add_*` methods are the same as `server.panes`, except
-that they place panes themselves and reject `placement` and `relative_to`:
+By default each new pane splits off to the right of the last visible one. The
+row, column, and grid helpers divide space equally instead, with the same
+`add_*` methods as `server.panes`. Their `relative_to` names the visible pane
+the group's first pane splits off: to its right for a row or grid, below it for
+a column.
 
 ```python
 grid = server.panes.add_grid(columns=2)
@@ -303,11 +292,8 @@ Shift plus an arrow key to move four. Dense layouts expand the affected axis
 in multiples of 60 when needed to keep every pane at least four columns wide
 and three rows tall.
 
-Page layouts use the version-3 browser store, keyed by server URL,
-`workspace_id`, and `page_id`. When the default page has no version-3 layout,
-Leika imports the prior version-2 single-page layout and writes it under the
-default page's new key. Additional pages start with their declared placement
-hints and never inherit that legacy layout.
+Page layouts are saved in the browser, keyed by server URL, `workspace_id`,
+and `page_id`. A page without a saved layout starts from its placement hints.
 
 ## Native videos
 
@@ -324,7 +310,7 @@ pane = server.panes.add_video(Path("reach.mp4"), title="Reach")
 pane.update(Path("grasp.mp4"), loading=False)
 ```
 
-Compose a collection with the existing pane layout helpers:
+Compose a collection with the pane layout helpers:
 
 ```python
 grid = server.panes.add_grid(columns=2)

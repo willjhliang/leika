@@ -71,7 +71,7 @@ python -m playwright install chromium
 ```
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
-multi-slider cancellation, the color picker, checklists, markdown, download and
+multi-slider cancellation, the color picker, lists, markdown, download and
 preview buttons, modal dismissal, notifications, settings, the connection pane,
 light/dark theming, multi-client updates, the lifecycle of every pane type,
 resizing and persistence, and responsive floating/mobile control panels.
@@ -163,10 +163,9 @@ boundary; consumers of internal helpers should import their owning module.
   rendering, gestures, and connection lifecycle.
 - For HTTP changes, put host/origin decisions in `HttpRequestPolicy`, retained
   runtime content in `HttpAssetRegistry`, and response/static-file behavior in
-  `HttpRequestHandler`. Preserve the owner's admission limits and shutdown behavior.
+  `HttpRequestHandler`. Preserve the owner's shutdown behavior.
 - For new wire messages, update the Python schema, run `make generate`, and
-  cover both replay and live dispatch. Resource reservations must be released
-  on rejected publication as well as removal.
+  cover both replay and live dispatch.
 
 ## Releases
 

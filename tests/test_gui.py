@@ -250,6 +250,13 @@ def test_option_validation(server: leika.Server) -> None:
     dropdown.options = ("c", "d")
     assert dropdown.value == "c"
     _wait_for(lambda: seen == ["c"])
+    # Options holding the current value keep it.
+    dropdown.options = ("d", "c")
+    assert dropdown.value == "c"
+
+    # Options are read once, so a one-shot iterable also supplies the default.
+    once = server.gui.add_dropdown("Once", iter(("x", "y")))  # type: ignore[arg-type]
+    assert (once.options, once.value) == (("x", "y"), "x")
 
 
 def test_hold_frequency_is_positive_and_finite(server: leika.Server) -> None:
@@ -1344,6 +1351,15 @@ def test_malformed_or_unavailable_uploads_are_aborted(
     assert messages[-1].reason == "An upload is already active for this control."
     assert (ClientId(1), "active") in server.gui._uploads
 
+    # Disabling the button aborts the transfer in flight.
+    upload.disabled = True
+    server.gui._handle_file_transfer_part(
+        ClientId(1), _messages.FileTransferPart(upload.id, "active", 0, b"x")
+    )
+    assert server.gui._uploads == {}
+    assert messages[-1].reason == "Upload target unavailable."
+    assert upload.value.content == b""
+
 
 def test_upload_part_and_button_removal_are_serialized(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
@@ -2184,15 +2200,44 @@ def test_disabled_or_hidden_controls_reject_stale_client_actions(
     )
     assert holds == []
 
-    warm_calls: list[object] = []
-    preview = server.gui.add_preview_button("Preview", b"x", filename="x.txt", disabled=True)
-    monkeypatch.setattr(preview, "_warm", warm_calls.append)
-    asyncio.run(
-        server.gui._handle_gui_preview_warm(
-            ClientId(1), _messages.GuiPreviewWarmMessage(preview.id)
-        )
+    # A browser sends only presses; anything else is not a click.
+    clicks: list[bool] = []
+    enabled = server.gui.add_button("Press")
+    enabled.on_click(lambda event: clicks.append(event.value))
+    _browser_update(server, enabled, False)
+    _browser_update(server, enabled, 1)
+    assert clicks == []
+    _browser_update(server, enabled, True)
+    assert clicks == [True]
+
+    preview_calls: list[str] = []
+    disabled_preview = server.gui.add_preview_button(
+        "Preview", b"x", filename="x.txt", disabled=True
     )
-    assert warm_calls == []
+    hidden_preview = server.gui.add_preview_button(
+        "Hidden preview", b"x", filename="x.txt", visible=False
+    )
+    for preview in (disabled_preview, hidden_preview):
+        monkeypatch.setattr(preview, "_warm", lambda *_: preview_calls.append("warm"))
+        monkeypatch.setattr(preview, "_reload", lambda *_: preview_calls.append("reload"))
+        monkeypatch.setattr(preview, "_watch", lambda *_: preview_calls.append("watch"))
+        asyncio.run(
+            server.gui._handle_gui_preview_warm(
+                ClientId(1), _messages.GuiPreviewWarmMessage(preview.id)
+            )
+        )
+        asyncio.run(
+            server.gui._handle_gui_preview_reload(
+                ClientId(1), _messages.GuiPreviewReloadMessage(preview.id)
+            )
+        )
+        asyncio.run(
+            server.gui._handle_gui_preview_watch(
+                ClientId(1), _messages.GuiPreviewWatchMessage(preview.id, "version")
+            )
+        )
+    assert server.gui._preview_work_from_key == {}
+    assert preview_calls == []
 
 
 def test_file_button_press_is_single_flight_and_preserves_manual_disable(
