@@ -52,10 +52,8 @@ dev = [
   "matplotlib>=3.6",
   "plotly>=5.21,<7",
   "viser>=0.2.11,<2",
-  "nodeenv>=1.9.1,<2.0.0",
   "packaging>=24,<27",
   "playwright>=1.40.0",
-  "psutil>=5.9.5,<8.0.0",
   "pyright>=1.1.390",
   "pytest>=8",
   "pytest-playwright>=0.4.0",
@@ -75,9 +73,6 @@ docs = [
 [dependency-groups]
 audit = ["pip-audit==2.10.1"]
 
-[project.scripts]
-leika-build-client = "leika._client_autobuild:build_client_entrypoint"
-
 [tool.uv]
 required-version = "==0.12.3"
 
@@ -94,10 +89,6 @@ exclude = [
   "**/__pycache__/**",
   "/core",
   "/core.*",
-  "**/.leika-build-backup",
-  "**/.leika-build-backup/**",
-  "**/.leika-build-stage-*",
-  "**/.leika-build-stage-*/**",
   "**/.*.leika-backup",
   "**/.*.leika-backup/**",
   "**/.*.leika-stage-*",
@@ -106,9 +97,8 @@ exclude = [
   "src/leika/.leika-icons-stage-*",
   "src/leika/.leika-icons-stage-*/**",
   "docs/_build/**",
-  "src/leika/client/.leika-build.lock",
-  "src/leika/client/.nodeenv/**",
-  "src/leika/client/build/.leika-sources",
+  "src/leika/client/build/.*",
+  "src/leika/client/build/tmp*",
   "src/leika/client/node_modules/**",
 ]
 
@@ -139,7 +129,6 @@ artifacts = [
   "src/leika/client/build/THIRD_PARTY_NOTICES.txt",
 ]
 exclude = [
-  "src/leika/client/.nodeenv/**",
   "src/leika/client/node_modules/**",
   "src/leika/client/src/**",
   "src/leika/client/.nvmrc",
@@ -173,7 +162,6 @@ markers = [
 include = ["src", "examples"]
 exclude = [
   "docs",
-  "src/leika/client/.nodeenv",
   "src/leika/client/node_modules",
   "src/leika/client/build",
 ]
@@ -182,7 +170,7 @@ pythonVersion = "3.10"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = [".nodeenv", "node_modules", "src/leika/client/build"]
+exclude = ["node_modules", "src/leika/client/build"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "PLC", "PLE", "PLR", "PLW"]

@@ -88,9 +88,7 @@ def test_check_rejects_matching_symlink_and_non_regular_targets(
 
 
 def test_prettier_runtime_never_falls_back_to_npx(tmp_path: Path, monkeypatch) -> None:
-    bin_dir = tmp_path / "bin"
     monkeypatch.setattr(sync, "PRETTIER_PATH", tmp_path / "missing-prettier")
-    monkeypatch.setattr(sync.client_autobuild, "_resolve_node", lambda: (bin_dir, None))
 
     with pytest.raises(RuntimeError, match="not installed from package-lock.json"):
         sync._prettier_runtime()

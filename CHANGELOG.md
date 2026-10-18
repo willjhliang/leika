@@ -5,6 +5,11 @@ versioning.
 
 ## Unreleased
 
+- The `leika-build-client` console script and the `LEIKA_CLIENT_BUILD`
+  environment variable are removed. A source checkout still rebuilds the
+  browser client when its sources change, and `make build-client` builds it
+  explicitly. Building needs `npm` on `PATH`; Leika no longer downloads Node.
+
 - Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
   One WebSockets server implementation uses the API available from version 12
   through 17, with no version dispatch or compatibility adapter.

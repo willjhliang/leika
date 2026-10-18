@@ -4,7 +4,7 @@
 
 ```bash
 make install   # Uses the tracked uv.lock.
-# pip fallback: python -m pip install -e ".[dev]" && leika-build-client
+# pip fallback: python -m pip install -e ".[dev]" && make build-client
 ```
 
 The Python package serves `src/leika/client/build/index.html`. The Python-facing
@@ -13,50 +13,20 @@ The pip fallback honors published ranges instead of the development lock.
 
 ## Building the client
 
-`leika-build-client` -- equivalently `make build-client` -- is the only way the
-client is built. CI runs it, the bootstrap above runs it, and a server that
-finds no usable build runs it for you. What a build *is* stays in the client's
-`package.json`. The entry point resolves the pinned Node runtime, refreshes
-dependencies with `npm ci` when the package inputs change, and then invokes
-the package's `npm run build`; there is no second build definition to drift.
+The server serves `src/leika/client/build/index.html`. In a source checkout, a
+server that finds that build missing or older than the client sources rebuilds
+it before starting; `make build-client` does the same explicitly. A build runs
+`npm ci` when `package-lock.json` changed since the last install, then the
+client's own `npm run build`, and records a hash of the client sources in
+`build/.leika-sources`. It needs `npm` from Node.js 24 on `PATH`. The Hatch
+build hook builds the client the same way into every sdist and wheel, so an
+installed wheel ships the build and never rebuilds it.
 
-A build records the hash of the sources it came from in
-`build/.leika-sources`, and is rebuilt when that no longer matches the tree.
-Timestamps are not consulted: checkouts, cache restores, and pip all rewrite
-them. A completed generation is staged and validated before an atomic directory
-swap, so an interrupted build leaves either the previous generation or a
-recoverable new one rather than a mixed bundle. Files and directory entries are
-explicitly flushed on POSIX. Python does not expose directory fsync on Windows,
-so there the backup transaction guarantees process-crash recovery while
-power-loss durability remains the filesystem's responsibility.
-
-Hatch's custom build hook is validation-only: it never starts Node, npm, or a
-network request. A standard wheel built directly from a checkout fails fast if
-the bundle is missing or stale and points to `leika-build-client --force` or
-`make package`. Editable and sdist builds remain possible from a clean checkout.
-When a wheel is built from an extracted sdist, the hook validates the complete
-bundled client without requiring the checkout-only source stamp.
-
-Set `LEIKA_CLIENT_BUILD` to control this from a script:
-
-| Value | Effect |
-| --- | --- |
-| `auto` (default) | Build when the stamp does not match, unless `npm run dev` is running |
-| `never` | Never build; serve whatever is in `build/` |
-| `always` | Build unconditionally |
-
-Node is pinned in `src/leika/client/.nvmrc`, beside the `package.json` it
-applies to, and CI reads the same file through `setup-node`'s
-`node-version-file`. If that exact version is already on your `PATH` the build
-uses it; otherwise it downloads a private copy with `nodeenv`.
-
-Use that same version (`nvm use`) before running any command that rewrites
-`package-lock.json`. npm versions disagree about which optional transitive
-packages belong in a lockfile, so regenerating it on an older npm silently
-drops entries that CI's npm then rejects with a confusing
-`npm ci` "package.json and package-lock.json are not in sync" error.
-Dependency refreshes use `npm ci` and never rewrite the lockfile; release
-packaging forces a clean refresh even when the local install stamp matches.
+Node is pinned in `src/leika/client/.nvmrc`, which CI reads through
+`setup-node`. Use that npm major version before running any command that
+rewrites `package-lock.json`: npm versions disagree about which optional
+transitive packages belong in a lockfile, and `npm ci` rejects a lockfile an
+older npm wrote.
 
 ## Checks
 

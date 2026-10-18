@@ -9,7 +9,7 @@ help: ## Show available development commands
 
 install: ## Install Python and browser-development dependencies
 	uv sync --locked --extra dev
-	$(UV_DEV) leika-build-client
+	python src/leika/_client_autobuild.py
 
 install-docs: ## Install the documentation toolchain (Sphinx, Furo, live reload)
 	uv sync --locked --extra docs
@@ -30,8 +30,8 @@ typecheck: ## Type-check the Python package and examples
 client-test: ## Type-check, lint, format-check, and unit-test the browser client
 	cd src/leika/client && npm run typecheck && npm run lint && npm run format:check && npm test
 
-build-client: ## Build the single-file browser client
-	$(UV_DEV) leika-build-client
+build-client: ## Build the single-file browser client if its sources changed
+	python src/leika/_client_autobuild.py
 
 docs: ## Build the HTML documentation into docs/_build/html
 	$(UV_DOCS) sphinx-build -b html -W --keep-going docs docs/_build/html

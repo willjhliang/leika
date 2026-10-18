@@ -91,14 +91,13 @@ def _write_or_check(path: Path, content: str, *, check: bool) -> bool:
 
 
 def _prettier_runtime() -> tuple[Path, dict[str, str]]:
-    """Resolve the lockfile-installed Prettier and pinned Node runtime."""
-    bin_dir, virtual_env = client_autobuild._resolve_node()
+    """Resolve the lockfile-installed Prettier."""
     if not PRETTIER_PATH.is_file():
         raise RuntimeError(
             "Prettier is not installed from package-lock.json; run "
             "`npm ci` in src/leika/client before synchronizing generated files"
         )
-    return PRETTIER_PATH, client_autobuild._node_env(bin_dir, virtual_env)
+    return PRETTIER_PATH, dict(os.environ)
 
 
 def _format_source(
@@ -137,8 +136,7 @@ def main() -> int:
         outputs.append((VERSION_PATH, _version_source()))
 
     try:
-        # npm ci replaces node_modules and nodeenv creation replaces its bin
-        # directory. Keep the client-build lock through formatting and every
+        # npm ci replaces node_modules. Keep the client-build lock through formatting and every
         # generated-file check/replacement. Per-file publication is atomic,
         # and no build can observe the brief interval between the protocol and
         # version replacements.

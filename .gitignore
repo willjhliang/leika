@@ -26,10 +26,6 @@ dist/
 docs/_build/
 htmlcov/
 node_modules/
-src/leika/client/.leika-build.lock
-src/leika/client/.leika-build-backup/
-src/leika/client/.leika-build-stage-*/
 src/leika/.leika-icons-stage-*/
-src/leika/client/.nodeenv/
 src/leika/client/build/
 test-results/
