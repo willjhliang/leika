@@ -134,7 +134,7 @@ def _viser_embed_target(target: str | Any) -> str | tuple[str, int]:
             )
         if not 1 <= port <= 65535:
             raise ValueError(f"Viser server reported an invalid port: {port!r}.")
-        return get_host(), port
+        return cast(str, get_host()), port
 
     raise TypeError(
         "target must be a viser ViserServer (an object with get_port() and "
