@@ -74,43 +74,48 @@ Defects found:
 - `InsidePictureContext` is only provided as `false`, leaving a dead branch.
 - The progress bar is classified as an input on the server.
 
-## Proposed plan
+## Decisions
 
-Proposals awaiting the owner's decisions are kept apart from authorized work.
-Nothing below is authorized yet.
+- **Trust model.** Leika trusts its own server and Python caller. It validates
+  and bounds only what browsers send to Python, and authenticates connections.
+  Every resource ledger, budget, preflight, browser re-validation, image
+  sniffing and pixel lease goes.
+- **Client.** GUI tab tear-out goes: the docking library becomes one control
+  panel that floats, docks left or right, resizes and collapses. The preview
+  pipeline, hover-scroll text, contents rail, per-file preview memory,
+  connection statistics and colour-picker extras stay.
+- **Python API.** Overlapping controls merge into one control per concept and
+  compatibility aliases go. Rendering presets, pane-size reporting, client
+  pacing and the `delivery_backpressure` option go; backpressure is always on.
+  `leika.infra` becomes private. `share=True` stays. `add_playback(duration=)`
+  and `add_video_controls(sync_group=)` remain the two playback entry points.
+- **Release.** Minimal flow: build the client, `uv build`, one short archive
+  check, `twine check`, install smoke tests and tag-triggered publishing.
+- Babble's WebSockets 12, Pillow 11.3 and Viser 0.2.11 support stays.
 
-Behavior-preserving phases:
+## Authorized plan
 
-1. Delete dead code: playgrounds and their HTML pages, `sheet.tsx`,
-   `testGuiContext.ts`, `shallowObjectKeysEqual.ts`, Markdown inlining in
-   `_markdown.py`, `await_async_errors`, Viser `_port`, the ndarray wire path,
-   `TypeScriptAnnotationOverride`, unreachable single-message GUI actions and
-   the dead branch of `AssignablePropsBase`.
-2. One implementation per concept: one image preparation path, one pane adder
-   and one pane content layer, one GUI handle base with one `update`, retire
-   and callback path, one validation function per component, one Plotly
-   serializer, one file-send path, one lifecycle owner (`Server`), one message
-   base, one window generator, encode-once broadcasts.
-3. One client receive path: synchronous decode, a plain per-frame queue and one
-   dispatch `switch`; no generated runtime validator.
-4. Tooling: one client build path, one generator entry point, `uv build` plus
-   one short archive check, `twine check` and install smoke tests; CI calls
-   Makefile targets; docs describe current behavior only, and this brief is
-   excluded from published docs.
+Each wave's agents work in temporary worktrees with disjoint file ownership.
+Each outcome is reviewed, validated and committed with its tests and docs.
 
-Decisions for the owner:
+1. **Wave 1, in parallel.** Release tooling and CI; the single control panel
+   (with the dev playgrounds deleted); the private transport (one message base,
+   encode-once broadcasts, one window generator, one lifecycle owner, in-memory
+   client serving, no ndarray path, no generated browser validator, inbound-only
+   limits).
+2. **Wave 2.** Python server and panes, then the Python GUI layer: remove
+   ledgers and budgets, one implementation per concept, dead code. In parallel,
+   the browser client: remove budgets and re-validation, one receive path,
+   one image component, one Plotly loader, dead code.
+3. **Wave 3, in parallel.** Remove rendering presets end to end; merge
+   overlapping controls end to end.
+4. **Wave 4.** Make the docs describe current behavior, then run full
+   validation (unit, browser, docs, package) and a final review.
 
-- Trust model: validate only browser input and authentication, removing every
-  resource ledger and client re-validation.
-- Client cuts: GUI tab tear-out, the preview pipeline (keep a minimal preview),
-  hover-scroll text, the Markdown contents rail, per-file preview memory,
-  connection stats, colour-picker extras.
-- API cuts: merge overlapping controls, rendering presets and pacing,
-  `share=True`, the public `leika.infra` surface, compatibility aliases.
-- Release depth: whether reproducibility checks and hashed build constraints
-  stay.
+Baseline before the work: 1,013 Python unit tests pass and one fails only
+under parallel workers (it patches `json.loads` while Plotly loads its
+validator cache); 907 client tests pass.
 
 ## Next actions
 
-Present the review, record the owner's decisions here, then execute the
-authorized phases in order, each committed with its tests and docs.
+Run wave 1.
