@@ -8,11 +8,12 @@
 Every consumer installs Leika the same way: a regular install of this checkout,
 `leika @ file:///mnt/amlfs-01/home/wiliang/leika`, listed in the requirements
 it installs from (Babble `requirements-viewer.txt`, do_anything
-`requirements.txt`, lwm `requirements/overrides.txt` and its compiled lock).
-do_anything and lwm are installed from `main` at `417941c` and pass their
-viewer tests (55 and 49). Babble's install includes successive-port retry;
-its current launch receipt records the installed source commit. The version
-stays 0.4.0 until the user releases.
+`requirements.txt`, lwm `requirements/lwm.txt`). All three have the code from
+`2c01cf1`, including successive-port retry; their installed Python files and
+built client match the checkout, and dependency versions are unchanged.
+LWM's 38 and do_anything's 21 targeted viewer checks pass. Babble's current
+launch receipt records its running source commit. The version stays 0.4.0
+until the user releases.
 
 Downstream consumers are Babble (`babble/viewer/app.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
@@ -136,8 +137,7 @@ libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 Installs copy the code and built page, so merges here don't reach running
 consumers until a rollout. A rollout runs with `main` committed and its client
 build current (consumer envs have no npm): reinstall each project per its
-install doc (lwm syncs with `--reinstall-package leika` and must keep its
-Isaac pins, e.g. Pillow 11.2.1), run its viewer tests, and restart the
+install doc, preserving its dependency pins, run its viewer tests, and restart the
 visualizers this session owns: lwm's Pilot jobs `jca01ef3ea83041812226`
 (port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer
 (current URL and launch identity in Babble's `runs/viewer-checks/viewer-current.json`).
