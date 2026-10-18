@@ -38,19 +38,17 @@ make lint
 make typecheck
 make client-test
 make test
-make gallery  # After visual client or gallery-registry changes.
-python scripts/check_docs.py
 make docs
 make test-e2e
 make package
+make gallery  # After visual client or gallery-registry changes.
 ```
 
 Run through `make docs` before opening a change; add `make test-e2e` for
-browser-facing changes and `make package` for packaging changes.
-`check_docs.py` recursively validates local Markdown and reStructuredText links,
-then compiles every shipped example and Markdown Python block. It has no `make`
-target but CI runs it, so skipping it locally is a way to go red on a broken
-link or snippet.
+browser-facing changes and `make package` for packaging changes. `make docs`
+first runs `scripts/check_docs.py`, which validates local Markdown and
+reStructuredText links and compiles every example and Markdown Python block.
+CI runs these targets on every pull request.
 
 Unit tests must work without the optional plotting libraries unless marked
 `plotly` or `matplotlib`. `make package` builds the sdist and wheel into
@@ -98,14 +96,9 @@ using Pillow. The proxy replacement preserves the reason for the former aiohttp
 floor: its older C response parser has a
 [memory safety advisory](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-cq5v-8q36-5273).
 
-CI runs the HTTP, auth, dispatch, resource/lifecycle and real-browser Viser tests
-under the simulator pins, WebSockets 13 and the latest supported WebSockets,
-alongside the locked environment. Viser's own dependency range determines which
-Viser release can be installed with each transport version. No simulator
-or GPU is required for these transport tests. The eight-scene browser test checks
-geometry delivery, Leika controls, and reconnect replay on one forwarded port.
-Viser owns reconnect policy: the tested modern version retries when its iframe
-regains focus; Viser 0.2.11 retries in the background as well.
+CI's minimum-versions job installs the development environment under these
+constraints on Python 3.10, then runs the unit tests and the Viser pane browser
+tests. No simulator or GPU is required.
 
 ## Documentation
 

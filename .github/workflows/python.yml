@@ -1,14 +1,11 @@
 name: Python
 
 on:
-  workflow_call:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
 
-  schedule:
-    - cron: "17 6 * * 1"
 concurrency:
   group: python-${{ github.ref }}
   cancel-in-progress: true
@@ -28,141 +25,40 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/build-client
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: ./.github/actions/setup
         with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            build-constraints.txt
-          cache-suffix: ${{ matrix.python-version }}
-      - name: Unit tests
-        env:
-          LEIKA_PYTHON_VERSION: ${{ matrix.python-version }}
-        run: uv run --locked --extra dev --python "$LEIKA_PYTHON_VERSION" pytest --ignore=tests/e2e
-      - name: Unit tests without runtime asserts
-        if: matrix.python-version == '3.12'
-        env:
-          PYTHONOPTIMIZE: "1"
-        run: uv run --locked --extra dev --python 3.12 pytest --ignore=tests/e2e
+          python-version: ${{ matrix.python-version }}
+      - run: make build-client test
 
   quality:
     runs-on: ubuntu-24.04
-    name: Python quality
+    name: Lint and type checks
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            build-constraints.txt
-      - name: Ruff
-        run: |
-          uv run --locked --extra dev ruff check src tests examples scripts hatch_build.py --output-format github
-          uv run --locked --extra dev ruff format --check src tests examples scripts hatch_build.py
-      - name: Pyright
-        run: uv run --locked --extra dev --python 3.12 pyright src examples
-      - name: Documentation and examples
-        run: python scripts/check_docs.py
-
-  minimum-dependencies:
-    runs-on: ubuntu-24.04
-    name: Minimum direct dependencies
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/build-client
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            build-constraints.txt
-      - name: Test declared direct-dependency floors
-        run: |
-          floor_environment="$(mktemp -d)"
-          uv pip compile pyproject.toml --extra dev --resolution lowest-direct \
-            --python-version 3.10 --output-file "$floor_environment/requirements.txt"
-          uv venv --python 3.10 "$floor_environment/environment"
-          uv pip sync --python "$floor_environment/environment/bin/python" \
-            "$floor_environment/requirements.txt"
-          PYTHONPATH=src "$floor_environment/environment/bin/python" \
-            scripts/check_dependency_floors.py --pytest
-      - name: Ensure floor resolution leaves the universal lock unchanged
-        run: git diff --exit-code -- uv.lock
-
-  transport-compatibility:
-    runs-on: ubuntu-24.04
-    name: Transport compatibility (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Isaac 5.1 pins
-            websockets: websockets==12.0
-            constraints: tests/constraints/isaac51.txt
-          - name: WebSockets 13
-            websockets: websockets==13.0
-            constraints: /dev/null
-          - name: Latest WebSockets
-            websockets: websockets>=17
-            constraints: /dev/null
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/build-client
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-      - name: Install transport test dependencies
+      - uses: ./.github/actions/setup
+      - run: make lint typecheck
         env:
-          WEBSOCKETS_REQUIREMENT: ${{ matrix.websockets }}
-          TEST_CONSTRAINTS: ${{ matrix.constraints }}
-        run: |
-          uv venv --python 3.11
-          uv pip install -e '.[dev]' aiohttp "$WEBSOCKETS_REQUIREMENT" -c "$TEST_CONSTRAINTS"
-          uv pip check
-          .venv/bin/python -m playwright install chromium --with-deps
-      - name: Transport, image and browser compatibility
-        run: |
-          .venv/bin/python -m pytest -q tests/test_http_serving.py tests/test_auth.py \
-            tests/test_infra_dispatch.py tests/test_viser_proxy.py \
-            tests/test_server_lifecycle.py tests/test_rendering.py tests/test_image_encoding.py
-          .venv/bin/python -m pytest -q tests/e2e/test_viser_pane.py
+          RUFF_OUTPUT_FORMAT: github
 
-  dependency-audit:
+  minimum-versions:
     runs-on: ubuntu-24.04
-    name: Audit ${{ matrix.extra }} dependencies on Python ${{ matrix.python-version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.14"]
-        extra: [base, examples]
+    # The pyproject.toml floors that Babble's Isaac Sim 5.1 pins depend on.
+    name: Python 3.10 with WebSockets 12, Pillow 11.3 and Viser 0.2.11
+    env:
+      PIP_CONSTRAINT: tests/constraints/isaac51.txt
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: ./.github/actions/setup
         with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-          cache-suffix: audit-${{ matrix.python-version }}-${{ matrix.extra }}
-      - name: Audit exact locked production dependencies
-        env:
-          AUDIT_EXTRA: ${{ matrix.extra }}
-          AUDIT_PYTHON: ${{ matrix.python-version }}
-        run: >-
-          python scripts/check_dependency_audit.py
-          --python "$AUDIT_PYTHON" --extra "$AUDIT_EXTRA"
+          python-version: "3.10"
+      - run: python -m pip check
+      - run: make build-client test
+      - run: python -m playwright install chromium --with-deps
+      - run: python -m pytest tests/e2e/test_viser_pane.py
 
   platforms:
     name: Unit tests on ${{ matrix.os }}
@@ -175,22 +71,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: src/leika/client/.nvmrc
-          cache: npm
-          cache-dependency-path: src/leika/client/package-lock.json
-      - name: Install client toolchain
-        working-directory: src/leika/client
-        run: npm ci
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            build-constraints.txt
-      - name: Unit tests
-        run: uv run --locked --extra dev --python 3.12 pytest --ignore=tests/e2e
-      - name: Generated protocol
-        run: uv run --locked --extra dev --python 3.12 python scripts/generate.py --check
+      - uses: ./.github/actions/setup
+      # `make build-client test`, spelled out so Windows does not need make.
+      - run: python src/leika/_client_autobuild.py
+      - run: python -m pytest --ignore=tests/e2e

@@ -1,14 +1,13 @@
 name: Docs
 
 on:
-  workflow_call:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
   schedule:
     - cron: "23 6 * * 1"
+
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
@@ -24,20 +23,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            build-constraints.txt
-      # No client build: the browser bundle is resolved when a Server is
-      # constructed, not on import, so autodoc runs without a Node toolchain.
-      - name: Build documentation
-        run: uv run --locked --extra docs --python 3.12 sphinx-build -b html -W --keep-going docs docs/_build/html
+          python-version: "3.13"
+      # No client build: autodoc imports leika, which needs only the Python package.
+      - run: python -m pip install -e ".[docs]"
+      - run: make docs
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: docs/_build/html
+      # External sites can be briefly unavailable, so links are a scheduled
+      # signal rather than a pull-request gate.
+      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: make linkcheck
 
   deploy:
     needs: build
@@ -53,25 +51,3 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
-
-  linkcheck:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    name: Check external links
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            build-constraints.txt
-      # External sites can be transiently unavailable, so this is a scheduled
-      # signal rather than a pull-request or release publication gate.
-      - name: Check external links
-        run: >-
-          uv run --locked --extra docs --python 3.12
-          sphinx-build -b linkcheck -W --keep-going docs docs/_build/linkcheck

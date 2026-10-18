@@ -1,0 +1,30 @@
+name: Set up Leika
+description: Install Python, Node.js and Leika's development dependencies, and restore the client build
+
+inputs:
+  python-version:
+    description: Python version
+    required: false
+    default: "3.13"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: src/leika/client/.nvmrc
+        cache: npm
+        cache-dependency-path: src/leika/client/package-lock.json
+    # A restored build carries its source stamp, so `make build-client` skips it.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: src/leika/client/build
+        key: leika-client-${{ runner.os }}-${{ hashFiles('src/leika/client/**') }}
+    - name: Install Leika
+      shell: bash
+      run: python -m pip install -e ".[dev]"

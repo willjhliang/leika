@@ -1,4 +1,4 @@
-.PHONY: help install build-client generate check-generated test test-e2e lint typecheck client-test docs docs-serve gallery package
+.PHONY: help install build-client generate check-generated test test-e2e lint typecheck client-test docs linkcheck docs-serve gallery package
 E2E_WORKERS ?= 4
 
 
@@ -34,8 +34,12 @@ typecheck: ## Type-check the Python package and examples
 client-test: ## Type-check, lint, format-check, and unit-test the browser client
 	cd src/leika/client && npm run typecheck && npm run lint && npm run format:check && npm test
 
-docs: ## Build the HTML documentation into docs/_build/html
+docs: ## Check local links and snippets, then build the HTML docs into docs/_build/html
+	python scripts/check_docs.py
 	python -m sphinx -b html -W --keep-going docs docs/_build/html
+
+linkcheck: ## Check the documentation's external links
+	python -m sphinx -b linkcheck -W --keep-going docs docs/_build/linkcheck
 
 docs-serve: ## Serve the documentation on :8000, rebuilding as files change
 	sphinx-autobuild -b html -W --keep-going docs docs/_build/html --watch README.md --open-browser
