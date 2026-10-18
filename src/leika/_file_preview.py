@@ -9,8 +9,6 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from ._file_transfer import open_regular_file, validate_unchanged_file_snapshot
-
 PREVIEW_TEXT_LEAD_BYTES = 8192
 _TEXT_EXTENSIONS = frozenset(
     ".md .markdown .cfg .conf .csv .diff .ini .log .lock .patch .properties "
@@ -41,16 +39,13 @@ def iter_preview_text(
         return
     markdown = extension in (".md", ".markdown") or mime == "text/markdown"
     render_limit = 1024 * 1024 if markdown else 16 * 1024 * 1024
-    context = (
-        open_regular_file(content) if isinstance(content, Path) else contextlib.nullcontext(None)
-    )
+    context = open(content, "rb") if isinstance(content, Path) else contextlib.nullcontext(None)
     with context as stream:
-        before = os.fstat(stream.fileno()) if stream is not None else None
-        if before is None:
+        if stream is None:
             assert isinstance(content, bytes)
             size = len(content)
         else:
-            size = before.st_size
+            size = os.fstat(stream.fileno()).st_size
         if size > max_bytes:
             return
         target = PREVIEW_TEXT_LEAD_BYTES if size > render_limit else size
@@ -64,8 +59,6 @@ def iter_preview_text(
                 data = content[offset : offset + count]
             else:
                 data = stream.read(count)
-                assert before is not None and isinstance(content, Path)
-                validate_unchanged_file_snapshot(content, before, os.fstat(stream.fileno()))
             if len(data) != count:
                 raise OSError(f"{filename} changed while its preview was being read")
             offset += len(data)

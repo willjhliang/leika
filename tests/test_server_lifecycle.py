@@ -580,7 +580,7 @@ def test_late_constructor_failure_stops_server_and_executors(
     assert len(servers) == 1
     assert servers[0]._server_thread is not None
     assert not servers[0]._server_thread.is_alive()
-    assert len(executors) == 2
+    assert len(executors) == 1
     assert all(executor._shutdown for executor in executors)
 
 
@@ -612,8 +612,8 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
         leika.Server(host="127.0.0.1", port=0, verbose=False)
 
     assert captured.value is primary
-    assert len(executors) == 2
-    assert [executor.cleanup_calls for executor in executors] == [1, 1]
+    assert len(executors) == 1
+    assert [executor.cleanup_calls for executor in executors] == [1]
     assert all(executor._shutdown for executor in executors)
 
 
@@ -648,7 +648,7 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
     assert len(servers) == 1
     assert servers[0]._server_thread is not None
     assert not servers[0]._server_thread.is_alive()
-    assert len(executors) == 2
+    assert len(executors) == 1
     assert all(executor._shutdown for executor in executors)
 
 

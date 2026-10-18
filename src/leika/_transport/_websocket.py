@@ -10,7 +10,6 @@ import dataclasses
 import http
 import itertools
 import logging
-import os
 import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Sequence
@@ -288,11 +287,9 @@ class WebsockServer(WebsockMessageHandler):
         if client_state is not None:
             client_state.message_buffer.flush()
 
-    def register_http_asset(
-        self, path: Path, *, _expected_metadata: os.stat_result | None = None
-    ) -> HttpAsset:
+    def register_http_asset(self, path: Path) -> HttpAsset:
         """Serve an immutable snapshot of one file under its content hash."""
-        return self._http_asset_registry.register(path, _expected_metadata=_expected_metadata)
+        return self._http_asset_registry.register(path)
 
     def _background_worker(self, startup: Future[None]) -> None:
         # A new event loop keeps notebooks, which run their own, working.

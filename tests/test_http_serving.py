@@ -8,7 +8,6 @@ import http.client
 import os
 import struct
 import threading
-import time
 from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
@@ -218,42 +217,6 @@ def test_runtime_assets_are_released_on_stop(tmp_path: Path) -> None:
     assert (registry._snapshots, registry._bytes) == ({}, 0)
     with pytest.raises(RuntimeError, match="after server shutdown"):
         server.register_http_asset(asset)
-
-
-def test_registered_assets_require_regular_files(tmp_path: Path) -> None:
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("FIFOs are not available on this platform")
-    fifo = tmp_path / "asset.fifo"
-    os.mkfifo(fifo)
-    # This must reject before opening the FIFO; there is deliberately no writer
-    # on the other end to rescue a blocking implementation.
-    started = time.monotonic()
-    with pytest.raises(ValueError, match="regular file"):
-        HttpAssetRegistry().register(fifo)
-    assert time.monotonic() - started < 1.0
-
-
-def test_asset_registration_rejects_a_same_size_in_place_rewrite(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "mutable.bin"
-    source.write_bytes(b"before")
-    real_fstat = os.fstat
-    calls = 0
-
-    def rewrite_between_descriptor_stats(descriptor: int) -> os.stat_result:
-        nonlocal calls
-        metadata = real_fstat(descriptor)
-        calls += 1
-        if calls == 2:
-            source.write_bytes(b"after!")
-            timestamp = metadata.st_mtime_ns + 1_000_000_000
-            os.utime(source, ns=(timestamp, timestamp))
-        return metadata if calls == 2 else real_fstat(descriptor)
-
-    monkeypatch.setattr(os, "fstat", rewrite_between_descriptor_stats)
-    with pytest.raises(OSError, match="changed while it was being read"):
-        HttpAssetRegistry().register(source)
 
 
 def test_runtime_assets_are_csp_sandboxed_even_when_embedding_is_allowed(

@@ -39,11 +39,7 @@ from ._async_errors import (
     print_async_exception,
 )
 from ._file_preview import iter_preview_text
-from ._file_transfer import (
-    open_regular_file,
-    validate_file_display_name,
-    validate_unchanged_file_snapshot,
-)
+from ._file_transfer import validate_file_display_name
 from ._gui_resources import _GUI_CONTAINER_DEPTH_MAX, _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
@@ -1418,7 +1414,7 @@ def _gui_text_source(
         source = _link_markdown_assets(
             value,
             image_root,
-            lambda path, metadata: server._register_http_image(path, _expected_metadata=metadata),
+            server._register_http_image,
         )
     if len(source.encode("utf-8")) > _GUI_MARKDOWN_MAX_SOURCE_BYTES:
         raise ValueError("Markdown source exceeds the 1 MiB browser render limit.")
@@ -2104,20 +2100,10 @@ class GuiUploadButtonHandle(_GuiInputHandle[UploadedFile], GuiUploadButtonProps)
 
 
 def _read_preview_markdown(path: Path, max_bytes: int) -> bytes | None:
-    """Read stable regular Markdown, or leave an oversized file to the sender."""
-    with open_regular_file(path) as file:
-        before = os.fstat(file.fileno())
-        size = before.st_size
-        if size > max_bytes:
-            return None
+    """Read Markdown, or leave an oversized file to the sender."""
+    with open(path, "rb") as file:
         payload = file.read(max_bytes + 1)
-        after = os.fstat(file.fileno())
-    if len(payload) > max_bytes:
-        return None
-    validate_unchanged_file_snapshot(path, before, after)
-    if len(payload) != size:
-        raise OSError(f"{path} changed size while it was being read")
-    return payload
+    return payload if len(payload) <= max_bytes else None
 
 
 FileContent = Union[bytes, Path, Callable[["GuiEvent[Any]"], Union[bytes, Path]]]
@@ -2224,7 +2210,7 @@ class _GuiFileButtonHandle(GuiButtonHandle):
         if self._filename is not None:
             return self._filename, content
         if isinstance(content, Path):
-            return content.name, content
+            return validate_file_display_name(content.name), content
         # Bytes name nothing, so there is nothing to fall back to. Raised here
         # rather than at creation because a callable's return type is only
         # known once it has run.
@@ -2411,9 +2397,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             linked = _link_markdown_assets(
                 source,
                 content.parent,
-                lambda path, metadata: client._server._register_http_image(
-                    path, _expected_metadata=metadata
-                ),
+                client._server._register_http_image,
                 image_ready if stream_uuid is not None else None,
             ).encode("utf-8")
             return linked if len(linked) <= _GUI_MARKDOWN_MAX_SOURCE_BYTES else content

@@ -5,6 +5,13 @@ versioning.
 
 ## Unreleased
 
+- File sends: `Server.send_file_download()` and `send_file_preview()` check
+  their arguments once and send through each client's own path; inside an
+  atomic block or on the event loop each client's transfer runs on the shared
+  callback pool. Python no longer caps downloads at 256 MiB, 65,536 parts, or
+  128 active transfers per client. Files, runtime HTTP assets, previews, and
+  Markdown images are read with plain `open()`, so a FIFO or device path blocks
+  as it would anywhere else, and `Path` subclasses are passed through as given.
 - Panes (breaking): pages and panes are no longer limited to 128 pages, 128
   panes, 16 Viser panes, shared payload, text and raster budgets, or the
   16 Mi-character Matplotlib SVG limit; `server.stop()` leaves pane handles

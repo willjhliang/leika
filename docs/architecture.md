@@ -27,7 +27,6 @@ transition has a clear home.
 | --- | --- |
 | Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
 | One browser's GUI, rendering preferences, outgoing transfers, and transfer cancellation | `_client_handle.py` |
-| Download limits, validation, and descriptor-backed chunk sources | `_downloads.py` |
 | Bounded background jobs and captured-payload admission | `_executor.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
@@ -37,7 +36,7 @@ transition has a clear home.
 | Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
 | WebSocket lifecycle, dispatch, replay, and flow control | `_transport/_websocket.py`, `_transport/_message_buffer.py` |
 | HTTP request policy, password gate, routing, assets, and the Viser proxy | `_transport/_http_security.py`, `_transport/_auth.py`, `_transport/_http.py`, `_transport/_http_assets.py`, `_transport/_viser_proxy.py` |
-| Regular-file snapshots and display-name validation | `_file_transfer.py` |
+| File-send argument checks and chunked file sources | `_file_transfer.py` |
 
 `Server` composes the public APIs and shared resources. `ClientHandle` depends
 on the server only for its instance's services and type annotations; the server
@@ -198,9 +197,9 @@ Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
 share 128 MiB, beyond which the oldest registrations are evicted and their URLs
 answer 404.
 
-Downloads are stream-flow-controlled to an 8 MiB queued budget per server
-client, but browser save and link flows still assemble the complete file as a
-Blob. The browser accepts at most 256 MiB and 65,536 parts per download, with
+Downloads are flow-controlled to 8 MiB of queued payload per client, but
+browser save and link flows still assemble the complete file as a Blob. The
+browser accepts at most 256 MiB and 65,536 parts per download, with
 at most 128 active assemblies. One document-wide 512 MiB budget covers both
 the declared bytes of active assemblies and completed Blobs retained by save
 navigation, links, current or deferred previews, and the warm cache. Completion

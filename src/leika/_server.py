@@ -7,7 +7,6 @@ import contextlib
 import dataclasses
 import ipaddress
 import math
-import os
 import secrets
 import threading
 import time
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, TypeVar, cast
 from urllib.parse import urlsplit
 
-from . import _client_autobuild, _downloads, _messages
+from . import _client_autobuild, _messages
 from ._async_errors import (
     await_user_callback,
     in_sync_user_callback,
@@ -24,7 +23,7 @@ from ._async_errors import (
 )
 from ._client_handle import ClientHandle
 from ._executor import BoundedThreadPoolExecutor
-from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
+from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_send
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
 from ._pages import Pages, _page_name_from_label
@@ -54,8 +53,6 @@ _SERVER_GUI_PIXELS_MAX = 128 * 1024 * 1024
 _SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
 
 _CALLBACK_EXECUTOR_MAX_PENDING = 256
-_TRANSFER_EXECUTOR_MAX_PENDING = 16
-_TRANSFER_EXECUTOR_MAX_RETAINED_BYTES = 256 * 1024 * 1024
 _PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
 
 
@@ -197,16 +194,10 @@ class Server:
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
         try:
-            # Allocate worker pools only after all pure construction and handler
-            # registration succeeds. The common rollback below also covers a
-            # failure while allocating the second pool.
+            # Allocate the worker pool only after all pure construction and
+            # handler registration succeeds.
             self._thread_executor = BoundedThreadPoolExecutor(
                 max_workers=32, max_pending=_CALLBACK_EXECUTOR_MAX_PENDING
-            )
-            self._transfer_executor = BoundedThreadPoolExecutor(
-                max_workers=8,
-                max_pending=_TRANSFER_EXECUTOR_MAX_PENDING,
-                max_retained_bytes=_TRANSFER_EXECUTOR_MAX_RETAINED_BYTES,
             )
             server.start()
             self._event_loop = server._broadcast_buffer.event_loop
@@ -283,7 +274,6 @@ class Server:
             callbacks = tuple(self._client_disconnect_cb)
         if client is None:
             return
-        client._cancel_all_outgoing_file_transfers()
         client.gui._discard_client_work(conn.client_id, release_retained_uploads=True)
         gui = getattr(self, "gui", None)
         if gui is not None:
@@ -613,7 +603,7 @@ class Server:
         # transfers before their executor is retired. Attempt both pools even
         # if an injected or platform shutdown failure affects the first one.
         primary_error: BaseException | None = None
-        for executor_name in ("_transfer_executor", "_thread_executor"):
+        for executor_name in ("_thread_executor",):
             executor = getattr(self, executor_name, None)
             if executor is None:
                 continue
@@ -691,7 +681,6 @@ class Server:
             with self._client_lock:
                 clients = tuple(self._connected_clients.values())
             for client in clients:
-                client._cancel_all_outgoing_file_transfers()
                 client.gui._retire_scope_without_queue()
             gui = getattr(self, "gui", None)
             if gui is not None:
@@ -849,50 +838,13 @@ class Server:
             raise TypeError("path must be a pathlib.Path")
         return self._websock_server.register_http_asset(path).url
 
-    def _register_http_image(
-        self, path: Path, *, _expected_metadata: os.stat_result | None = None
-    ) -> HttpAsset:
+    def _register_http_image(self, path: Path) -> HttpAsset:
         """:meth:`register_http_asset`, keeping the picture's size as well.
 
         The size is what a document needs in order to leave the right room for
-        a figure before the figure has arrived, and it is read from the bytes
-        the URL was already being hashed from -- so it is the same
-        registration, told in full rather than told twice.
+        a figure before the figure has arrived.
         """
-        return self._websock_server.register_http_asset(path, _expected_metadata=_expected_metadata)
-
-    def _run_broadcast_file_transfer(
-        self,
-        clients: tuple[ClientHandle, ...],
-        callback: Callable[[ClientHandle], object],
-        *,
-        retained_bytes: int,
-    ) -> None:
-        """Run one all-client transfer job with atomic admission."""
-        if not clients:
-            return
-
-        def send_all() -> None:
-            for client in clients:
-                callback(client)
-
-        try:
-            on_event_loop = asyncio.get_running_loop() is self._event_loop
-        except RuntimeError:
-            on_event_loop = False
-        must_defer = on_event_loop or any(
-            client._websock_connection.get_message_buffer().file_transfer_must_be_deferred()
-            for client in clients
-        )
-        if must_defer:
-            # One bytes object is retained once even when it is broadcast. Admit
-            # the whole fan-out before sending to any client, avoiding partial
-            # delivery caused solely by the executor's retained-byte ceiling.
-            self._transfer_executor.submit_retained(
-                send_all, retained_bytes=retained_bytes
-            ).add_done_callback(print_async_errors)
-        else:
-            send_all()
+        return self._websock_server.register_http_asset(path)
 
     def send_file_download(
         self,
@@ -901,35 +853,25 @@ class Server:
         chunk_size: int = 1024 * 1024,
         save_immediately: bool = False,
     ) -> None:
-        """Send a file for a client or clients to download.
+        """Send a file for every connected client to download.
 
         Args:
             filename: Name of the file to send. Used to infer MIME type.
             content: Contents of the file, or a path to read them from; see
                 :meth:`ClientHandle.send_file_download`. A path is read once
-                per client rather than held in memory between them, so a file
-                rewritten mid-fan-out can reach two clients differently.
+                per client, so a file rewritten mid-fan-out can reach two
+                clients differently.
             chunk_size: Positive part size, at most 8 MiB.
             save_immediately: Whether to save the file immediately. If `False`,
                 a link to the file will be shown as a notification. Being able to
                 right click the link and choose "Save as..." can be useful.
         """
-        filename = validate_file_display_name(filename)
-        content = _downloads.validate_file_content(content)
-        _downloads.validate_download_chunk_size(chunk_size)
+        filename, content = validate_file_send(filename, content, chunk_size)
         if type(save_immediately) is not bool:
             raise TypeError("save_immediately must be a bool.")
-        clients = tuple(self.clients.values())
-        self._run_broadcast_file_transfer(
-            clients,
-            lambda client: client._send_file(
-                filename,
-                content,
-                chunk_size,
-                "save" if save_immediately else "link",
-            ),
-            retained_bytes=len(content) if type(content) is bytes else 0,
-        )
+        disposition = "save" if save_immediately else "link"
+        for client in self.clients.values():
+            client._send_download(filename, content, chunk_size, disposition)
 
     def send_file_preview(
         self,
@@ -949,32 +891,10 @@ class Server:
             max_bytes: Size past which the file is not sent, and the clients
                 are told why; see :meth:`ClientHandle.send_file_preview`.
         """
-        filename = validate_file_display_name(filename)
-        content = _downloads.validate_file_content(content)
-        _downloads.validate_download_chunk_size(chunk_size)
+        filename, content = validate_file_send(filename, content, chunk_size)
         _validate_nonnegative_integer(max_bytes, "max_bytes")
-        clients = tuple(self.clients.values())
-
-        def send(client: ClientHandle) -> None:
-            rejected_size = client._send_file(
-                filename,
-                content,
-                chunk_size,
-                "preview",
-                max_bytes=max_bytes,
-            )
-            if rejected_size is not None:
-                client.add_notification(
-                    "Too large to preview",
-                    f"{filename} is {_downloads.format_bytes(rejected_size)}, over the"
-                    f" {_downloads.format_bytes(max_bytes)} preview limit.",
-                )
-
-        self._run_broadcast_file_transfer(
-            clients,
-            send,
-            retained_bytes=len(content) if type(content) is bytes else 0,
-        )
+        for client in self.clients.values():
+            client._send_preview(filename, content, chunk_size=chunk_size, max_bytes=max_bytes)
 
     def add_notification(
         self,

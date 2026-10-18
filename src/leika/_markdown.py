@@ -1,14 +1,11 @@
-"""Bounded Markdown image rewriting and local asset resolution.
+"""Markdown image rewriting: local images become registered HTTP assets.
 
-This layer prepares document content independently of GUI handle state. The
-caller chooses inline data URLs or supplies an HTTP asset registration callback.
+This layer prepares document content independently of GUI handle state.
 """
 
 from __future__ import annotations
 
-import base64
 import dataclasses
-import os
 import re
 import warnings
 from collections.abc import Callable, Iterator
@@ -16,34 +13,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
-from ._file_transfer import open_regular_file, validate_unchanged_file_snapshot
-from ._transport._image_headers import image_info
-
 if TYPE_CHECKING:
     from ._transport._http_assets import HttpAsset
 
 
-@dataclasses.dataclass(frozen=True)
-class _ResolvedMarkdownAsset:
-    path: Path
-    metadata: os.stat_result
-
-
-def _resolve_markdown_asset(image_root: Path, url: str) -> _ResolvedMarkdownAsset:
-    """Resolve a local image using ordinary filesystem path semantics."""
-    path = (image_root / url).resolve()
-    return _ResolvedMarkdownAsset(path, path.stat())
-
-
-_MARKDOWN_INLINE_MAX_ASSET_BYTES = 8 * 1024 * 1024
-_MARKDOWN_INLINE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 _MARKDOWN_ESCAPE = re.compile(r"\\([\\`*_[\]{}()#+\-.!<> ])")
 _MARKDOWN_FENCE = re.compile(r"^[ \t]{0,3}([`~]{3,})(.*)$")
-
-
-@dataclasses.dataclass
-class _InlineMarkdownBudget:
-    remaining_output_bytes: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -252,95 +227,15 @@ def _relative_markdown_asset(url: str) -> str | None:
         return None
 
 
-def _get_data_url(
-    url: str,
-    image_root: Path | None,
-    budget: _InlineMarkdownBudget | None = None,
-) -> str:
-    local_url = _relative_markdown_asset(url)
-    if local_url is None:
-        return url
-    if image_root is None:
-        warnings.warn(
-            (
-                "No `image_root` provided. All relative paths will be scoped to the "
-                "Leika installation path."
-            ),
-            stacklevel=2,
-        )
-        image_root = Path(__file__).parent
-    try:
-        source = _resolve_markdown_asset(image_root, local_url)
-    except OSError:
-        warnings.warn(
-            f"Failed to read image {url}, with image_root set to {image_root}.",
-            stacklevel=2,
-        )
-        return url
-    if budget is None:
-        budget = _InlineMarkdownBudget(_MARKDOWN_INLINE_MAX_TOTAL_BYTES)
-    try:
-        with open_regular_file(source.path, expected_metadata=source.metadata) as file:
-            before = os.fstat(file.fileno())
-            size = before.st_size
-            encoded_size = 4 * ((size + 2) // 3)
-            # ``image/png``/``image/gif`` are the shortest supported
-            # content-derived prefixes. If even this lower bound cannot fit,
-            # avoid the disk read; the exact MIME check follows validation.
-            output_size = len("data:image/png;base64,") + encoded_size
-            if (
-                size > _MARKDOWN_INLINE_MAX_ASSET_BYTES
-                or output_size > budget.remaining_output_bytes
-            ):
-                warnings.warn(
-                    f"Refused to inline image {url}: the Markdown image byte limit "
-                    "would be exceeded.",
-                    stacklevel=2,
-                )
-                return url
-            binary = file.read(_MARKDOWN_INLINE_MAX_ASSET_BYTES + 1)
-            after = os.fstat(file.fileno())
-        validate_unchanged_file_snapshot(source.path, before, after)
-        if len(binary) != size:
-            raise OSError(f"{source.path} changed size while it was being read")
-        image_kind, _ = image_info(binary)
-        mime_type = "image/jpeg" if image_kind == "jpeg" else f"image/{image_kind}"
-        exact_output_size = len(f"data:{mime_type};base64,") + 4 * ((len(binary) + 2) // 3)
-        if exact_output_size > budget.remaining_output_bytes:
-            warnings.warn(
-                f"Refused to inline image {url}: the Markdown image byte limit would be exceeded.",
-                stacklevel=2,
-            )
-            return url
-        encoded = base64.b64encode(binary).decode("ascii")
-        data_url = f"data:{mime_type};base64,{encoded}"
-        budget.remaining_output_bytes -= len(data_url)
-        return data_url
-    except (OSError, ValueError):
-        warnings.warn(
-            f"Failed to read image {url}, with image_root set to {image_root}.",
-            stacklevel=2,
-        )
-        return url
-
-
-def _parse_markdown(markdown: str, image_root: Path | None) -> str:
-    budget = _InlineMarkdownBudget(_MARKDOWN_INLINE_MAX_TOTAL_BYTES)
-    return _rewrite_markdown_images(markdown, lambda url: _get_data_url(url, image_root, budget))
-
-
 def _link_markdown_assets(
     markdown: str,
     image_root: Path,
-    register: Callable[[Path, os.stat_result], HttpAsset],
+    register: Callable[[Path], HttpAsset],
     on_asset: Callable[[str, str], None] | None = None,
 ) -> str:
     """Point a document's relative images at server URLs of their own.
 
-    The counterpart of :func:`_parse_markdown` for when there is a server to
-    fetch from. Inlining images works anywhere but puts every byte of them in
-    front of the text, so nothing shows until all of it has arrived;
-    registering them (:meth:`Server.register_http_asset`) leaves the document
+    Registering images (:meth:`Server.register_http_asset`) leaves the document
     the size of its writing, and the browser fetches the images alongside it.
 
     Web addresses, fragments, protocol-relative destinations, and every URI
@@ -360,15 +255,7 @@ def _link_markdown_assets(
         if local_url is None:
             return None
         try:
-            source = _resolve_markdown_asset(image_root, local_url)
-        except OSError:
-            warnings.warn(
-                f"Failed to read image {url}, relative to {image_root}.",
-                stacklevel=2,
-            )
-            return None
-        try:
-            asset = register(source.path, source.metadata)
+            asset = register((image_root / local_url).resolve())
         except (OSError, ValueError):
             warnings.warn(
                 f"Failed to read image {url}, relative to {image_root}.",

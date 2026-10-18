@@ -36,9 +36,6 @@ class _Client:
         )()
         self.flushes = 0
 
-    def _cancel_all_outgoing_file_transfers(self) -> None:
-        pass
-
     def flush(self) -> None:
         self.flushes += 1
 
