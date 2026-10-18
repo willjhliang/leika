@@ -551,9 +551,9 @@ class GuiApi:
 
         None for every mismatch -- a stale uuid, another kind of button, a
         button that takes no input now, a client gone between queueing and
-        dispatch -- so each preview message
-        can be a quiet return: the browser asks on its own account about a file
-        it was already sent, and nobody is waiting on an error.
+        dispatch -- so each preview message can be a quiet return: the browser
+        asks on its own account about a file it was already sent, and nobody is
+        waiting on an error.
         """
         client = self._resolve_client(client_id)
         if client is None:
