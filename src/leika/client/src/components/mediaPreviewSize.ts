@@ -5,8 +5,6 @@
 // expand button, which has the picture in hand, and by a previewed file,
 // which is still waiting for one. Kept here so both get the same answer.
 
-import * as React from "react";
-
 /** Below this, media is scaled up to fill the popup rather than opening as a
  * postage stamp in the middle of one. It is also what a preview opens at
  * before anything has said how big it should be. */
@@ -49,34 +47,4 @@ export function mediaPreviewWidth(size: MediaSize | null): string {
   const aspect = size.width / size.height;
   const wanted = Math.max(FLOOR_PX, size.width);
   return `min(90vw, calc((100dvh - ${CHROME_REM}rem) * ${aspect}), ${wanted}px)`;
-}
-
-/** A picture's own size, once the browser has decoded enough to know it.
- *
- * Null until then, and null again the moment the URL changes: a size left
- * over from the last image would open the preview wrong and then correct
- * itself, which is worse than opening at the floor and settling.
- *
- * This loads the same object URL the popup renders, which the browser already
- * has, so there is no second fetch to pay for.
- */
-export function useMediaSize(url: string | null): MediaSize | null {
-  const [size, setSize] = React.useState<MediaSize | null>(null);
-  React.useEffect(() => {
-    setSize(null);
-    if (url === null) return;
-    let active = true;
-    const image = new window.Image();
-    image.onload = () => {
-      if (active) {
-        setSize({ width: image.naturalWidth, height: image.naturalHeight });
-      }
-    };
-    image.src = url;
-    return () => {
-      active = false;
-      image.onload = null;
-    };
-  }, [url]);
-  return size;
 }
