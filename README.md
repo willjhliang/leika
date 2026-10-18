@@ -48,9 +48,10 @@ with leika.Server(workspace_id="quickstart", label="Leika quickstart") as server
 ```
 
 Run the script and open the URL printed in the terminal (by default
-`http://localhost:8080`). `label` names the default page shown in the dock
-header. `server.panes` is the same pane API as `server.pages.default.panes`, so
-existing one-page applications need no structural changes.
+`http://localhost:8080`). `label` names the default page shown in the control
+panel header. `server.panes` is the same pane API as
+`server.pages.default.panes`, so existing one-page applications need no
+structural changes.
 
 Add named pages when one canvas is not enough:
 

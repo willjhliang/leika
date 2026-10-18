@@ -24,6 +24,14 @@ versioning.
   The sdist now carries the built client instead of its TypeScript sources,
   and no longer includes the documentation; change the client from a git
   checkout.
+- Control panel (breaking): GUI tabs can no longer be torn out, reordered,
+  stacked, or split; tab groups always render inline. The panel still floats,
+  docks to the left or right edge, resizes its width, and collapses by clicking
+  its header. Collapsed, it keeps that header in place of the side rail or the
+  fade to the connection badge, and the phone's bottom sheet shares the same
+  collapsed state. Each browser remembers the arrangement per server and
+  `workspace_id`; `control_layout` places the panel until the viewer moves it.
+  Saved panel layouts reset once.
 
 - Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
   One WebSockets server implementation uses the API available from version 12

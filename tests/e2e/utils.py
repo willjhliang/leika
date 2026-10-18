@@ -74,9 +74,9 @@ def drag(
     """Press at `start`, move through `waypoints`, and release.
 
     Every waypoint is interpolated so the gesture crosses the drag threshold and
-    the dock's rAF-throttled handlers see intermediate positions, as a real
-    pointer would. With `cancel=True` the drag is abandoned with Escape (the
-    dock's cancel path) instead of committing at the last waypoint.
+    rAF-throttled handlers see intermediate positions, as a real pointer would.
+    With `cancel=True` the drag is abandoned with Escape (the gesture's cancel
+    path) instead of committing at the last waypoint.
     """
     page.mouse.move(*start)
     page.mouse.down()

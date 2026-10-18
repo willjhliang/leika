@@ -6,7 +6,6 @@ import {
 } from "../ConnectionStatsController";
 import { LEIKA_PROTOCOL } from "../WebsocketMessages";
 import { useViewer } from "../ViewerContext";
-import { usePeekHold } from "../dock/DockContext";
 import {
   QUALITY_LABELS,
   formatBytes,
@@ -200,9 +199,6 @@ export function ConnectionBadge() {
     : "text-muted-foreground";
 
   React.useEffect(() => (open ? connectionStats.watch() : undefined), [open]);
-  // Reaching for the popout means leaving the panel, which is what folds a
-  // collapsed one away to this badge. Not while it is up.
-  usePeekHold(open);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -233,15 +229,11 @@ export function ConnectionBadge() {
               <button
                 ref={badge}
                 type="button"
-                // The panel header is the floating window's drag handle and
-                // its click-to-collapse target, both driven from
-                // `pointerdown`, so the gesture that opens this must not also
-                // reach it.
+                // The panel header is the panel's drag handle and its
+                // click-to-collapse target, both driven from `pointerdown`,
+                // so the gesture that opens this must not also reach it.
                 onPointerDown={(event) => event.stopPropagation()}
                 aria-label={`${accessibleBadgeText}; connection details`}
-                // Collapsed, the floating panel fades down to this one thing,
-                // so the peek marker rides on it.
-                data-dock-peek
                 data-leika-connection-trigger
                 data-leika-page-refreshing={refreshing ? "true" : undefined}
               />

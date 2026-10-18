@@ -184,7 +184,7 @@ def test_toasts_clear_a_left_docked_panel_from_the_start(
         "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
     )
     panel = page.get_by_test_id("control-panel")
-    expect(panel).to_have_attribute("data-dock-side", "left", timeout=5_000)
+    expect(panel).to_have_attribute("data-leika-placement", "left", timeout=5_000)
     panel_bounds = panel.bounding_box()
     assert panel_bounds is not None
 

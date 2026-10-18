@@ -57,7 +57,7 @@ def test_mobile_control_sheet_expansion_survives_refresh(
     assert page_errors == []
 
 
-def test_nested_gui_tab_detaches_with_live_content(
+def test_nested_gui_tab_content_stays_live(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -73,28 +73,14 @@ def test_nested_gui_tab_detaches_with_live_content(
     )
     nested_content = page.get_by_text("Nested content", exact=True)
     expect(nested_content).to_be_visible(timeout=5_000)
-    nested_tab = page.get_by_role("tab", name="Nested tab")
-    nested_tab.hover()
-    # The tab's grip is the tab's drag; its face belongs to the strip.
-    grip_bounds = nested_tab.locator("[data-leika-tab-drag-handle]").bounding_box()
-    assert grip_bounds is not None
-    grip_x = grip_bounds["x"] + grip_bounds["width"] / 2
-    grip_y = grip_bounds["y"] + grip_bounds["height"] / 2
-    page.mouse.move(grip_x, grip_y)
-    page.mouse.down()
-    page.mouse.move(grip_x, grip_y + 90, steps=8)
-    page.mouse.up()
-
-    expect(page.locator("[data-floating-window]")).to_have_count(2)
-    torn_window = nested_content.locator("xpath=ancestor::*[@data-floating-window][1]")
-    expect(torn_window).to_be_visible()
-    expect(torn_window.get_by_role("textbox")).to_have_value("ready")
+    panel = page.get_by_test_id("control-panel")
+    expect(panel.get_by_role("textbox")).to_have_value("ready")
     field.value = "updated"
-    expect(torn_window.get_by_role("textbox")).to_have_value("updated")
+    expect(panel.get_by_role("textbox")).to_have_value("updated")
     assert page_errors == []
 
 
-def test_dockable_tabs_keep_inactive_panel_dom_mounted(
+def test_gui_tabs_keep_inactive_panel_dom_mounted(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -243,9 +229,7 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     assert bounds is not None
     assert abs(bounds["y"] - 15.0) <= 0.5
     assert bounds["height"] <= 870.5
-    scroll_viewport = panel.locator(
-        '[data-dock-panel-scroll-body] > [data-slot="scroll-area-viewport"]'
-    ).first
+    scroll_viewport = panel.locator('[data-slot="scroll-area-viewport"]').first
     assert scroll_viewport.evaluate("element => element.scrollHeight > element.clientHeight")
     last_control.scroll_into_view_if_needed()
     expect(last_control).to_be_visible()
@@ -347,7 +331,7 @@ def test_tall_docked_panel_scrolls_internally_and_stays_inside_viewport(
     )
 
     panel = page.get_by_test_id("control-panel")
-    expect(panel).to_have_attribute("data-dock-side", control_layout, timeout=5_000)
+    expect(panel).to_have_attribute("data-leika-placement", control_layout, timeout=5_000)
 
     last_control = page.get_by_text("Docked control 60", exact=True)
     expect(last_control).to_be_attached(timeout=5_000)

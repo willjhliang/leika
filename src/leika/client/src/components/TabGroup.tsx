@@ -1,75 +1,22 @@
 import * as React from "react";
 
-import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
-import { GuiDockContext } from "../ControlPanel/GuiDockContext";
 import { GuiTabGroupMessage } from "../WebsocketMessages";
 import { IconHtml } from "./common";
-import { TabStrip } from "./TabStrip";
-import { DockArea } from "../dock/DockArea";
-import { DockContext, useDock } from "../dock/DockContext";
-import * as layoutOps from "../dock/layoutOps";
+import { HoverScrollText } from "./HoverScrollText";
 
-/**
- * A tab group, with or without the dragging.
+/** A GUI tab group: a strip of tabs over their containers, with every tab's
+ * contents kept mounted so renderers and half-typed values survive a switch.
  *
- * One kind of tab either way: both forms draw the same `TabStrip` and the same
- * bodies under it, and what a dock adds is that its tabs can be torn out into
- * windows of their own, dropped into another panel, or reordered. It used to
- * add a different-looking strip as well -- a filled pill strip that scrolled
- * its overflow away silently, against an underlined one that wrapped -- and
- * which an author got was decided by the panel's chrome setting, which has no
- * visible connection to a tab group at all.
- *
- * Dragging cannot simply be switched on here, because a tab that can be torn
- * out has to BE a dock panel: the dock is what holds it once it is out, and
- * what draws it wherever it lands. So the draggable form hands its tabs over
- * to the dock as panels and lets the dock place them, and the fixed form keeps
- * them and draws them itself. The fork is which of those two owns the bodies;
- * it is not a fork in what a tab group looks like.
- */
-export default function TabGroupComponent(message: GuiTabGroupMessage) {
-  const dock = React.useContext(DockContext);
-  const guiDock = React.useContext(GuiDockContext);
-  // Both, or neither: the panel registry and the dock that renders it are two
-  // halves of the same surface.
-  if (dock !== null && guiDock !== null)
-    return <DraggableTabGroup {...message} />;
-  return <FixedTabGroup {...message} />;
-}
-
-/** Tabs the viewer can pull apart: each becomes a panel of the dock's, and the
- * group becomes an area for the dock to place them in. */
-function DraggableTabGroup({
-  uuid,
+ * The strip wraps rather than scrolling: a tab whose words are cut off at an
+ * edge, with no scrollbar to say there is more, is a tab nobody can read. It is
+ * as tall as the tabs it holds, marked important because the stock list sets a
+ * one-line height from the tabs root above it. */
+export default function TabGroupComponent({
   props: { _tabs: tabs },
 }: GuiTabGroupMessage) {
-  const dock = useDock();
-  const guiDock = React.useContext(GuiDockContext)!;
-  const areaId = `gui-tabs-${uuid}`;
-
-  React.useEffect(() => guiDock.registerTabGroup(uuid), [uuid, guiDock]);
-  const tabContainerIds = tabs.map((tab) => tab.container_id);
-  const ready = tabContainerIds.every((id) => dock.panels[id] !== undefined);
-  const orderKey = tabContainerIds.join("\n");
-  React.useEffect(() => {
-    if (!ready) return;
-    tabContainerIds.forEach((id, index) =>
-      dock.api.addPanelToArea(areaId, id, index),
-    );
-    dock.api.apply((layout) =>
-      layoutOps.setAreaTabOrder(layout, areaId, tabContainerIds),
-    );
-    // `orderKey` is the semantic dependency for `tabContainerIds`: label/icon
-    // updates rebuild the tab array but do not require re-placing its panels.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, orderKey, areaId, dock.api]);
-
-  return <DockArea areaId={areaId} minHeight="2.4em" inheritContentPadding />;
-}
-
-/** Tabs that stay where they are, drawn here rather than by a dock. */
-function FixedTabGroup({ props: { _tabs: tabs } }: GuiTabGroupMessage) {
   const { GuiContainer } = useGuiComponent();
   // Derived rather than corrected in an effect: when the server drops the
   // selected tab, the first tab takes over on the same render.
@@ -82,16 +29,29 @@ function FixedTabGroup({ props: { _tabs: tabs } }: GuiTabGroupMessage) {
   if (activeTab === null) return null;
   return (
     <Tabs value={activeTab} onValueChange={(next) => setSelected(String(next))}>
-      <TabStrip
-        tabs={tabs.map((tab) => ({
-          id: tab.container_id,
-          label: tab.label,
-          icon:
-            tab.icon_html === null ? undefined : (
-              <IconHtml html={tab.icon_html} />
-            ),
-        }))}
-      />
+      <TabsList
+        variant="line"
+        className="h-auto! w-full min-w-0 flex-wrap justify-start"
+        data-leika-tabs-list
+      >
+        {tabs.map((tab) => (
+          <TabsTrigger
+            key={tab.container_id}
+            value={tab.container_id}
+            title={tab.label}
+            // A lone tab is the group's whole title and takes the whole row;
+            // the cap exists so that in a CROWD no one tab hogs the strip.
+            className={cn("min-w-fit", tabs.length > 1 && "max-w-56")}
+            data-leika-tab
+          >
+            {tab.icon_html !== null && <IconHtml html={tab.icon_html} />}
+            {/* A tab is not worth widening the strip for: past `max-w-56` the
+                label gives way. `TabsTrigger` is a flex box, so the ellipsis
+                has to be asked for on a box inside it. */}
+            <HoverScrollText>{tab.label}</HoverScrollText>
+          </TabsTrigger>
+        ))}
+      </TabsList>
       {tabs.map((tab) => (
         <TabsContent
           value={tab.container_id}

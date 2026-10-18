@@ -60,7 +60,6 @@ describe("readClientSettings", () => {
       accentColor: null,
       imageFit: "fit",
       rendering: "auto",
-      mobileControlsExpanded: true,
     });
     expect(readClientSettings(null)).toEqual(defaultClientSettings());
   });
@@ -73,7 +72,6 @@ describe("readClientSettings", () => {
       accentColor: "rgb(10, 20, 30)",
       imageFit: "fill",
       rendering: "auto",
-      mobileControlsExpanded: false,
     });
     expect(readClientSettings(storage)).toEqual({
       darkMode: true,
@@ -81,7 +79,6 @@ describe("readClientSettings", () => {
       accentColor: "rgb(10, 20, 30)",
       imageFit: "fill",
       rendering: "auto",
-      mobileControlsExpanded: false,
     });
   });
 
@@ -94,7 +91,6 @@ describe("readClientSettings", () => {
       accentColor: null,
       imageFit: "fit",
       rendering: "auto",
-      mobileControlsExpanded: true,
     });
   });
 
@@ -116,7 +112,6 @@ describe("readClientSettings", () => {
       accentColor: null,
       imageFit: "fit",
       rendering: "auto",
-      mobileControlsExpanded: true,
     });
   });
 
@@ -181,7 +176,6 @@ describe("useClientSettings", () => {
     actions.setShowPaneTitles(true);
     actions.setAccentColor("rgb(255, 0, 0)");
     actions.setImageFit("fill");
-    actions.setMobileControlsExpanded(false);
 
     expect(getState()).toEqual({
       darkMode: true,
@@ -189,7 +183,6 @@ describe("useClientSettings", () => {
       accentColor: "rgb(255, 0, 0)",
       imageFit: "fill",
       rendering: "auto",
-      mobileControlsExpanded: false,
     });
     expect(storage.values.size).toBe(1);
     expect(

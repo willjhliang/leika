@@ -76,13 +76,11 @@ preview buttons, modal dismissal, notifications, settings, the connection pane,
 light/dark theming, multi-client updates, the lifecycle of every pane type,
 resizing and persistence, and responsive floating/mobile control panels.
 
-`test_dock.py` covers the docking surface's pointer gestures. The dock's layout
-model is unit-tested in TypeScript (`src/leika/client/src/dock/*.test.ts`); the
-gesture controller and views above it read real DOM geometry, so they can only
-be verified in a browser. Those tests drive the real app rather than a fixture:
-the control panel is an ordinary dock panel and GUI tab groups are ordinary
-dockable panels, so docking, splitting, snapping, tearing out, reordering,
-resizing, minimizing, and drag cancellation are all reachable from it.
+`test_control_panel.py` covers the desktop control panel's pointer gestures --
+floating, docking to either edge, resizing, collapsing, drag cancellation -- and
+its persistence, which read real DOM geometry and so can only be verified in a
+browser. The persistence rules themselves are unit-tested in TypeScript
+(`src/leika/client/src/ControlPanel/controlPanelLayout.test.ts`).
 
 Failure artifacts are written under `test-results/` when capture is enabled by
 the local pytest-playwright configuration or CI runner.

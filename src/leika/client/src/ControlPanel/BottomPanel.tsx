@@ -10,22 +10,22 @@ import {
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
 import { cn } from "../lib/utils";
-import { useViewer } from "../ViewerContext";
+import { useControlPanel } from "./controlPanelLayout";
 import { CONTROL_MAX_WIDTH_CLASS } from "./controlWidth";
 
 const BottomPanelContext = React.createContext<null | {
   expanded: boolean;
 }>(null);
 
-/** A bottom panel is used to display the controls on mobile devices. */
+/** A bottom panel is used to display the controls on mobile devices. It folds
+ * with the same collapsed state as the desktop panel. */
 export default function BottomPanel({
   children,
 }: {
   children: string | React.ReactNode;
 }) {
-  const viewer = useViewer();
-  const expanded = viewer.useSettings((state) => state.mobileControlsExpanded);
-  const { setMobileControlsExpanded } = viewer.settingsActions;
+  const panel = useControlPanel();
+  const expanded = !panel.store((layout) => layout.collapsed);
   return (
     <BottomPanelContext.Provider value={{ expanded }}>
       <Card
@@ -37,7 +37,7 @@ export default function BottomPanel({
       >
         <Collapsible
           open={expanded}
-          onOpenChange={setMobileControlsExpanded}
+          onOpenChange={(open) => panel.save({ collapsed: !open })}
           className="contents"
         >
           {children}
@@ -93,8 +93,8 @@ BottomPanel.Contents = function BottomPanelContents({
   return (
     <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Separator />
-      {/* The same top-bleed the dock panels carry (see TabGroupFrame): room
-          for first-row ink above its box, at no change in layout. */}
+      {/* The same top-bleed the desktop panel carries (see ControlPanelFrame):
+          room for first-row ink above its box, at no change in layout. */}
       <ScrollArea className="-mt-1 h-0 min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]]:pt-1">
         <CardContent>{children}</CardContent>
       </ScrollArea>

@@ -35,8 +35,6 @@ export interface ClientSettings {
   imageFit: ImageFit;
   /** Per-browser raster fidelity; never changes another viewer's encoding. */
   rendering: RenderingMode;
-  /** Whether the phone's bottom control sheet is unfolded. */
-  mobileControlsExpanded: boolean;
 }
 
 export interface ClientSettingsActions {
@@ -47,7 +45,6 @@ export interface ClientSettingsActions {
   setAccentColor: (accentColor: string | null) => void;
   setImageFit: (imageFit: ImageFit) => void;
   setRendering: (rendering: RenderingMode) => void;
-  setMobileControlsExpanded: (expanded: boolean) => void;
 }
 
 export interface ClientSettingsStorage {
@@ -55,8 +52,8 @@ export interface ClientSettingsStorage {
   setItem(key: string, value: string): void;
 }
 
-/** Unlike a dock layout, these say nothing about one app, so the key carries
- * neither the server URL nor the workspace: one browser, one set of
+/** Unlike the control panel's layout, these say nothing about one app, so the
+ * key carries neither the server URL nor the workspace: one browser, one set of
  * preferences.
  *
  * v2 retires v1's image-fit vocabulary, which was the CSS keywords. Reading a
@@ -76,7 +73,6 @@ export function defaultClientSettings(): ClientSettings {
     accentColor: null,
     imageFit: "fit",
     rendering: "auto",
-    mobileControlsExpanded: true,
   };
 }
 
@@ -135,10 +131,6 @@ export function readClientSettings(
       stored.rendering === "performance" || stored.rendering === "quality"
         ? stored.rendering
         : defaults.rendering,
-    mobileControlsExpanded:
-      typeof stored.mobileControlsExpanded === "boolean"
-        ? stored.mobileControlsExpanded
-        : defaults.mobileControlsExpanded,
   };
 }
 
@@ -174,8 +166,6 @@ export function useClientSettings(
       setAccentColor: (accentColor) => update({ accentColor }),
       setImageFit: (imageFit) => update({ imageFit }),
       setRendering: (rendering) => update({ rendering }),
-      setMobileControlsExpanded: (mobileControlsExpanded) =>
-        update({ mobileControlsExpanded }),
     };
   }, [storage, store]);
 

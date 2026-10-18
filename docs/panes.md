@@ -28,9 +28,10 @@ with leika.Server(workspace_id="run", label="Live signals") as server:
     analysis.panes.add_plotly(figure, pane_id="loss")
 ```
 
-A page's `name` is what viewers see in the dock-header selector. Its `page_id`
-is the stable identity used for browser persistence, so renaming a page does
-not discard its layout. Page names and IDs are each unique within a server:
+A page's `name` is what viewers see in the control panel's page selector. Its
+`page_id` is the stable identity used for browser persistence, so renaming a
+page does not discard its layout. Page names and IDs are each unique within a
+server:
 
 ```python
 analysis.name = "Results"
