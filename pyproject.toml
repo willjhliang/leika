@@ -46,7 +46,7 @@ Repository = "https://github.com/willjhliang/leika"
 Issues = "https://github.com/willjhliang/leika/issues"
 
 [project.optional-dependencies]
-examples = ["matplotlib>=3.6", "plotly>=5.21,<7", "viser>=0.2.11,<2"]
+examples = ["matplotlib>=3.6", "plotly>=5.21,<8", "viser>=0.2.11,<2"]
 dev = [
   "leika[docs,examples]",
   "build>=1",
