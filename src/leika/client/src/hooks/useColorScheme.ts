@@ -1,16 +1,12 @@
-import { useSyncExternalStore } from "react";
+import { useViewer } from "../ViewerContext";
+import { usePrefersDarkMode } from "./useMediaQuery";
 
-import {
-  getColorScheme,
-  subscribeColorScheme,
-  type ColorScheme,
-} from "./colorSchemeStore";
+export type ColorScheme = "light" | "dark";
 
-/** The resolved color scheme from the theme provider's document-root class. */
+/** The scheme in force: the Settings choice, or the browser's under Auto.
+ * Python selects the same setting, so this is the one source of dark mode. */
 export function useColorScheme(): ColorScheme {
-  return useSyncExternalStore(
-    subscribeColorScheme,
-    getColorScheme,
-    () => "light" as const,
-  );
+  const chosen = useViewer().useSettings((state) => state.darkMode);
+  const prefersDark = usePrefersDarkMode();
+  return (chosen ?? prefersDark) ? "dark" : "light";
 }
