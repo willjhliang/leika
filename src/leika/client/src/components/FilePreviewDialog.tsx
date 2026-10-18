@@ -323,7 +323,7 @@ function PendingBody() {
   );
 }
 
-export function TextPreviewLimit({ filename }: { filename: string }) {
+function TextPreviewLimit({ filename }: { filename: string }) {
   return (
     <div
       role="status"
@@ -337,7 +337,7 @@ export function TextPreviewLimit({ filename }: { filename: string }) {
   );
 }
 
-export function MarkdownPreviewLimit({ filename }: { filename: string }) {
+function MarkdownPreviewLimit({ filename }: { filename: string }) {
   const limitMiB = MARKDOWN_RENDER_MAX_SOURCE_BYTES / (1024 * 1024);
   return (
     <div
@@ -491,8 +491,7 @@ const WATCH_INTERVAL_MS = 1000;
  *
  * The half of a preview that talks to the server: the dialog below draws a
  * file and says when the reader wants another look at it, and this is what
- * turns that into messages. The playground renders the dialog with neither,
- * and gets a preview that simply sits there, which is what a gallery wants.
+ * turns that into messages.
  */
 export function FilePreviewHost() {
   const preview = React.useSyncExternalStore(
@@ -588,7 +587,7 @@ const DOCUMENT_WIDTH = "min(72rem, calc(100vw - 2rem))";
  * message -- so the popup is the right shape from the click, and only the
  * contents wait.
  */
-export function FilePreviewDialog({
+function FilePreviewDialog({
   preview,
   onClose,
   onReload,
