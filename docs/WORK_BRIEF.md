@@ -109,19 +109,23 @@ Each outcome is reviewed, validated and committed with its tests and docs.
    client); the browser client without budgets or re-validation (WebSocket on
    the main thread, one image component, one Plotly loader, one dark-mode
    hook, one `addPane`). 657 Python, 357 client, 209 browser tests pass.
-3. **Wave 2b, running.** One agent: the Python GUI layer (ledger out, one
-   update/validation/lifecycle path) plus merging overlapping controls end to
-   end with the aliases. Beside it: rendering presets end to end (also
-   pane-size reporting, `delivery_backpressure`, Viser `_port`, the frame
-   `timestampSec`, and the root-pane sentinel if modest).
+3. **Wave 2b (merged at `6831a3c`).** The Python GUI layer without its ledger,
+   with one update, validation and lifecycle path; overlapping controls merged
+   end to end and the aliases removed; rendering presets, pane-size reporting,
+   `delivery_backpressure`, Viser `_port`, the frame timestamp and the root-pane
+   sentinel removed. 608 Python, 358 client, 207 browser tests pass.
 4. **Wave 4.** Make the docs describe current behavior, run full validation and
    a final review, then roll out to the consumers.
 
-Open review notes for the final pass: rows, columns and grids accept then
-reject `placement`/`relative_to` (shared adder signature);
-`PlotlyComponent` still reports malformed server JSON and invalid aspects
-(client re-validation); Viser 0.2.11 requests a font at the server root (a
-cosmetic 404 outside the proxy path).
+Wave 4 code items: rows, columns and grids accept then reject
+`placement`/`relative_to` (shared adder signature); `PlotlyComponent` still
+re-validates server JSON and aspects; Viser 0.2.11 requests a font at the
+server root (a cosmetic 404 outside the proxy path); browser text and list
+entry caps in `guiConstants.ts` that Python no longer shares;
+`_handle_gui_refresh` reaches into `page.panes` internals; browser input gaps
+(a button update with `False` fires `on_click`, an upload in flight completes
+after its button is disabled, preview reload and watch run on disabled or
+hidden buttons); `add_dropdown` validates its options twice.
 
 Local work uses the `leika` conda environment (Python 3.13 and Node 24 from
 conda-forge, Leika installed editable with
@@ -146,10 +150,9 @@ change.
 
 ## Next actions
 
-Wave 2b is running in two worktrees. Review and merge both, then wave 4.
+Wave 4 runs in one agent: the code items above, then the docs pass. Review,
+validate and merge it, then roll out to all three consumers; the GUI API
+changes don't touch the calls they use.
 
-Roll out to all three consumers after the final merge of this series.
-
-The user asked to ration usage: fold the Python GUI cleanup and the control
-merge into one agent (wave 2b), run presets removal beside it, review diffs
-selectively, run the full checks once per merge, and keep the docs pass lean.
+The user asked to ration usage: one agent for wave 4, selective diff review,
+full checks once per merge, a lean docs pass.
