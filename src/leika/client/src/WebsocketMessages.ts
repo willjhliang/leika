@@ -1087,15 +1087,6 @@ export interface FileTransferPartAck {
   transferred_bytes: number;
   total_bytes: number;
 }
-/** Browser-owned rendering preferences, resent on every connection.
- *
- * (automatically generated)
- */
-export interface RenderingSettingsMessage {
-  type: "RenderingSettingsMessage";
-  rendering: "auto" | "performance" | "quality";
-  image_fit: "fit" | "fill" | "stretch";
-}
 /** Browser pane content dimensions in physical pixels; zero when hidden.
  *
  * (automatically generated)
@@ -1303,7 +1294,6 @@ export type Message =
   | FileTransferPart
   | FileTransferAbort
   | FileTransferPartAck
-  | RenderingSettingsMessage
   | PaneViewportMessage
   | ClientPingMessage
   | ServerPongMessage
@@ -1381,4 +1371,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "fb026827e2d1";
+export const LEIKA_PROTOCOL = "5e5f7e2341c1";

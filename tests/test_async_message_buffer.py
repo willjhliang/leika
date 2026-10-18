@@ -12,7 +12,7 @@ import pytest
 from leika import _messages
 from leika._transport import _message_buffer as buffer_impl
 from leika._transport._message_buffer import AsyncMessageBuffer, MessageWindow
-from leika._transport._websocket import _ClientHandleState, _message_producer
+from leika._transport._websocket import _message_producer
 
 Windows = AsyncGenerator[MessageWindow, None]
 _PANE_PROPS = _messages.ViewportEmptyProps("Pane", True, False)
@@ -446,9 +446,8 @@ def test_failed_send_keeps_tombstone_until_disconnect() -> None:
                 assert _retained(buffer) == [remove]
                 raise RuntimeError("send failed")
 
-        state = _ClientHandleState(buffer, buffer)
         with pytest.raises(RuntimeError, match="send failed"):
-            await _message_producer(FailingSocket(), buffer, 7, state)  # type: ignore[arg-type]
+            await _message_producer(FailingSocket(), buffer, 7)  # type: ignore[arg-type]
 
         # The producer's exit unregistered the client, which released it.
         assert buffer.message_from_id == {}

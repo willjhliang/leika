@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import random
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
@@ -121,22 +120,9 @@ class _RecordingSocket:
 
 
 def _produce(
-    socket: _RecordingSocket,
-    buffer: AsyncMessageBuffer,
-    client_id: int,
-    state: _ClientHandleState | None = None,
-    *,
-    delivery_backpressure: bool = False,
+    socket: _RecordingSocket, buffer: AsyncMessageBuffer, client_id: int
 ) -> asyncio.Task[None]:
-    return asyncio.ensure_future(
-        _message_producer(
-            socket,  # type: ignore[arg-type]
-            buffer,
-            client_id,
-            state or _ClientHandleState(buffer, buffer),
-            delivery_backpressure=delivery_backpressure,
-        )
-    )
+    return asyncio.ensure_future(_message_producer(socket, buffer, client_id))  # type: ignore[arg-type]
 
 
 async def _next_frame(socket: _RecordingSocket) -> list[dict[str, Any]]:
@@ -513,61 +499,44 @@ def test_frames_reuse_bytes_encoded_once_at_push() -> None:
         buffer = AsyncMessageBuffer(
             asyncio.get_running_loop(), persistent_messages=True, window_duration_sec=0
         )
-        kept, swapped = _Counted("kept"), _Counted("swapped")
-        assert buffer.push_many((kept, swapped))
-        assert encoded == ["kept", "swapped"]
+        assert buffer.push_many((_Counted("first"), _Counted("second")))
+        assert encoded == ["first", "second"]
 
-        async def prepare(messages: Sequence[_messages.Message]) -> list[_messages.Message]:
-            assert list(messages) == [kept, swapped]
-            return [kept, _Counted("replacement")]
-
-        hooked_state = _ClientHandleState(buffer, buffer, prepare_outgoing=prepare)
-        plain, hooked = _RecordingSocket(), _RecordingSocket()
-        producers = [_produce(plain, buffer, 1), _produce(hooked, buffer, 2, hooked_state)]
+        sockets = [_RecordingSocket(), _RecordingSocket()]
+        producers = [_produce(socket, buffer, index) for index, socket in enumerate(sockets)]
         try:
-            assert await _next_frame(plain) == [
-                {"type": "_Counted", "value": "kept"},
-                {"type": "_Counted", "value": "swapped"},
-            ]
-            assert await _next_frame(hooked) == [
-                {"type": "_Counted", "value": "kept"},
-                {"type": "_Counted", "value": "replacement"},
-            ]
-            # Both clients' frames used the bytes stored at push; only the
-            # hook's replacement was encoded again.
-            assert encoded == ["kept", "swapped", "replacement"]
+            for socket in sockets:
+                assert await _next_frame(socket) == [
+                    {"type": "_Counted", "value": "first"},
+                    {"type": "_Counted", "value": "second"},
+                ]
+            # Both clients' frames used the bytes stored at push.
+            assert encoded == ["first", "second"]
         finally:
             await _shut_down(buffer, *producers)
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("mode", ["off", "server", "rendering"])
-def test_delivery_backpressure_coalesces_pending_updates_until_receipt(mode: str) -> None:
+def test_delivery_backpressure_coalesces_pending_updates_until_receipt() -> None:
     async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        state = _ClientHandleState(buffer, buffer, rendering_backpressure=mode == "rendering")
         socket = _RecordingSocket()
         assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": 0}))
-        producer = _produce(socket, buffer, 1, state, delivery_backpressure=mode == "server")
+        producer = _produce(socket, buffer, 1)
         try:
             await _next_frame(socket)
-            receipt = None
-            if mode != "off":
-                receipt = await asyncio.wait_for(socket.receipts.get(), timeout=1)
+            receipt = await asyncio.wait_for(socket.receipts.get(), timeout=1)
             for value in range(1, 100):
                 assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": value}))
             buffer.flush()
-            if receipt is not None:
-                # Nothing more enters the socket before the peer's receipt.
-                with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(socket.frames.get(), timeout=0.05)
-                assert socket.sent == 1
-                receipt.set_result(0.0)
+            # Nothing more enters the socket before the peer's receipt.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(socket.frames.get(), timeout=0.05)
+            assert socket.sent == 1
+            receipt.set_result(0.0)
             frame = await _next_frame(socket)
             assert [message["updates"]["value"] for message in frame] == [99]
-            if mode == "off":
-                assert socket.receipts.empty()
         finally:
             await _shut_down(buffer, producer)
 
@@ -580,8 +549,8 @@ def test_delivery_backpressure_does_not_block_another_client() -> None:
         slow, fast = _RecordingSocket(), _RecordingSocket(automatic_receipts=True)
         assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": 0}))
         producers = [
-            _produce(slow, buffer, 1, delivery_backpressure=True),
-            _produce(fast, buffer, 2, delivery_backpressure=True),
+            _produce(slow, buffer, 1),
+            _produce(fast, buffer, 2),
         ]
         try:
             await _next_frame(slow)
@@ -597,49 +566,3 @@ def test_delivery_backpressure_does_not_block_another_client() -> None:
             await _shut_down(buffer, *producers)
 
     asyncio.run(scenario())
-
-
-def test_delivery_rate_waits_for_bulk_receipt() -> None:
-    async def scenario() -> None:
-        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        state = _ClientHandleState(buffer, buffer)
-        socket = _RecordingSocket()
-        # Random bytes, so compression cannot shrink the frame below bulk size.
-        payload = random.Random(0).randbytes(32_000)
-        assert buffer.push(_messages.FileTransferPart(None, "transfer", 0, payload))
-        producer = _produce(socket, buffer, 1, state, delivery_backpressure=True)
-        try:
-            receipt = await asyncio.wait_for(socket.receipts.get(), timeout=1)
-            assert state.delivery_rate is None
-            await asyncio.sleep(0.03)
-            receipt.set_result(0.0)
-            for _ in range(100):
-                if state.delivery_rate is not None:
-                    break
-                await asyncio.sleep(0.001)
-            assert state.delivery_rate is not None
-            assert 0 < state.delivery_rate < 2_000_000
-        finally:
-            await _shut_down(buffer, producer)
-
-    asyncio.run(scenario())
-
-
-def test_delivery_rate_tracks_slowdown_and_recovery_without_control_noise() -> None:
-    state = _ClientHandleState(None, None)  # type: ignore[arg-type]
-    state.record_delivery(1_000_000, 0.01)
-    assert state.delivery_rate == 100_000_000
-    state.record_delivery(125_000, 1)
-    assert 125_000 < state.delivery_rate < 420_000
-    for _ in range(10):
-        state.record_delivery(125_000, 1)
-    assert 125_000 <= state.delivery_rate < 130_000
-
-    # Tiny control frames and zero-duration samples measure nothing.
-    slow = state.delivery_rate
-    state.record_delivery(100, 10)
-    state.record_delivery(125_000, 0)
-    assert state.delivery_rate == slow
-    for _ in range(10):
-        state.record_delivery(1_000_000, 0.01)
-    assert state.delivery_rate > 4_000_000

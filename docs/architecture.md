@@ -26,11 +26,10 @@ transition has a clear home.
 | Responsibility | Python modules |
 | --- | --- |
 | Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
-| One browser's GUI, rendering preferences, outgoing transfers, and transfer cancellation | `_client_handle.py` |
+| One browser's GUI, outgoing transfers, and transfer cancellation | `_client_handle.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
 | Renderer preparation shared by GUI controls and panes | `_image_encoding.py`, `_plotly.py`, `_markdown.py` |
-| Per-browser raster variants after transport coalescing | `_rendering.py` |
 | Retained GUI resource measurement | `_gui_resources.py` |
 | Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
 | WebSocket lifecycle, dispatch, replay, and flow control | `_transport/_websocket.py`, `_transport/_message_buffer.py` |
@@ -59,8 +58,7 @@ the file changes.
 Every message type is a dataclass under the one `Message` base in
 `_messages.py`. An outbound message is checked against its annotations and
 encoded once when it is queued; each outgoing window frames those bytes, so a
-broadcast is serialized once for every client. Only messages that a browser's
-rendering preferences replace are encoded again. A browser's message is decoded
+broadcast is serialized once for every client. A browser's message is decoded
 and validated against the schema before any handler sees it.
 
 | Responsibility | Browser modules, relative to `client/src/` |
@@ -134,15 +132,13 @@ the context is not a browser transaction, an all-or-nothing operation, or a
 delivery/render acknowledgement. `flush()` only requests an immediate outbound
 window by bypassing the batching delay; it is not a delivery or render barrier.
 
-For live streams, ``Server(delivery_backpressure=True)`` makes each outbound
-producer wait for a WebSocket pong after sending its batch. Because the pong
-follows that batch on the wire, only one batch per producer can be in flight;
-updates waiting in the message buffer still coalesce to their newest values.
-The two producers (connection-local and broadcast) and each connected client
-advance independently. This limits stale frame buildup on slow links at the
-cost of a round trip per batch. It acknowledges byte delivery, not rendering;
-existing connection keepalive and shutdown retain ownership of timeouts.
-The setting defaults to false, preserving existing transport behavior.
+Each outbound producer waits for a WebSocket pong after sending its batch.
+Because the pong follows that batch on the wire, only one batch per producer is
+in flight; updates waiting in the message buffer still coalesce to their newest
+values. The two producers (connection-local and broadcast) and each connected
+client advance independently. This keeps stale frames from building up on slow
+links at the cost of a round trip per batch. It acknowledges byte delivery, not
+rendering; connection keepalive and shutdown own timeouts.
 
 Tab groups use an explicit flat lifecycle. The group declaration is retained
 separately from stable tab create, update, and remove records, so every replay

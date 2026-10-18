@@ -1728,14 +1728,6 @@ class FileTransferPartAck(Message):
 
 
 @dataclasses.dataclass
-class RenderingSettingsMessage(Message):
-    """Browser-owned rendering preferences, resent on every connection."""
-
-    rendering: Literal["auto", "performance", "quality"]
-    image_fit: Literal["fit", "fill", "stretch"]
-
-
-@dataclasses.dataclass
 class PaneViewportMessage(Message):
     """Browser pane content dimensions in physical pixels; zero when hidden."""
 

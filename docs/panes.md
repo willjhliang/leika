@@ -243,44 +243,13 @@ obsolete server content, and background work must reject obsolete results. The
 receipt also settles same-value and rejected edits; reconnecting restores the
 server's current snapshot. Bind only live shared controls from this server.
 
-### Rendering presets
+### Streaming
 
-The Settings gear contains **Rendering**, saved per browser and restored on
-reconnect. It applies to native image panes, including paused images:
-
-| Preset | Behavior |
-| --- | --- |
-| **Auto** (default) | Start at full source resolution, then adapt to measured connection throughput, preserving JPEG quality. Display size does not affect Auto. |
-| **Performance** | Use half the display resolution in each dimension and JPEG quality 50 for smaller transfers. PNG stays lossless with alpha preserved, at the reduced resolution. |
-| **Quality** | Send the application's original encoded image at full source resolution, without resizing or recompression. |
-
-Auto uses smoothed bulk delivery receipts and the source image's byte size to
-estimate a half-second transfer budget. It scales by pixel area, keeping at least
-70% of each source dimension; this is a conservative heuristic, not a transfer-time
-guarantee. Unknown or sufficiently fast connections receive original bytes, and
-resolution recovers as faster receipts arrive. Very slow links also skip superseded
-frames instead of reducing detail further. Small control messages do not change
-the estimate; receipt timing includes round-trip delay.
-
-No preset upscales the source. Auto retains JPEG quantization and chroma sampling
-when resizing; unchanged-size Auto and Quality send the exact original bytes.
-The source encoding comes from `format` and `jpeg_quality` (`85` by default),
-so Quality cannot recover detail discarded by an application before publication.
-PNG remains PNG in every mode. Vector plots, embedded Viser views, GUI images,
-and document images retain their existing rendering paths.
-
-Each browser receives its own encoding after queued updates coalesce. A viewer's
-choice or slow connection does not lower another viewer's quality or cadence.
-Switching presets or resizing a pane refreshes its current image even when the
-application is paused. Application arrays and retained source images are unchanged.
-Per-client resizing/encoding runs off the network event loop. It adds CPU work
-when a variant is needed.
-
-Browser rendering preferences automatically enable transport receipt backpressure.
-`Server(delivery_backpressure=True)` remains available for non-browser clients.
-`client.delivery_rate` reports smoothed bulk bytes received per second, including
-round-trip delay, rather than the link's theoretical bandwidth. No preset changes
-the application's source clock; a slow client receives fewer current frames.
+Every browser receives the image bytes the application encoded, set by `format`
+and `jpeg_quality` (`85` by default). Leika sends each browser one batch at a
+time and waits for its receipt before the next, so queued updates coalesce to
+the newest frame: a slow connection receives fewer current frames, and one
+viewer's connection never slows another's.
 
 Applications can check `pane.has_viewers` before expensive routine rendering.
 Unknown browser dimensions count as visible; hidden panes and inactive pages do

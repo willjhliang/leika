@@ -63,20 +63,6 @@ class _ClientHandleState:
     # Internal state for ClientConnection objects.
     message_buffer: AsyncMessageBuffer
     persistent_message_buffer: AsyncMessageBuffer
-    delivery_rate: float | None = None
-    prepare_outgoing: Callable[[Sequence[Message]], Awaitable[Sequence[Message]]] | None = None
-    rendering_backpressure: bool = False
-
-    def record_delivery(self, size: int, elapsed: float) -> None:
-        # Tiny control-only batches measure RTT, not useful bulk throughput.
-        if size < 4096 or elapsed <= 0:
-            return
-        rate = size / elapsed
-        prior = self.delivery_rate
-        # Smooth time per byte: a prior fast LAN sample must not mask a new
-        # slow connection for dozens of large transfers. This also recovers as
-        # successful fast receipts replace the old cost, without extra probes.
-        self.delivery_rate = rate if prior is None else 1.0 / (0.7 / prior + 0.3 / rate)
 
 
 async def _run_callback(callback: Callable[..., object], *args: object) -> None:
@@ -194,7 +180,6 @@ class WebsockServer(WebsockMessageHandler):
         password: str | None = None,
         allowed_hosts: frozenset[str] = frozenset(),
         allow_embedding: bool = False,
-        delivery_backpressure: bool = False,
     ) -> None:
         super().__init__()
         self._host = host
@@ -207,7 +192,6 @@ class WebsockServer(WebsockMessageHandler):
         self._auth_guard = HttpPasswordGuard(password) if password is not None else None
         self._viser_proxy = ViserProxy(protected=password is not None)
         self._http_asset_registry = HttpAssetRegistry()
-        self._delivery_backpressure = delivery_backpressure
         self._client_state_from_id: dict[int, _ClientHandleState] = {}
         self._client_state_lock = threading.Lock()
         # The loop and the retained broadcast queue exist before the server
@@ -425,20 +409,8 @@ class WebsockServer(WebsockMessageHandler):
                     await client_connection._handle_incoming_message(client_id, message)
 
                 await _run_connection_tasks(
-                    _message_producer(
-                        connection,
-                        client_state.message_buffer,
-                        client_id,
-                        client_state,
-                        delivery_backpressure=self._delivery_backpressure,
-                    ),
-                    _message_producer(
-                        connection,
-                        self._broadcast_buffer,
-                        client_id,
-                        client_state,
-                        delivery_backpressure=self._delivery_backpressure,
-                    ),
+                    _message_producer(connection, client_state.message_buffer, client_id),
+                    _message_producer(connection, self._broadcast_buffer, client_id),
                     _message_consumer(connection, handle_incoming),
                 )
 
@@ -555,46 +527,26 @@ def _frame(compressor: zstandard.ZstdCompressor, encoded: Iterable[bytes]) -> by
 
 
 async def _message_producer(
-    websocket: WebSocketServerProtocol,
-    buffer: AsyncMessageBuffer,
-    client_id: int,
-    client_state: _ClientHandleState,
-    *,
-    delivery_backpressure: bool = False,
+    websocket: WebSocketServerProtocol, buffer: AsyncMessageBuffer, client_id: int
 ) -> None:
     """Send one buffer's windows to one client until either closes.
 
     Messages are encoded once when queued, so a broadcast is serialized once
-    for all clients; only messages a ``prepare_outgoing`` hook replaces are
-    encoded again.
+    for all clients. After each send the producer waits for the peer's pong:
+    send() may only copy into a socket buffer, and the pong proves the frame
+    arrived. Pending updates keep coalescing meanwhile, so a slow link gets
+    fewer, newer frames instead of a backlog. Each connection's two producers
+    wait independently; a slow browser holds back no other client.
     """
     compressor = zstandard.ZstdCompressor(level=1)
     windows = buffer.window_generator(client_id)
     try:
         async for window in windows:
             try:
-                encoded = [record.data for record in window.messages]
-                if client_state.prepare_outgoing is not None:
-                    data_from_message = {
-                        id(record.message): record.data for record in window.messages
-                    }
-                    prepared = await client_state.prepare_outgoing(
-                        [record.message for record in window.messages]
-                    )
-                    encoded = [
-                        data_from_message.get(id(message)) or message.encode()
-                        for message in prepared
-                    ]
-                frame = _frame(compressor, encoded)
-                started = time.monotonic()
-                await websocket.send(frame)
-                if delivery_backpressure or client_state.rendering_backpressure:
-                    # send() may only copy into a socket buffer. A pong proves
-                    # the peer received the frame, so pending updates keep
-                    # coalescing here meanwhile. This is per connection and
-                    # producer; a slow browser holds back no other client.
-                    await (await websocket.ping())
-                    client_state.record_delivery(len(frame), time.monotonic() - started)
+                await websocket.send(
+                    _frame(compressor, (record.data for record in window.messages))
+                )
+                await (await websocket.ping())
                 buffer.mark_messages_sent(client_id, window.last_message_id)
             finally:
                 if window.file_parts:

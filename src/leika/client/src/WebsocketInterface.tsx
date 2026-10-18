@@ -154,8 +154,6 @@ export function WebsocketMessageProducer() {
         });
         updateRetryInterval();
         viewer.mutable.current.sendMessage = senderFor(ws);
-        sentRendering = null;
-        syncRendering();
       };
 
       ws.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -212,21 +210,6 @@ export function WebsocketMessageProducer() {
     const unsubscribePageSubscription =
       viewer.useViewport.subscribe(syncPageSubscription);
 
-    let sentRendering: string | null = null;
-    const syncRendering = () => {
-      if (!connected) return;
-      const { rendering, imageFit } = viewer.useSettings.get();
-      const key = `${rendering}:${imageFit}`;
-      if (key === sentRendering) return;
-      sentRendering = key;
-      viewer.mutable.current.sendMessage({
-        type: "RenderingSettingsMessage",
-        rendering,
-        image_fit: imageFit,
-      });
-    };
-    const unsubscribeRendering = viewer.useSettings.subscribe(syncRendering);
-
     // The connection is pinged only while something is watching it.
     const reportStats = () => {
       // Ping first: the reply lands before the next tick, so this reports the
@@ -270,7 +253,6 @@ export function WebsocketMessageProducer() {
       document.removeEventListener("visibilitychange", updateRetryInterval);
       if (statsTimer !== null) clearInterval(statsTimer);
       unsubscribePageSubscription();
-      unsubscribeRendering();
       unsubscribeWatchers();
       const closing = socket;
       socket = null;
