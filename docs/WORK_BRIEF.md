@@ -141,10 +141,6 @@ visualizers this session owns: lwm's Pilot jobs `jca01ef3ea83041812226`
 (port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer on
 port 8092 (launch record in Babble's `runs/viewer-checks/`).
 
-After wave 1: 709 Python unit tests, 641 client tests and 216 browser tests
-pass. `test_gui.py::test_plotly_size_is_checked_before_config_json_parse`
-fails on its own; it pins the Plotly preflight that wave 2a removes.
-
 Breaking API changes roll out to Babble, do_anything and lwm in the same
 change.
 
