@@ -543,7 +543,13 @@ class Server:
         await await_user_callback(self._thread_executor, callback, *args)
 
     def _shut_down(self) -> None:
-        """Stop serving, close the tunnel, and cancel callbacks not yet started."""
+        """Stop serving, then close the tunnel and cancel callbacks not yet started."""
+        if threading.current_thread() is self._websock_server._server_thread:
+            # Waiting here would wait for this thread itself, and connection
+            # teardown still needs the pool; finish from another thread.
+            self._websock_server.signal_stop()
+            threading.Thread(target=self._shut_down, name="leika-stop", daemon=True).start()
+            return
         with self._client_lock:
             tunnel, self._share_tunnel = self._share_tunnel, None
         with contextlib.ExitStack() as cleanup:

@@ -144,14 +144,37 @@ def test_high_level_stop_is_safe_from_the_server_event_loop() -> None:
         assert callback_returned.wait(2.0)
         assert failures == []
 
-        # A repeat call off-thread completes the bounded join even if the
-        # asynchronous finalizer has not won the race yet.
+        # A repeat call off-thread joins the worker directly.
         server.stop()
         assert server._websock_server._server_thread is not None
         assert not server._websock_server._server_thread.is_alive()
         assert server._thread_executor._shutdown
     finally:
         server.stop()
+
+
+def test_stop_on_the_event_loop_still_runs_disconnect_callbacks() -> None:
+    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
+    connected = threading.Event()
+    disconnected = threading.Event()
+    server.on_client_connect(lambda _: connected.set())
+    server.on_client_disconnect(lambda _: disconnected.set())
+
+    async def stop_inside_event_loop() -> None:
+        server.stop()
+
+    try:
+        with connect(
+            f"ws://127.0.0.1:{server.port}",
+            subprotocols=[PROTOCOL],
+            open_timeout=2,
+        ):
+            assert connected.wait(2.0)
+            asyncio.run_coroutine_threadsafe(stop_inside_event_loop(), server._event_loop).result(2)
+            assert disconnected.wait(2.0)
+    finally:
+        server.stop()
+    assert server._thread_executor._shutdown
 
 
 def test_high_level_stop_from_sync_connection_callback_returns_promptly() -> None:
