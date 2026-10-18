@@ -222,22 +222,12 @@ describe("reconcileViewportLayout", () => {
     );
     expect(
       collectViewportPaneIds(
-        reconcileViewportLayout(
-          rootAndImage,
-          ["image"],
-          VIEWPORT_ROOT_PANE_ID,
-          false,
-        ),
+        reconcileViewportLayout(rootAndImage, ["image"], false),
       ),
     ).toEqual(["image"]);
     expect(
       collectViewportPaneIds(
-        reconcileViewportLayout(
-          layout(pane(VIEWPORT_ROOT_PANE_ID)),
-          [],
-          VIEWPORT_ROOT_PANE_ID,
-          false,
-        ),
+        reconcileViewportLayout(layout(pane(VIEWPORT_ROOT_PANE_ID)), [], false),
       ),
     ).toEqual([VIEWPORT_ROOT_PANE_ID]);
   });

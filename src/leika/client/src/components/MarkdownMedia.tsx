@@ -16,22 +16,14 @@ import {
 
 import { cn } from "@/lib/utils";
 
+import { MediaImage } from "./MediaImage";
 import { InlineMediaSurface, MediaPreview } from "./MediaPreview";
-import { observeMarkdownImageViewport } from "./markdownImageViewport";
 import { mediaPreviewWidth, type MediaSize } from "./mediaPreviewSize";
-import { inspectMarkdownImageSource } from "./markdownMediaSafety";
+import { markdownImageSource } from "./markdownMediaSafety";
 import {
   previewMediaClassName,
   usePreviewFullscreen,
 } from "./previewFullscreen";
-import {
-  IMAGE_DECODE_FAILURE_MESSAGE,
-  useImageDecodeError,
-} from "../imageDecodeError";
-import {
-  RASTER_PIXEL_BUDGET_MESSAGE,
-  useRasterPixelLease,
-} from "../useRasterPixelLease";
 
 interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   /** Supplied only by MarkdownLink, so its button can be a sibling of the
@@ -39,11 +31,6 @@ interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>;
   src?: string;
 }
-
-type AdmittedMarkdownImageProps = MarkdownImageProps & {
-  measured: MediaSize;
-  sourceKind: "asset" | "data";
-};
 
 interface SelectedImage {
   alt: string;
@@ -60,7 +47,6 @@ interface MarkdownMediaContextValue {
 
 const MarkdownMediaContext =
   React.createContext<MarkdownMediaContextValue | null>(null);
-const InsidePictureContext = React.createContext(false);
 const InsideUnliftedLinkContext = React.createContext(false);
 
 function SelectedImagePreview({
@@ -73,8 +59,6 @@ function SelectedImagePreview({
   onOpenChange: (open: boolean) => void;
 }) {
   const [fullscreen] = usePreviewFullscreen(image.key);
-  const decodeError = useImageDecodeError(image.src);
-  const pixels = useRasterPixelLease(image.src, image.size, open);
   return (
     <MediaPreview
       open={open}
@@ -83,31 +67,14 @@ function SelectedImagePreview({
       rememberAs={image.key}
       width={mediaPreviewWidth(image.size)}
     >
-      {!pixels.pending && !pixels.admitted ? (
-        <span role="status" className="text-muted-foreground text-sm">
-          {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
-          <a href={image.src} rel="noreferrer noopener">
-            Open image: {image.title}
-          </a>
-        </span>
-      ) : decodeError.failed ? (
-        <span role="status" className="text-muted-foreground text-sm">
-          {IMAGE_DECODE_FAILURE_MESSAGE}{" "}
-          <a href={image.src} rel="noreferrer noopener">
-            Open image: {image.title}
-          </a>
-        </span>
-      ) : pixels.admitted ? (
-        <img
-          src={image.src}
-          alt={image.alt}
-          title={image.titleAttribute}
-          width={image.size?.width}
-          height={image.size?.height}
-          className={previewMediaClassName(fullscreen)}
-          onError={decodeError.onError}
-        />
-      ) : null}
+      <MediaImage
+        src={image.src}
+        alt={image.alt}
+        title={image.titleAttribute}
+        width={image.size?.width}
+        height={image.size?.height}
+        className={previewMediaClassName(fullscreen)}
+      />
     </MediaPreview>
   );
 }
@@ -142,39 +109,13 @@ export function MarkdownMediaController({
   );
 }
 
-/** The size the server measured for a picture it is serving, from its URL.
- *
- * It travels as a query rather than an HTML tag because a tag on a line of its
- * own opens an HTML block in Markdown. The query is invisible to the parser
- * and ignored by the asset server, while giving the browser a stable box
- * before the pixels arrive.
- */
-function positiveDimension(value: number | string | undefined): number | null {
-  if (value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : null;
-}
-
-function imageSize(
-  element: HTMLImageElement | null,
-  props: React.ImgHTMLAttributes<HTMLImageElement>,
-): MediaSize | null {
-  const width =
-    positiveDimension(element?.naturalWidth) ?? positiveDimension(props.width);
-  const height =
-    positiveDimension(element?.naturalHeight) ??
-    positiveDimension(props.height);
-  return width === null || height === null ? null : { width, height };
-}
-
 /** A compact identity that survives closing and reopening the document.
  *
- * Asset URLs already carry a content digest, but a document may also use an
- * external URL or a multi-megabyte data URL. Keeping the source itself in the
- * global fullscreen flag would retain all of those bytes after the document
- * closes, so two independent 32-bit accumulators keep the identity without
- * keeping the payload. Length makes the already-remote collision still less
- * plausible.
+ * Asset URLs already carry a content digest, but a document may also use a
+ * multi-megabyte data URL. Keeping the source itself in the global fullscreen
+ * flag would retain all of those bytes after the document closes, so two
+ * independent 32-bit accumulators keep the identity without keeping the
+ * payload. Length makes the already-remote collision still less plausible.
  */
 function imageMemoryKey(src: string): string {
   let first = 0x811c9dc5;
@@ -199,103 +140,25 @@ function anchorAround(
   );
 }
 
-function useMarkdownImageViewport(): {
-  near: boolean;
-  observed: boolean;
-  ref: React.RefObject<HTMLSpanElement | null>;
-} {
-  const observed = typeof IntersectionObserver !== "undefined";
-  const ref = React.useRef<HTMLSpanElement | null>(null);
-  const [near, setNear] = React.useState(!observed);
-
-  React.useEffect(() => {
-    if (!observed || ref.current === null) return;
-    return observeMarkdownImageViewport(ref.current, setNear);
-  }, [observed]);
-
-  return { near, observed, ref };
-}
-
-function InertMarkdownImage({
-  linkedBy,
-  measured,
-  ...sourceProps
-}: AdmittedMarkdownImageProps) {
-  const placeholderProps = {
-    ...sourceProps,
-    onError: undefined,
-    src: undefined,
-    srcSet: undefined,
-    sourceKind: undefined,
-  };
-  return anchorAround(
-    <img
-      {...placeholderProps}
-      className={cn(
-        "text-center text-sm text-muted-foreground",
-        sourceProps.className,
-      )}
-      width={measured.width}
-      height={measured.height}
-    />,
-    linkedBy,
-  );
-}
-
-function ViewportMarkdownImage(props: AdmittedMarkdownImageProps) {
-  const viewport = useMarkdownImageViewport();
-  const pixels = useRasterPixelLease(
-    props.src ?? null,
-    props.measured,
-    viewport.near,
-  );
-  let contents: React.ReactNode = null;
-
-  if (viewport.observed && (!viewport.near || pixels.pending)) {
-    contents = <InertMarkdownImage {...props} />;
-  } else if (!pixels.pending && !pixels.admitted) {
-    const title = props.alt?.trim() || "Image";
-    contents = (
-      <span role="status" className="text-muted-foreground text-sm">
-        {RASTER_PIXEL_BUDGET_MESSAGE}{" "}
-        <a
-          href={props.src}
-          download={props.sourceKind === "data" ? title : undefined}
-          rel="noreferrer noopener"
-        >
-          Open image: {title}
-        </a>
-      </span>
-    );
-  } else if (pixels.admitted) {
-    contents = <AdmittedMarkdownImage {...props} />;
-  }
-
-  if (!viewport.observed) return contents;
-  return (
-    <span
-      ref={viewport.ref}
-      className="block w-fit max-w-full"
-      data-leika-markdown-image-viewport
-    >
-      {contents}
-    </span>
-  );
-}
-
 /** An image made by Markdown, optionally interactive when a controller owns it. */
 export function MarkdownImage({
   linkedBy,
   ...sourceProps
 }: MarkdownImageProps) {
+  const controller = React.useContext(MarkdownMediaContext);
+  const insideUnliftedLink = React.useContext(InsideUnliftedLinkContext);
   const preview = React.useContext(PreviewImageSourcesContext);
+  const imageRef = React.useRef<HTMLImageElement | null>(null);
+
+  // A streamed preview names its figures relative to the document until the
+  // server has registered each one.
   let resolved: string | undefined;
   try {
     resolved = preview?.sources?.get(
       previewImageSourceKey(sourceProps.src ?? ""),
     );
   } catch {
-    // Invalid references keep the normal placeholder/error behavior.
+    // An unparseable reference resolves to nothing, like an unknown one.
   }
   if (preview?.pending && resolved === undefined) {
     return sourceProps.alt
@@ -307,116 +170,55 @@ export function MarkdownImage({
         )
       : null;
   }
-  if (resolved !== undefined) sourceProps = { ...sourceProps, src: resolved };
-  const inspected = inspectMarkdownImageSource(sourceProps.src);
-  const measured = inspected.admission.ok ? inspected.admission.size : null;
-  if (sourceProps.src === undefined) {
-    return (
-      <span role="status" className="text-muted-foreground text-sm">
-        Image preview is unavailable because its source is missing.
-      </span>
-    );
-  }
-  if (!inspected.admission.ok) {
-    const title = sourceProps.alt?.trim() || "Image";
-    return (
-      <span role="status" className="text-muted-foreground text-sm">
-        {inspected.admission.reason}{" "}
-        <a
-          href={sourceProps.src}
-          download={inspected.sourceKind === "data" ? title : undefined}
-          rel="noreferrer noopener"
-        >
-          Open image: {title}
-        </a>
-      </span>
-    );
-  }
-  // From here admission succeeded, so the size passed to the hook is exact.
-  if (measured === null) return null;
-  return (
-    <ViewportMarkdownImage
-      {...sourceProps}
-      linkedBy={linkedBy}
-      measured={measured}
-      sourceKind={inspected.sourceKind === "asset" ? "asset" : "data"}
-    />
-  );
-}
-
-/** Draw an already-admitted image. Split from the lease gate so its markup
- * and link/button semantics remain testable without pretending SSR effects
- * can reserve a browser-only pixel owner. */
-export function AdmittedMarkdownImage({
-  linkedBy,
-  measured,
-  sourceKind,
-  ...sourceProps
-}: AdmittedMarkdownImageProps) {
-  const controller = React.useContext(MarkdownMediaContext);
-  const insidePicture = React.useContext(InsidePictureContext);
-  const insideUnliftedLink = React.useContext(InsideUnliftedLinkContext);
-  const imageRef = React.useRef<HTMLImageElement | null>(null);
-  const decodeError = useImageDecodeError(sourceProps.src ?? null);
-  if (sourceProps.src === undefined) return null;
-  if (decodeError.failed) {
-    const title = sourceProps.alt?.trim() || "Image";
-    return (
-      <span role="status" className="text-muted-foreground text-sm">
-        {IMAGE_DECODE_FAILURE_MESSAGE}{" "}
-        <a
-          href={sourceProps.src}
-          download={sourceKind === "data" ? title : undefined}
-          rel="noreferrer noopener"
-        >
-          Open image: {title}
-        </a>
-      </span>
-    );
+  const src = resolved ?? sourceProps.src;
+  const source = markdownImageSource(src);
+  if (src === undefined || source.kind === "blocked") {
+    // Never fetched: the image is a link the reader can choose to follow.
+    const text = sourceProps.alt?.trim() || src;
+    const link =
+      linkedBy ??
+      (src === undefined || insideUnliftedLink ? undefined : { href: src });
+    return anchorAround(<>{text}</>, link);
   }
 
-  const props = { ...sourceProps, ...measured };
-  // The viewport gate already defers offscreen figures. Native lazy loading
-  // would add another observer turn after admitting even a cached image.
-  const canDefer = sourceKind === "asset";
+  // A measured asset's box is already reserved, so its fetch can wait until
+  // the reader nears it without moving the document when it lands.
+  const deferred = source.size !== null;
   const image = (
-    <img
+    <MediaImage
       ref={imageRef}
-      {...props}
+      {...sourceProps}
+      src={src}
+      width={source.size?.width ?? sourceProps.width}
+      height={source.size?.height ?? sourceProps.height}
       className={cn(
         "text-center text-sm text-muted-foreground",
-        props.className,
+        sourceProps.className,
       )}
-      loading={canDefer ? "eager" : props.loading}
-      decoding={canDefer ? "async" : props.decoding}
-      onError={decodeError.onError}
+      loading={deferred ? "lazy" : sourceProps.loading}
+      decoding={deferred ? "async" : sourceProps.decoding}
     />
   );
 
-  // A picture's fallback image must remain its direct child. Likewise, a raw
-  // link with mixed/whitespace children cannot safely lift one child out; it
-  // keeps ordinary link behavior and no nested interactive control.
-  if (
-    controller === null ||
-    insidePicture ||
-    insideUnliftedLink ||
-    props.src === undefined
-  ) {
+  // A raw link with mixed/whitespace children cannot safely lift one child
+  // out; it keeps ordinary link behavior and no nested interactive control.
+  if (controller === null || insideUnliftedLink) {
     return anchorAround(image, linkedBy);
   }
 
-  const fallbackSrc = props.src;
-  const title = props.alt?.trim() || "Image";
+  const title = sourceProps.alt?.trim() || "Image";
   const expand = () => {
     const element = imageRef.current;
-    const src = element?.currentSrc || fallbackSrc;
     controller.openImage({
-      alt: props.alt ?? "",
-      key: imageMemoryKey(fallbackSrc),
-      size: imageSize(element, props),
+      alt: sourceProps.alt ?? "",
+      key: imageMemoryKey(src),
+      size:
+        element !== null && element.naturalWidth > 0
+          ? { width: element.naturalWidth, height: element.naturalHeight }
+          : source.size,
       src,
       title,
-      titleAttribute: props.title,
+      titleAttribute: sourceProps.title,
     });
   };
 
@@ -455,20 +257,20 @@ export function MarkdownLink({
   );
 }
 
-/** Keep responsive-image selection valid; its fallback stays unwrapped. */
+/** Draw only a picture's fallback image.
+ *
+ * `source[srcset]` starts fetching before anything can decide whether its
+ * address is one a document may load, so author sources are dropped and the
+ * fallback goes through MarkdownImage like any other image.
+ */
 export function MarkdownPicture(
   props: React.HTMLAttributes<HTMLPictureElement>,
 ) {
-  // `source[srcset]` starts fetching before a fallback component can inspect
-  // the bytes. Render only the fallback image through MarkdownImage's safe
-  // admission; responsive author sources remain inert rather than causing an
-  // involuntary remote request.
-  const fallbackImages = React.Children.toArray(props.children).filter(
-    (child) =>
-      React.isValidElement(child) &&
-      (child.type === MarkdownImage || child.type === AdmittedMarkdownImage),
-  );
   return (
-    <InsidePictureContext value={false}>{fallbackImages}</InsidePictureContext>
+    <>
+      {React.Children.toArray(props.children).filter(
+        (child) => React.isValidElement(child) && child.type === MarkdownImage,
+      )}
+    </>
   );
 }

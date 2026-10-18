@@ -51,9 +51,8 @@ model as a warm cache. While hidden, that cache has no renderer DOM, decoded
 raster/GPU resources, or Viser iframe. A cached target appears immediately with
 its last received content; an uncached target leaves the
 outgoing page visible. Either stale view is inert until a separately staged
-replay reaches `Ready`, then the current model replaces it. The cache is
-discarded if client safety budgets need the space, and every page's layout
-remains preserved. `server.gui` and each client's GUI remain workspace-wide,
+replay reaches `Ready`, then the current model replaces it. Every page's
+layout remains preserved. `server.gui` and each client's GUI remain workspace-wide,
 so the same controls stay available while viewers switch pages.
 
 ## Pane types
@@ -125,11 +124,10 @@ Floating-point arrays are read as 0 to 1 and integer arrays as 0 to 255.
 changes to it do not reach the pane; do not mutate it from another thread while
 the call runs.
 
-Received file-preview, Markdown, and registered-asset images reach the browser
-decoder only after verification as a static PNG, JPEG, GIF, or WebP. Animated,
-malformed, oversized, and unsupported files remain downloadable instead of
-rendering inline. Markdown avoids external image URLs; validated Leika assets
-carry their measured dimensions in their registered URL.
+The browser decodes file-preview, Markdown, and registered-asset images itself;
+one it cannot decode shows its ordinary broken-image state. Markdown avoids
+external image URLs; Leika assets carry their measured dimensions in their
+registered URL.
 
 ### matplotlib figures
 

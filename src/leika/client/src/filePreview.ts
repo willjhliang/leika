@@ -1,17 +1,9 @@
-import {
-  RETAINED_DOWNLOAD_PRIORITY,
-  type RetainedDownload,
-  retainedDownloads,
-} from "./retainedDownloadBudget";
-import { normalizedSafeRasterMimeType } from "./imageSafety";
 import { randomUuid } from "./utils/randomUuid";
-import { resetPreviewDocumentCache } from "./previewDocumentCache";
 import type {
   GuiPreviewReadyMessage,
   GuiPreviewImageMessage,
 } from "./WebsocketMessages";
 import { previewImageSourceKey } from "./previewImageSources";
-import { inspectMarkdownImageSource } from "./components/markdownMediaSafety";
 
 // Which viewer a previewed file gets, and the reading of its size.
 //
@@ -144,10 +136,7 @@ export function previewKindFor(
     // SVG is an image the browser will happily render, and also a document
     // that can carry script. It is shown as its source instead, which is a
     // truthful preview and not a way to run anything.
-    if (type === "image/svg+xml") return "text";
-    return normalizedSafeRasterMimeType(type) === null
-      ? "unsupported"
-      : "image";
+    return type === "image/svg+xml" ? "text" : "image";
   }
   if (type.startsWith("video/")) return "video";
   if (type.startsWith("audio/")) return "audio";
@@ -171,19 +160,6 @@ export interface FileContents {
   /** Object URL for the assembled blob. Revoked when the dialog closes. */
   url: string;
   blob: Blob;
-  /** Page-wide completed-file byte reservation owned with this URL. */
-  retained?: RetainedDownload;
-}
-
-function ensureRetained(contents: FileContents): RetainedDownload | null {
-  if (contents.retained !== undefined) {
-    return contents.retained.isActive ? contents.retained : null;
-  }
-  const retained = retainedDownloads.retain(contents.blob, {
-    priority: RETAINED_DOWNLOAD_PRIORITY.preview,
-  });
-  if (retained !== null) contents.retained = retained;
-  return retained;
 }
 
 export interface PreviewTextStream {
@@ -278,11 +254,7 @@ let deferredReplacement: CompleteFilePreview | null = null;
 let scrollingPreviewId: string | null = null;
 
 function releaseFileContents(contents: FileContents): void {
-  try {
-    URL.revokeObjectURL(contents.url);
-  } finally {
-    contents.retained?.release();
-  }
+  URL.revokeObjectURL(contents.url);
 }
 
 function announce(): void {
@@ -313,64 +285,9 @@ function revokeDeferredReplacement(): void {
   }
 }
 
-function restoreVisibleWatchTarget(): void {
-  if (current === null) {
-    watchTarget = null;
-    return;
-  }
-  setWatchTarget(current.sourceUuid, current.sourceVersion);
-}
-
 function discardDeferredReplacement(): void {
   cancelFilePreviewScroll();
   revokeDeferredReplacement();
-}
-
-function ownCurrentContents(preview: CompleteFilePreview): boolean {
-  const contents = preview.contents;
-  const retained = ensureRetained(contents);
-  if (retained === null) {
-    releaseFileContents(contents);
-    return false;
-  }
-  retained.setOwner(RETAINED_DOWNLOAD_PRIORITY.preview, () => {
-    if (current?.contents !== contents) return;
-    try {
-      URL.revokeObjectURL(contents.url);
-    } finally {
-      current = null;
-      watchTarget = null;
-      arriving.clear();
-      discardDeferredReplacement();
-      announce();
-    }
-  });
-  return true;
-}
-
-function ownDeferredContents(replacement: CompleteFilePreview): void {
-  const contents = replacement.contents;
-  const retained = ensureRetained(contents);
-  if (retained === null) {
-    releaseFileContents(contents);
-    if (deferredReplacement?.contents === contents) {
-      deferredReplacement = null;
-      restoreVisibleWatchTarget();
-    }
-    return;
-  }
-  retained.setOwner(RETAINED_DOWNLOAD_PRIORITY.deferredPreview, () => {
-    if (deferredReplacement?.contents !== contents) return;
-    try {
-      URL.revokeObjectURL(contents.url);
-    } finally {
-      deferredReplacement = null;
-      // This copy never became visible. Resume watching from the version the
-      // reader can still see so the server does not suppress a needed resend.
-      restoreVisibleWatchTarget();
-      announce();
-    }
-  });
 }
 
 function applyReplacement(replacement: CompleteFilePreview): void {
@@ -382,12 +299,6 @@ function applyReplacement(replacement: CompleteFilePreview): void {
     releaseFileContents(current.contents);
   }
   current = replacement;
-  if (!ownCurrentContents(replacement)) {
-    current = null;
-    watchTarget = null;
-    arriving.clear();
-    discardDeferredReplacement();
-  }
   announce();
 }
 
@@ -400,14 +311,6 @@ export function openFilePreview(preview: FilePreview): void {
   // watch for the rest of the session.
   arriving.clear();
   current = preview;
-  if (preview.contents !== null) {
-    if (!ownCurrentContents(preview as CompleteFilePreview)) {
-      current = null;
-      watchTarget = null;
-      announce();
-      return;
-    }
-  }
   setWatchTarget(preview.sourceUuid, preview.sourceVersion);
   announce();
 }
@@ -442,9 +345,8 @@ export function requestFilePreview(
     mimeType:
       contents !== null
         ? contents.blob.type
-        : (lead?.mimeType ?? (warm?.retained.blob.type || "text/plain")),
-    sizeBytes:
-      contents?.blob.size ?? lead?.sizeBytes ?? warm?.retained.blob.size ?? 0,
+        : (lead?.mimeType ?? (warm?.blob.type || "text/plain")),
+    sizeBytes: contents?.blob.size ?? lead?.sizeBytes ?? warm?.blob.size ?? 0,
     textLead: lead?.textLead,
     textStream: textStreams.get(sourceUuid),
     contents,
@@ -517,27 +419,14 @@ export function receiveFilePreviewImage(message: GuiPreviewImageMessage): void {
   const active =
     current?.sourceUuid === message.uuid ? current.textStream : undefined;
   const previous = active?.id === message.stream_uuid ? active : cached;
-  if (
-    previous?.id !== message.stream_uuid ||
-    message.source.length > 8192 ||
-    message.url.length > 256
-  )
-    return;
-  const inspected = inspectMarkdownImageSource(message.url);
-  if (!inspected.admission.ok || inspected.sourceKind !== "asset") return;
+  if (previous?.id !== message.stream_uuid) return;
   let key: string;
   try {
     key = previewImageSourceKey(message.source);
-    if (key.length > 8192) return;
   } catch {
     return;
   }
   if (previous.imageSources?.get(key) === message.url) return;
-  if (
-    (previous.imageSources?.size ?? 0) >= 128 &&
-    !previous.imageSources?.has(key)
-  )
-    return;
   const imageSources = new Map(previous.imageSources);
   imageSources.set(key, message.url);
   const stream = { ...previous, imageSources };
@@ -693,7 +582,6 @@ export function resolveFilePreview(id: string, contents: FileContents): void {
   if (current.contents !== null && scrollingPreviewId === current.id) {
     revokeDeferredReplacement();
     deferredReplacement = next;
-    ownDeferredContents(next);
     return;
   }
 
@@ -790,7 +678,6 @@ export function reloadFilePreview({
     // valid throughout the short hold.
     revokeDeferredReplacement();
     deferredReplacement = next;
-    ownDeferredContents(next);
     // The visible snapshot is unchanged, but the watch snapshot moved on.
     announce();
     return;
@@ -828,7 +715,7 @@ const WARMED_LIMIT = 8;
 type WarmedFile = {
   filename: string;
   version: string | null;
-  retained: RetainedDownload;
+  blob: Blob;
   cacheKey?: string | null;
 };
 const warmed = new Map<string, WarmedFile>();
@@ -838,30 +725,12 @@ export function warmFilePreview(
   sourceUuid: string,
   filename: string,
   version: string | null,
-  retainedOrBlob: RetainedDownload | Blob,
+  blob: Blob,
   cacheKey?: string | null,
 ): void {
-  const retained =
-    retainedOrBlob instanceof Blob
-      ? retainedDownloads.retain(retainedOrBlob, {
-          priority: RETAINED_DOWNLOAD_PRIORITY.warm,
-        })
-      : retainedOrBlob;
-  if (retained === null || !retained.isActive) return;
-  const replaced = warmed.get(sourceUuid);
-  if (replaced !== undefined) replaced.retained.release();
-  const entry = { filename, version, retained, cacheKey };
   warmed.delete(sourceUuid);
-  warmed.set(sourceUuid, entry);
-  retained.setOwner(RETAINED_DOWNLOAD_PRIORITY.warm, () => {
-    if (warmed.get(sourceUuid) === entry) warmed.delete(sourceUuid);
-  });
-  if (warmed.size > WARMED_LIMIT) {
-    const oldestId = warmed.keys().next().value!;
-    const oldest = warmed.get(oldestId)!;
-    warmed.delete(oldestId);
-    oldest.retained.release();
-  }
+  warmed.set(sourceUuid, { filename, version, blob, cacheKey });
+  if (warmed.size > WARMED_LIMIT) warmed.delete(warmed.keys().next().value!);
 }
 
 /** Return only the exact source revision the upcoming press announced. */
@@ -880,31 +749,15 @@ export function warmedContents(
     return null;
   }
   warmed.delete(sourceUuid);
-  let url: string;
-  try {
-    url = URL.createObjectURL(entry.retained.blob);
-  } catch {
-    entry.retained.release();
-    return null;
-  }
-  const contents = { blob: entry.retained.blob, url, retained: entry.retained };
-  // `openFilePreview` immediately takes ownership in production. Until then,
-  // the transferred value at least knows how to release its URL if higher
-  // priority budget pressure arrives synchronously.
-  entry.retained.setOwner(RETAINED_DOWNLOAD_PRIORITY.preview, () =>
-    URL.revokeObjectURL(url),
-  );
-  return contents;
+  return { blob: entry.blob, url: URL.createObjectURL(entry.blob) };
 }
 
 /** Clear every resource owned by the current server connection. */
 export function resetFilePreviewState(): void {
-  resetPreviewDocumentCache();
   textLeads.clear();
   textStreams.clear();
   cachedTextChars = 0;
   arriving.clear();
-  for (const entry of warmed.values()) entry.retained.release();
   warmed.clear();
   discardDeferredReplacement();
   watchTarget = null;
@@ -922,19 +775,16 @@ export function closeFilePreview(id: string): void {
   watchTarget = null;
   const { contents, sourceUuid, filename, sourceVersion, cacheKey } = current;
   if (contents !== null) {
-    if (sourceUuid !== null && cacheKey && contents.retained?.isActive) {
-      // Move the existing reservation into the evictable warm cache. The Blob
-      // remains counted once; only this dialog's object URL is released.
-      URL.revokeObjectURL(contents.url);
+    releaseFileContents(contents);
+    // A copy the server confirmed is kept for the next press.
+    if (sourceUuid !== null && cacheKey) {
       warmFilePreview(
         sourceUuid,
         filename,
         sourceVersion,
-        contents.retained,
+        contents.blob,
         cacheKey,
       );
-    } else {
-      releaseFileContents(contents);
     }
   }
   current = null;

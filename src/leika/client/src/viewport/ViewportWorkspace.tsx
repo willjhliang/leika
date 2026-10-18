@@ -2,6 +2,7 @@ import React from "react";
 import { Card, CardContent } from "../components/ui/card";
 import { useViewer } from "../ViewerContext";
 import { motionExceedsThreshold } from "../dragUtils";
+import { bindPointerGesture, tryCapture, tryRelease } from "../pointerGesture";
 import { prefersReducedMotion } from "../utils/motion";
 import {
   VIEWPORT_ROOT_PANE_ID,
@@ -44,6 +45,8 @@ interface DropHint {
 interface GestureBase {
   pointerId: number;
   grip: HTMLElement;
+  /** Remove the gesture's window listeners. */
+  detach: () => void;
   startLayout: ViewportLayout;
   startInteractionEpoch: number;
   grid: GridSpec;
@@ -352,13 +355,9 @@ export function ViewportWorkspace() {
     setDropHint(null);
     setGestureView(null);
     setDragIndicator(null);
-    if (gesture !== null && gesture.grip.hasPointerCapture(gesture.pointerId)) {
-      try {
-        gesture.grip.releasePointerCapture(gesture.pointerId);
-      } catch {
-        // Pointer capture may already have been released by the browser.
-      }
-    }
+    if (gesture === null) return;
+    gesture.detach();
+    tryRelease(gesture.grip, gesture.pointerId);
   }, []);
 
   // A topology change or workspace resize invalidates in-flight paths and
@@ -384,80 +383,21 @@ export function ViewportWorkspace() {
     workspaceSize.width,
   ]);
 
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || gestureRef.current === null) return;
-      event.preventDefault();
-      clearGesture();
-      setAnnouncement("Viewport gesture cancelled.");
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [clearGesture]);
-
   React.useEffect(() => clearGesture, [clearGesture]);
 
-  const beginPaneDrag = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>, paneId: string) => {
-      if (
-        !interactive ||
-        event.button !== 0 ||
-        gestureRef.current !== null ||
-        grid.cellWidth <= 0 ||
-        grid.cellHeight <= 0
-      ) {
-        return;
-      }
-      // Lock the current grid for the gesture. Pane docking is preview-only,
-      // so pointer-down must never rescale or rearrange the live workspace.
-      const gestureGrid = grid;
-      event.preventDefault();
-      event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      gestureRef.current = {
-        kind: "pane",
-        pointerId: event.pointerId,
-        grip: event.currentTarget,
-        startLayout: layout,
-        startInteractionEpoch: interactionEpoch,
-        grid: gestureGrid,
-        workspaceWidth: workspaceSize.width,
-        workspaceHeight: workspaceSize.height,
-        sourcePaneId: paneId,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        dragStarted: false,
-        indicatorShown: false,
-        startGeometry: computeLayoutGeometry(
-          layout.root,
-          gestureGrid.columns,
-          gestureGrid.rows,
-        ),
-        lastCandidate: null,
-        lastHint: null,
-      };
-      setGestureView({ kind: "pane", grid: gestureGrid, startLayout: layout });
-    },
-    [grid, interactionEpoch, interactive, layout, workspaceSize],
-  );
-
   const updatePaneDrag = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
+    (event: PointerEvent) => {
       const gesture = gestureRef.current;
-      if (gesture?.kind !== "pane" || gesture.pointerId !== event.pointerId) {
-        return;
-      }
+      if (gesture?.kind !== "pane") return;
       applyPaneDragPoint(gesture, event.clientX, event.clientY);
     },
     [applyPaneDragPoint],
   );
 
   const finishPaneDrag = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>, cancelled: boolean) => {
+    (event: PointerEvent, cancelled: boolean) => {
       const gesture = gestureRef.current;
-      if (gesture?.kind !== "pane" || gesture.pointerId !== event.pointerId) {
-        return;
-      }
+      if (gesture?.kind !== "pane") return;
       if (!cancelled) {
         applyPaneDragPoint(gesture, event.clientX, event.clientY);
       }
@@ -473,8 +413,11 @@ export function ViewportWorkspace() {
       const sourceTitle = getPaneTitle(gesture.sourcePaneId);
       const targetTitle = getPaneTitle(hint?.targetPaneId ?? null);
       clearGesture();
+      if (cancelled) {
+        setAnnouncement("Viewport gesture cancelled.");
+        return;
+      }
       if (
-        cancelled ||
         stale ||
         candidate === null ||
         hint === null ||
@@ -504,6 +447,98 @@ export function ViewportWorkspace() {
     ],
   );
 
+  const beginPaneDrag = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>, paneId: string) => {
+      if (
+        !interactive ||
+        event.button !== 0 ||
+        gestureRef.current !== null ||
+        grid.cellWidth <= 0 ||
+        grid.cellHeight <= 0
+      ) {
+        return;
+      }
+      // Lock the current grid for the gesture. Pane docking is preview-only,
+      // so pointer-down must never rescale or rearrange the live workspace.
+      const gestureGrid = grid;
+      event.preventDefault();
+      event.stopPropagation();
+      // Captured so the gesture keeps its moves over pane iframes.
+      tryCapture(event.currentTarget, event.pointerId);
+      gestureRef.current = {
+        kind: "pane",
+        pointerId: event.pointerId,
+        grip: event.currentTarget,
+        detach: bindPointerGesture(
+          updatePaneDrag,
+          finishPaneDrag,
+          event.pointerId,
+        ),
+        startLayout: layout,
+        startInteractionEpoch: interactionEpoch,
+        grid: gestureGrid,
+        workspaceWidth: workspaceSize.width,
+        workspaceHeight: workspaceSize.height,
+        sourcePaneId: paneId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        dragStarted: false,
+        indicatorShown: false,
+        startGeometry: computeLayoutGeometry(
+          layout.root,
+          gestureGrid.columns,
+          gestureGrid.rows,
+        ),
+        lastCandidate: null,
+        lastHint: null,
+      };
+      setGestureView({ kind: "pane", grid: gestureGrid, startLayout: layout });
+    },
+    [
+      finishPaneDrag,
+      grid,
+      interactionEpoch,
+      interactive,
+      layout,
+      updatePaneDrag,
+      workspaceSize,
+    ],
+  );
+
+  const updateDividerResize = React.useCallback(
+    (event: PointerEvent) => {
+      const gesture = gestureRef.current;
+      if (gesture?.kind !== "divider") return;
+      applyDividerPoint(gesture, event.clientX, event.clientY);
+    },
+    [applyDividerPoint],
+  );
+
+  const finishDividerResize = React.useCallback(
+    (event: PointerEvent, cancelled: boolean) => {
+      const gesture = gestureRef.current;
+      if (gesture?.kind !== "divider") return;
+      if (!cancelled) {
+        applyDividerPoint(gesture, event.clientX, event.clientY);
+      }
+      const nextLayout = gesture.lastValidLayout;
+      const gridLine = gesture.lastGridLine;
+      const stale = isGestureStale(gesture);
+      const axisName = gesture.divider.direction === "row" ? "column" : "row";
+      clearGesture();
+      if (cancelled) {
+        setAnnouncement("Viewport gesture cancelled.");
+        return;
+      }
+      if (stale || sameViewportLayout(nextLayout, gesture.startLayout)) return;
+      viewer.viewportActions.commitUserLayout(nextLayout);
+      setAnnouncement(
+        "Moved viewport divider to " + axisName + " " + gridLine + ".",
+      );
+    },
+    [applyDividerPoint, clearGesture, isGestureStale, viewer.viewportActions],
+  );
+
   const beginDividerResize = React.useCallback(
     (event: React.PointerEvent<HTMLElement>, divider: DividerGeometry) => {
       if (
@@ -524,11 +559,16 @@ export function ViewportWorkspace() {
           : (event.clientY - bounds.top) / grid.cellHeight;
       event.preventDefault();
       event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      tryCapture(event.currentTarget, event.pointerId);
       gestureRef.current = {
         kind: "divider",
         pointerId: event.pointerId,
         grip: event.currentTarget,
+        detach: bindPointerGesture(
+          updateDividerResize,
+          finishDividerResize,
+          event.pointerId,
+        ),
         startLayout: layout,
         startInteractionEpoch: interactionEpoch,
         grid,
@@ -541,53 +581,15 @@ export function ViewportWorkspace() {
       };
       setGestureView({ kind: "divider", grid, startLayout: layout });
     },
-    [grid, interactionEpoch, interactive, layout, workspaceSize],
-  );
-
-  const updateDividerResize = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      const gesture = gestureRef.current;
-      if (
-        gesture?.kind !== "divider" ||
-        gesture.pointerId !== event.pointerId
-      ) {
-        return;
-      }
-      applyDividerPoint(gesture, event.clientX, event.clientY);
-    },
-    [applyDividerPoint],
-  );
-
-  const finishDividerResize = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>, cancelled: boolean) => {
-      const gesture = gestureRef.current;
-      if (
-        gesture?.kind !== "divider" ||
-        gesture.pointerId !== event.pointerId
-      ) {
-        return;
-      }
-      if (!cancelled) {
-        applyDividerPoint(gesture, event.clientX, event.clientY);
-      }
-      const nextLayout = gesture.lastValidLayout;
-      const gridLine = gesture.lastGridLine;
-      const stale = isGestureStale(gesture);
-      const axisName = gesture.divider.direction === "row" ? "column" : "row";
-      clearGesture();
-      if (
-        cancelled ||
-        stale ||
-        sameViewportLayout(nextLayout, gesture.startLayout)
-      ) {
-        return;
-      }
-      viewer.viewportActions.commitUserLayout(nextLayout);
-      setAnnouncement(
-        "Moved viewport divider to " + axisName + " " + gridLine + ".",
-      );
-    },
-    [applyDividerPoint, clearGesture, isGestureStale, viewer.viewportActions],
+    [
+      finishDividerResize,
+      grid,
+      interactionEpoch,
+      interactive,
+      layout,
+      updateDividerResize,
+      workspaceSize,
+    ],
   );
 
   const resizeDividerWithKeyboard = React.useCallback(
@@ -712,12 +714,6 @@ export function ViewportWorkspace() {
               motionEnabled={motionEnabled}
               hideChrome={pristineRootOnly || paneId === VIEWPORT_ROOT_PANE_ID}
               onHeaderPointerDown={beginPaneDrag}
-              onHeaderPointerMove={updatePaneDrag}
-              onHeaderPointerUp={(event) => finishPaneDrag(event, false)}
-              onHeaderPointerCancel={(event) => finishPaneDrag(event, true)}
-              onHeaderLostPointerCapture={(event) =>
-                finishPaneDrag(event, true)
-              }
               onHeaderKeyDown={swapPaneWithKeyboard}
             />
           );
@@ -732,10 +728,6 @@ export function ViewportWorkspace() {
             beforeTitle={getPaneTitle(divider.beforePaneId)}
             afterTitle={getPaneTitle(divider.afterPaneId)}
             onPointerDown={beginDividerResize}
-            onPointerMove={updateDividerResize}
-            onPointerUp={(event) => finishDividerResize(event, false)}
-            onPointerCancel={(event) => finishDividerResize(event, true)}
-            onLostPointerCapture={(event) => finishDividerResize(event, true)}
             onKeyDown={resizeDividerWithKeyboard}
           />
         ))}

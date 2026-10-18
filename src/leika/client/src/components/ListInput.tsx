@@ -1,7 +1,7 @@
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
-import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../guiLimits";
+import { MAX_GUI_COLLECTION_ITEM_CODE_UNITS } from "../ControlPanel/guiConstants";
 import { GuiListMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { EntryStack } from "./EntryStack";

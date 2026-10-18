@@ -1,5 +1,4 @@
 import React from "react";
-import { captureSendSession } from "../connectionSender";
 import { Card } from "../components/ui/card";
 import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
@@ -24,10 +23,6 @@ export function ViewportPaneHost({
   motionEnabled,
   hideChrome,
   onHeaderPointerDown,
-  onHeaderPointerMove,
-  onHeaderPointerUp,
-  onHeaderPointerCancel,
-  onHeaderLostPointerCapture,
   onHeaderKeyDown,
 }: {
   pageId: string | null;
@@ -42,10 +37,6 @@ export function ViewportPaneHost({
     event: React.PointerEvent<HTMLElement>,
     paneId: string,
   ) => void;
-  onHeaderPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderLostPointerCapture: (event: React.PointerEvent<HTMLElement>) => void;
   onHeaderKeyDown: (
     event: React.KeyboardEvent<HTMLElement>,
     paneId: string,
@@ -71,13 +62,13 @@ export function ViewportPaneHost({
   React.useEffect(() => {
     const element = contentRef.current;
     if (element === null || pageId === null || pane?.kind === "root") return;
-    const session = captureSendSession(viewer.mutable.current);
+    // Bound to the current connection; a later one gets its own report.
+    const sendMessage = viewer.mutable.current.sendMessage;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const report = () => {
-      if (!session.isCurrent()) return;
       const box = element.getBoundingClientRect();
       const visible = paneVisible && !document.hidden;
-      session.sendMessage({
+      sendMessage({
         type: "PaneViewportMessage",
         page_id: pageId,
         pane_id: paneId,
@@ -107,14 +98,13 @@ export function ViewportPaneHost({
       clearTimeout(timer);
       observer.disconnect();
       document.removeEventListener("visibilitychange", report);
-      if (session.isCurrent())
-        session.sendMessage({
-          type: "PaneViewportMessage",
-          page_id: pageId,
-          pane_id: paneId,
-          width: 0,
-          height: 0,
-        });
+      sendMessage({
+        type: "PaneViewportMessage",
+        page_id: pageId,
+        pane_id: paneId,
+        width: 0,
+        height: 0,
+      });
     };
   }, [viewer, pageId, paneId, paneVisible, pane?.kind, interactionEpoch]);
   if (pane === undefined) return null;
@@ -211,13 +201,9 @@ export function ViewportPaneHost({
           // hidden, only a pointer over the strip the bar occupies reveals it.
           onPointerEnter={() => setIsHovered(true)}
           onPointerLeave={() => setIsHovered(false)}
-          onPointerMove={onHeaderPointerMove}
-          onPointerUp={onHeaderPointerUp}
-          onPointerCancel={onHeaderPointerCancel}
-          onLostPointerCapture={onHeaderLostPointerCapture}
-          // Dock chrome on a pane: the dock's card surface, square corners
+          // Control-panel chrome on a pane: the panel's card surface, square corners
           // (every corner of the bar sits on a pane seam), and the muted
-          // field-label type the dock's rows use. Focus is border-only, like
+          // field-label type the panel's rows use. Focus is border-only, like
           // every other control.
           className={cn(
             "absolute inset-x-0 top-0 z-20 flex items-center rounded-none border border-transparent bg-card px-2 text-sm outline-none select-none focus-visible:border-ring",

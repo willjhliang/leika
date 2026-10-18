@@ -181,7 +181,7 @@ export const ControlPanelContext =
 /** The viewer's control-panel session, for the app root to provide. */
 export function useControlPanelSession(): ControlPanelSession {
   const viewer = useViewer();
-  const server = viewer.useGui((state) => state.server);
+  const server = viewer.server;
   const workspaceId = viewer.useGui((state) => state.workspaceId);
   const configured = viewer.useGui((state) => state.theme.control_layout);
   const [session] = React.useState(() => createControlPanelSession());

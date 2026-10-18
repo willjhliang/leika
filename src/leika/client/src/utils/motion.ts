@@ -1,5 +1,5 @@
 // Honors the OS-level "reduce motion" accessibility setting. Both layout
-// engines (the dock and the viewport workspace) turn their transitions instant
+// surfaces (the control panel and the viewport workspace) turn their transitions instant
 // when it is set, so this lives in a neutral module rather than inside either.
 //
 // The MediaQueryList is module-scoped so `.matches` reads stay live without

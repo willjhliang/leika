@@ -4,22 +4,18 @@ import type { VideoPlaybackRegistry } from "./viewport/videoPlayback";
 import { useClientSettings } from "./ClientSettings";
 import type { GuiSession } from "./ControlPanel/GuiState";
 import { Message } from "./WebsocketMessages";
-import type { MessageSender } from "./connectionSender";
-import type { BoundedMessageQueue } from "./boundedMessageQueue";
 import type { FileDownloadAssembler } from "./fileDownloadAssembler";
 import type { FileUploadAckBroker } from "./fileUploadAckBroker";
 import type { ViewportSession } from "./viewport/ViewportState";
 
+export type MessageSender = (message: Message) => void;
+
 /** Mutable transport state for the live websocket producer. */
 export type ViewerMutable = {
+  /** Sends on the current connection; replaced on every connect. */
   sendMessage: MessageSender;
-  messageQueue: BoundedMessageQueue;
-  notifyMessageQueue: () => void;
   downloads: FileDownloadAssembler;
   uploads: FileUploadAckBroker;
-  /** Terminate/reset the current transport on a semantic trust-boundary
-   * violation discovered before a wire frame applies side effects. */
-  failConnection: (reason: string) => void;
 };
 
 export function warnDisconnectedSend(message: Message): void {
@@ -28,6 +24,8 @@ export function warnDisconnectedSend(message: Message): void {
 
 /** Application context for Leika's GUI and 2D pane workspace. */
 export type ViewerContextContents = {
+  /** The WebSocket endpoint this page connects to. */
+  server: string;
   videoPlayback: VideoPlaybackRegistry;
   useGui: GuiSession["store"];
   useGuiConfig: GuiSession["configStore"];

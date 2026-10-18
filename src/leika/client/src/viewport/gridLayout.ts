@@ -81,12 +81,9 @@ function minimumSubtreeSpan(
 export function gridSpecForLayout(
   layout: ViewportLayout,
   workspace: WorkspaceSize,
-  minimums?: { columns: number; rows: number },
 ): GridSpec {
-  const minimumColumns =
-    minimums?.columns ?? minimumSubtreeSpan(layout.root, "row");
-  const minimumRows =
-    minimums?.rows ?? minimumSubtreeSpan(layout.root, "column");
+  const minimumColumns = minimumSubtreeSpan(layout.root, "row");
+  const minimumRows = minimumSubtreeSpan(layout.root, "column");
   const columns =
     Math.max(1, Math.ceil(minimumColumns / NOMINAL_GRID_DIVISIONS)) *
     NOMINAL_GRID_DIVISIONS;

@@ -19,10 +19,6 @@ export function ViewportDivider({
   beforeTitle,
   afterTitle,
   onPointerDown,
-  onPointerMove,
-  onPointerUp,
-  onPointerCancel,
-  onLostPointerCapture,
   onKeyDown,
 }: {
   divider: DividerGeometry;
@@ -34,10 +30,6 @@ export function ViewportDivider({
     event: React.PointerEvent<HTMLElement>,
     divider: DividerGeometry,
   ) => void;
-  onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
-  onPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
-  onPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
-  onLostPointerCapture: (event: React.PointerEvent<HTMLElement>) => void;
   onKeyDown: (
     event: React.KeyboardEvent<HTMLElement>,
     divider: DividerGeometry,
@@ -89,10 +81,6 @@ export function ViewportDivider({
           : "ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown"
       }
       onPointerDown={(event) => onPointerDown(event, divider)}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onLostPointerCapture={onLostPointerCapture}
       onKeyDown={(event) => onKeyDown(event, divider)}
       // An invisible 24px grab strip. It drops Button's transparent border,
       // because the line inside is positioned against the PADDING box and that

@@ -1,6 +1,9 @@
 import type { RootContent } from "hast";
-import { parseMarkdown, type DocumentHeading } from "./markdown";
-import { MAX_GUI_MARKDOWN_SOURCE_BYTES } from "./guiLimits";
+import {
+  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  parseMarkdown,
+  type DocumentHeading,
+} from "./markdown";
 
 export type MarkdownStreamInput =
   | { type: "source"; source: string; complete: boolean; images: boolean }
@@ -62,7 +65,7 @@ export class ProgressiveMarkdownParser {
 
   accept(message: MarkdownStreamInput): void {
     if (message.type === "source") {
-      if (message.source.length > MAX_GUI_MARKDOWN_SOURCE_BYTES)
+      if (message.source.length > MARKDOWN_RENDER_MAX_SOURCE_BYTES)
         throw new Error("Markdown render limit exceeded");
       this.desired = message;
     } else {

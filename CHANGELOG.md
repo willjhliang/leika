@@ -29,14 +29,36 @@ versioning.
 - Plotly: GUI plots now follow the viewer's light or dark theme like Plotly
   panes, through one shared serializer. Plotly's browser runtime is sent once
   to every browser after the first figure, including browsers viewing pages
-  without one; a reconnecting browser keeps the runtime it already loaded. Figures are no longer preflighted (500,000 values, 4,096 config
-  items, 16 Mi-character JSON), any `go.Figure` subclass is accepted, and Plotly
+  without one; a reconnecting browser keeps the runtime it already loaded.
+  Figures are no longer preflighted (500,000 values, 4,096 config items,
+  16 Mi-character JSON), any `go.Figure` subclass is accepted, and Plotly
   and Matplotlib serialization no longer take a server-wide lock.
 - Images: GUI and pane images go through one preparation path that always
   encodes with Pillow, even when OpenCV is installed, using fast PNG
   compression (level 1) as OpenCV did. Image calls no longer
   enforce the 16,384-pixel side and 32 Mi-pixel limits or the 512 MiB
   server-wide preparation budget, and accept `numpy.ndarray` subclasses.
+- Browser: the colour picker's remembered output format resets once, and
+  command palette search ranks commands with cmdk's built-in matching.
+- Browser: downloads and uploads no longer meet browser-side size, part or
+  count limits or filename and MIME re-checks; uploads keep the server's limits.
+  A file link toast now stays usable across a reconnect until it is closed.
+- Browser: every image is decoded by the browser itself. Images are no longer
+  header-checked or held to a page-wide pixel limit; one the browser cannot
+  decode (including formats such as TIFF in a file preview) shows its ordinary
+  broken-image state instead of a Leika status and download button.
+- Browser: the client keeps its WebSocket on the page instead of a worker and
+  applies each batch as it arrives, once per animation frame, instead of
+  replaying the server's timing or closing the connection over its own queue
+  and send limits.
+- Browser: panes apply exactly as the server sends them, without browser pane
+  limits; a cached page is no longer evicted early under memory pressure.
+  Pane layouts saved by Leika 0.3 (version 2) are no longer migrated, so such
+  a default page starts once from its creation-time placement.
+- Browser: GUI controls, modals, commands and notifications apply exactly as
+  the server sends them. The client no longer enforces its own count and size
+  limits on them or drops the connection over them, and a notification shown
+  again updates its toast in place.
 - Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP
   server is now private, with one message base; use `leika.Server`. Custom
   message roots and low-level servers are no longer supported.

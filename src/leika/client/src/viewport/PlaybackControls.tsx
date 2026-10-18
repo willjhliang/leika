@@ -31,7 +31,7 @@ function formatTime(seconds: number): string {
     : `${minutes}:${remainder}`;
 }
 
-/** The dock and every fullscreen overlay subscribe to the same controller. */
+/** The control panel and every fullscreen overlay subscribe to the same controller. */
 export function PlaybackControls({
   playback,
   playerRef,
@@ -60,8 +60,8 @@ export function PlaybackControls({
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, [playerRef]);
-  const dock = playerRef === undefined;
-  const compact = dock && controlLabel !== null;
+  const inPanel = playerRef === undefined;
+  const compact = inPanel && controlLabel !== null;
   const label = controlLabel ?? "Playback";
   const status =
     statusText ??
@@ -70,7 +70,7 @@ export function PlaybackControls({
       : buffering
         ? "Preparing content…"
         : undefined);
-  const fullControls = dock || !grouped || fullscreen;
+  const fullControls = inPanel || !grouped || fullscreen;
   const canSeek = duration > 0 && !error && !disabled;
   const timeline = (
     <Slider
@@ -91,9 +91,9 @@ export function PlaybackControls({
     <div
       role="group"
       aria-label={`${label} playback`}
-      title={dock ? status : undefined}
+      title={inPanel ? status : undefined}
       className={
-        dock
+        inPanel
           ? "min-w-0"
           : `absolute right-0 bottom-0 p-1 opacity-0 group-hover/video:opacity-100 [@media(hover:none)]:opacity-100 ${fullControls ? "left-0" : ""}`
       }
@@ -102,7 +102,7 @@ export function PlaybackControls({
           The 24px icon buttons already inset their 12px icons by 6px; the
           speed trigger uses 5px padding plus its 1px transparent border. */}
       <div
-        className={`flex min-w-0 items-center rounded-md ${compact ? "h-6" : "h-8"} ${dock ? "" : "border bg-card px-1 text-card-foreground shadow-sm"}`}
+        className={`flex min-w-0 items-center rounded-md ${compact ? "h-6" : "h-8"} ${inPanel ? "" : "border bg-card px-1 text-card-foreground shadow-sm"}`}
       >
         {fullControls && (
           <>
@@ -150,12 +150,12 @@ export function PlaybackControls({
             <div className="min-w-7 flex-1 px-1.5">{timeline}</div>
             {!compact && (
               <span
-                className={`shrink-0 px-1.5 tabular-nums whitespace-nowrap ${dock ? "text-xs" : "text-[11px]"}`}
+                className={`shrink-0 px-1.5 tabular-nums whitespace-nowrap ${inPanel ? "text-xs" : "text-[11px]"}`}
                 aria-hidden="true"
                 title={`${formatTime(time)} / ${formatTime(duration)}`}
               >
                 {formatTime(time)}
-                {!dock && (
+                {!inPanel && (
                   <span className="@max-[260px]:hidden text-muted-foreground">
                     {" "}
                     / {formatTime(duration)}
@@ -172,7 +172,7 @@ export function PlaybackControls({
               <SelectTrigger
                 size="xs"
                 variant="ghost"
-                className={`px-[5px] text-muted-foreground [&>svg]:hidden ${dock ? "text-xs" : "text-[11px]"}`}
+                className={`px-[5px] text-muted-foreground [&>svg]:hidden ${inPanel ? "text-xs" : "text-[11px]"}`}
                 aria-label={`${label} playback speed`}
                 title="Playback speed"
                 disabled={!canSeek}
@@ -228,7 +228,7 @@ export function PlaybackControls({
           </Button>
         )}
       </div>
-      {dock && status && (
+      {inPanel && status && (
         <p role="status" className="sr-only">
           {status}
         </p>

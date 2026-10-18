@@ -2,7 +2,6 @@
 import "./index.css";
 
 import React from "react";
-import { ThemeProvider as NextThemesProvider } from "next-themes";
 
 import { CommandPalette } from "./CommandPalette";
 import ControlPanel from "./ControlPanel/ControlPanel";
@@ -13,27 +12,21 @@ import {
   useControlPanelSession,
 } from "./ControlPanel/controlPanelLayout";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
-import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
-import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
+import { websocketServer } from "./SearchParamsUtils";
 import { useViewer } from "./ViewerContext";
 import { ViewerProvider } from "./ViewerProvider";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
 import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useAccentColor } from "./hooks/useAccentColor";
-import { useMobileView, usePrefersDarkMode } from "./hooks/useMediaQuery";
-import { useThemeColor } from "./hooks/useThemeColor";
+import { useColorScheme, type ColorScheme } from "./hooks/useColorScheme";
+import { useMobileView } from "./hooks/useMediaQuery";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
 export function Root() {
-  const searchParams = new URLSearchParams(window.location.search);
-  const servers = searchParams.getAll(searchParamKey);
-  const initialServer =
-    servers[0] ?? defaultWebsocketServer(window.location.href);
-
   return (
-    <ViewerProvider initialServer={initialServer}>
+    <ViewerProvider server={websocketServer(window.location.href)}>
       <ViewerContents>
         <WebsocketMessageProducer />
       </ViewerContents>
@@ -41,38 +34,44 @@ export function Root() {
   );
 }
 
+/** Put the scheme on `<html>`, where `index.css` and portals read it,
+ * without animating every transition through the change. */
+function useDocumentColorScheme(scheme: ColorScheme): void {
+  React.useLayoutEffect(() => {
+    const root = document.documentElement;
+    const pause = document.createElement("style");
+    pause.textContent = "*,*::before,*::after{transition:none!important}";
+    document.head.appendChild(pause);
+    root.classList.toggle("dark", scheme === "dark");
+    root.style.colorScheme = scheme;
+    // `theme-color` tints the browser's own chrome (the Android address bar,
+    // the area around the page on iOS) to match the panel surface.
+    const meta = document.querySelector<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    );
+    const styles = getComputedStyle(root);
+    if (meta !== null)
+      meta.content = styles.getPropertyValue("--leika-panel-surface").trim();
+    setTimeout(() => pause.remove(), 1);
+  }, [scheme]);
+}
+
 function ViewerContents({ children }: { children: React.ReactNode }) {
   const viewer = useViewer();
-  const prefersDarkMode = usePrefersDarkMode();
-  const chosenDarkMode = viewer.useSettings((state) => state.darkMode);
-  // Settings is the single selection, whether changed by Python or the GUI.
-  // Auto always follows the browser, with no server override underneath it.
-  const darkMode = chosenDarkMode ?? prefersDarkMode;
   const controlPanel = useControlPanelSession();
   useAccentColor(viewer.useSettings((state) => state.accentColor));
-  useThemeColor();
+  useDocumentColorScheme(useColorScheme());
 
   return (
-    // The scheme is resolved above rather than handed to `enableSystem`, so
-    // the class on `<html>` stays the single source of truth -- next-themes
-    // never gets to override it from its own localStorage.
-    <NextThemesProvider
-      attribute="class"
-      forcedTheme={darkMode ? "dark" : "light"}
-      enableSystem={false}
-      disableTransitionOnChange
-    >
-      <TooltipProvider delay={500}>
-        <ControlPanelContext.Provider value={controlPanel}>
-          {children}
-          <MessageHandler />
-          <LeikaModal />
-          <FilePreviewHost />
-          <CommandPalette />
-          <AppLayout />
-        </ControlPanelContext.Provider>
-      </TooltipProvider>
-    </NextThemesProvider>
+    <TooltipProvider delay={500}>
+      <ControlPanelContext.Provider value={controlPanel}>
+        {children}
+        <LeikaModal />
+        <FilePreviewHost />
+        <CommandPalette />
+        <AppLayout />
+      </ControlPanelContext.Provider>
+    </TooltipProvider>
   );
 }
 

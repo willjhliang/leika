@@ -32,37 +32,27 @@ import {
   type FilePreview,
   type PreviewKind,
 } from "../filePreview";
-import type { ImageAdmission } from "../imageSafety";
-import { contentsOf, type RenderedDocument } from "../markdown";
+import {
+  contentsOf,
+  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  type RenderedDocument,
+} from "../markdown";
 import { HintTooltip } from "./common";
-import { LatestBlobTextReader } from "./latestBlobTextReader";
 import {
   cachedPreviewText,
-  rememberPreviewText,
-} from "../previewDocumentCache";
-import {
-  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
   markdownRenderAllowed,
+  rememberPreviewText,
 } from "./markdownDocument";
 import { usePreviewMarkdown } from "./usePreviewMarkdown";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MediaImage } from "./MediaImage";
 import { MediaPreview } from "./MediaPreview";
-import { mediaPreviewWidth } from "./mediaPreviewSize";
+import { mediaPreviewWidth, type MediaSize } from "./mediaPreviewSize";
 import { usePreviewContents } from "./previewContents";
 import {
   previewMediaClassName,
   usePreviewFullscreen,
 } from "./previewFullscreen";
-import { RejectedImageStatus } from "./SafeImage";
-import { useSafeBlobImage } from "./useSafeBlobImage";
-import {
-  IMAGE_DECODE_FAILURE_MESSAGE,
-  useImageDecodeError,
-} from "../imageDecodeError";
-import {
-  RASTER_PIXEL_BUDGET_MESSAGE,
-  useRasterPixelLease,
-} from "../useRasterPixelLease";
 
 /** Read a textual blob without briefly rendering an empty document.
  *
@@ -75,7 +65,6 @@ function useBlobText(
   enabled: boolean,
   continuityKey: string,
 ): string | null {
-  const reader = React.useMemo(() => new LatestBlobTextReader(), []);
   const cached = blob === null ? null : cachedPreviewText(blob);
   const [read, setRead] = React.useState<{
     continuityKey: string;
@@ -89,7 +78,6 @@ function useBlobText(
     }
     if (!enabled || blob === null || !fileTextPreviewAllowed(blob.size)) {
       setRead(null);
-      reader.clear();
       return;
     }
     // A different file or viewer cannot borrow this decoded text. A new Blob
@@ -98,11 +86,16 @@ function useBlobText(
     setRead((current) =>
       current?.continuityKey === continuityKey ? current : null,
     );
-    return reader.request(blob, (value) => {
-      rememberPreviewText(blob, value);
-      React.startTransition(() => setRead({ continuityKey, text: value }));
+    let cancelled = false;
+    void blob.text().then((text) => {
+      if (cancelled) return;
+      rememberPreviewText(blob, text);
+      React.startTransition(() => setRead({ continuityKey, text }));
     });
-  }, [blob, cached, continuityKey, enabled, reader]);
+    return () => {
+      cancelled = true;
+    };
+  }, [blob, cached, continuityKey, enabled]);
   // State retains only decoded text, never the replaced Blob. This gate hides
   // it synchronously if the same dialog changes file or viewer.
   if (cached !== null) return cached;
@@ -330,7 +323,7 @@ function PendingBody() {
   );
 }
 
-export function TextPreviewLimit({ filename }: { filename: string }) {
+function TextPreviewLimit({ filename }: { filename: string }) {
   return (
     <div
       role="status"
@@ -344,7 +337,7 @@ export function TextPreviewLimit({ filename }: { filename: string }) {
   );
 }
 
-export function MarkdownPreviewLimit({ filename }: { filename: string }) {
+function MarkdownPreviewLimit({ filename }: { filename: string }) {
   const limitMiB = MARKDOWN_RENDER_MAX_SOURCE_BYTES / (1024 * 1024);
   return (
     <div
@@ -367,7 +360,8 @@ function PreviewBody({
   text,
   showContents,
   document,
-  imageAdmission,
+  imageSize,
+  onImageSize,
 }: {
   kind: PreviewKind;
   preview: FilePreview;
@@ -379,41 +373,27 @@ function PreviewBody({
   text: string | null;
   showContents: boolean;
   document: RenderedDocument | null;
-  imageAdmission: ImageAdmission | null;
+  imageSize: MediaSize | null;
+  onImageSize: (size: MediaSize) => void;
 }) {
   const { filename, mimeType, sizeBytes } = preview;
   const url = contents?.url;
-  const imageDecodeError = useImageDecodeError(
-    kind === "image" ? (url ?? null) : null,
-  );
-  const imagePixels = useRasterPixelLease(
-    kind === "image" ? (contents?.blob ?? null) : null,
-    imageAdmission?.ok === true ? imageAdmission.size : null,
-  );
   const [fullscreen] = usePreviewFullscreen(previewMemoryKey(preview));
 
   switch (kind) {
-    // The three that are shown at their own size. The popup has already been
-    // opened at the media's width -- see `mediaPreviewWidth` at the bottom of
-    // this file -- so each of these fills it, rather than being centered in
+    // The three that are shown at their own size. The popup takes the media's
+    // width -- see `mediaPreviewWidth`, which a picture answers once it has
+    // loaded -- so each of these fills it, rather than being centered in
     // something wider with a column of empty dialog down either side.
     case "image":
-      if (imageAdmission === null) return <PendingBody />;
-      if (!imageAdmission.ok)
-        return <RejectedImageStatus reason={imageAdmission.reason} />;
-      if (!imagePixels.pending && !imagePixels.admitted)
-        return <RejectedImageStatus reason={RASTER_PIXEL_BUDGET_MESSAGE} />;
-      if (imageDecodeError.failed)
-        return <RejectedImageStatus reason={IMAGE_DECODE_FAILURE_MESSAGE} />;
-      if (!imagePixels.admitted) return <PendingBody />;
       return (
-        <img
+        <MediaImage
           src={url}
           alt={filename}
-          width={imageAdmission.size.width}
-          height={imageAdmission.size.height}
+          width={imageSize?.width}
+          height={imageSize?.height}
           className={previewMediaClassName(fullscreen)}
-          onError={imageDecodeError.onError}
+          onSize={onImageSize}
         />
       );
     case "video":
@@ -511,8 +491,7 @@ const WATCH_INTERVAL_MS = 1000;
  *
  * The half of a preview that talks to the server: the dialog below draws a
  * file and says when the reader wants another look at it, and this is what
- * turns that into messages. The playground renders the dialog with neither,
- * and gets a preview that simply sits there, which is what a gallery wants.
+ * turns that into messages.
  */
 export function FilePreviewHost() {
   const preview = React.useSyncExternalStore(
@@ -608,7 +587,7 @@ const DOCUMENT_WIDTH = "min(72rem, calc(100vw - 2rem))";
  * message -- so the popup is the right shape from the click, and only the
  * contents wait.
  */
-export function FilePreviewDialog({
+function FilePreviewDialog({
   preview,
   onClose,
   onReload,
@@ -622,13 +601,10 @@ export function FilePreviewDialog({
   const kind = previewKindFor(preview.mimeType, preview.filename);
   const memoryKey = previewMemoryKey(preview);
   const media = isMediaKind(kind);
-  // Only a picture says how big it is. Audio has no size at all, and a
-  // video's is not worth a second decode to learn, so both open at the floor.
-  const imageAdmission = useSafeBlobImage(
-    kind === "image" ? (preview.contents?.blob ?? null) : null,
-    preview.mimeType,
-  );
-  const imageSize = imageAdmission?.ok ? imageAdmission.size : null;
+  // Only a picture says how big it is, once the browser has loaded it. Audio
+  // has no size at all, and a video's is not worth a second decode to learn,
+  // so both open at the floor.
+  const [imageSize, setImageSize] = React.useState<MediaSize | null>(null);
   // Read rather than passed down: the popup owns the toggle, and the document
   // frame is the one thing inside it that has to know.
   const [fullscreen] = usePreviewFullscreen(memoryKey);
@@ -757,7 +733,8 @@ export function FilePreviewDialog({
             text={text}
             showContents={showContents}
             document={document}
-            imageAdmission={imageAdmission}
+            imageSize={imageSize}
+            onImageSize={setImageSize}
           />
         </PreviewImageSourcesContext.Provider>
         {kind === "markdown" && !markdownRenderAllowed(preview.sizeBytes) ? (

@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  RETAINED_DOWNLOAD_PRIORITY,
-  retainedDownloads,
-} from "./retainedDownloadBudget";
-import {
   abortFilePreviewTransfer,
   acceptFilePreview,
   beginFilePreviewScroll,
@@ -169,7 +165,6 @@ describe("the preview store", () => {
     expect(reloadIsOnItsWay("button")).toBe(false);
     expect(warmedContents("button", "warm.md", "1")).toBeNull();
     expect(revoke).toHaveBeenCalledWith(arrived.url);
-    expect(retainedDownloads.sizeBytes).toBe(0);
   });
 
   it("unwinds failed preview and reload transfers without losing good contents", () => {
@@ -313,8 +308,7 @@ describe("the preview store", () => {
     resolveFilePreview("a", fresh);
     expect(revoke).toHaveBeenCalledWith(early!.url);
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
-    // Opening consumes the warmed owner; it cannot duplicate the Blob behind
-    // the visible preview outside aggregate retained-byte accounting.
+    // Opening consumes the warmed copy.
     expect(warmedContents("button", "notes.md", "1:4")).toBeNull();
   });
 
@@ -334,18 +328,6 @@ describe("the preview store", () => {
     finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
     expect(revoke).toHaveBeenCalledWith(early.url);
-  });
-
-  it("never stores a warm entry whose Blob lease is already inactive", () => {
-    const retained = retainedDownloads.retain(new Blob(["stale"]), {
-      priority: RETAINED_DOWNLOAD_PRIORITY.warm,
-    });
-    expect(retained).not.toBeNull();
-    retained!.release();
-
-    warmFilePreview("button", "stale.md", "1", retained!);
-    expect(warmedContents("button", "stale.md", "1")).toBeNull();
-    expect(retainedDownloads.sizeBytes).toBe(0);
   });
 
   it("never shares warmed bytes across sources or revisions", () => {
@@ -412,32 +394,6 @@ describe("the preview store", () => {
     finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(second);
     expect(revoke).toHaveBeenCalledWith(first.url);
-  });
-
-  it("watches from the visible version when a held reload is evicted", () => {
-    const revoke = vi
-      .spyOn(URL, "revokeObjectURL")
-      .mockImplementation(() => undefined);
-    openFilePreview(metadata("a"));
-    const first = contents();
-    resolveFilePreview("a", first);
-    beginFilePreviewScroll("a");
-
-    const second = contents();
-    reload(second, { sourceVersion: "2:9" });
-    expect(filePreviewWatchStore.snapshot()?.sourceVersion).toBe("2:9");
-    expect(second.retained).toBeDefined();
-
-    second.retained!.evict();
-
-    expect(filePreviewStore.snapshot()?.contents).toBe(first);
-    expect(filePreviewWatchStore.snapshot()).toEqual({
-      sourceUuid: "button",
-      sourceVersion: "1:4",
-    });
-    expect(revoke).toHaveBeenCalledWith(second.url);
-    finishFilePreviewScroll("a");
-    expect(filePreviewStore.snapshot()?.contents).toBe(first);
   });
 
   it("keeps only the newest reload completed during one scroll gesture", () => {
@@ -714,15 +670,9 @@ describe("reopening retained Markdown", () => {
     return { request, blob };
   };
 
-  it("moves the existing byte reservation between the popup and bounded cache", () => {
+  it("keeps a confirmed copy for the next press", () => {
     const { request, blob } = complete();
-    const lease = filePreviewStore.snapshot()!.contents!.retained!;
-    const count = retainedDownloads.ownerCount;
-    const bytes = retainedDownloads.sizeBytes;
     closeFilePreview(request.requestUuid);
-    expect(lease.priority).toBe(RETAINED_DOWNLOAD_PRIORITY.warm);
-    expect(retainedDownloads.ownerCount).toBe(count);
-    expect(retainedDownloads.sizeBytes).toBe(bytes);
 
     const reopened = requestFilePreview("source", "Report");
     expect(reopened.cachedKey).toBe("original");
@@ -730,8 +680,6 @@ describe("reopening retained Markdown", () => {
     expect(filePreviewWatchStore.snapshot()!.sourceVersion).toBeNull();
     ready(reopened.requestUuid, "original", true);
     expect(filePreviewWatchStore.snapshot()!.sourceVersion).toBe("version");
-    expect(lease.priority).toBe(RETAINED_DOWNLOAD_PRIORITY.preview);
-    expect(retainedDownloads.ownerCount).toBe(count);
   });
 
   it("ignores late confirmations and never tags old bytes with an arriving revision", () => {
@@ -748,11 +696,12 @@ describe("reopening retained Markdown", () => {
     expect(filePreviewStore.snapshot()!.contents!.blob).toBe(blob);
   });
 
-  it("falls back to an ordinary open after memory-pressure eviction", () => {
+  it("falls back to an ordinary open once newer files push it out", () => {
     const { request } = complete();
-    const lease = filePreviewStore.snapshot()!.contents!.retained!;
     closeFilePreview(request.requestUuid);
-    lease.evict();
+    for (let index = 0; index < 8; index += 1) {
+      warmFilePreview(String(index), "other.md", "1", new Blob(["other"]));
+    }
     expect(requestFilePreview("source", "Report").cachedKey).toBeNull();
     expect(filePreviewStore.snapshot()!.contents).toBeNull();
   });
@@ -781,7 +730,7 @@ describe("progressive preview images", () => {
       url: asset,
     });
 
-  it("retains ready images with the warmed stream and rejects stale or unsafe URLs", () => {
+  it("retains ready images with the warmed stream and ignores stale streams", () => {
     part("old");
     image("old");
     requestFilePreview("report", "Report");
@@ -794,7 +743,6 @@ describe("progressive preview images", () => {
     ).toBe(url);
     part("new");
     image("old");
-    image("new", "plot é.png", "https://example.com/remote.png");
     expect(
       filePreviewStore.snapshot()?.textStream?.imageSources,
     ).toBeUndefined();
@@ -807,14 +755,5 @@ describe("progressive preview images", () => {
     image("new");
     requestFilePreview("report", "Report");
     expect(filePreviewStore.snapshot()?.textStream).toBeUndefined();
-  });
-
-  it("bounds early image state while the complete document remains authoritative", () => {
-    part("stream");
-    for (let i = 0; i < 200; i++) image("stream", `figure-${i}.png`);
-    requestFilePreview("report", "Report");
-    expect(filePreviewStore.snapshot()?.textStream?.imageSources?.size).toBe(
-      128,
-    );
   });
 });

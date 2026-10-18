@@ -48,8 +48,7 @@ def test_the_badge_opens_what_the_connection_is_doing(
 def test_the_page_counts_what_crosses_the_socket(
     leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
-    """Bytes are weighed in the worker, before the buffer is handed on -- a
-    count taken after that transfer would read zero every time."""
+    """Bytes are weighed as frames arrive, so the GUI that arrived counts."""
     leika_server.gui.add_slider("Weight", 0.5, min=0.0, max=1.0, step=0.1)
     popover = open_connection(leika_page)
 
@@ -66,7 +65,7 @@ def test_the_page_counts_what_crosses_the_socket(
 def test_the_answers_to_its_own_pings_go_no_further(
     leika_server: leika.Server, leika_page: Page, page_errors: list[str]
 ) -> None:
-    """A pong is the worker's business. Forwarded to the app it would reach the
+    """A pong is the socket's business. Forwarded to the app it would reach the
     message handler, which knows nothing about it and says so in the console."""
     del leika_server
     warnings: list[str] = []
@@ -90,8 +89,7 @@ def test_nothing_is_measured_until_the_badge_is_opened(
     """Pinging a connection nobody is looking at would be traffic the feature
     invented for itself.
 
-    Counted where the pings land rather than where they leave: the socket is
-    in a worker, whose globals the page cannot reach to instrument.
+    Counted where the pings land, which needs no instrumentation of the page.
     """
     pings: list[float] = []
     leika_server._websock_server.register_handler(

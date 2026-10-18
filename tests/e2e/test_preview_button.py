@@ -1743,13 +1743,8 @@ def test_a_document_does_not_reflow_as_its_figures_arrive(
     images = _dialog(preview_page).locator("img")
     expect(images).to_have_count(5)
 
-    # Scroll the stable viewport owner: admission replaces an inert <img>
-    # with its live image as it approaches, potentially during Playwright's
-    # stability check. The owner reserves the same box throughout.
-    viewports = _dialog(preview_page).locator("[data-leika-markdown-image-viewport]")
-    expect(viewports).to_have_count(5)
     for index in range(5):
-        viewports.nth(index).scroll_into_view_if_needed()
+        images.nth(index).scroll_into_view_if_needed()
     deadline = time.monotonic() + 5.0
     while not held and time.monotonic() < deadline:
         preview_page.wait_for_timeout(10)

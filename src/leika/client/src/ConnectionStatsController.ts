@@ -1,7 +1,7 @@
-// The connection's counters, between the websocket worker and whatever is
+// The connection's counters, between the websocket owner and whatever is
 // looking at them.
 //
-// A module singleton rather than viewer state: the worker lives in one effect
+// A module singleton rather than viewer state: the socket lives in one effect
 // and the popover that reads it is somewhere else entirely, so there is no
 // React parent for the two to share. Nothing here is a preference, so nothing
 // is stored -- close the page and the session's totals go with it.
@@ -16,7 +16,7 @@ import {
 import { createStore } from "./store";
 
 interface ConnectionStatsState {
-  /** How many components are asking for measurements. The worker pings only
+  /** How many components are asking for measurements. The socket pings only
    * while this is above zero, so a connection nobody is inspecting carries no
    * traffic on its behalf. */
   watchers: number;

@@ -7,7 +7,6 @@ from playwright.sync_api import Page, expect
 
 import leika
 
-from .test_connection_pane import open_connection, row
 from .utils import find_gui_input, wait_until
 
 LABEL = "[data-leika-connection-label]"
@@ -27,65 +26,6 @@ def set_visibility(page: Page, visibility: str) -> None:
         }""",
         visibility,
     )
-
-
-@pytest.mark.parametrize("background", [False, True])
-@pytest.mark.parametrize("failure", ["fatal", "error"])
-def test_failed_worker_is_replaced_without_reloading(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-    failure: str,
-    background: bool,
-) -> None:
-    slider = leika_server.gui.add_slider("Recovered gain", 0.5, min=0.0, max=1.0, step=0.1)
-    control = find_gui_input(leika_page, "Recovered gain")
-    expect(control).to_have_value("0.5")
-    popover = open_connection(leika_page)
-    expect(row(popover, "Latency")).to_contain_text("ms", timeout=10_000)
-    if background:
-        set_visibility(leika_page, "hidden")
-    previous_clients = set(leika_server.clients)
-    leika_page.evaluate("() => { window.reconnectPageMarker = 'same document'; }")
-    worker = leika_page.workers[0]
-
-    # Exercise both failure channels delivered by a real Web Worker. Delay
-    # the fault so evaluate can return before the owner terminates the worker.
-    worker.evaluate(
-        """failure => {
-            setTimeout(() => {
-                if (failure === "error") throw new Error("Test worker interruption");
-                self.postMessage({type: "fatal", reason: "Test worker interruption"});
-            }, 50);
-        }""",
-        failure,
-    )
-
-    expect(leika_page.locator(LABEL)).to_have_text(
-        "Inactive" if background else "Connecting...", timeout=5_000
-    )
-    expect(popover.locator("[data-leika-connection-error]")).to_contain_text(
-        "Test worker interruption"
-    )
-    if background:
-        leika_page.wait_for_timeout(1_200)
-        assert len(leika_server.clients) == 0
-        set_visibility(leika_page, "visible")
-    expect(leika_page.locator(LABEL)).to_have_text("Connected", timeout=15_000)
-    expect(popover.locator("[data-leika-connection-error]")).to_have_count(0)
-    expect(row(popover, "Latency")).to_contain_text("ms", timeout=10_000)
-    expect(leika_page.locator(READY)).to_be_visible()
-    expect(control).to_have_value("0.5")
-    assert leika_page.evaluate("() => window.reconnectPageMarker") == "same document"
-    wait_until(
-        lambda: len(leika_server.clients) == 1 and not previous_clients & set(leika_server.clients)
-    )
-
-    leika_page.keyboard.press("Escape")
-    control.fill("0.8")
-    control.press("Enter")
-    wait_until(lambda: slider.value == 0.8)
-    assert page_errors == []
 
 
 @pytest.mark.parametrize("background", [False, True])
@@ -123,17 +63,17 @@ def test_server_restart_reconnects_when_visible_without_window_focus(
         assert page_errors == []
 
 
-def test_failed_retry_command_recovers_and_ignores_the_old_worker(
+def test_a_replaced_socket_cannot_disturb_its_successor(
     leika_server: leika.Server, page: Page, page_errors: list[str]
 ) -> None:
     page.add_init_script(
         """(() => {
-            const BrowserWorker = window.Worker;
-            window.connectionTestWorkers = [];
-            window.Worker = class extends BrowserWorker {
+            const BrowserWebSocket = window.WebSocket;
+            window.connectionTestSockets = [];
+            window.WebSocket = class extends BrowserWebSocket {
                 constructor(...args) {
                     super(...args);
-                    window.connectionTestWorkers.push(this);
+                    window.connectionTestSockets.push(this);
                 }
             };
         })();"""
@@ -143,40 +83,28 @@ def test_failed_retry_command_recovers_and_ignores_the_old_worker(
     expect(page.locator(READY)).to_be_visible(timeout=15_000)
     page.evaluate(
         """() => {
-            const worker = window.connectionTestWorkers[0];
-            window.staleWorkerCallbacks = {
-                message: worker.onmessage,
-                error: worker.onerror,
-                messageerror: worker.onmessageerror,
+            const socket = window.connectionTestSockets[0];
+            window.staleSocketCallbacks = {
+                close: socket.onclose,
+                message: socket.onmessage,
             };
-            worker.postMessage = () => {
-                throw new DOMException("Test command failure", "DataCloneError");
-            };
-            // A close starts a retry immediately; that command fails inside
-            // the disconnect handler, before it returns to the browser.
-            worker.dispatchEvent(new MessageEvent("message", {data: {
-                type: "closed", closeKind: "socket", closeReason: "Test close",
-            }}));
+            socket.close();
         }"""
     )
-    expect(page.locator(LABEL)).to_have_text("Connecting...")
     expect(page.locator(LABEL)).to_have_text("Connected", timeout=15_000)
     expect(page.locator(READY)).to_be_visible()
     page.evaluate(
         """() => {
-            const stale = window.staleWorkerCallbacks;
-            stale.message({data: {type: "fatal", reason: "Stale failure"}});
-            stale.message({data: {type: "closed", closeKind: "version_mismatch",
-                                  closeReason: "Stale close"}});
-            stale.error(new ErrorEvent("error", {message: "Stale error"}));
-            stale.messageerror(new MessageEvent("messageerror"));
+            const stale = window.staleSocketCallbacks;
+            stale.close(new CloseEvent("close", {code: 1002, reason: "Stale close"}));
+            stale.message(new MessageEvent("message", {data: new ArrayBuffer(1)}));
         }"""
     )
     # Wait past another retry tick to expose duplicate timers or a stale
-    # failure accidentally replacing the newly connected worker.
+    # event accidentally replacing the newly connected socket.
     page.wait_for_timeout(1_200)
     expect(page.locator(LABEL)).to_have_text("Connected")
-    assert page.evaluate("() => window.connectionTestWorkers.length") == 2
+    assert page.evaluate("() => window.connectionTestSockets.length") == 2
     control = find_gui_input(page, "Recovered gain")
     control.fill("0.8")
     control.press("Enter")
@@ -184,14 +112,12 @@ def test_failed_retry_command_recovers_and_ignores_the_old_worker(
     assert page_errors == []
 
 
-@pytest.mark.parametrize("failure", ["socket", "worker"])
 @pytest.mark.parametrize("background", [False, True])
 @pytest.mark.parametrize("grouped", [False, True])
 def test_reconnect_preserves_renderers_and_reconciles_content(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
-    failure: str,
     background: bool,
     grouped: bool,
 ) -> None:
@@ -224,22 +150,16 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
     frame = page.locator("iframe").element_handle().content_frame()
     frame.evaluate("window.reconnectMarker = 'kept'")
     old_clients = set(leika_server.clients)
-    worker = page.workers[0]
     # Catch the next real send, then close the real socket. Visibility sync
     # sends even while hidden; transport retries wait until the tab returns.
-    if failure == "socket":
-        worker.evaluate("""() => {
-            const send = WebSocket.prototype.send;
-            WebSocket.prototype.send = function(...args) {
-                WebSocket.prototype.send = send;
-                send.apply(this, args);
-                setTimeout(() => this.close(1000, 'Test socket interruption'), 50);
-            };
-        }""")
-    else:
-        worker.evaluate("""() => {
-            setTimeout(() => self.postMessage({type:'fatal', reason:'Test interruption'}), 50);
-        }""")
+    page.evaluate("""() => {
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function(...args) {
+            WebSocket.prototype.send = send;
+            send.apply(this, args);
+            setTimeout(() => this.close(1000, 'Test socket interruption'), 50);
+        };
+    }""")
     set_visibility(page, "hidden")
     expect(page.locator(LABEL)).to_have_text("Inactive", timeout=10_000)
     assert video.evaluate("v => v === window.keptVideo")
@@ -266,7 +186,6 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
     )
     page.get_by_role("button", name=f"Next frame {label}", exact=True).click()
     page.wait_for_function('Math.abs(document.querySelector("video").currentTime - .9) < .02')
-    assert (page.workers[0] == worker) == (failure == "socket")
     wait_until(
         lambda: len(leika_server.clients) == 1 and not old_clients & set(leika_server.clients)
     )

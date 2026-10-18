@@ -269,6 +269,11 @@ export function contentsOf(headings: DocumentHeading[]): DocumentHeading[] {
   return listed.length < 2 ? [] : listed;
 }
 
+/** The largest document, in UTF-8 bytes, that is rendered rather than offered
+ * as a download. Compact Markdown can expand into many React and DOM nodes, so
+ * this sits well below the 16 MiB plain-text preview limit. */
+export const MARKDOWN_RENDER_MAX_SOURCE_BYTES = 1024 * 1024;
+
 /** A rendered document: the tree to draw, and what is in it. */
 export interface RenderedDocument {
   element: ReactElement;

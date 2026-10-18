@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
-import { MAX_GUI_TEXT_VALUE_CODE_UNITS } from "../guiLimits";
+import { MAX_GUI_TEXT_VALUE_CODE_UNITS } from "../ControlPanel/guiConstants";
 import { GuiTextMessage } from "../WebsocketMessages";
 import { GuiInputRow } from "./common";
 import { HoverScrollText } from "./HoverScrollText";

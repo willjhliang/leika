@@ -68,7 +68,7 @@ and validated against the schema before any handler sees it.
 | Application composition and stable viewer ownership | `App.tsx`, `ViewerProvider.tsx`, `ViewerContext.ts` |
 | GUI and viewport sessions with independently callable actions | `ControlPanel/GuiState.ts`, `viewport/ViewportState.ts` |
 | Store subscriptions and React selectors | `store.ts` |
-| Worker transport, ordered frame processing, and dispatch | `WebsocketClientWorker.ts`, `WebsocketInterface.tsx`, `MessageHandler.tsx`, `messageBatch.ts` |
+| WebSocket connection, frame decoding, and dispatch | `WebsocketInterface.tsx`, `hybridMessageDecode.ts`, `MessageHandler.tsx` |
 | Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
 | Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
 | Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
@@ -77,7 +77,7 @@ and validated against the schema before any handler sees it.
 
 `createGuiState()` and `createViewportState()` construct complete sessions
 without mounting React. Their hooks own one session per mounted viewer, and
-`ViewerProvider` owns the queues and transfer brokers alongside those sessions.
+`ViewerProvider` owns the transfer brokers alongside those sessions.
 Views subscribe to state and invoke actions; the state engines can be tested
 with the same actions and persistence adapters used by the application.
 
@@ -100,7 +100,8 @@ runtime orchestration; see [Development](development.md) for their entry points.
    and keeps an independent pane layout for every page.
 4. Changing pages sends an internal, generation-tagged subscription. The
    server replays retained state for that page, then streams its live updates;
-   stale frames from a rapid switch are rejected before browser preflight.
+   the browser applies pane messages only to the stream it subscribed to, so
+   stale frames from a rapid switch are ignored.
 5. GUI input changes update local state optimistically before the event is sent
    to Python.
 6. Python updates the authoritative handle and broadcasts it to the other
@@ -108,26 +109,23 @@ runtime orchestration; see [Development](development.md) for their entry points.
    slider from flickering through an older round-trip value.
 
 On a retryable connection loss, the viewport retains its displayed page in the
-existing bounded transition slot while a fresh catalog and page stream replay.
+existing transition slot while a fresh catalog and page stream replay.
 Matching pane IDs and renderer sources keep their mounted browser elements,
 including local video playback state and Viser's iframe. Replayed state remains
 authoritative: removed panes disappear, changed sources update, and a different
-server or workspace clears the retained page. Memory admission can evict the
-snapshot under pressure. Transfers and GUI controls still reset per connection;
-retained renderers keep their resource leases until replaced or unmounted.
+server or workspace clears the retained page. Transfers and GUI controls still
+reset per connection.
 
 Named pages partition the viewport state, not the whole application. The GUI
 tree and control panel are workspace-global and stay mounted as the viewer
 switches pages. Inactive-page pane state remains retained on the server, but its
 payload is not serialized or sent to that browser until the page is selected.
 The browser preserves every page's layout and may retain one inactive page's
-detached source model as a bounded warm cache. That hidden cache has no renderer
-DOM or Viser connection. During a switch exactly one stale model -- the cached
-target, or the outgoing page on a cold miss -- may remain visibly mounted but
-inert while the authoritative target replays into separate staging state.
-Matching `Ready`
-atomically promotes that state; resource pressure may evict the stale model and
-temporarily expose the loading surface.
+detached source model as a warm cache. That hidden cache has no renderer DOM or
+Viser connection. During a switch exactly one stale model -- the cached target,
+or the outgoing page on a cold miss -- may remain visibly mounted but inert
+while the authoritative target replays into separate staging state. Matching
+`Ready` atomically promotes that state.
 
 `server.atomic()` is a queue-emission barrier: no message queued inside it is
 emitted until the outermost context exits, and message order is preserved.
@@ -164,19 +162,15 @@ The scope-wide budgets are 16 Mi UTF-16 code units, 128 MiB of retained text
 and binary payload, and 64 Mi-pixels. Notifications additionally share a
 separate 2 Mi UTF-16 text ledger.
 
-One connected browser document combines `server.gui` with its own `client.gui`,
-and therefore admits at most 8,192 components, 2,048 commands, 64 modals, 256
-notifications, 32,768 tabs and collection entries, 32 Mi UTF-16 code units, and
-256 MiB of retained GUI payload. Notifications have a separate 4 Mi UTF-16
-document ledger. Each handle retains at most 256 callbacks. Programmatic GUI
+The browser applies GUI, modal, command, and notification messages as they
+arrive, without limits of its own; it removes exactly the descendants a removal
+lists. Each handle retains at most 256 callbacks. Programmatic GUI
 callbacks queue at most 1,024 snapshots and 128 MiB before later callbacks are
 reported and declined.
 
 Across all GUI scopes on one server, retained GUI state is capped at 256 MiB
 and GUI rasters at 128 Mi-pixels, and `server.gui` rasters at 64 Mi-pixels.
-Pages, panes, and their content have no Leika-imposed limits. The browser
-counts every mounted copy of a direct raster against its own 128 Mi-pixel
-document budget.
+Pages, panes, and their content have no Leika-imposed limits.
 
 These are ownership limits for Leika's GUI, wire, and rendered state, not
 a bound on total Python-process memory. Registered callbacks and lazy file
@@ -186,33 +180,25 @@ state.
 Browser-to-server protocol messages are limited to 4 MiB, and each decoded
 message to 100,000 values, depth 64, and 4 MiB of strings and bytes. A
 server-to-browser window carries at most 128 messages and takes no more once
-its encoded messages pass 8 MiB. Browser sends also stop at 16 MiB of
-WebSocket buffered data, 8,192 throttled slots, or 1,024 uncoalesced events;
-overflow closes the connection instead of silently dropping state.
+its encoded messages pass 8 MiB. The browser opens the socket on the page's
+main thread, decodes each frame as it arrives, and applies the queued messages
+once per animation frame (or on a short timer while the tab is hidden).
 
 Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
 The server's 256 MiB combined upload budget includes transfers in progress,
 transient conversion headroom, and retained `UploadedFile` values; explicit
 cancellation releases a transfer's reservation. The server admits at most 128
-active uploads per server instance; each browser document independently admits
-at most 128.
+active uploads per server instance.
 
 Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
 share 128 MiB, beyond which the oldest registrations are evicted and their URLs
 answer 404.
 
-Downloads are flow-controlled to 8 MiB of queued payload per client, but
-browser save and link flows still assemble the complete file as a Blob. The
-browser accepts at most 256 MiB and 65,536 parts per download, with
-at most 128 active assemblies. One document-wide 512 MiB budget covers both
-the declared bytes of active assemblies and completed Blobs retained by save
-navigation, links, current or deferred previews, and the warm cache. Completion
-transfers the reservation atomically to its Blob owner; under pressure,
-lower-priority cache and link owners are evicted before a new transfer is
-rejected. The same document admits at most 512 active or retained owners and
-65,536 received part records in aggregate, including zero-byte and highly
-fragmented transfers. These limits bound browser memory commitments; callers
-should use a dedicated streaming endpoint for larger files.
+Downloads are stream-flow-controlled to an 8 MiB queued budget per server
+client, but browser save and link flows still assemble the complete file as a
+Blob in memory; use a dedicated streaming endpoint for very large files. Each
+owner of a completed file -- a save, a link toast, a preview, or the warm cache
+-- revokes its own object URL when it closes.
 
 A path-backed download is a live descriptor stream: atomically replacing the
 path leaves an already-open transfer stable, while modifying the same file in
@@ -229,23 +215,20 @@ snapshot becomes ready. Up to 128 early image resolutions belong to each text
 stream (bounded source/asset URLs); stale streams cannot update a new preview.
 The final transfer remains the complete downloadable document. Reopened cached
 documents mount in batches of 96 blocks; following an internal link completes
-mounting before resolving its target. Image decoding remains viewport-bound.
+mounting before resolving its target. Markdown images load lazily.
 
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character).
-Public creation and update raise `ValueError` before publishing a larger source. The bundled client also
-declines an oversized payload before DOM, Blob, or image parsing and shows a
-status in the affected control or pane.
+Public creation and update raise `ValueError` before publishing a larger source.
+The browser waits for the Plotly runtime the server sends and renders each
+figure as it arrives.
 
-A received file-preview, Markdown, or registered-asset image reaches the decoder
-only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
-animated, oversized, and unsupported files remain available through an explicit
-link or download fallback. Local Markdown image paths resolve from the document
+The browser decodes every received image itself; one it cannot decode shows its
+ordinary broken-image state. Local Markdown image paths resolve from the document
 directory (or `add_text`'s `image_root`) with ordinary filesystem semantics,
 including parent directories, absolute paths, and symlinks. This base directory
 does not restrict which local images a document can reference.
-Markdown does not fetch external images; only a
-bounded data image or the exact hash-and-dimensions URL Leika emits for a
-registered picture can render inline.
+Markdown does not fetch external images; only a data image or a Leika asset
+URL renders inline, and an asset URL carries its measured size.
 
 GUI plots and Plotly panes share one serializer. Adding or assigning a figure
 stores its JSON with a private copy of the config, and the getter rebuilds an
@@ -283,11 +266,6 @@ panel follows `configure_theme(control_layout=...)`. These namespaces avoid
 collisions between servers and pages. Stable `page_id` and `pane_id` values let
 saved state recognize a page and its panes after a Python restart; display names
 and pane titles may change without changing layout identity.
-
-The default page provides the compatibility bridge from the former one-page
-model. If it has no version-3 layout, the client reads the version-2 layout for
-the same server URL and `workspace_id`, normalizes it, and saves it under the
-default page's version-3 key. Other pages never consume the old layout.
 
 Public `workspace_id`, explicit `page_id`, and explicit `pane_id` values are
 nonempty valid Unicode, at most 1,024 UTF-16 code units, and cannot be the

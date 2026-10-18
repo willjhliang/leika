@@ -4,10 +4,8 @@ import { VideoPlaybackRegistry } from "./viewport/videoPlayback";
 import { useClientSettings } from "./ClientSettings";
 import { useGuiState } from "./ControlPanel/GuiState";
 import { useViewportState } from "./viewport/ViewportState";
-import { BoundedMessageQueue } from "./boundedMessageQueue";
 import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { FileUploadAckBroker } from "./fileUploadAckBroker";
-import { retainedDownloads } from "./retainedDownloadBudget";
 import {
   ViewerContext,
   type ViewerContextContents,
@@ -15,32 +13,27 @@ import {
   warnDisconnectedSend,
 } from "./ViewerContext";
 
-/** A viewer owns one set of transport resources, shared by its producer and
- * message handler. Construct these lazily so rendering never replaces or
- * allocates a second queue, download assembler, or upload broker. */
+/** A viewer owns one set of transport resources. Construct these lazily so
+ * rendering never allocates a second download assembler or upload broker. */
 function createViewerTransport(): ViewerMutable {
   return {
     sendMessage: warnDisconnectedSend,
-    messageQueue: new BoundedMessageQueue(),
-    notifyMessageQueue: () => undefined,
-    downloads: new FileDownloadAssembler(retainedDownloads),
+    downloads: new FileDownloadAssembler(),
     uploads: new FileUploadAckBroker(),
-    failConnection: (reason) =>
-      console.error("Cannot fail an inactive connection:", reason),
   };
 }
 
 /** Composition boundary for browser state and mutable transport resources. */
 export function ViewerProvider({
-  initialServer,
+  server,
   children,
 }: {
-  initialServer: string;
+  server: string;
   children: React.ReactNode;
 }) {
   const [transport] = React.useState(createViewerTransport);
   const mutable = React.useRef(transport);
-  const guiState = useGuiState(initialServer);
+  const guiState = useGuiState();
   const viewportState = useViewportState();
   const [videoPlayback] = React.useState(() => new VideoPlaybackRegistry());
   React.useEffect(() => {
@@ -60,6 +53,7 @@ export function ViewerProvider({
   // app whenever its provider re-renders.
   const viewer: ViewerContextContents = React.useMemo(
     () => ({
+      server,
       videoPlayback,
       useGui: guiState.store,
       useGuiConfig: guiState.configStore,
@@ -70,7 +64,14 @@ export function ViewerProvider({
       settingsActions: settingsActions,
       mutable,
     }),
-    [guiState, viewportState, settingsStore, settingsActions, videoPlayback],
+    [
+      server,
+      guiState,
+      viewportState,
+      settingsStore,
+      settingsActions,
+      videoPlayback,
+    ],
   );
 
   return (

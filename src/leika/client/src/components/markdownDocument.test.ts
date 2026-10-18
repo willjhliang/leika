@@ -13,20 +13,22 @@ import { PreviewImageSourcesContext } from "../previewImageSources";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { MARKDOWN_RENDER_MAX_SOURCE_BYTES } from "../markdown";
 import {
-  MARKDOWN_CACHE_MAX_ENTRY_BYTES,
-  MARKDOWN_CACHE_MAX_SOURCE_BYTES,
-  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  cachedMarkdownDocument,
+  cachedPreviewText,
+  MARKDOWN_CACHE_MAX_CHARS,
   MARKDOWN_WARM_MAX_ASSETS,
   MARKDOWN_WARM_MAX_BYTES,
   markdownSourceBytesAtMost,
+  rememberMarkdownDocument,
+  rememberPreviewText,
   renderMarkdown,
   resetMarkdownDocumentCache,
   warmMarkdownBlob,
-  warmMarkdownDocument,
 } from "./markdownDocument";
 import {
-  AdmittedMarkdownImage,
+  MarkdownImage,
   MarkdownMediaController,
   MarkdownPicture,
 } from "./MarkdownMedia";
@@ -43,23 +45,21 @@ const interactiveHtml = (markdown: string) =>
     ),
   );
 
-const admittedImage = (
+const figure = (
   width: number,
   height: number,
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>,
 ) =>
-  createElement(AdmittedMarkdownImage, {
+  createElement(MarkdownImage, {
     alt: "Plot",
     linkedBy,
-    measured: { width, height },
-    sourceKind: "asset",
     src: measuredAsset(width, height),
   });
 
-const admittedHtml = (width: number, height: number) =>
-  renderToStaticMarkup(admittedImage(width, height));
+const figureHtml = (width: number, height: number) =>
+  renderToStaticMarkup(figure(width, height));
 
-const interactiveAdmittedHtml = (
+const interactiveFigureHtml = (
   width: number,
   height: number,
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>,
@@ -68,7 +68,7 @@ const interactiveAdmittedHtml = (
     createElement(
       MarkdownMediaController,
       null,
-      admittedImage(width, height, linkedBy),
+      figure(width, height, linkedBy),
     ),
   );
 
@@ -130,28 +130,38 @@ test("oversized markdown gets a visible status without parsing", () => {
   expect(drawn).toContain("1 MiB");
 });
 
-test("the rendered cache has entry and aggregate source-byte bounds", () => {
-  const sources = Array.from(
-    { length: 5 },
-    (_, index) =>
-      `# ${index}\n\n${"x".repeat(MARKDOWN_CACHE_MAX_ENTRY_BYTES - 8)}`,
-  );
-  const first = renderMarkdown(sources[0]);
-  for (const source of sources.slice(1)) renderMarkdown(source);
+test("documents and preview text share one bound on the source they hold", () => {
+  const document = renderMarkdown("# Report");
+  const half = MARKDOWN_CACHE_MAX_CHARS / 2;
+  const first = "a".repeat(half);
+  const text = new Blob();
+  rememberMarkdownDocument(first, document);
+  rememberPreviewText(text, "b".repeat(half));
+  // Touched, so the preview text is now the least recently used.
+  expect(cachedMarkdownDocument(first)).toBe(document);
+  rememberMarkdownDocument("c".repeat(half), document);
 
-  expect(MARKDOWN_CACHE_MAX_SOURCE_BYTES).toBe(
-    4 * MARKDOWN_CACHE_MAX_ENTRY_BYTES,
-  );
-  expect(renderMarkdown(sources[0])).not.toBe(first);
-
-  const oversizedEntry = "z".repeat(MARKDOWN_CACHE_MAX_ENTRY_BYTES + 1);
-  expect(renderMarkdown(oversizedEntry)).not.toBe(
-    renderMarkdown(oversizedEntry),
-  );
+  expect(cachedPreviewText(text)).toBeNull();
+  expect(cachedMarkdownDocument(first)).toBe(document);
+  const tooLarge = "x".repeat(MARKDOWN_RENDER_MAX_SOURCE_BYTES + 1);
+  rememberMarkdownDocument(tooLarge, document);
+  expect(cachedMarkdownDocument(tooLarge)).toBeNull();
 });
 
-test("reset drops rendered source and invalidates pending warm parsing", async () => {
-  vi.useFakeTimers();
+test("a preview's text is found by its exact Blob until reset", () => {
+  const blob = new Blob(["# Report"]);
+  rememberPreviewText(blob, "# Report");
+  const document = renderMarkdown("# Report");
+  expect(cachedPreviewText(blob)).toBe("# Report");
+  expect(cachedPreviewText(new Blob(["# Report"]))).toBeNull();
+  expect(cachedMarkdownDocument("# Report")).toBe(document);
+
+  resetMarkdownDocumentCache();
+  expect(cachedPreviewText(blob)).toBeNull();
+  expect(cachedMarkdownDocument("# Report")).toBeNull();
+});
+
+test("reset drops rendered source and stops a warm decode from fetching", async () => {
   const fetch = vi.fn(() => Promise.resolve(new Response()));
   vi.stubGlobal("fetch", fetch);
   let resolveText!: (source: string) => void;
@@ -161,13 +171,10 @@ test("reset drops rendered source and invalidates pending warm parsing", async (
         resolveText = resolve;
       }),
   );
-  const blob = { size: 32, text } as unknown as Blob;
-  warmMarkdownBlob(blob, () => true);
+  warmMarkdownBlob({ size: 32, text } as unknown as Blob);
   resetMarkdownDocumentCache();
   resolveText("![plot](/leika-assets/a.png?w=1&h=1)");
   await Promise.resolve();
-  await Promise.resolve();
-  vi.runAllTimers();
 
   expect(fetch).not.toHaveBeenCalled();
   const before = renderMarkdown("# after reset");
@@ -175,145 +182,45 @@ test("reset drops rendered source and invalidates pending warm parsing", async (
   expect(renderMarkdown("# after reset")).not.toBe(before);
 });
 
-test("warm Blob parsing is size-bounded and single-flight", async () => {
-  vi.useFakeTimers();
-  let resolveFirst!: (source: string) => void;
-  const firstText = vi.fn(
-    () => new Promise<string>((resolve) => (resolveFirst = resolve)),
-  );
-  const secondText = vi.fn(() => Promise.resolve("# second"));
-  warmMarkdownBlob(
-    { size: MARKDOWN_WARM_MAX_BYTES, text: firstText } as unknown as Blob,
-    () => true,
-  );
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
-  expect(firstText).toHaveBeenCalledOnce();
-  expect(secondText).not.toHaveBeenCalled();
-  resolveFirst("# discarded");
-  await Promise.resolve();
-  await Promise.resolve();
-  // Decoding remains single-flight until the scheduled parse has actually
-  // run; otherwise each hidden-tab idle closure could retain another source.
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
-  expect(secondText).not.toHaveBeenCalled();
-  await vi.runAllTimersAsync();
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
-  expect(secondText).toHaveBeenCalledOnce();
-  await Promise.resolve();
-  await Promise.resolve();
-  await vi.runAllTimersAsync();
-
-  const tooLargeText = vi.fn(() => Promise.resolve("# too large"));
-  warmMarkdownBlob(
-    {
-      size: MARKDOWN_WARM_MAX_BYTES + 1,
-      text: tooLargeText,
-    } as unknown as Blob,
-    () => true,
-  );
-  expect(tooLargeText).not.toHaveBeenCalled();
-
-  const evictedText = vi.fn(() => Promise.resolve("# evicted"));
-  warmMarkdownBlob(
-    { size: 1, text: evictedText } as unknown as Blob,
-    () => false,
-  );
-  expect(evictedText).not.toHaveBeenCalled();
-});
-
-test("an evicted owner cancels warm work already queued for idle", async () => {
-  vi.useFakeTimers();
-  const fetch = vi.fn(() => Promise.resolve(new Response()));
-  vi.stubGlobal("fetch", fetch);
-  let active = true;
-  warmMarkdownBlob(
-    {
-      size: 48,
-      text: () => Promise.resolve("![plot](/leika-assets/late.png?w=1&h=1)"),
-    } as unknown as Blob,
-    () => active,
-  );
-  await Promise.resolve();
-  await Promise.resolve();
-  active = false;
-  vi.runAllTimers();
-
-  expect(fetch).not.toHaveBeenCalled();
-});
-
-test("markdown warming deduplicates and caps asset prefetches", async () => {
-  vi.useFakeTimers();
+test("warming prefetches each image once, within its bounds", async () => {
   const fetch = vi.fn(() => Promise.resolve(new Response()));
   vi.stubGlobal("fetch", fetch);
   const assets = Array.from(
     { length: MARKDOWN_WARM_MAX_ASSETS + 2 },
-    (_, index) => `![${index}](/leika-assets/${index}.png)`,
+    (_, index) => `![${index}](/leika-assets/${index}.png?w=1&h=1)`,
   );
   assets.push(assets[0]);
-
-  const warmed = warmMarkdownDocument(assets.join("\n"));
-  await vi.runAllTimersAsync();
-  await warmed;
+  const source = assets.join("\n");
+  warmMarkdownBlob({
+    size: source.length,
+    text: () => Promise.resolve(source),
+  } as unknown as Blob);
+  await Promise.resolve();
 
   expect(fetch).toHaveBeenCalledTimes(MARKDOWN_WARM_MAX_ASSETS);
-});
+  expect(fetch).toHaveBeenCalledWith("/leika-assets/0.png?w=1&h=1");
 
-test("direct warm requests retain only one pending idle source", async () => {
-  vi.useFakeTimers();
-  const first = warmMarkdownDocument("# first");
-  const skipped = warmMarkdownDocument("# skipped");
-
-  expect(vi.getTimerCount()).toBe(1);
-  await skipped;
-  await vi.runAllTimersAsync();
-  await first;
-});
-
-test("reset releases pending warm state even when cancellation throws", async () => {
-  let work!: IdleRequestCallback;
-  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-    work = callback;
-    return 1;
-  });
-  vi.stubGlobal("cancelIdleCallback", () => {
-    throw new Error("scheduler unavailable");
-  });
-  const pending = warmMarkdownDocument("# pending");
-
-  expect(() => resetMarkdownDocumentCache()).not.toThrow();
-  await pending;
-  work({} as IdleDeadline);
-
-  // Cancellation released the single-flight slot and the late scheduler
-  // callback cannot repopulate state from the invalidated generation.
-  const next = warmMarkdownDocument("# next");
-  expect(next).not.toBe(pending);
-  resetMarkdownDocumentCache();
-  await next;
+  const tooLargeText = vi.fn(() => Promise.resolve(""));
+  warmMarkdownBlob({
+    size: MARKDOWN_WARM_MAX_BYTES + 1,
+    text: tooLargeText,
+  } as unknown as Blob);
+  expect(tooLargeText).not.toHaveBeenCalled();
 });
 
 test("a served figure reserves the size the server measured", () => {
   // The whole point of the exercise: the browser knows the shape of the box
   // before the picture is in it, so a document lays out once instead of
   // reflowing under the reader as each figure lands.
-  const drawn = admittedHtml(640, 360);
+  const drawn = figureHtml(640, 360);
   expect(drawn).toContain('width="640"');
   expect(drawn).toContain('height="360"');
   expect(drawn).toContain('alt="Plot"');
 });
 
-test("admitted figures load immediately and decode asynchronously", () => {
-  const drawn = admittedHtml(640, 360);
-  expect(drawn).toContain('loading="eager"');
+test("measured figures load lazily and decode asynchronously", () => {
+  const drawn = figureHtml(640, 360);
+  expect(drawn).toContain('loading="lazy"');
   expect(drawn).toContain('decoding="async"');
   // Scheduling hints must not trade away the stable geometry that prevents
   // images arriving under the reader from moving the document.
@@ -321,28 +228,15 @@ test("admitted figures load immediately and decode asynchronously", () => {
   expect(drawn).toContain('height="360"');
 });
 
-test("an external figure is an explicit link and causes no image request", () => {
+test("an external figure is a link and causes no image request", () => {
   const drawn = html("![Plot](https://example.com/plot.png)");
-  expect(drawn).toContain('role="status"');
   expect(drawn).toContain('href="https://example.com/plot.png"');
+  expect(drawn).toContain(">Plot</a>");
   expect(drawn).not.toContain("<img");
 });
 
-test("forged or mismatched measured asset URLs cannot bless generic bytes", () => {
-  for (const source of [
-    `/leika-assets/${"a".repeat(64)}.png?w=1&h=1`,
-    `/leika-assets/${"a".repeat(64)}-1x1.png?w=2&h=1`,
-    `/leika-assets/not-a-digest-1x1.png?w=1&h=1`,
-    `/leika-assets/${"a".repeat(64)}-1x1.too_long_suffix_name?w=1&h=1`,
-  ]) {
-    const drawn = html(`![Plot](${source})`);
-    expect(drawn).toContain('role="status"');
-    expect(drawn).not.toContain("<img");
-  }
-});
-
 test("a controlled figure has one accessible expand control", () => {
-  const drawn = interactiveAdmittedHtml(8, 8);
+  const drawn = interactiveFigureHtml(8, 8);
   const surface = matching(
     drawn,
     /<span\b[^>]*data-leika-inline-media[^>]*>.*?<\/span>/,
@@ -354,7 +248,7 @@ test("a controlled figure has one accessible expand control", () => {
 });
 
 test("a linked figure keeps link and expand as sibling actions", () => {
-  const drawn = interactiveAdmittedHtml(8, 8, {
+  const drawn = interactiveFigureHtml(8, 8, {
     href: "https://example.com/report",
   });
   const surface = matching(
@@ -390,7 +284,7 @@ test("a controlled picture drops source selection and admits only its fallback",
         createElement("source", {
           srcSet: "https://example.com/wide.png 2x",
         }),
-        admittedImage(8, 8),
+        figure(8, 8),
       ),
     ),
   );
