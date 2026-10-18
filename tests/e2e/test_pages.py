@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from playwright.sync_api import Page, expect
 
 import leika
@@ -315,4 +316,33 @@ def test_page_switch_keeps_pixels_visible_and_revalidates_a_cached_page(
         timeout=5_000,
     )
     _assert_no_empty_workspace(page)
+    assert page_errors == []
+
+
+def test_a_browser_that_loaded_plotly_reconnects_on_another_page(
+    leika_server: leika.Server, page: Page, page_errors: list[str]
+) -> None:
+    go = pytest.importorskip("plotly.graph_objects")
+    label = page.locator("[data-leika-connection-label]")
+
+    def declare(server: leika.Server) -> None:
+        plots = server.pages.add("Plots", page_id="plots")
+        plots.panes.add_plotly(go.Figure(go.Scatter(y=[3, 4])), pane_id="plot")
+
+    declare(leika_server)
+    page.goto(leika_server.url)
+    page.wait_for_selector('[data-viewport-workspace][aria-busy="false"]', timeout=15_000)
+    page.wait_for_function("() => window.Plotly !== undefined", timeout=15_000)
+    leika_server.stop()
+    expect(label).to_have_text("Connecting...", timeout=15_000)
+
+    # The same workspace keeps its panes, and replays the runtime once more.
+    with leika.Server(
+        host="127.0.0.1",
+        port=leika_server.port,
+        workspace_id=leika_server.workspace_id,
+        verbose=False,
+    ) as restarted:
+        declare(restarted)
+        expect(label).to_have_text("Connected", timeout=15_000)
     assert page_errors == []
