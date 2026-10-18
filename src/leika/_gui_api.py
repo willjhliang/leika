@@ -68,7 +68,6 @@ from ._gui_handles import (
     _GuiHandle,
     _GuiHandleState,
     _make_uuid,
-    _options,
 )
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
@@ -2339,16 +2338,15 @@ class GuiApi:
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        option_tuple = _options(options, "Dropdown")
         return self._add_input(
             GuiDropdownHandle,
-            option_tuple[0] if initial_value is None else initial_value,
+            initial_value,
             label=label,
             hint=hint,
             disabled=disabled,
             visible=visible,
             order=order,
-            options=option_tuple,
+            options=options,
             searchable=searchable,
         )
 

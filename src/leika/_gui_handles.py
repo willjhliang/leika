@@ -949,15 +949,15 @@ class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDrop
     @override
     def _prepare(self, changes: dict[str, Any]) -> _Change | None:
         if "options" in changes and "value" not in changes:
-            options = _options(changes["options"], "Dropdown")
-            changes = {**changes, "options": options}
-            if self._impl.value not in options:
-                changes["value"] = options[0]
+            changes = {**changes, "value": None}
         return super()._prepare(changes)
 
     @override
     def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
+        """None keeps the current value while it is an option, else selects the first."""
         options = _options(props.options, "Dropdown")
+        if value is None:
+            value = self._impl.value if self._impl.value in options else options[0]
         return dataclasses.replace(props, options=options), _option(options, value, "Dropdown")
 
 

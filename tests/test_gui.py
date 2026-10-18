@@ -250,6 +250,13 @@ def test_option_validation(server: leika.Server) -> None:
     dropdown.options = ("c", "d")
     assert dropdown.value == "c"
     _wait_for(lambda: seen == ["c"])
+    # Options holding the current value keep it.
+    dropdown.options = ("d", "c")
+    assert dropdown.value == "c"
+
+    # Options are read once, so a one-shot iterable also supplies the default.
+    once = server.gui.add_dropdown("Once", iter(("x", "y")))  # type: ignore[arg-type]
+    assert (once.options, once.value) == (("x", "y"), "x")
 
 
 def test_hold_frequency_is_positive_and_finite(server: leika.Server) -> None:
