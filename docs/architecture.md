@@ -57,8 +57,9 @@ the file changes.
 
 Every message type is a dataclass under the one `Message` base in
 `_messages.py`. An outbound message is checked against its annotations and
-encoded once when it is queued; each outgoing window frames those bytes, so a
-broadcast is serialized once for every client. A browser's message is decoded
+encoded once when it is queued. The queue keeps only those bytes and their
+routing, and each outgoing window frames them, so a broadcast is serialized once
+for every client. A browser's message is decoded
 and validated against the schema before any handler sees it.
 
 | Responsibility | Browser modules, relative to `client/src/` |

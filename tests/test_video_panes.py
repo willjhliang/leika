@@ -5,6 +5,8 @@ import pytest
 import leika
 from leika import _messages
 
+from .utils import queued_messages
+
 
 def test_video_replay_update_and_retirement(server: leika.Server, tmp_path: Path) -> None:
     clip = tmp_path / "clip.mp4"
@@ -12,7 +14,7 @@ def test_video_replay_update_and_retirement(server: leika.Server, tmp_path: Path
     pane = server.panes.add_video(clip, pane_id="videos")
     buffer = server._websock_server.get_message_buffer()
     creates = [
-        m for m in buffer.message_from_id.values() if isinstance(m, _messages.ViewportVideoMessage)
+        m for m in queued_messages(buffer).values() if isinstance(m, _messages.ViewportVideoMessage)
     ]
     assert len(creates) == 1
     assert creates[0].props._url.startswith("/leika-assets/")
@@ -92,7 +94,7 @@ def test_shared_video_api_replay_and_group_assignment(server: leika.Server) -> N
     controls.label = None
     assert controls.label is None
     nested.sync_group = "other"
-    messages = list(server._websock_server.get_message_buffer().message_from_id.values())
+    messages = list(queued_messages(server._websock_server.get_message_buffer()).values())
     creates = [m for m in messages if isinstance(m, _messages.GuiVideoControlsMessage)]
     assert len(creates) == 2
     assert {m.props.sync_group for m in creates} == {"episode"}  # Updates replay separately.

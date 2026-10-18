@@ -27,6 +27,8 @@ from leika import _messages
 from leika._server import ClientHandle
 from leika._transport._websocket import ClientId
 
+from .utils import queued_messages
+
 
 def _wait_for(predicate, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
@@ -620,7 +622,7 @@ def test_popup_is_a_folder_compatible_container(server: leika.Server) -> None:
     assert gain._impl.parent_container_id == folder.id
     assert any(
         isinstance(message, _messages.GuiPopupMessage) and message.uuid == popup.id
-        for message in server._websock_server.get_message_buffer().message_from_id.values()
+        for message in queued_messages(server._websock_server.get_message_buffer()).values()
     )
 
     popup.update(label="Rendering", visible=False, order=8.0)
@@ -668,7 +670,7 @@ def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
     assert form.actions.order > last.order > first.order
 
     buffer = server._websock_server.get_message_buffer()
-    before_ids = set(buffer.message_from_id)
+    before_ids = set(queued_messages(buffer))
     before_count = server.gui._live_component_count
     before_resources = dict(server.gui._resource_from_gui_uuid)
     before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
@@ -686,14 +688,14 @@ def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
     assert server.gui._live_component_count == before_count
     assert server.gui._resource_from_gui_uuid == before_resources
     assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
-    assert set(buffer.message_from_id) == before_ids
+    assert set(queued_messages(buffer)) == before_ids
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", original_queue)
-    before_success = set(buffer.message_from_id)
+    before_success = set(queued_messages(buffer))
     added = form.add_text("Nickname", initial_value="")
     published = [
         message
-        for message_id, message in buffer.message_from_id.items()
+        for message_id, message in queued_messages(buffer).items()
         if message_id not in before_success
     ]
     assert not any(
@@ -705,12 +707,12 @@ def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
     assert form.actions.order == sys.float_info.max
     assert form.actions.order > added.order > last.order
 
-    before_tie = buffer.message_from_id.copy()
+    before_tie = queued_messages(buffer)
     before_count = server.gui._live_component_count
     before_resources = dict(server.gui._resource_from_gui_uuid)
     with pytest.raises(ValueError, match="reserved for a form's Reset/Submit"):
         form.add_text("Tied", "", order=sys.float_info.max)
-    assert buffer.message_from_id == before_tie
+    assert queued_messages(buffer) == before_tie
     assert server.gui._live_component_count == before_count
     assert server.gui._resource_from_gui_uuid == before_resources
 
@@ -718,24 +720,24 @@ def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
     with pytest.raises(ValueError, match="reserved for a form's Reset/Submit"):
         added.order = sys.float_info.max
     assert added.order == old_order
-    assert buffer.message_from_id == before_tie
+    assert queued_messages(buffer) == before_tie
 
     outside = server.gui.add_text("Outside", "", order=sys.float_info.max)
     assert outside.order == sys.float_info.max
 
     action_props = dataclasses.replace(form.actions._impl.props)
-    action_buffer = buffer.message_from_id.copy()
+    action_buffer = queued_messages(buffer)
     action_resource = server.gui._resource_total
     with pytest.raises(ValueError, match="actions must keep their terminal order"):
         form.actions.order = 0.0
     assert form.actions._impl.props == action_props
-    assert buffer.message_from_id == action_buffer
+    assert queued_messages(buffer) == action_buffer
     assert server.gui._resource_total == action_resource
 
     with pytest.raises(ValueError, match="actions must keep their terminal order"):
         form.actions.update(order=0.0)
     assert form.actions._impl.props == action_props
-    assert buffer.message_from_id == action_buffer
+    assert queued_messages(buffer) == action_buffer
     assert server.gui._resource_total == action_resource
 
     with pytest.raises(TypeError, match="must be a number"):
@@ -745,7 +747,7 @@ def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
     with pytest.raises(ValueError, match="exactly Reset and Submit"):
         form.actions.update(options=("Reset", "Cancel"))
     assert form.actions._impl.props == action_props
-    assert buffer.message_from_id == action_buffer
+    assert queued_messages(buffer) == action_buffer
     assert server.gui._resource_total == action_resource
 
 
@@ -780,7 +782,7 @@ def test_add_form_action_creation_failure_leaves_no_form_ghost(
     assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
     assert not any(
         isinstance(message, _messages.GuiFormMessage) and message.uuid == form_uuid[0]
-        for message in buffer.message_from_id.values()
+        for message in queued_messages(buffer).values()
     )
 
 
@@ -1400,7 +1402,7 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     tabs = server.gui.add_tab_group()
     group_create = next(
         message
-        for message in buffer.message_from_id.values()
+        for message in queued_messages(buffer).values()
         if isinstance(message, _messages.GuiTabGroupMessage) and message.uuid == tabs.id
     )
     assert group_create.props._tabs == ()
@@ -1419,7 +1421,7 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     with pytest.raises(AttributeError, match="internal state"):
         tabs.update(_tabs=forged)
 
-    messages = tuple(buffer.message_from_id.items())
+    messages = tuple(queued_messages(buffer).items())
     alpha_declaration_id = next(
         message_id
         for message_id, message in messages
@@ -1443,7 +1445,7 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     assert alpha_declaration_id < alpha_child_id < beta_declaration_id < beta_child_id
     alpha_update = next(
         message
-        for message in buffer.message_from_id.values()
+        for message in queued_messages(buffer).values()
         if isinstance(message, _messages.GuiTabUpdateMessage) and message.uuid == alpha.id
     )
     assert alpha_update.icon_html is not None
@@ -1453,13 +1455,13 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     assert all(
         getattr(message, "uuid", None) not in {alpha.id, alpha_child.id}
         or isinstance(message, _messages.GuiRemoveMessage)
-        for message in buffer.message_from_id.values()
+        for message in queued_messages(buffer).values()
     )
     assert [descriptor.container_id for descriptor in tabs._tabs] == [beta.id]
 
     old_icon = beta.icon
     old_tabs = tabs._tabs
-    old_buffer = buffer.message_from_id.copy()
+    old_buffer = queued_messages(buffer)
 
     def reject(_: Sequence[_messages.Message]) -> None:
         raise RuntimeError("tab lifecycle batch rejected")
@@ -1469,7 +1471,7 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
         beta.icon = leika.Icon.PLAY
     assert beta.icon == old_icon
     assert tabs._tabs == old_tabs
-    assert buffer.message_from_id == old_buffer
+    assert queued_messages(buffer) == old_buffer
 
 
 def test_removed_containers_reject_new_actions(server: leika.Server) -> None:
@@ -1727,7 +1729,7 @@ def test_full_component_graph_depth_is_bounded_transactionally(
 
     def state() -> tuple[object, ...]:
         return (
-            buffer.message_from_id,
+            queued_messages(buffer),
             server.gui._live_component_count,
             server.gui._resource_total,
             dict(server.gui._resource_from_gui_uuid),
@@ -1845,7 +1847,7 @@ def test_plotly_runtime_is_queued_once_for_every_scope(server: leika.Server) -> 
     client = ClientHandle(connection, server)  # type: ignore[arg-type]
 
     def runtimes() -> list[_messages.Message]:
-        broadcast = server._websock_server._broadcast_buffer.message_from_id.values()
+        broadcast = queued_messages(server._websock_server._broadcast_buffer).values()
         return [m for m in broadcast if isinstance(m, _messages.RunJavascriptMessage)]
 
     assert runtimes() == []
@@ -3030,13 +3032,13 @@ def test_mini_form_rejects_second_direct_or_nested_field_before_publication(
         server.gui.add_text("Only", "")
 
     buffer = server._websock_server.get_message_buffer()
-    before_messages = buffer.message_from_id.copy()
+    before_messages = queued_messages(buffer)
     before_count = server.gui._live_component_count
     before_resources = dict(server.gui._resource_from_gui_uuid)
     before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
     with pytest.raises(ValueError, match="single field"):
         mini.add_text("Second", "")
-    assert buffer.message_from_id == before_messages
+    assert queued_messages(buffer) == before_messages
     assert server.gui._live_component_count == before_count
     assert server.gui._resource_from_gui_uuid == before_resources
     assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
@@ -3047,14 +3049,14 @@ def test_mini_form_rejects_second_direct_or_nested_field_before_publication(
         lambda: mini.add_html("<p>Sibling</p>"),
         lambda: mini.add_button("Sibling"),
     ):
-        before_messages = buffer.message_from_id.copy()
+        before_messages = queued_messages(buffer)
         before_count = server.gui._live_component_count
         before_resources = dict(server.gui._resource_from_gui_uuid)
         before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
         before_children = dict(mini._children)
         with pytest.raises(ValueError, match="direct editable field"):
             add_incompatible()
-        assert buffer.message_from_id == before_messages
+        assert queued_messages(buffer) == before_messages
         assert server.gui._live_component_count == before_count
         assert server.gui._resource_from_gui_uuid == before_resources
         assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
@@ -3708,19 +3710,19 @@ def test_refresh_bindings_acknowledge_same_value_and_bound_client_history(server
         buffer = server._websock_server.get_message_buffer()
         updates = [
             m
-            for m in buffer.message_from_id.values()
+            for m in queued_messages(buffer).values()
             if isinstance(m, _messages.ViewportPaneUpdateMessage) and m.pane_id == pane.pane_id
         ]
         return updates[-1].updates
 
     first = request(1, "first")
-    assert first["_refresh_controls"] == (control._impl.uuid,)
-    assert first["_refresh_requests"] == ("first",)
+    assert first["_refresh_controls"] == [control._impl.uuid]
+    assert first["_refresh_requests"] == ["first"]
     assert first["loading"] is True
     assert first["_data"] == pane._props._data
     second = request(1, "same-value")
     assert second["_refresh_revision"] > first["_refresh_revision"]
-    assert second["_refresh_requests"] == ("same-value",)
+    assert second["_refresh_requests"] == ["same-value"]
     assert seen == [1]
     for i in range(100):
         request(1, f"repeat-{i}")
@@ -3729,7 +3731,7 @@ def test_refresh_bindings_acknowledge_same_value_and_bound_client_history(server
         len(
             [
                 m
-                for m in server._websock_server.get_message_buffer().message_from_id.values()
+                for m in queued_messages(server._websock_server.get_message_buffer()).values()
                 if isinstance(m, _messages.ViewportPaneUpdateMessage) and m.pane_id == pane.pane_id
             ]
         )

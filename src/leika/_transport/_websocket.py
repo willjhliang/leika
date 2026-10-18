@@ -399,7 +399,7 @@ class WebsockServer(WebsockMessageHandler):
                     rich.print(
                         f"[bold](leika)[/bold] Connection opened ({client_id},"
                         f" {len(active_client_ids)} total),"
-                        f" {len(self._broadcast_buffer.message_from_id)} persistent messages"
+                        f" {len(self._broadcast_buffer)} persistent messages"
                     )
 
                 async def handle_incoming(message: Message) -> None:

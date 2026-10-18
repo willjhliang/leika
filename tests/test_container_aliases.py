@@ -1,11 +1,13 @@
 import leika
 
+from .utils import queued_messages
+
 
 def test_direct_container_methods_publish_children_in_the_folder(server: leika.Server) -> None:
     folder = server.gui.add_folder("Settings")
     nested = folder.add_folder("Advanced")
     control = nested.add_checkbox("Enabled", True)
-    messages = server._websock_server.get_message_buffer().message_from_id.values()
+    messages = queued_messages(server._websock_server.get_message_buffer()).values()
     parents = {
         message.uuid: message.container_uuid
         for message in messages

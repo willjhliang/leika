@@ -12,9 +12,11 @@ import pytest
 
 from leika import _messages, _panes
 
+from .utils import queued_messages
+
 
 def retained(server):
-    return tuple(server._websock_server.get_message_buffer().message_from_id.values())
+    return tuple(queued_messages(server._websock_server.get_message_buffer()).values())
 
 
 def test_general_pane_replaces_content_and_replay_without_changing_identity(server):
@@ -159,7 +161,7 @@ def test_replacement_preserves_refresh_bindings_and_latest_metadata(server, monk
     pane.set_video("/movie.mp4")
     assert (pane.title, pane.visible, pane.loading) == ("Latest", False, "Preparing")
     updates = [m for m in retained(server) if isinstance(m, _messages.ViewportPaneUpdateMessage)]
-    assert updates[-1].updates["_refresh_controls"] == (control._impl.uuid,)
+    assert updates[-1].updates["_refresh_controls"] == [control._impl.uuid]
     pane.clear(loading=False)
     assert pane.loading is False and pane.title == "Latest"
 

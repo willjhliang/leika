@@ -10,9 +10,11 @@ import leika
 from leika import _messages
 from leika._transport._websocket import ClientId
 
+from .utils import queued_messages
+
 
 def _retained(server: leika.Server) -> tuple[_messages.Message, ...]:
-    return tuple(server._websock_server.get_message_buffer().message_from_id.values())
+    return tuple(queued_messages(server._websock_server.get_message_buffer()).values())
 
 
 def test_default_page_preserves_the_one_page_api_and_bootstrap_order(
