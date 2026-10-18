@@ -551,7 +551,8 @@ class GuiApi:
         """The button a preview message names, and the client that sent it.
 
         None for every mismatch -- a stale uuid, another kind of button, a
-        client gone between queueing and dispatch -- so each preview message
+        button that takes no input now, a client gone between queueing and
+        dispatch -- so each preview message
         can be a quiet return: the browser asks on its own account about a file
         it was already sent, and nobody is waiting on an error.
         """
@@ -560,7 +561,7 @@ class GuiApi:
             return None
         with self._lock:
             handle = self._handles.get(uuid)
-            if not isinstance(handle, GuiPreviewButtonHandle) or handle._impl.removed:
+            if not isinstance(handle, GuiPreviewButtonHandle) or not handle._accepts_input():
                 return None
             return handle, client
 
@@ -706,10 +707,7 @@ class GuiApi:
         if found is None:
             return
         handle, client = found
-        if handle._accepts_input():
-            self._queue_preview_work(
-                "warm", client_id, client, handle, lambda: handle._warm(client)
-            )
+        self._queue_preview_work("warm", client_id, client, handle, lambda: handle._warm(client))
 
     async def _handle_gui_preview_reload(
         self, client_id: ClientId, message: _messages.GuiPreviewReloadMessage
@@ -802,8 +800,6 @@ class GuiApi:
                 metadata_valid = False
             if not metadata_valid:
                 reason = "Invalid upload metadata."
-            elif not handle._accepts_input():
-                reason = "Upload target unavailable."
             elif message.size_bytes > _FILE_UPLOAD_MAX_BYTES:
                 reason = "Upload exceeds the 64 MiB limit."
             elif (client_id, transfer_uuid) in self._uploads or any(
@@ -842,7 +838,14 @@ class GuiApi:
     def _acknowledge_upload(
         self, client_id: ClientId, transfer_uuid: str, upload: _Upload
     ) -> Coroutine[Any, Any, None] | None:
-        """Acknowledge an upload's progress, committing its value once complete."""
+        """Acknowledge an upload's progress, committing its value once complete.
+
+        The upload is the button's next value, so it proceeds only while the
+        button accepts input: disabling or hiding it aborts the transfer."""
+        if not upload.handle._accepts_input():
+            self._uploads.pop((client_id, transfer_uuid), None)
+            self._abort_upload(client_id, transfer_uuid, "Upload target unavailable.")
+            return None
         done = len(upload.content) == upload.size
         acknowledged = self._queue_to_client(
             client_id,

@@ -162,7 +162,9 @@ sends to Python is validated and bounded.
 Browser-to-server protocol messages are limited to 4 MiB, and each decoded
 message to 100,000 values, depth 64, and 4 MiB of strings and bytes. Each
 browser value is checked against the control it targets, and a disabled,
-hidden, or read-only input takes no new value.
+hidden, or read-only input takes no new value: a button takes only presses, an
+upload in flight aborts once its button stops taking input, and a preview
+button's reloads and file watches stop with it.
 
 In the other direction, a server-to-browser window carries at most 128 messages
 and takes no more once its encoded messages pass 8 MiB. The browser opens the socket on the page's

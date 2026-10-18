@@ -1001,6 +1001,13 @@ class GuiButtonHandle(_HasIcon, GuiInputHandle[bool], GuiButtonProps):
         _role(props.color)
         return props, _bool(value, "button")
 
+    @override
+    def _client_value(self, value: Any) -> Any:
+        """A browser sends only presses, which are True."""
+        if value is not True:
+            raise ValueError("A browser button update must be a press.")
+        return value
+
     def on_click(
         self: TGuiHandle, func: Callable[[GuiEvent[TGuiHandle]], NoneOrCoroutine]
     ) -> Callable[[GuiEvent[TGuiHandle]], NoneOrCoroutine]:
