@@ -5,9 +5,7 @@ import time
 from contextlib import ExitStack
 from types import SimpleNamespace
 
-import msgspec
 import numpy as np
-import zstandard
 from playwright.sync_api import Page, expect
 
 import leika
@@ -107,33 +105,27 @@ def test_hidden_viser_keeps_the_iframe_document(
 def test_eight_live_scenes_update_from_leika_and_reconnect(page: Page) -> None:
     import viser
 
-    received = []
     sockets = []
-
-    def receive(data):
-        # Viser 0.2 sends MessagePack; 1.x sends compressed metadata followed
-        # by binary arrays. Observe messages received by the real browser.
-        try:
-            messages = msgspec.msgpack.decode(data)
-        except msgspec.DecodeError:
-            size = int.from_bytes(data[:8], "little")
-            compressed_size = int.from_bytes(data[8:16], "little")
-            metadata = zstandard.ZstdDecompressor().decompress(
-                data[16 : 16 + compressed_size], max_output_size=size
-            )
-            messages = msgspec.msgpack.decode(metadata)["messages"]
-        received.extend(messages if isinstance(messages, (list, tuple)) else [messages])
 
     def on_socket(socket):
         if "/_leika/viser/" in socket.url:
             sockets.append(socket.url)
-            socket.on("framereceived", receive)
 
     def wait_for(predicate):
         deadline = time.monotonic() + 30
         while not predicate() and time.monotonic() < deadline:
             page.wait_for_timeout(50)
         assert predicate()
+
+    def scene_frame(index):
+        return page.frame_locator(f'iframe[title="Skill {index}"]')
+
+    def expect_step(step):
+        # Each scene's public GUI renders its state as text in the embedded
+        # document, so the browser shows what every Viser server sent it.
+        for index in range(8):
+            status = scene_frame(index).get_by_text(f"Skill {index} step {step}", exact=True)
+            expect(status).to_be_visible(timeout=30_000)
 
     page.on("websocket", on_socket)
     errors = []
@@ -142,51 +134,41 @@ def test_eight_live_scenes_update_from_leika_and_reconnect(page: Page) -> None:
     with ExitStack() as lifetime:
         server = lifetime.enter_context(leika.Server(host="127.0.0.1", port=0, verbose=False))
         scenes = []
-        meshes = []
+        statuses = []
         for index in range(8):
             scene = viser.ViserServer(host="127.0.0.1", port=find_free_port())
             lifetime.callback(scene.stop)
             scenes.append(scene)
-            meshes.append(
-                scene.scene.add_mesh_simple(
-                    f"/skill-{index}",
-                    vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32),
-                    faces=np.array([[0, 1, 2]], dtype=np.uint32),
-                    color=(200, 80, 20),
-                )
+            scene.scene.add_mesh_simple(
+                f"/skill-{index}",
+                vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32),
+                faces=np.array([[0, 1, 2]], dtype=np.uint32),
+                color=(200, 80, 20),
             )
-            server.panes.add_viser(scene, pane_id=f"skill-{index}", title=f"Skill {index}")
+            statuses.append(scene.gui.add_markdown(f"Skill {index} step 0"))
+            server.panes.add_viser(
+                scene, pane_id=f"skill-{index}", title=f"Skill {index}", minimize_gui=False
+            )
+        steps = iter(range(1, 3))
 
-        def move(_):
-            for index, mesh in enumerate(meshes):
-                mesh.position = (index + 1.0, 0.0, 0.0)
+        def step(_):
+            current = next(steps)
+            for index, status in enumerate(statuses):
+                status.content = f"Skill {index} step {current}"
 
-        server.gui.add_button("Step all skills").on_click(move)
+        server.gui.add_button("Step all skills").on_click(step)
         page.goto(server.url)
         expect(page.locator("iframe")).to_have_count(8)
         wait_for(lambda: all(scene.get_clients() for scene in scenes))
-        wait_for(lambda: len({m.get("name") for m in received if m["type"] == "MeshMessage"}) == 8)
         for index in range(8):
-            expect(
-                page.frame_locator(f'iframe[title="Skill {index}"]').locator("canvas[data-engine]")
-            ).to_be_visible()
-        received.clear()
+            expect(scene_frame(index).locator("canvas[data-engine]")).to_be_visible()
+        expect_step(0)
         page.get_by_role("button", name="Step all skills", exact=True).click()
-
-        def updated():
-            return all(
-                any(
-                    m["type"] == "SetPositionMessage"
-                    and m["name"] == f"/skill-{index}"
-                    and m["position"] == [index + 1.0, 0.0, 0.0]
-                    for m in received
-                )
-                for index in range(8)
-            )
-
-        wait_for(updated)
+        expect_step(1)
         old_clients = [set(scene.get_clients()) for scene in scenes]
-        page.evaluate("window.sceneDocument = document")
+        bodies = [scene_frame(index).locator("body") for index in range(8)]
+        for body in bodies:
+            body.evaluate("() => { window.sceneDocument = document }")
         proxy = server._websock_server._viser_proxy
 
         async def disconnect():
@@ -198,7 +180,6 @@ def test_eight_live_scenes_update_from_leika_and_reconnect(page: Page) -> None:
                 )
             )
 
-        received.clear()
         asyncio.run_coroutine_threadsafe(disconnect(), proxy._loop).result(timeout=10)
         # Modern Viser retries only while its document has focus. Exercise
         # that public behavior by focusing each embedded document in turn.
@@ -208,8 +189,9 @@ def test_eight_live_scenes_update_from_leika_and_reconnect(page: Page) -> None:
         wait_for(
             lambda: all(set(scene.get_clients()) - old for scene, old in zip(scenes, old_clients))
         )
-        wait_for(updated)
-        assert page.evaluate("window.sceneDocument === document")
+        page.get_by_role("button", name="Step all skills", exact=True).click()
+        expect_step(2)
+        assert all(body.evaluate("() => window.sceneDocument === document") for body in bodies)
         assert len(sockets) >= 16
         assert all(url.startswith(server.url.replace("http:", "ws:")) for url in sockets)
         assert errors == []
