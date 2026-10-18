@@ -31,6 +31,14 @@ rewrites `package-lock.json`: npm versions disagree about which optional
 transitive packages belong in a lockfile, and `npm ci` rejects a lockfile an
 older npm wrote.
 
+## Generated files
+
+Run `make generate` after changing message dataclasses, the package version,
+or the pinned `lucide-static` version. It regenerates the TypeScript protocol,
+the client's version file, and the `leika.Icon` enum and SVG archive.
+`make check-generated` fails instead of writing when any of them is out of
+date.
+
 ## Checks
 
 ```bash
@@ -45,122 +53,73 @@ make gallery  # After visual client or gallery-registry changes.
 ```
 
 Run through `make docs` before opening a change; add `make test-e2e` for
-browser-facing changes and `make package` for packaging changes. `make docs`
-first runs `scripts/check_docs.py`, which validates local Markdown and
-reStructuredText links and compiles every example and Markdown Python block.
-CI runs these targets on every pull request.
+browser-facing changes and `make package` for packaging changes. CI runs these
+targets on every pull request.
 
 Unit tests must work without the optional plotting libraries unless marked
 `plotly` or `matplotlib`. `make package` builds the sdist and wheel into
 `dist/`, each with the built client and without its sources, and checks them
 with `scripts/check_dist.py` and `twine check --strict`.
 
-## Pinned simulator environments
-
-Leika uses the WebSockets 12 API on every supported version (12 through 17),
-and supports Pillow 11.3 through 12.x. There is one server implementation,
-imported explicitly from `websockets.legacy.server`, with native HTTP and
-subprotocol hooks. Upstream owns parsing, framing and connection shutdown;
-Leika owns request routing, response budgets and application policy. There is
-no version detection or compatibility adapter.
-
-The upstream legacy API remains available in newer releases but is deprecated
-and maintained until November 2029. See the
-[upstream migration policy](https://websockets.readthedocs.io/en/stable/howto/upgrade.html).
-Leika's dependency range covers tested releases, not unbounded future versions.
-The Viser proxy uses `httpcore[asyncio]>=1.0.9`, whose HTTP parser requires
-`h11>=0.16`. Leika does not import or require aiohttp.
-
-For Isaac Sim 5.1's Python 3.11 environment, install the source revision or its
-locally built wheel with the checked-in compatibility constraints:
-
-```bash
-python -m pip install -c tests/constraints/isaac51.txt . viser
-python -m pip check
-```
-
-This selects Viser 0.2.11, the last release before its WebSockets 13.1 minimum.
-Viser remains optional. `ViserServer(host="127.0.0.1", port=...)` and
-`server.panes.add_viser(scene, ...)` retain the same integration API. Legacy Vite
-asset URLs, including worker URLs, stay inside the pane's proxy path; rewritten
-HTML/JavaScript is fetched without compression and charged to the HTTP budget.
-Other assets retain their encoding and range handling. Keep simulator-owned pins
-in place; these constraints are test inputs, not a complete simulator lock.
-
-The old Pillow release has known vulnerabilities outside Leika's image surface.
-Leika only encodes and decodes PNG/JPEG and explicitly restricts `Image.open`
-to those formats. This follows the format restriction in Pillow's
-[FITS advisory](https://github.com/python-pillow/Pillow/security/advisories/GHSA-whj4-6x5x-4v2j)
-and excludes the PSD/EPS decoders as well. It does not secure other applications
-using Pillow. The proxy replacement preserves the reason for the former aiohttp
-floor: its older C response parser has a
-[memory safety advisory](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-cq5v-8q36-5273).
-
-CI's minimum-versions job installs the development environment under these
-constraints on Python 3.10, then runs the unit tests and the Viser pane browser
-tests. No simulator or GPU is required.
-
-## Documentation
-
-```bash
-make docs
-```
-
-Sphinx renders `docs/` into `docs/_build/html`. The narrative pages are
-Markdown through MyST so they stay readable on GitHub; the API reference under
-`docs/api/` is reStructuredText driven by autodoc, so public docstrings are the
-only source for it. `make docs` builds with `-W`, which turns warnings such as
-a broken cross-reference into failures, and CI publishes `main` to GitHub Pages
-through `.github/workflows/docs.yml`.
-
-Adding a public class or method to `leika` means adding it to the matching page
-in `docs/api/`; autodoc will not discover it otherwise.
-
-## Releases
-
-Bump `__version__` in `src/leika/__init__.py`, add the dated entry to
-`CHANGELOG.md`, run `make generate` (the client's version file follows
-`__version__`) and, after visual changes, `make gallery`. Commit the results,
-run the checks above, then tag and publish a GitHub release:
-
-```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin vX.Y.Z
-gh release create vX.Y.Z --title "vX.Y.Z"
-```
-
-Publishing the release runs `.github/workflows/package.yml`. It checks that the
-tag is `v` followed by `leika.__version__`, runs `make package`, installs the
-wheel and the sdist into fresh environments and serves the page from each, and
-then uploads both to PyPI through Trusted Publishing. PyPI releases are
-immutable: a mistake means moving to the next patch version.
-
 ## Browser tests
 
-The Playwright suite runs against the built single-file client, so build it and
-install Chromium before the first run:
+The Playwright suite runs against the built single-file client, which it builds
+when stale. Install Chromium before the first run:
 
 ```bash
-make build-client
 python -m playwright install chromium
 ```
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
 multi-slider cancellation, the color picker, checklists, markdown, download and
 preview buttons, modal dismissal, notifications, settings, the connection pane,
-light/dark theming, multi-client updates, the lifecycle of every pane type, resizing and persistence, and responsive
-floating/mobile control panels.
+light/dark theming, multi-client updates, the lifecycle of every pane type,
+resizing and persistence, and responsive floating/mobile control panels.
 
 `test_dock.py` covers the docking surface's pointer gestures. The dock's layout
-model is unit-tested in TypeScript (`src/leika/client/src/dock/*.test.ts`); the gesture
-controller and views above it read real DOM geometry, so they can only be
-verified in a browser. Those tests drive the real app rather than a fixture:
+model is unit-tested in TypeScript (`src/leika/client/src/dock/*.test.ts`); the
+gesture controller and views above it read real DOM geometry, so they can only
+be verified in a browser. Those tests drive the real app rather than a fixture:
 the control panel is an ordinary dock panel and GUI tab groups are ordinary
 dockable panels, so docking, splitting, snapping, tearing out, reordering,
 resizing, minimizing, and drag cancellation are all reachable from it.
 
 Failure artifacts are written under `test-results/` when capture is enabled by
 the local pytest-playwright configuration or CI runner.
+
+## Documentation
+
+Sphinx renders `docs/` into `docs/_build/html` through `make docs`, which first
+runs `scripts/check_docs.py` to validate local Markdown and reStructuredText
+links and compile every example and Markdown Python block. The narrative pages
+are Markdown through MyST so they stay readable on GitHub; the API reference
+under `docs/api/` is reStructuredText driven by autodoc, so public docstrings
+are the only source for it. The build uses `-W`, which turns warnings such as a
+broken cross-reference into failures, and CI publishes `main` to GitHub Pages
+through `.github/workflows/docs.yml`. `make linkcheck` checks external links;
+CI runs it weekly.
+
+Adding a public class or method to `leika` means adding it to the matching page
+in `docs/api/`; autodoc will not discover it otherwise.
+
+## Minimum supported versions
+
+Babble runs Leika inside Isaac Sim 5.1, which pins WebSockets 12, Pillow 11.3
+and Viser 0.2.11; those are Leika's floors in `pyproject.toml`. Leika uses the
+WebSockets 12 server API, `websockets.legacy.server`, on every supported
+WebSockets release; upstream maintains that API until November 2029 under its
+[migration policy](https://websockets.readthedocs.io/en/stable/howto/upgrade.html).
+Leika opens images only as PNG or JPEG, which keeps it clear of the decoders
+with known vulnerabilities in old Pillow releases. To reproduce the simulator's
+versions:
+
+```bash
+python -m pip install -c tests/constraints/isaac51.txt -e ".[dev]"
+python -m pip check
+```
+
+CI's minimum-versions job does this on Python 3.10, then runs the unit tests
+and the Viser pane browser tests.
 
 ## Client UI
 
@@ -178,11 +137,11 @@ npm exec -- shadcn add <component>
 ```
 
 The `shadcn` package remains pinned because `src/leika/client/src/index.css`
-imports its stock Tailwind support stylesheet. When that version or preset changes, regenerate
-the components and update the package, theme tokens, licenses, and provenance
-together. Keep to this single component framework, and let Leika's domain
-components compose the generated shadcn primitives directly rather than through
-a wrapper layer.
+imports its stock Tailwind support stylesheet. When that version or preset
+changes, regenerate the components and update the package, theme tokens,
+licenses, and provenance together. Keep to this single component framework,
+and let Leika's domain components compose the generated shadcn primitives
+directly rather than through a wrapper layer.
 
 One file in `components/ui` is vendored rather than generated: `status.tsx`
 comes from the separate shadcn.io collection and has no `shadcn add` path, so
@@ -207,13 +166,25 @@ boundary; consumers of internal helpers should import their owning module.
 - For HTTP changes, put host/origin decisions in `HttpRequestPolicy`, retained
   runtime content in `HttpAssetRegistry`, and response/static-file behavior in
   `HttpRequestHandler`. Preserve the owner's admission limits and shutdown behavior.
-- For new wire messages, update the Python schema, regenerate the bundled
-  TypeScript contract, and cover both replay and live dispatch. Resource
-  reservations must be released on rejected publication as well as removal.
+- For new wire messages, update the Python schema, run `make generate`, and
+  cover both replay and live dispatch. Resource reservations must be released
+  on rejected publication as well as removal.
 
-## Generated files
+## Releases
 
-Run `make generate` after changing message dataclasses, the package version,
-or the pinned `lucide-static` version. It regenerates the TypeScript protocol,
-the client's version file, and the `leika.Icon` enum and SVG archive. CI runs
-`make check-generated` to reject generated-file drift.
+Bump `__version__` in `src/leika/__init__.py`, add the dated entry to
+`CHANGELOG.md`, run `make generate` (the client's version file follows
+`__version__`) and, after visual changes, `make gallery`. Commit the results,
+run the checks above, then tag and publish a GitHub release:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+gh release create vX.Y.Z --title "vX.Y.Z"
+```
+
+Publishing the release runs `.github/workflows/package.yml`. It checks that the
+tag is `v` followed by `leika.__version__`, runs `make package`, installs the
+wheel and the sdist into fresh environments and serves the page from each, and
+then uploads both to PyPI through Trusted Publishing. PyPI releases are
+immutable: a mistake means moving to the next patch version.

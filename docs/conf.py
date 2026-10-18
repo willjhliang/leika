@@ -30,7 +30,8 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", ".DS_Store"]
+# The work brief is an internal log kept in git, not published documentation.
+exclude_patterns = ["_build", ".DS_Store", "WORK_BRIEF.md"]
 
 source_suffix = {
     ".rst": "restructuredtext",
@@ -83,12 +84,6 @@ nitpick_ignore_regex = [
 nitpick_ignore = [
     ("py:attr", "Server.gui"),
     ("py:class", "asyncio.events.AbstractEventLoop"),
-]
-# This README link points at the CHANGELOG added by the same change, so it is a
-# transient 404 until that change reaches the repository's main branch. Sphinx
-# separately parses the local file as the changelog page.
-linkcheck_ignore = [
-    r"https://github\.com/willjhliang/leika/blob/main/CHANGELOG\.md",
 ]
 
 intersphinx_mapping = {

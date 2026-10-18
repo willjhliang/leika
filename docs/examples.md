@@ -11,6 +11,8 @@ The runnable sources live in the repository's
   synchronized controls, callbacks, editable and frozen radio lists, tabs,
   popup, modal, upload, command palette, notifications, GUI image/Plotly, and
   live updates; requires `leika[examples]`.
+- `python examples/custom_playback.py`: a playback bar driving custom content
+  from Python, with no media or simulator; base install.
 
 Each example prints a local URL. If Leika runs on a remote host, forward the
 port over SSH and open the forwarded localhost URL.
