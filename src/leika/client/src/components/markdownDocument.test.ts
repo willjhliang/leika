@@ -13,17 +13,19 @@ import { PreviewImageSourcesContext } from "../previewImageSources";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { MARKDOWN_RENDER_MAX_SOURCE_BYTES } from "../markdown";
 import {
-  MARKDOWN_CACHE_MAX_ENTRY_BYTES,
-  MARKDOWN_CACHE_MAX_SOURCE_BYTES,
-  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  cachedMarkdownDocument,
+  cachedPreviewText,
+  MARKDOWN_CACHE_MAX_CHARS,
   MARKDOWN_WARM_MAX_ASSETS,
   MARKDOWN_WARM_MAX_BYTES,
   markdownSourceBytesAtMost,
+  rememberMarkdownDocument,
+  rememberPreviewText,
   renderMarkdown,
   resetMarkdownDocumentCache,
   warmMarkdownBlob,
-  warmMarkdownDocument,
 } from "./markdownDocument";
 import {
   MarkdownImage,
@@ -128,28 +130,38 @@ test("oversized markdown gets a visible status without parsing", () => {
   expect(drawn).toContain("1 MiB");
 });
 
-test("the rendered cache has entry and aggregate source-byte bounds", () => {
-  const sources = Array.from(
-    { length: 5 },
-    (_, index) =>
-      `# ${index}\n\n${"x".repeat(MARKDOWN_CACHE_MAX_ENTRY_BYTES - 8)}`,
-  );
-  const first = renderMarkdown(sources[0]);
-  for (const source of sources.slice(1)) renderMarkdown(source);
+test("documents and preview text share one bound on the source they hold", () => {
+  const document = renderMarkdown("# Report");
+  const half = MARKDOWN_CACHE_MAX_CHARS / 2;
+  const first = "a".repeat(half);
+  const text = new Blob();
+  rememberMarkdownDocument(first, document);
+  rememberPreviewText(text, "b".repeat(half));
+  // Touched, so the preview text is now the least recently used.
+  expect(cachedMarkdownDocument(first)).toBe(document);
+  rememberMarkdownDocument("c".repeat(half), document);
 
-  expect(MARKDOWN_CACHE_MAX_SOURCE_BYTES).toBe(
-    4 * MARKDOWN_CACHE_MAX_ENTRY_BYTES,
-  );
-  expect(renderMarkdown(sources[0])).not.toBe(first);
-
-  const oversizedEntry = "z".repeat(MARKDOWN_CACHE_MAX_ENTRY_BYTES + 1);
-  expect(renderMarkdown(oversizedEntry)).not.toBe(
-    renderMarkdown(oversizedEntry),
-  );
+  expect(cachedPreviewText(text)).toBeNull();
+  expect(cachedMarkdownDocument(first)).toBe(document);
+  const tooLarge = "x".repeat(MARKDOWN_RENDER_MAX_SOURCE_BYTES + 1);
+  rememberMarkdownDocument(tooLarge, document);
+  expect(cachedMarkdownDocument(tooLarge)).toBeNull();
 });
 
-test("reset drops rendered source and invalidates pending warm parsing", async () => {
-  vi.useFakeTimers();
+test("a preview's text is found by its exact Blob until reset", () => {
+  const blob = new Blob(["# Report"]);
+  rememberPreviewText(blob, "# Report");
+  const document = renderMarkdown("# Report");
+  expect(cachedPreviewText(blob)).toBe("# Report");
+  expect(cachedPreviewText(new Blob(["# Report"]))).toBeNull();
+  expect(cachedMarkdownDocument("# Report")).toBe(document);
+
+  resetMarkdownDocumentCache();
+  expect(cachedPreviewText(blob)).toBeNull();
+  expect(cachedMarkdownDocument("# Report")).toBeNull();
+});
+
+test("reset drops rendered source and stops a warm decode from fetching", async () => {
   const fetch = vi.fn(() => Promise.resolve(new Response()));
   vi.stubGlobal("fetch", fetch);
   let resolveText!: (source: string) => void;
@@ -159,13 +171,10 @@ test("reset drops rendered source and invalidates pending warm parsing", async (
         resolveText = resolve;
       }),
   );
-  const blob = { size: 32, text } as unknown as Blob;
-  warmMarkdownBlob(blob);
+  warmMarkdownBlob({ size: 32, text } as unknown as Blob);
   resetMarkdownDocumentCache();
   resolveText("![plot](/leika-assets/a.png?w=1&h=1)");
   await Promise.resolve();
-  await Promise.resolve();
-  vi.runAllTimers();
 
   expect(fetch).not.toHaveBeenCalled();
   const before = renderMarkdown("# after reset");
@@ -173,91 +182,30 @@ test("reset drops rendered source and invalidates pending warm parsing", async (
   expect(renderMarkdown("# after reset")).not.toBe(before);
 });
 
-test("warm Blob parsing is size-bounded and single-flight", async () => {
-  vi.useFakeTimers();
-  let resolveFirst!: (source: string) => void;
-  const firstText = vi.fn(
-    () => new Promise<string>((resolve) => (resolveFirst = resolve)),
+test("warming prefetches each image once, within its bounds", async () => {
+  const fetch = vi.fn(() => Promise.resolve(new Response()));
+  vi.stubGlobal("fetch", fetch);
+  const assets = Array.from(
+    { length: MARKDOWN_WARM_MAX_ASSETS + 2 },
+    (_, index) => `![${index}](/leika-assets/${index}.png?w=1&h=1)`,
   );
-  const secondText = vi.fn(() => Promise.resolve("# second"));
+  assets.push(assets[0]);
+  const source = assets.join("\n");
   warmMarkdownBlob({
-    size: MARKDOWN_WARM_MAX_BYTES,
-    text: firstText,
+    size: source.length,
+    text: () => Promise.resolve(source),
   } as unknown as Blob);
-  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
-  expect(firstText).toHaveBeenCalledOnce();
-  expect(secondText).not.toHaveBeenCalled();
-  resolveFirst("# discarded");
   await Promise.resolve();
-  await Promise.resolve();
-  // Decoding remains single-flight until the scheduled parse has actually
-  // run; otherwise each hidden-tab idle closure could retain another source.
-  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
-  expect(secondText).not.toHaveBeenCalled();
-  await vi.runAllTimersAsync();
-  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
-  expect(secondText).toHaveBeenCalledOnce();
-  await Promise.resolve();
-  await Promise.resolve();
-  await vi.runAllTimersAsync();
 
-  const tooLargeText = vi.fn(() => Promise.resolve("# too large"));
+  expect(fetch).toHaveBeenCalledTimes(MARKDOWN_WARM_MAX_ASSETS);
+  expect(fetch).toHaveBeenCalledWith("/leika-assets/0.png?w=1&h=1");
+
+  const tooLargeText = vi.fn(() => Promise.resolve(""));
   warmMarkdownBlob({
     size: MARKDOWN_WARM_MAX_BYTES + 1,
     text: tooLargeText,
   } as unknown as Blob);
   expect(tooLargeText).not.toHaveBeenCalled();
-});
-
-test("markdown warming deduplicates and caps asset prefetches", async () => {
-  vi.useFakeTimers();
-  const fetch = vi.fn(() => Promise.resolve(new Response()));
-  vi.stubGlobal("fetch", fetch);
-  const assets = Array.from(
-    { length: MARKDOWN_WARM_MAX_ASSETS + 2 },
-    (_, index) => `![${index}](/leika-assets/${index}.png)`,
-  );
-  assets.push(assets[0]);
-
-  const warmed = warmMarkdownDocument(assets.join("\n"));
-  await vi.runAllTimersAsync();
-  await warmed;
-
-  expect(fetch).toHaveBeenCalledTimes(MARKDOWN_WARM_MAX_ASSETS);
-});
-
-test("direct warm requests retain only one pending idle source", async () => {
-  vi.useFakeTimers();
-  const first = warmMarkdownDocument("# first");
-  const skipped = warmMarkdownDocument("# skipped");
-
-  expect(vi.getTimerCount()).toBe(1);
-  await skipped;
-  await vi.runAllTimersAsync();
-  await first;
-});
-
-test("reset releases pending warm state even when cancellation throws", async () => {
-  let work!: IdleRequestCallback;
-  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-    work = callback;
-    return 1;
-  });
-  vi.stubGlobal("cancelIdleCallback", () => {
-    throw new Error("scheduler unavailable");
-  });
-  const pending = warmMarkdownDocument("# pending");
-
-  expect(() => resetMarkdownDocumentCache()).not.toThrow();
-  await pending;
-  work({} as IdleDeadline);
-
-  // Cancellation released the single-flight slot and the late scheduler
-  // callback cannot repopulate state from the invalidated generation.
-  const next = warmMarkdownDocument("# next");
-  expect(next).not.toBe(pending);
-  resetMarkdownDocumentCache();
-  await next;
 });
 
 test("a served figure reserves the size the server measured", () => {

@@ -1,5 +1,4 @@
 import { randomUuid } from "./utils/randomUuid";
-import { resetPreviewDocumentCache } from "./previewDocumentCache";
 import type {
   GuiPreviewReadyMessage,
   GuiPreviewImageMessage,
@@ -755,7 +754,6 @@ export function warmedContents(
 
 /** Clear every resource owned by the current server connection. */
 export function resetFilePreviewState(): void {
-  resetPreviewDocumentCache();
   textLeads.clear();
   textStreams.clear();
   cachedTextChars = 0;

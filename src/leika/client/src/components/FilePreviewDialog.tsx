@@ -32,16 +32,16 @@ import {
   type FilePreview,
   type PreviewKind,
 } from "../filePreview";
-import { contentsOf, type RenderedDocument } from "../markdown";
+import {
+  contentsOf,
+  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
+  type RenderedDocument,
+} from "../markdown";
 import { HintTooltip } from "./common";
-import { LatestBlobTextReader } from "./latestBlobTextReader";
 import {
   cachedPreviewText,
-  rememberPreviewText,
-} from "../previewDocumentCache";
-import {
-  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
   markdownRenderAllowed,
+  rememberPreviewText,
 } from "./markdownDocument";
 import { usePreviewMarkdown } from "./usePreviewMarkdown";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -65,7 +65,6 @@ function useBlobText(
   enabled: boolean,
   continuityKey: string,
 ): string | null {
-  const reader = React.useMemo(() => new LatestBlobTextReader(), []);
   const cached = blob === null ? null : cachedPreviewText(blob);
   const [read, setRead] = React.useState<{
     continuityKey: string;
@@ -79,7 +78,6 @@ function useBlobText(
     }
     if (!enabled || blob === null || !fileTextPreviewAllowed(blob.size)) {
       setRead(null);
-      reader.clear();
       return;
     }
     // A different file or viewer cannot borrow this decoded text. A new Blob
@@ -88,11 +86,16 @@ function useBlobText(
     setRead((current) =>
       current?.continuityKey === continuityKey ? current : null,
     );
-    return reader.request(blob, (value) => {
-      rememberPreviewText(blob, value);
-      React.startTransition(() => setRead({ continuityKey, text: value }));
+    let cancelled = false;
+    void blob.text().then((text) => {
+      if (cancelled) return;
+      rememberPreviewText(blob, text);
+      React.startTransition(() => setRead({ continuityKey, text }));
     });
-  }, [blob, cached, continuityKey, enabled, reader]);
+    return () => {
+      cancelled = true;
+    };
+  }, [blob, cached, continuityKey, enabled]);
   // State retains only decoded text, never the replaced Blob. This gate hides
   // it synchronously if the same dialog changes file or viewer.
   if (cached !== null) return cached;

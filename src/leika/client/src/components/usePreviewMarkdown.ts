@@ -6,9 +6,9 @@ import type { MarkdownPatch } from "../progressiveMarkdown";
 import MarkdownPreviewWorker from "../markdownPreviewWorker?worker&inline";
 import { PreviewMarkdownBlocks } from "./previewMarkdownBlocks";
 import {
-  cachedPreviewDocument,
-  rememberPreviewDocument,
-} from "../previewDocumentCache";
+  cachedMarkdownDocument,
+  rememberMarkdownDocument,
+} from "./markdownDocument";
 
 /** Keep one parser and one block tree alive as streamed text grows. */
 export function usePreviewMarkdown(
@@ -25,7 +25,7 @@ export function usePreviewMarkdown(
   const cached = React.useMemo(
     () =>
       source !== null && complete && images
-        ? cachedPreviewDocument(source)
+        ? cachedMarkdownDocument(source)
         : null,
     [source, complete, images],
   );
@@ -128,7 +128,7 @@ export function usePreviewMarkdown(
         try {
           const document = blocks.apply(event.data);
           if (event.data.complete && event.data.source !== undefined) {
-            rememberPreviewDocument(event.data.source, document);
+            rememberMarkdownDocument(event.data.source, document);
           }
           if (replacingCache && !event.data.complete) {
             // A replacement worker starts without the old block tree. Keep

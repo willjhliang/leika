@@ -10,10 +10,10 @@
 import {
   createMarkdownRenderer,
   createMarkdownCompiler,
+  MARKDOWN_RENDER_MAX_SOURCE_BYTES,
   type MarkdownComponents,
   type RenderedDocument,
 } from "../markdown";
-import { MAX_GUI_MARKDOWN_SOURCE_BYTES } from "../guiLimits";
 import { MarkdownImage, MarkdownLink, MarkdownPicture } from "./MarkdownMedia";
 
 // What a document looks like is shadcn/typeset's, whole: `src/typeset.css`
@@ -58,25 +58,55 @@ const components: MarkdownComponents = {
 const render = createMarkdownRenderer(components);
 export const compileMarkdown = createMarkdownCompiler(components);
 
-/** How many rendered documents are kept. Reading during a run means the same
+/** How many entries the cache keeps. Reading during a run means the same
  * report opened over and over; a handful of documents is a session's worth,
  * and holding elements for more would hold their whole trees in memory. */
-const RENDERED_LIMIT = 8;
-/** Bound parsed Markdown by source size as well as cached source bytes. Even
- * compact Markdown can expand into many React/DOM nodes, so this is lower
- * than the 16 MiB plain-text preview ceiling. */
-export const MARKDOWN_RENDER_MAX_SOURCE_BYTES = MAX_GUI_MARKDOWN_SOURCE_BYTES;
-export const MARKDOWN_CACHE_MAX_SOURCE_BYTES = 2 * 1024 * 1024;
-export const MARKDOWN_CACHE_MAX_ENTRY_BYTES = 512 * 1024;
+const CACHE_LIMIT = 8;
+/** The cache's bound on the source it holds, in UTF-16 code units: room for
+ * two documents at the render limit. */
+export const MARKDOWN_CACHE_MAX_CHARS = 2 * MARKDOWN_RENDER_MAX_SOURCE_BYTES;
 export const MARKDOWN_WARM_MAX_BYTES = 512 * 1024;
 export const MARKDOWN_WARM_MAX_ASSETS = 128;
-type CachedDocument = { document: RenderedDocument; sourceBytes: number };
-const rendered = new Map<string, CachedDocument>();
-let renderedSourceBytes = 0;
-let warmBlobInFlight = false;
-let warmDocumentInFlight = false;
+
+/** The documents recently shown, least recently used first.
+ *
+ * A source keys its parse. A Blob keys the text a preview read out of it, so
+ * reopening a file finds its parse with neither a read nor a reparse. The
+ * parse is immutable, so the same source may answer with the same tree every
+ * time; a document whose text has changed -- including an image updating,
+ * since images are referenced by content-addressed URLs that change with
+ * them -- is a different key and renders fresh.
+ */
+type CacheEntry = { source: string; document: RenderedDocument | null };
+const cache = new Map<string | Blob, CacheEntry>();
+let cachedChars = 0;
 let warmGeneration = 0;
-const pendingWarmIdleCancellations = new Set<() => void>();
+
+function cached(key: string | Blob): CacheEntry | undefined {
+  const entry = cache.get(key);
+  if (entry !== undefined) {
+    // Reinsert so the map's order stays the order of last use.
+    cache.delete(key);
+    cache.set(key, entry);
+  }
+  return entry;
+}
+
+function remember(key: string | Blob, entry: CacheEntry): void {
+  const replaced = cache.get(key);
+  if (replaced !== undefined) cachedChars -= replaced.source.length;
+  cache.delete(key);
+  // Text past the render limit -- a long log being previewed -- would push
+  // out everything else.
+  if (entry.source.length > MARKDOWN_RENDER_MAX_SOURCE_BYTES) return;
+  cache.set(key, entry);
+  cachedChars += entry.source.length;
+  while (cache.size > CACHE_LIMIT || cachedChars > MARKDOWN_CACHE_MAX_CHARS) {
+    const [oldestKey, oldest] = cache.entries().next().value!;
+    cache.delete(oldestKey);
+    cachedChars -= oldest.source.length;
+  }
+}
 
 export function markdownRenderAllowed(sizeBytes: number): boolean {
   return sizeBytes <= MARKDOWN_RENDER_MAX_SOURCE_BYTES;
@@ -109,25 +139,14 @@ export function markdownSourceBytesAtMost(
 /** Turn markdown into elements, remembering the documents recently shown.
  *
  * Parsing a long document is the one real cost left in opening one, and it
- * was being paid again on every reopening of the same unchanged file. The
- * elements are immutable, so the same source may answer with the same tree
- * every time; a document whose text has changed -- including an image
- * updating, since images are referenced by content-addressed URLs that
- * change with them -- is a different key and renders fresh.
+ * was being paid again on every reopening of the same unchanged file.
  */
 export function renderMarkdown(source: string): RenderedDocument {
-  const cached = rendered.get(source);
-  if (cached !== undefined) {
-    // Reinsert so the map's order stays the order of last use.
-    rendered.delete(source);
-    rendered.set(source, cached);
-    return cached.document;
-  }
-  const bytes = markdownSourceBytesAtMost(
-    source,
-    MARKDOWN_RENDER_MAX_SOURCE_BYTES,
-  );
-  if (bytes === null) {
+  const known = cached(source)?.document;
+  if (known) return known;
+  if (
+    markdownSourceBytesAtMost(source, MARKDOWN_RENDER_MAX_SOURCE_BYTES) === null
+  ) {
     return {
       element: (
         <p role="status">
@@ -138,136 +157,60 @@ export function renderMarkdown(source: string): RenderedDocument {
     };
   }
   const document = render(source);
-  if (bytes <= MARKDOWN_CACHE_MAX_ENTRY_BYTES) {
-    rendered.set(source, { document, sourceBytes: bytes });
-    renderedSourceBytes += bytes;
-  }
-  while (
-    rendered.size > RENDERED_LIMIT ||
-    renderedSourceBytes > MARKDOWN_CACHE_MAX_SOURCE_BYTES
-  ) {
-    const oldestKey = rendered.keys().next().value!;
-    const oldest = rendered.get(oldestKey)!;
-    rendered.delete(oldestKey);
-    renderedSourceBytes -= oldest.sourceBytes;
-  }
+  remember(source, { source, document });
   return document;
 }
 
+/** The parse of `source`, if it is still remembered. */
+export function cachedMarkdownDocument(
+  source: string,
+): RenderedDocument | null {
+  return cached(source)?.document ?? null;
+}
+
+/** Remember a parse made elsewhere -- a preview's, made in a worker. */
+export function rememberMarkdownDocument(
+  source: string,
+  document: RenderedDocument,
+): void {
+  remember(source, { source, document });
+}
+
+/** The text a preview read out of `blob`, if it is still remembered. */
+export function cachedPreviewText(blob: Blob): string | null {
+  return cached(blob)?.source ?? null;
+}
+
+export function rememberPreviewText(blob: Blob, text: string): void {
+  remember(blob, { source: text, document: null });
+}
+
 export function resetMarkdownDocumentCache(): void {
-  rendered.clear();
-  renderedSourceBytes = 0;
+  cache.clear();
+  cachedChars = 0;
   warmGeneration += 1;
-  for (const cancel of [...pendingWarmIdleCancellations]) cancel();
 }
 
-/** Ready a document before anyone has asked to read it.
+/** Fetch a warmed document's images before anyone has asked to read it.
  *
- * The two costs of a first open are paid here, ahead of the click: the parse
- * goes into the render cache, and the images the document names are fetched
- * so the browser's own cache holds them -- their URLs are immutable, so what
- * is fetched now is exactly what the open will show. The parse waits for an
- * idle moment because warming happens while the reader is doing something
- * else, and must not be felt.
- *
- * The URLs are matched with their `?w=&h=` if they carry one, because that is
- * the address the document will ask for: fetching the bare path would warm a
- * cache entry under a key no `<img>` on the page is going to use.
+ * Their URLs are immutable, so what the browser caches now is exactly what
+ * the open will show; the document itself is parsed by the preview that
+ * opens it. The URLs are matched with their `?w=&h=` if they carry one,
+ * because that is the address the document will ask for: fetching the bare
+ * path would warm a cache entry under a key no `<img>` on the page is going
+ * to use.
  */
-export function warmMarkdownDocument(source: string): Promise<void> {
-  if (
-    warmDocumentInFlight ||
-    markdownSourceBytesAtMost(source, MARKDOWN_WARM_MAX_BYTES) === null
-  )
-    return Promise.resolve();
-  warmDocumentInFlight = true;
-  const generation = warmGeneration;
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    let cancelScheduled: () => void = () => undefined;
-    let cancel: () => void = () => undefined;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      pendingWarmIdleCancellations.delete(cancel);
-      warmDocumentInFlight = false;
-      resolve();
-    };
-    const work = () => {
-      if (settled) return;
-      try {
-        if (generation !== warmGeneration) return;
-        // Idle callbacks still block the UI once started. Only preparse a
-        // bounded small document here; file previews parse larger ones in a worker.
-        if (source.length <= 8192) renderMarkdown(source);
-        const urls = new Set(
-          source.match(/\/leika-assets\/[\w.-]+(?:\?w=\d+&h=\d+)?/g) ?? [],
-        );
-        let count = 0;
-        for (const url of urls) {
-          if (count >= MARKDOWN_WARM_MAX_ASSETS) break;
-          count += 1;
-          try {
-            void fetch(url).catch(() => undefined);
-          } catch {
-            // No browser to cache for (tests); nothing to warm.
-          }
-        }
-      } catch {
-        // Warming is opportunistic. The foreground renderer remains the
-        // authoritative error surface if a future parser rejects a document.
-      } finally {
-        finish();
-      }
-    };
-    try {
-      if (
-        typeof requestIdleCallback === "function" &&
-        typeof cancelIdleCallback === "function"
-      ) {
-        const handle = requestIdleCallback(work);
-        cancelScheduled = () => cancelIdleCallback(handle);
-      } else {
-        const handle = setTimeout(work, 100);
-        cancelScheduled = () => clearTimeout(handle);
-      }
-    } catch {
-      finish();
-    }
-    cancel = () => {
-      if (settled) return;
-      try {
-        cancelScheduled();
-      } catch {
-        // Cleanup remains complete if a browser scheduler rejects cancellation.
-      } finally {
-        finish();
-      }
-    };
-    if (!settled) pendingWarmIdleCancellations.add(cancel);
-  });
-}
-
-/** Decode at most one small warm Blob at a time. */
 export function warmMarkdownBlob(blob: Blob): void {
-  if (blob.size > MARKDOWN_WARM_MAX_BYTES || warmBlobInFlight) return;
+  if (blob.size > MARKDOWN_WARM_MAX_BYTES) return;
   const generation = warmGeneration;
-  warmBlobInFlight = true;
-  let decoded: Promise<string>;
-  try {
-    decoded = blob.text();
-  } catch {
-    warmBlobInFlight = false;
-    return;
-  }
-  void decoded
-    .then(
-      (source) => {
-        if (generation === warmGeneration) return warmMarkdownDocument(source);
-      },
-      () => undefined,
-    )
-    .finally(() => {
-      warmBlobInFlight = false;
-    });
+  void blob.text().then((source) => {
+    // A reconnect may have replaced the server these URLs belong to.
+    if (generation !== warmGeneration) return;
+    const urls = new Set(
+      source.match(/\/leika-assets\/[\w.-]+(?:\?w=\d+&h=\d+)?/g),
+    );
+    for (const url of [...urls].slice(0, MARKDOWN_WARM_MAX_ASSETS)) {
+      void fetch(url).catch(() => undefined);
+    }
+  });
 }

@@ -135,11 +135,8 @@ describe("markdown current-section selection", () => {
 });
 
 describe("prepared Markdown previews", () => {
-  test("reuses a document too large for the shared parse cache", () => {
+  test("draws a prepared document without parsing its source", () => {
     const source = "# Prepared report\n\n" + "Long paragraph. ".repeat(36_000);
-    expect(source.length).toBeGreaterThan(
-      markdownDocument.MARKDOWN_CACHE_MAX_ENTRY_BYTES,
-    );
     const document = markdownDocument.renderMarkdown(source);
     const parse = vi.spyOn(markdownDocument, "renderMarkdown");
     try {
