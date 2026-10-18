@@ -32,5 +32,5 @@ export function panePositionStyle(
 }
 
 export function paneTitle(pane: ViewportPane): string {
-  return pane.kind === "root" ? "" : pane.props.title;
+  return pane.props.title;
 }

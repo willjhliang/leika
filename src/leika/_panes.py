@@ -40,9 +40,6 @@ Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
 PaneLoading: TypeAlias = bool | str
 PaneId = NewType("PaneId", str)
 
-_ROOT_PANE_ID = "__leika_root__"
-"""Hidden layout sentinel used when no data pane can anchor a split."""
-
 
 def _validate_loading(value: object) -> PaneLoading:
     if type(value) is bool:
@@ -343,7 +340,7 @@ class PaneHandle:
                             page_id=panes._page_id,
                             pane_id=self._pane_id,
                             placement="right",
-                            relative_to=_ROOT_PANE_ID,
+                            relative_to=None,
                             equalize_group=(),
                             props=props,
                         )
@@ -877,7 +874,7 @@ class _PaneAdder:
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Edge, anchor pane, and equally divided siblings for the next pane. Lock held."""
         raise NotImplementedError
 
@@ -903,8 +900,6 @@ class _PaneAdder:
             raise TypeError("visible must be a bool")
         loading = _validate_loading(loading)
         pane_id = str(uuid.uuid4()) if pane_id is None else validate_layout_id(pane_id, "Pane ID")
-        if pane_id == _ROOT_PANE_ID:
-            raise ValueError(f"Pane ID {pane_id!r} is reserved.")
         fields, source = handle_type._prepare(panes, value, settings, None)
         try:
             with panes._lock:
@@ -1308,7 +1303,7 @@ class PaneGroup(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Attach to the group's last visible member and equalize with the visible ones.
 
         Hidden and removed members cannot anchor placement, so with none
@@ -1367,7 +1362,7 @@ class PaneGrid(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         return self._next_group()._place(placement, relative_to)
 
     def _placed(self, handle: PaneHandle) -> None:
@@ -1397,21 +1392,21 @@ class Panes(_PaneAdder):
 
     def _place(
         self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str, tuple[str, ...]]:
+    ) -> tuple[Placement, str | None, tuple[str, ...]]:
         placement = "right" if placement is None else placement
         if type(placement) is not str or placement not in ("left", "right", "top", "bottom"):
             raise ValueError("placement must be left, right, top, or bottom.")
         return placement, self._resolve_relative_to(relative_to), ()
 
     def _visible_pane_ids(self) -> set[str]:
-        return {_ROOT_PANE_ID} | {
+        return {
             pane_id
             for pane_id, handle in self._handle_from_pane_id.items()
             if handle._props.visible
         }
 
-    def _resolve_relative_to(self, relative_to: str | None) -> str:
-        """Resolve ``None`` placement to the latest visible pane. Lock held."""
+    def _resolve_relative_to(self, relative_to: str | None) -> str | None:
+        """Resolve ``None`` placement to the latest visible pane, if any. Lock held."""
         if relative_to is not None:
             relative_to = validate_layout_id(relative_to, "relative_to")
             if relative_to not in self._visible_pane_ids():
@@ -1420,7 +1415,7 @@ class Panes(_PaneAdder):
         for pane_id, handle in reversed(self._handle_from_pane_id.items()):
             if handle._props.visible:
                 return pane_id
-        return _ROOT_PANE_ID
+        return None
 
     def _snapshot_message(
         self, pane_ids: tuple[str, ...] | None = None

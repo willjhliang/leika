@@ -34,6 +34,8 @@ def test_general_pane_replaces_content_and_replay_without_changing_identity(serv
     messages = retained(server)
     declarations = [m for m in messages if isinstance(m, _messages.ViewportPaneMessage)]
     assert [m.pane_id for m in declarations] == [p.pane_id for p in panes]
+    # The first pane fills the empty workspace; later ones split beside it.
+    assert declarations[0].relative_to is None
     assert declarations[1].relative_to == "slot-0"
     assert not any(
         isinstance(m, (_messages.ViewportImageMessage, _messages.ViewportVideoMessage))

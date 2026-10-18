@@ -268,10 +268,6 @@ Public `workspace_id`, explicit `page_id`, and explicit `pane_id` values are
 nonempty valid Unicode, at most 1,024 UTF-16 code units, and cannot be the
 reserved JavaScript property names `__proto__`, `prototype`, or `constructor`.
 
-Internally, an invisible root sentinel gives the pane layout a valid anchor
-before any data pane exists. It is not a public pane and occupies no workspace
-once visible panes are present.
-
 A pane handle keeps its identity while its renderer changes. Content is
 prepared outside the registry lock; the commit then checks that no other
 replacement happened meanwhile, queues the new renderer, and releases the old

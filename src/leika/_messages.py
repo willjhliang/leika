@@ -1410,7 +1410,9 @@ class _ViewportPaneCreateMessage(
     page_id: str
     pane_id: str
     placement: Literal["left", "right", "top", "bottom"]
-    relative_to: str
+    relative_to: Optional[str]
+    """Pane to split beside; None, or a pane the browser no longer shows, means
+    its last pane, and a pane added to an empty workspace fills it."""
     equalize_group: Tuple[str, ...]
     """Sibling pane IDs whose combined share, including this pane's, is
     redistributed equally on insertion. Empty for standalone panes."""
@@ -1565,7 +1567,6 @@ class ViewportPaneSnapshotMessage(_PageScopedMessage):
     """Authoritative pane IDs used to reconcile browser-persisted layouts."""
 
     page_id: str
-    # The hidden layout root sentinel is implicit and deliberately excluded.
     pane_ids: Tuple[str, ...]
 
     @override

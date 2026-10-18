@@ -58,9 +58,10 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function minimumSubtreeSpan(
-  node: ViewportLayoutNode,
+  node: ViewportLayoutNode | null,
   axis: ViewportSplitDirection,
 ): number {
+  if (node === null) return 0;
   if (node.type === "pane") {
     return axis === "row" ? MIN_PANE_COLUMNS : MIN_PANE_ROWS;
   }
@@ -149,7 +150,7 @@ function dividerKey(path: ViewportLayoutPath, dividerIndex: number): string {
 
 /** Resolve layout weights to integer internal grid lines and pane rectangles. */
 export function computeLayoutGeometry(
-  root: ViewportLayoutNode,
+  root: ViewportLayoutNode | null,
   columns: number,
   rows: number,
 ): LayoutGeometry {
@@ -206,7 +207,8 @@ export function computeLayoutGeometry(
     });
   };
 
-  visit(root, { x: 0, y: 0, width: columns, height: rows }, []);
+  if (root !== null)
+    visit(root, { x: 0, y: 0, width: columns, height: rows }, []);
   return { panes, dividers };
 }
 

@@ -21,7 +21,6 @@ export function ViewportPaneHost({
   geometryTransition,
   isDragging,
   motionEnabled,
-  hideChrome,
   onHeaderPointerDown,
   onHeaderKeyDown,
 }: {
@@ -32,7 +31,6 @@ export function ViewportPaneHost({
   geometryTransition: string | undefined;
   isDragging: boolean;
   motionEnabled: boolean;
-  hideChrome: boolean;
   onHeaderPointerDown: (
     event: React.PointerEvent<HTMLElement>,
     paneId: string,
@@ -54,13 +52,7 @@ export function ViewportPaneHost({
 
   const isHiddenHost = rect === null;
   const title = paneTitle(pane);
-  const hasTitleBar = !hideChrome && !isHiddenHost;
-  const loading =
-    pane.kind === "root"
-      ? false
-      : pane.refreshPending !== undefined
-        ? true
-        : pane.props.loading;
+  const loading = pane.refreshPending !== undefined ? true : pane.props.loading;
   const isLoading = loading !== false;
   return (
     <Card
@@ -75,7 +67,7 @@ export function ViewportPaneHost({
         // rounded corners let the canvas show through at each junction. The
         // divider owns the seam line; the canvas owns the colour behind it.
         "isolate min-h-0 min-w-0 overflow-hidden rounded-none ring-0",
-        (hideChrome || isHiddenHost) && "gap-0 bg-background py-0",
+        isHiddenHost && "gap-0 bg-background py-0",
       )}
       style={{
         ...(isHiddenHost
@@ -101,7 +93,7 @@ export function ViewportPaneHost({
           inset: 0,
           // With titles on, the bar is a real top bar and the content starts
           // beneath it; off, the bar overlays the content instead.
-          top: hasTitleBar && showPaneTitles ? PANE_TITLE_BAR_PX : 0,
+          top: !isHiddenHost && showPaneTitles ? PANE_TITLE_BAR_PX : 0,
           minWidth: 0,
           minHeight: 0,
           overflow: "hidden",
@@ -121,7 +113,7 @@ export function ViewportPaneHost({
         )}
       </div>
 
-      {hasTitleBar && (
+      {!isHiddenHost && (
         <button
           type="button"
           data-viewport-pane-header={paneId}

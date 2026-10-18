@@ -806,7 +806,7 @@ export interface ViewportPaneMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: { title: string; visible: boolean; loading: boolean | string };
 }
@@ -819,7 +819,7 @@ export interface ViewportEmptyMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: { title: string; visible: boolean; loading: boolean | string };
 }
@@ -832,7 +832,7 @@ export interface ViewportImageMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _data: Uint8Array<ArrayBuffer>;
@@ -852,7 +852,7 @@ export interface ViewportMatplotlibMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _svg: string;
@@ -870,7 +870,7 @@ export interface ViewportPlotlyMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _plotly_json_str: string;
@@ -889,7 +889,7 @@ export interface ViewportVideoMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _url: string;
@@ -913,7 +913,7 @@ export interface ViewportViserMessage {
   page_id: string;
   pane_id: string;
   placement: "left" | "right" | "top" | "bottom";
-  relative_to: string;
+  relative_to: string | null;
   equalize_group: string[];
   props: {
     _url: string;
@@ -1358,4 +1358,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "951d41231bed";
+export const LEIKA_PROTOCOL = "210f639dece1";
