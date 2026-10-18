@@ -11,18 +11,14 @@ import secrets
 import threading
 import time
 from collections.abc import Coroutine, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Iterator, TypeVar, cast
+from typing import Any, Callable, ContextManager, TypeVar, cast
 from urllib.parse import urlsplit
 
 from . import _client_autobuild, _messages
-from ._async_errors import (
-    await_user_callback,
-    in_sync_user_callback,
-    print_async_errors,
-)
+from ._async_errors import await_user_callback, print_async_errors
 from ._client_handle import ClientHandle
-from ._executor import BoundedThreadPoolExecutor
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_send
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
@@ -52,7 +48,6 @@ _SERVER_GUI_RETAINED_MAX_BYTES = 256 * 1024 * 1024
 _SERVER_GUI_PIXELS_MAX = 128 * 1024 * 1024
 _SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
 
-_CALLBACK_EXECUTOR_MAX_PENDING = 256
 _PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
 
 
@@ -145,8 +140,7 @@ class Server:
         else:
             self._password_generated = False
 
-        # Building can fail, but owns no runtime resources. Complete it before
-        # allocating executors so constructor failure is leak-free.
+        # Building can fail, but owns no runtime resources.
         _client_autobuild.ensure_client_is_built()
         self.host = host
         self.password = password
@@ -154,10 +148,7 @@ class Server:
         self.verbose = verbose
         self.allow_embedding = allow_embedding
         self._stopped = False
-        self._stop_lock = threading.Lock()
-        self._stop_finalizer: threading.Thread | None = None
-        self._active_user_callbacks = 0
-        self._executor_shutdown = False
+        self._share_tunnel: CloudflaredTunnel | None = None
         self._connected_clients: dict[int, ClientHandle] = {}
         self._client_lock = threading.RLock()
         self._file_upload_reservation_lock = threading.Lock()
@@ -173,6 +164,7 @@ class Server:
         self._page_global_decoded_pixels = 0
         self._plotly_lock = threading.Lock()
         self._plotly_runtime_queued = False
+        self._thread_executor = ThreadPoolExecutor(max_workers=32)
 
         server = WebsockServer(
             host,
@@ -187,6 +179,7 @@ class Server:
             delivery_backpressure=delivery_backpressure,
         )
         self._websock_server = server
+        self._event_loop = server._broadcast_buffer.event_loop
         server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
         server.register_handler(_messages.PaneViewportMessage, self._handle_pane_viewport)
@@ -194,14 +187,8 @@ class Server:
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
 
         try:
-            # Allocate the worker pool only after all pure construction and
-            # handler registration succeeds.
-            self._thread_executor = BoundedThreadPoolExecutor(
-                max_workers=32, max_pending=_CALLBACK_EXECUTOR_MAX_PENDING
-            )
-            server.start()
-            self._event_loop = server._broadcast_buffer.event_loop
-            self.port = server._port
+            # The workspace is complete before the server listens, so no
+            # browser ever sees part of it.
             self.gui = GuiApi(
                 self,
                 thread_executor=self._thread_executor,
@@ -210,33 +197,22 @@ class Server:
             server.queue_message_or_raise(
                 _messages.WorkspaceConfigurationMessage(workspace_id=workspace_id)
             )
-            self.pages = Pages(self, default_name=default_page_name)
+            self.pages = Pages(self, default_page_name)
             self.panes = self.pages.default.panes
+            server.start()
+            self.port = server._port
 
-            # Open the share tunnel last: it only matters once the server it
-            # forwards to is up. A tunnel failure is reported but not fatal --
-            # the dashboard itself still works locally.
-            self._share_tunnel: CloudflaredTunnel | None = None
+            # A tunnel failure is reported but not fatal: the dashboard itself
+            # still works locally.
             if share:
+                tunnel = CloudflaredTunnel(self.port)
                 try:
-                    tunnel = CloudflaredTunnel(self.port)
+                    share_url = tunnel.start()
+                except ShareTunnelError as error:
+                    print(f"Leika share tunnel failed: {error}")
+                else:
                     self._share_tunnel = tunnel
-                    started_share_url = tunnel.start()
-                    tunnel_host = urlsplit(started_share_url).hostname
-                    if tunnel_host is None:
-                        raise ShareTunnelError("cloudflared returned a malformed share URL.")
-                    server.trust_proxy_host(tunnel_host)
-                except ShareTunnelError as e:
-                    close_error: Exception | None = None
-                    if self._share_tunnel is not None:
-                        try:
-                            self._share_tunnel.close()
-                        except Exception as error:
-                            close_error = error
-                    self._share_tunnel = None
-                    print(f"Leika share tunnel failed: {e}")
-                    if close_error is not None:
-                        print(f"Leika share tunnel cleanup also failed: {close_error}")
+                    server.trust_proxy_host(cast(str, urlsplit(share_url).hostname))
 
             if verbose:
                 print(f"Leika listening at {self.url}")
@@ -245,19 +221,9 @@ class Server:
                 if self._password_generated:
                     print(f"Leika password (auto-generated): {password}")
         except BaseException:
-            # Preserve the construction failure while independently attempting
-            # every resource cleanup; no secondary teardown failure may mask it.
-            tunnel = getattr(self, "_share_tunnel", None)
-            cleanup: tuple[Callable[[], object], ...] = (
-                *((tunnel.close,) if tunnel is not None else ()),
-                server.stop,
-                self._shutdown_callback_executor,
-            )
-            for action in cleanup:
-                try:
-                    action()
-                except BaseException:
-                    pass
+            # Release what construction started; its failure is the one reported.
+            with contextlib.suppress(Exception):
+                self._shut_down()
             raise
 
     async def _on_connect(self, conn: WebsockClientConnection) -> None:
@@ -275,16 +241,14 @@ class Server:
         if client is None:
             return
         client.gui._discard_client_work(conn.client_id, release_retained_uploads=True)
-        gui = getattr(self, "gui", None)
-        if gui is not None:
-            gui._discard_client_work(conn.client_id)
+        self.gui._discard_client_work(conn.client_id)
         for callback in callbacks:
             await self._await_user_callback(callback, client)
 
     @property
     def share_url(self) -> str | None:
         """Current public tunnel URL, or ``None`` when no tunnel is live."""
-        tunnel = getattr(self, "_share_tunnel", None)
+        tunnel = self._share_tunnel
         return None if tunnel is None else tunnel.url
 
     @property
@@ -427,11 +391,8 @@ class Server:
             or not 0 <= message.generation <= _PAGE_SUBSCRIPTION_GENERATION_MAX
         ):
             return
-        pages = getattr(self, "pages", None)
-        if pages is None:
-            return
-        with pages._lock:
-            page = pages._page_from_page_id.get(message.page_id)
+        with self.pages._lock:
+            page = self.pages._page_from_page_id.get(message.page_id)
         if page is None:
             return
         with self._client_lock:
@@ -578,143 +539,34 @@ class Server:
         webbrowser.open(self.url)
         return None
 
-    @contextlib.contextmanager
-    def _active_user_callback(self) -> Iterator[None]:
-        """Mark callback work whose completion is owned by the server loop."""
-        with self._stop_lock:
-            self._active_user_callbacks += 1
-        try:
-            yield
-        finally:
-            with self._stop_lock:
-                self._active_user_callbacks -= 1
-
     async def _await_user_callback(self, callback: Callable[..., Any], *args: Any) -> None:
-        with self._active_user_callback():
-            await await_user_callback(self._thread_executor, callback, *args)
+        await await_user_callback(self._thread_executor, callback, *args)
 
-    def _shutdown_callback_executor(self) -> None:
-        """Cancel queued callbacks once, after websocket teardown is done."""
-        with self._stop_lock:
-            if self._executor_shutdown:
-                return
-            self._executor_shutdown = True
-        # Websocket teardown marks every buffer done first, waking blocked
-        # transfers before their executor is retired. Attempt both pools even
-        # if an injected or platform shutdown failure affects the first one.
-        primary_error: BaseException | None = None
-        for executor_name in ("_thread_executor",):
-            executor = getattr(self, executor_name, None)
-            if executor is None:
-                continue
-            try:
-                executor.shutdown_cancel_pending()
-            except BaseException as error:
-                if primary_error is None:
-                    primary_error = error
-        if primary_error is not None:
-            with self._stop_lock:
-                self._executor_shutdown = False
-            raise primary_error
-
-    def _finish_stop(self) -> None:
-        """Join the worker, close the tunnel, then release callback ownership."""
-        tunnel: CloudflaredTunnel | None
-        with self._stop_lock:
-            tunnel = self._share_tunnel
-            self._share_tunnel = None
-
-        primary_error: BaseException | None = None
-
-        def attempt(cleanup: Callable[[], object]) -> None:
-            nonlocal primary_error
-            try:
-                cleanup()
-            except BaseException as error:
-                # Python 3.10 has no ExceptionGroup. Preserve the first failure
-                # while still attempting every independently owned cleanup.
-                if primary_error is None:
-                    primary_error = error
-
-        attempt(self._websock_server.stop)
-        if tunnel is not None:
-            attempt(tunnel.close)
-
-        def clear_callbacks() -> None:
-            with self._client_lock:
-                self._client_connect_cb.clear()
-                self._client_disconnect_cb.clear()
-
-        attempt(clear_callbacks)
-        attempt(self._shutdown_callback_executor)
-        if primary_error is not None:
-            raise primary_error
-
-    def _run_stop_finalizer(self) -> None:
-        """Finish asynchronous shutdown and release finalizer ownership."""
-        try:
-            self._finish_stop()
-        finally:
-            current = threading.current_thread()
-            with self._stop_lock:
-                if self._stop_finalizer is current:
-                    self._stop_finalizer = None
+    def _shut_down(self) -> None:
+        """Stop serving, close the tunnel, and cancel callbacks not yet started."""
+        with self._client_lock:
+            tunnel, self._share_tunnel = self._share_tunnel, None
+        with contextlib.ExitStack() as cleanup:
+            # Each step runs even if an earlier one fails.
+            cleanup.callback(self._thread_executor.shutdown, wait=False, cancel_futures=True)
+            if tunnel is not None:
+                cleanup.callback(tunnel.close)
+            self._websock_server.stop()
 
     def stop(self) -> None:
         """Stop the Leika server and cancel callbacks that have not started.
 
-        Python threads already executing user code cannot be terminated safely;
-        loop-owned callback awaits may be cancelled as connection tasks retire.
-        If shutdown is requested from callback-owned work -- including a
-        synchronous callback or an external Future that the server loop awaits --
-        this call signals promptly and a short-lived finalizer performs the join,
-        avoiding a circular wait. A concurrent off-callback caller may observe
-        the same asynchronous completion while such work is active. Repeat calls
-        remain safe and can complete the bounded join.
+        Callbacks already running finish on their own threads. Stopping from
+        inside a callback or on the server's event loop is safe, and repeat
+        calls are harmless.
         """
-        with self._stop_lock:
-            first_request = not self._stopped
+        with self._client_lock:
             self._stopped = True
-            callback_active = self._active_user_callbacks > 0
-
-        if first_request:
-            with self._client_lock:
-                clients = tuple(self._connected_clients.values())
-            for client in clients:
-                client.gui._retire_scope_without_queue()
-            gui = getattr(self, "gui", None)
-            if gui is not None:
-                gui._retire_scope_without_queue()
-
-        server_thread = self._websock_server._server_thread
-        if (
-            threading.current_thread() is server_thread
-            or in_sync_user_callback()
-            or callback_active
-        ):
-            # Signal only. Joining here from an external Future's worker would
-            # wait for the loop that is awaiting that Future.
-            self._websock_server.signal_stop()
-            with self._stop_lock:
-                if self._stop_finalizer is None:
-                    finalizer = threading.Thread(
-                        target=self._run_stop_finalizer,
-                        name="leika-stop-finalizer",
-                        daemon=True,
-                    )
-                    # Publish before start while holding the lock. A fast target
-                    # cannot clear itself until this critical section exits, and
-                    # a start failure rolls the sentinel back synchronously.
-                    self._stop_finalizer = finalizer
-                    try:
-                        finalizer.start()
-                    except BaseException:
-                        if self._stop_finalizer is finalizer:
-                            self._stop_finalizer = None
-                        raise
-            return
-
-        self._finish_stop()
+            clients = tuple(self._connected_clients.values())
+        for client in clients:
+            client.gui._retire_scope_without_queue()
+        self.gui._retire_scope_without_queue()
+        self._shut_down()
 
     async def _await_connect_callback_if_current(
         self,
@@ -740,10 +592,9 @@ class Server:
         """
         if not callable(cb):
             raise TypeError("client connection callback must be callable")
-        with self._stop_lock:
+        with self._client_lock:
             if self._stopped:
                 raise RuntimeError("Cannot register callbacks after Server.stop().")
-        with self._client_lock:
             clients = tuple(self._connected_clients.values())
             self._client_connect_cb.append(cb)
 
@@ -757,20 +608,9 @@ class Server:
         # connect between the two lines. The common dispatcher invokes ordinary
         # callables off-loop and awaits any result they return.
         for client in clients:
-            callback_work = self._await_connect_callback_if_current(cb, client)
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    callback_work,
-                    self._event_loop,
-                )
-            except BaseException:
-                callback_work.close()
-                with self._client_lock:
-                    self._client_connect_cb[:] = [
-                        existing for existing in self._client_connect_cb if existing != cb
-                    ]
-                raise
-            future.add_done_callback(print_async_errors)
+            asyncio.run_coroutine_threadsafe(
+                self._await_connect_callback_if_current(cb, client), self._event_loop
+            ).add_done_callback(print_async_errors)
 
         return cast(Callable[[ClientHandle], NoneOrCoroutine], cb)
 
@@ -787,10 +627,9 @@ class Server:
         """
         if not callable(cb):
             raise TypeError("client disconnection callback must be callable")
-        with self._stop_lock:
+        with self._client_lock:
             if self._stopped:
                 raise RuntimeError("Cannot register callbacks after Server.stop().")
-        with self._client_lock:
             self._client_disconnect_cb.append(cb)
         return cb
 

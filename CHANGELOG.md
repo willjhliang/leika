@@ -5,6 +5,12 @@ versioning.
 
 ## Unreleased
 
+- Server: synchronous callbacks and deferred file transfers share one plain
+  32-thread pool, without the 256-job pending cap. `stop()` called from a
+  callback now waits for the server thread directly instead of handing the
+  wait to a finalizer thread, and no longer clears registered connect and
+  disconnect callbacks. The GUI and default page are queued before the server
+  starts listening.
 - File sends: `Server.send_file_download()` and `send_file_preview()` check
   their arguments once and send through each client's own path; inside an
   atomic block or on the event loop each client's transfer runs on the shared

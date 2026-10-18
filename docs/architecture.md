@@ -27,7 +27,6 @@ transition has a clear home.
 | --- | --- |
 | Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
 | One browser's GUI, rendering preferences, outgoing transfers, and transfer cancellation | `_client_handle.py` |
-| Bounded background jobs and captured-payload admission | `_executor.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
 | Renderer preparation shared by GUI controls and panes | `_image_encoding.py`, `_plotly.py`, `_markdown.py` |
@@ -47,7 +46,11 @@ handle's state, so a failed queue leaves the handle unchanged.
 
 `leika._transport` is private. `Server` alone owns connect and disconnect
 callbacks and shutdown; the transport runs one worker thread whose teardown
-closes every message buffer, the Viser proxy, and the handler registry. Request
+closes every message buffer, the Viser proxy, and the handler registry. The
+server queues its GUI, workspace, and default page before it starts listening,
+so no browser sees a partial workspace. Synchronous callbacks and deferred
+file transfers share one 32-thread pool. `stop()` joins the worker unless it
+runs on that thread, cancels queued callbacks, and lets running ones finish. Request
 policy owns accepted host and proxy rules, and the HTTP handler serves the
 single-file client from memory with a precomputed gzip copy, rereading it when
 the file changes.
