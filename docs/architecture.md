@@ -49,8 +49,9 @@ callbacks and shutdown; the transport runs one worker thread whose teardown
 closes every message buffer, the Viser proxy, and the handler registry. The
 server queues its GUI, workspace, and default page before it starts listening,
 so no browser sees a partial workspace. Synchronous callbacks and deferred
-file transfers share one 32-thread pool. `stop()` joins the worker unless it
-runs on that thread, cancels queued callbacks, and lets running ones finish. Request
+file transfers share one 32-thread pool. `stop()` waits for the worker (from a
+helper thread when called on the worker itself), then cancels queued callbacks
+and lets running ones finish. Request
 policy owns accepted host and proxy rules, and the HTTP handler serves the
 single-file client from memory with a precomputed gzip copy, rereading it when
 the file changes.
