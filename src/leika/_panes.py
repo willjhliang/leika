@@ -440,11 +440,11 @@ class PaneHandle:
         late frames from earlier selections cannot reveal the previous image.
         Repeated calls add bindings and prune removed controls.
         """
-        from ._gui_handles import _GuiInputHandle
+        from ._gui_handles import GuiInputHandle
 
         owner = self._panes._owner
         for control in controls:
-            if not isinstance(control, _GuiInputHandle):
+            if not isinstance(control, GuiInputHandle):
                 raise TypeError("invalidate_on requires GUI input handles.")
             if control._impl.gui_api._owner is not owner or control._impl.removed:
                 raise ValueError("refresh controls must be live shared inputs on this server.")

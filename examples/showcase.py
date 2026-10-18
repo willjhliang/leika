@@ -346,9 +346,9 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         palette = server.gui.add_toggle(("Ocean", "Magma", "Viridis"), label="Palette")
         nudge = server.gui.add_button(("Left", "Right"), label="Nudge", merge=False)
         with server.gui.add_folder("Color adjustments"):
-            offset = server.gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)
-            tint = server.gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))
-            plot_color = server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
+            offset = server.gui.add_vector("Offset", initial_value=(0.0, 0.0), step=0.05)
+            tint = server.gui.add_color("Tint", initial_value=(20, 90, 210, 45))
+            plot_color = server.gui.add_color("Plot line", initial_value=(196, 196, 196))
             revert = server.gui.add_button("Revert", label="Colors")
         gui_preview = server.gui.add_image(
             initial[::4, ::4],
@@ -366,8 +366,8 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         cloud_size = server.gui.add_slider(
             "Point size", min=0.005, max=0.06, step=0.005, initial_value=0.02
         )
-        cloud_color = server.gui.add_rgb("Cloud color", initial_value=(230, 180, 80))
-        spin = server.gui.add_toggle("Spin the cloud")
+        cloud_color = server.gui.add_color("Cloud color", initial_value=(230, 180, 80))
+        spin = server.gui.add_checkbox("Spin the cloud", initial_value=False)
 
     tabs = server.gui.add_tab_group()
     with tabs.add_tab("Charts", icon=leika.Icon.CHART_LINE):
@@ -397,10 +397,10 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
             icon=leika.Icon.UPLOAD,
         )
 
-        with server.gui.add_popup("Popup example"):
+        with server.gui.add_folder("Popup example", popup=True):
             server.gui.add_text(
                 None,
-                "A popup is a folder-like container that keeps its controls behind one row.",
+                "A popup folder keeps its controls behind one row.",
                 editable=False,
                 markdown=True,
                 multiline=True,
@@ -473,7 +473,7 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         log = server.gui.add_text(
             None, "_Nothing logged yet._", editable=False, markdown=True, multiline=True
         )
-        with server.gui.add_mini_form() as broadcast:
+        with server.gui.add_form(mini=True) as broadcast:
             message = server.gui.add_text("Broadcast", "")
         watchlist = server.gui.add_list(
             "Watch for",
@@ -481,24 +481,28 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
             hint="Drag an entry to reorder it.",
         )
         watching = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
-        todo = server.gui.add_checklist(
+        todo = server.gui.add_list(
             "To do",
             (("Sweep the offset", True), "Log the ringing", "Export the run"),
+            mark="check",
             hint="Drag an entry to reorder it; its tick goes with it.",
         )
-        preflight = server.gui.add_checklist(
+        preflight = server.gui.add_list(
             "Before a run",
             ("Warm up the source", ("Zero the offset", True), "Clear the log"),
+            mark="check",
             frozen=True,
         )
-        server.gui.add_radio_list(
+        server.gui.add_list(
             "Density",
             ("Compact", ("Comfortable", True), "Spacious"),
+            mark="radio",
             hint="Choose one density or edit and reorder the choices.",
         )
-        server.gui.add_radio_list(
+        server.gui.add_list(
             "Quality",
             (("Draft", True), "Balanced", "Maximum"),
+            mark="radio",
             frozen=True,
         )
         progress = server.gui.add_text(None, "", editable=False, markdown=True, multiline=True)
@@ -627,7 +631,7 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
         watching.value = "" if not kept else "_Watching: " + ", ".join(kept) + "._"
 
     def show_progress(_: Any = None) -> None:
-        done = len(todo.checked) + len(preflight.checked)
+        done = len(todo.marked) + len(preflight.marked)
         total = len(todo.value) + len(preflight.value)
         progress.value = f"_{done} of {total} ticked._"
 
@@ -666,7 +670,7 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
 
     @server.on_client_connect
     def _(client: leika.ClientHandle) -> None:
-        client.add_notification(
+        client.gui.add_notification(
             "Welcome to Leika",
             "Drag pane labels, resize dividers, or press Ctrl/Cmd+K.",
             auto_close_seconds=4.0,

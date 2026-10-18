@@ -202,8 +202,8 @@ def test_a_form_opens_from_one_row_into_a_popout(
 
     # A form with no label: its trigger takes the whole row, the way a
     # labelless button does, rather than leaving an empty label column.
-    plain = leika_server.gui.add_form()
-    plain.add_text("Comment", initial_value="")
+    with leika_server.gui.add_form():
+        leika_server.gui.add_text("Comment", initial_value="")
     triggers = leika_page.locator("[data-leika-form-trigger]")
     expect(triggers).to_have_count(2, timeout=5_000)
     labelled = trigger.bounding_box()
@@ -219,7 +219,7 @@ def test_a_popup_opens_folder_like_contents_from_a_labelled_row(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    with leika_server.gui.add_popup("Render options") as popup:
+    with leika_server.gui.add_folder("Render options", popup=True) as popup:
         axes = leika_server.gui.add_checkbox("Show axes", initial_value=True)
         with leika_server.gui.add_folder("Advanced"):
             leika_server.gui.add_number("Line width", initial_value=2.0)
@@ -246,10 +246,11 @@ def test_a_popup_opens_folder_like_contents_from_a_labelled_row(
     leika_page.keyboard.press("Escape")
     expect(popout).to_have_count(0)
 
-    empty = leika_server.gui.add_popup("Empty popup")
+    empty = leika_server.gui.add_folder("Empty popup", popup=True)
     empty_trigger = find_gui_row(leika_page, "Empty popup").locator("[data-leika-popup-trigger]")
     expect(empty_trigger).to_be_disabled(timeout=5_000)
-    late = empty.add_text("Late field", initial_value="")
+    with empty:
+        late = leika_server.gui.add_text("Late field", initial_value="")
     expect(empty_trigger).to_be_enabled(timeout=5_000)
     empty_trigger.click()
     late_field = leika_page.get_by_role("textbox", name="Late field")
@@ -272,7 +273,7 @@ def test_a_mini_form_sends_from_the_end_of_its_field_row(
     """One field, no popout: the field keeps its row and the commit joins it as
     a square button on the end, sized like the undo a color row carries."""
     submits: list[str] = []
-    with leika_server.gui.add_mini_form() as mini:
+    with leika_server.gui.add_form(mini=True) as mini:
         query = leika_server.gui.add_text("Search", initial_value="")
     mini.on_submit(lambda _: submits.append(query.value))
 
@@ -305,13 +306,11 @@ def test_a_forms_action_buttons_render_below_its_fields(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """A form's actions belong at the bottom, and they are created at the top.
+    """A form's actions belong at the bottom, below every field.
 
-    They have to exist before the `with` body that fills the form runs, so they
-    hold the form's smallest order number and the server moves them after the
-    fact. That has to land on the client that watched the form being built as
-    well as on one that arrives to find it finished -- two different paths, an
-    update and a replay.
+    The browser draws them after the form's own rows, for a client that watched
+    the form being built, one that arrives to find it finished, and a field
+    added afterwards.
     """
     with leika_server.gui.add_form(label="Profile") as form:
         leika_server.gui.add_text("Name", initial_value="Ada")
@@ -334,7 +333,7 @@ def test_a_forms_action_buttons_render_below_its_fields(
             assert box is not None
             assert box["y"] + box["height"] <= button["y"] + 0.5, (index, box, button)
 
-    # The client that was already connected, and saw the move as an update.
+    # The client that was already connected.
     assert_submit_is_last(leika_page)
 
     # A client that arrives afterwards, and is replayed the finished form.
@@ -344,10 +343,9 @@ def test_a_forms_action_buttons_render_below_its_fields(
     )
     assert_submit_is_last(leika_page)
 
-    # And a field added to a form the client has already drawn, which is the
-    # case that has nothing to do with what order the messages went out in: the
-    # button is on screen, in a place the client has to be told to move it from.
-    form.add_text("Nickname", initial_value="")
+    # And a field added to a form the client has already drawn.
+    with form:
+        leika_server.gui.add_text("Nickname", initial_value="")
     expect(find_gui_row(leika_page, "Nickname")).to_be_visible(timeout=5_000)
     assert_submit_is_last(leika_page)
     assert page_errors == []

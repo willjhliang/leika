@@ -92,12 +92,12 @@ class _Client:
         self._transfer_cancel_from_uuid: dict[str, threading.Event] = {}
         self.flushes = 0
         self.notifications: List[Tuple[str, str]] = []
+        self.gui = SimpleNamespace(
+            add_notification=lambda title, body="", **_: self.notifications.append((title, body))
+        )
 
     def flush(self) -> None:
         self.flushes += 1
-
-    def add_notification(self, title: str, body: str = "", **kwargs: Any) -> None:
-        self.notifications.append((title, body))
 
 
 class _PendingFuture:

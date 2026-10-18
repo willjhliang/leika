@@ -87,7 +87,7 @@ def test_checklist_and_open_selection_option_use_the_same_hover_cycle(
     page_errors: list[str],
 ) -> None:
     value = "A shared long value that overflows both checklist and selection rows"
-    leika_server.gui.add_checklist("Tasks", [value], frozen=True)
+    leika_server.gui.add_list("Tasks", [value], frozen=True, mark="check")
     leika_server.gui.add_dropdown("Choice", options=("Short", value))
 
     def expect_shared_cycle(surface) -> None:
@@ -108,7 +108,7 @@ def test_checklist_and_open_selection_option_use_the_same_hover_cycle(
         expect(surface).not_to_have_attribute("data-leika-hover-scroll-active", "")
 
     checklist = find_gui_row(leika_page, "Tasks").locator(
-        "[data-leika-checklist-entry] [data-leika-hover-scroll]"
+        "[data-leika-list-entry] [data-leika-hover-scroll]"
     )
     expect_shared_cycle(checklist)
 
@@ -125,9 +125,9 @@ def test_editable_radio_text_scrolls_on_hover_but_clicks_from_its_prefix(
     page_errors: list[str],
 ) -> None:
     value = "An editable value long enough to travel well beyond its narrow field"
-    leika_server.gui.add_radio_list("Editable", [value])
+    leika_server.gui.add_list("Editable", [value], mark="radio")
 
-    field = leika_page.locator("[data-leika-radio-list-entry]")
+    field = leika_page.locator("[data-leika-list-entry]")
     expect(field).to_have_attribute("data-leika-hover-scroll-input", "")
     assert field.evaluate("input => input.scrollWidth > input.clientWidth")
     expect(field).to_have_css("text-overflow", "ellipsis")

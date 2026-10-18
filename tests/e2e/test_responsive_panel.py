@@ -215,7 +215,7 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
             "Spacing slider", min=0.0, max=1.0, step=0.01, initial_value=0.5
         )
     with leika_server.gui.add_folder("Second folder"):
-        leika_server.gui.add_vector3("Vector", initial_value=(1.0, 2.0, 3.0))
+        leika_server.gui.add_vector("Vector", initial_value=(1.0, 2.0, 3.0))
     with leika_server.gui.add_folder("Tall section"):
         for index in range(36):
             leika_server.gui.add_checkbox(f"Tall control {index + 1}", initial_value=index % 2 == 0)

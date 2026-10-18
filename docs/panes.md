@@ -363,7 +363,7 @@ A named group gives the videos on the displayed page one timeline in each
 browser. The dock component and fullscreen overlays control that same timeline:
 
 ```python
-server.gui.add_playback(sync_group="episode")
+server.gui.add_video_controls(sync_group="episode")
 grid = server.panes.add_grid(columns=2)
 for index in range(4):
     grid.add_video(
@@ -377,7 +377,7 @@ for index in range(4):
 Without a label, the dock component is one full-width 32px row: play/pause,
 previous/next frame, seek, elapsed time, speed and loop. Elapsed time stays
 visible; hover over it for total duration. Pass a label, for example
-`server.gui.add_playback("Playback", sync_group="episode")`, for a standard
+`server.gui.add_video_controls("Playback", sync_group="episode")`, for a standard
 24px labelled row containing only play/pause, seek, speed and loop. Both dock
 layouts and video overlays use 12px gaps between icon bounds, text and the
 timeline, with 24px button targets. The label
@@ -457,6 +457,5 @@ normal GUI scope: `server.gui` is shared across browsers; `client.gui` is privat
 Reconnect restores the published state. Video groups continue to keep independent
 browser-local clocks; no frame-by-frame Python traffic is added to videos.
 
-`add_video_controls(...)` remains available as the video-specific spelling of
-`add_playback(sync_group=...)`. Video duration, autoplay, looping and frame rate
-are still configured on video panes, not on their dock control.
+Video duration, autoplay, looping and frame rate are configured on video
+panes, not on their `add_video_controls(...)` dock control.

@@ -2,12 +2,11 @@ from ._client_handle import ClientHandle as ClientHandle
 from ._gui_api import GuiApi as GuiApi
 from ._gui_handles import CommandEvent as CommandEvent
 from ._gui_handles import CommandHandle as CommandHandle
-from ._gui_handles import DownloadContent as DownloadContent
 from ._gui_handles import FileContent as FileContent
 from ._gui_handles import GuiButtonGroupHandle as GuiButtonGroupHandle
 from ._gui_handles import GuiButtonHandle as GuiButtonHandle
 from ._gui_handles import GuiCheckboxHandle as GuiCheckboxHandle
-from ._gui_handles import GuiChecklistHandle as GuiChecklistHandle
+from ._gui_handles import GuiColorHandle as GuiColorHandle
 from ._gui_handles import GuiContainer as GuiContainer
 from ._gui_handles import GuiDividerHandle as GuiDividerHandle
 from ._gui_handles import GuiDownloadButtonHandle as GuiDownloadButtonHandle
@@ -24,25 +23,18 @@ from ._gui_handles import GuiMultiSliderHandle as GuiMultiSliderHandle
 from ._gui_handles import GuiNumberHandle as GuiNumberHandle
 from ._gui_handles import GuiPlaybackHandle as GuiPlaybackHandle
 from ._gui_handles import GuiPlotlyHandle as GuiPlotlyHandle
-from ._gui_handles import GuiPopupHandle as GuiPopupHandle
 from ._gui_handles import GuiPreviewButtonHandle as GuiPreviewButtonHandle
 from ._gui_handles import GuiProgressBarHandle as GuiProgressBarHandle
-from ._gui_handles import GuiRadioListHandle as GuiRadioListHandle
-from ._gui_handles import GuiRgbaHandle as GuiRgbaHandle
-from ._gui_handles import GuiRgbHandle as GuiRgbHandle
 from ._gui_handles import GuiSliderHandle as GuiSliderHandle
 from ._gui_handles import GuiTabGroupHandle as GuiTabGroupHandle
 from ._gui_handles import GuiTabHandle as GuiTabHandle
 from ._gui_handles import GuiTextHandle as GuiTextHandle
 from ._gui_handles import GuiToggleGroupHandle as GuiToggleGroupHandle
-from ._gui_handles import GuiToggleHandle as GuiToggleHandle
 from ._gui_handles import GuiUploadButtonHandle as GuiUploadButtonHandle
-from ._gui_handles import GuiVector2Handle as GuiVector2Handle
-from ._gui_handles import GuiVector3Handle as GuiVector3Handle
+from ._gui_handles import GuiVectorHandle as GuiVectorHandle
 from ._gui_handles import GuiVideoControlsHandle as GuiVideoControlsHandle
 from ._gui_handles import PlaybackEvent as PlaybackEvent
 from ._gui_handles import PlaybackState as PlaybackState
-from ._gui_handles import PreviewContent as PreviewContent
 from ._gui_handles import UploadedFile as UploadedFile
 from ._icons_enum import Icon as Icon
 from ._icons_enum import IconName as IconName
@@ -64,7 +56,5 @@ from ._panes import PlotlyPaneHandle as PlotlyPaneHandle
 from ._panes import VideoPaneHandle as VideoPaneHandle
 from ._panes import ViserPaneHandle as ViserPaneHandle
 from ._server import Server as Server
-
-GuiTabGroup = GuiTabGroupHandle
 
 __version__ = "0.4.0"

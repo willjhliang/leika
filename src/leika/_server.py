@@ -20,7 +20,6 @@ from ._async_errors import await_user_callback, print_async_errors
 from ._client_handle import ClientHandle
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_send
 from ._gui_api import GuiApi
-from ._notification_handle import NotificationHandle
 from ._pages import Pages, _page_name_from_label
 from ._share import CloudflaredTunnel, ShareTunnelError
 from ._transport._auth import HttpPasswordGuard
@@ -36,16 +35,6 @@ from ._validation import validate_nonnegative_integer as _validate_nonnegative_i
 from ._validation import validate_positive_integer as _validate_positive_integer
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
-
-_FILE_UPLOAD_AGGREGATE_MAX_BYTES = 256 * 1024 * 1024
-"""Maximum retained payload bytes across simultaneous uploads."""
-
-_FILE_UPLOAD_MAX_ACTIVE = 128
-"""Maximum simultaneous uploads, including empty uploads."""
-
-_SERVER_GUI_RETAINED_MAX_BYTES = 256 * 1024 * 1024
-_SERVER_GUI_PIXELS_MAX = 128 * 1024 * 1024
-_SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
 
 _PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
 
@@ -143,17 +132,10 @@ class Server:
         self._share_tunnel: CloudflaredTunnel | None = None
         self._connected_clients: dict[int, ClientHandle] = {}
         self._client_lock = threading.RLock()
-        self._file_upload_reservation_lock = threading.Lock()
-        self._file_upload_bytes_reserved = 0
-        self._file_upload_count = 0
         self._client_connect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
         self._client_disconnect_cb: list[Callable[[ClientHandle], None | Coroutine]] = []
         self._gui_order_counter = 0
         self._gui_order_lock = threading.Lock()
-        self._gui_resource_lock = threading.Lock()
-        self._gui_retained_units_and_bytes = 0
-        self._gui_decoded_pixels = 0
-        self._page_global_decoded_pixels = 0
         self._plotly_lock = threading.Lock()
         self._plotly_runtime_queued = False
         self._thread_executor = ThreadPoolExecutor(max_workers=32)
@@ -229,7 +211,7 @@ class Server:
             callbacks = tuple(self._client_disconnect_cb)
         if client is None:
             return
-        client.gui._discard_client_work(conn.client_id, release_retained_uploads=True)
+        client.gui._retire_scope()
         self.gui._discard_client_work(conn.client_id)
         for callback in callbacks:
             await self._await_user_callback(callback, client)
@@ -256,87 +238,6 @@ class Server:
             escaped_host = display_host.replace("%", "%25")
             display_host = f"[{escaped_host}]"
         return f"http://{display_host}:{self.port}"
-
-    def _reserve_file_upload(self, size_bytes: int) -> bool:
-        """Reserve builder storage plus immutable-conversion headroom."""
-        if type(size_bytes) is not int or size_bytes < 0:
-            raise ValueError("upload size must be a non-negative integer")
-        charged_bytes = size_bytes * 2
-        with self._file_upload_reservation_lock:
-            if (
-                self._file_upload_count >= _FILE_UPLOAD_MAX_ACTIVE
-                or self._file_upload_bytes_reserved + charged_bytes
-                > _FILE_UPLOAD_AGGREGATE_MAX_BYTES
-            ):
-                return False
-            self._file_upload_count += 1
-            self._file_upload_bytes_reserved += charged_bytes
-            return True
-
-    def _release_file_upload(self, size_bytes: int) -> None:
-        """Release an incomplete upload and its conversion headroom."""
-        charged_bytes = size_bytes * 2
-        with self._file_upload_reservation_lock:
-            if self._file_upload_count == 0 or charged_bytes > self._file_upload_bytes_reserved:
-                raise RuntimeError("upload reservation accounting underflow")
-            self._file_upload_count -= 1
-            self._file_upload_bytes_reserved -= charged_bytes
-
-    def _complete_file_upload(self, size_bytes: int, replaced_bytes: int) -> None:
-        """Convert one active reservation into retained immutable payload."""
-        with self._file_upload_reservation_lock:
-            released = size_bytes + replaced_bytes
-            if self._file_upload_count == 0 or released > self._file_upload_bytes_reserved:
-                raise RuntimeError("upload reservation accounting underflow")
-            self._file_upload_count -= 1
-            self._file_upload_bytes_reserved -= released
-
-    def _replace_retained_file_upload(self, old_bytes: int, new_bytes: int) -> None:
-        """Account for a user assignment to an upload handle value."""
-        if min(old_bytes, new_bytes) < 0:
-            raise ValueError("retained upload sizes must be non-negative")
-        with self._file_upload_reservation_lock:
-            updated = self._file_upload_bytes_reserved - old_bytes + new_bytes
-            if old_bytes > self._file_upload_bytes_reserved:
-                raise RuntimeError("upload reservation accounting underflow")
-            if updated > _FILE_UPLOAD_AGGREGATE_MAX_BYTES:
-                raise ValueError("UploadedFile values exceed the 256 MiB server memory limit.")
-            self._file_upload_bytes_reserved = updated
-
-    def _release_retained_file_upload(self, size_bytes: int) -> None:
-        """Release a completed value when its handle is removed."""
-        with self._file_upload_reservation_lock:
-            if not 0 <= size_bytes <= self._file_upload_bytes_reserved:
-                raise RuntimeError("upload reservation accounting underflow")
-            self._file_upload_bytes_reserved -= size_bytes
-
-    def _replace_gui_resource_cost(
-        self,
-        old: Any,
-        new: Any,
-        *,
-        page_global: bool,
-    ) -> None:
-        """Reserve process-wide retained GUI source and decoded-raster capacity."""
-        old_retained = old.text_units * 2 + old.payload_bytes
-        new_retained = new.text_units * 2 + new.payload_bytes
-        with self._gui_resource_lock:
-            retained = self._gui_retained_units_and_bytes - old_retained + new_retained
-            pixels = self._gui_decoded_pixels - old.decoded_pixels + new.decoded_pixels
-            page_pixels = self._page_global_decoded_pixels
-            if page_global:
-                page_pixels = page_pixels - old.decoded_pixels + new.decoded_pixels
-            if retained > _SERVER_GUI_RETAINED_MAX_BYTES:
-                raise RuntimeError("The server exceeded its 256 MiB retained GUI budget.")
-            if pixels > _SERVER_GUI_PIXELS_MAX:
-                raise RuntimeError("The server exceeded its 128 Mi-pixel GUI raster budget.")
-            if page_pixels > _SERVER_PAGE_PIXELS_MAX:
-                raise RuntimeError("The shared page exceeded its 64 Mi-pixel raster budget.")
-            if min(retained, pixels, page_pixels) < 0:
-                raise RuntimeError("GUI resource accounting underflow")
-            self._gui_retained_units_and_bytes = retained
-            self._gui_decoded_pixels = pixels
-            self._page_global_decoded_pixels = page_pixels
 
     def _next_gui_order(self) -> float:
         """Allocate one deterministic implicit order across this server's GUIs."""
@@ -490,8 +391,8 @@ class Server:
             self._stopped = True
             clients = tuple(self._connected_clients.values())
         for client in clients:
-            client.gui._retire_scope_without_queue()
-        self.gui._retire_scope_without_queue()
+            client.gui._retire_scope()
+        self.gui._retire_scope()
         self._shut_down()
 
     async def _await_connect_callback_if_current(
@@ -660,27 +561,6 @@ class Server:
         _validate_nonnegative_integer(max_bytes, "max_bytes")
         for client in self.clients.values():
             client._send_preview(filename, content, chunk_size=chunk_size, max_bytes=max_bytes)
-
-    def add_notification(
-        self,
-        title: str,
-        body: str = "",
-        *,
-        loading: bool = False,
-        with_close_button: bool = True,
-        auto_close_seconds: float | None = 5.0,
-    ) -> NotificationHandle:
-        """Show a notification for all clients.
-
-        See :meth:`GuiApi.add_notification` for argument semantics.
-        """
-        return self.gui.add_notification(
-            title,
-            body,
-            loading=loading,
-            with_close_button=with_close_button,
-            auto_close_seconds=auto_close_seconds,
-        )
 
     def get_event_loop(self) -> asyncio.AbstractEventLoop:
         """Get the asyncio event loop used by the Leika background thread. This

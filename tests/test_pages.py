@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
@@ -8,7 +7,6 @@ import pytest
 
 import leika
 from leika import _messages
-from leika._transport._websocket import ClientId
 
 from .utils import queued_messages
 
@@ -117,37 +115,14 @@ def test_page_names_are_stable_identity_updates_and_labels(
             page.name = "Renamed"
             assert page.name == "Renamed"
             assert page.page_id == stable_id
-            server.gui.set_panel_label(None)
-            assert page.name == "Main"
             updates = [
                 message
                 for message in _retained(server)
                 if isinstance(message, _messages.PageUpdateMessage)
             ]
-            assert updates[-1] == _messages.PageUpdateMessage("default", "Main")
+            assert updates[-1] == _messages.PageUpdateMessage("default", "Renamed")
         finally:
             server.stop()
-
-
-def test_client_local_panel_label_sends_a_default_page_update_only_to_that_client(
-    server: leika.Server,
-) -> None:
-    queued: list[_messages.Message] = []
-    connection = SimpleNamespace(
-        client_id=ClientId(17),
-        register_handler=lambda *_: None,
-        queue_message=queued.append,
-        queue_message_or_raise=queued.append,
-        queue_messages_or_raise=queued.extend,
-        get_message_buffer=lambda: SimpleNamespace(event_loop=server._event_loop),
-    )
-    client = leika.ClientHandle(cast(Any, connection), server)
-    server.pages.default.name = "Global"
-
-    client.gui.set_panel_label("")
-
-    assert queued[-1] == _messages.PageUpdateMessage(page_id="default", name="Main")
-    assert server.pages.default.name == "Global"
 
 
 @pytest.mark.parametrize(

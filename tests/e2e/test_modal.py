@@ -25,7 +25,7 @@ def dialog(page: Page) -> Locator:
 def wait_until_closed(modal: leika.GuiModalHandle, timeout: float = 5.0) -> None:
     """Block until the server has torn the modal down."""
     deadline = time.monotonic() + timeout
-    while not modal.closed and time.monotonic() < deadline:
+    while not modal._impl.removed and time.monotonic() < deadline:
         time.sleep(0.01)
 
 
@@ -68,12 +68,13 @@ def test_each_dismissal_gesture_closes_and_tears_down(
     leika_page.locator('[data-slot="dialog-close"]').click()
     expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
-    assert modal.closed
-    assert modal._children == {}
-    assert modal.id not in leika_server.gui._modal_handle_from_uuid
+    assert modal._impl.removed
+    assert modal._impl.children == {}
+    assert modal.id not in leika_server.gui._handles
     # A closed modal is not a container that can still be filled.
-    with pytest.raises(RuntimeError, match="closed modal"):
-        modal.add_button("Too late")
+    with pytest.raises(RuntimeError, match="removed GuiModalHandle"):
+        with modal:
+            pass
 
     # The backdrop covers the viewport, so a click at its top-left corner lands
     # outside the popup without hitting any other control.
@@ -81,13 +82,13 @@ def test_each_dismissal_gesture_closes_and_tears_down(
     leika_page.locator('[data-slot="dialog-overlay"]').click(position={"x": 5, "y": 5})
     expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
-    assert modal.closed
+    assert modal._impl.removed
 
     modal = open_modal(leika_server, leika_page)
     leika_page.keyboard.press("Escape")
     expect(dialog(leika_page)).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
-    assert modal.closed
+    assert modal._impl.removed
     assert page_errors == []
 
 
@@ -118,7 +119,7 @@ def test_a_preview_opened_from_a_modal_owns_the_top_layer(
     outer.locator('[data-slot="dialog-close"]').click()
     expect(outer).to_have_count(0, timeout=5_000)
     wait_until_closed(modal)
-    assert modal.closed
+    assert modal._impl.removed
     assert page_errors == []
 
 
@@ -146,6 +147,6 @@ def test_dismissing_closes_the_modal_for_every_client(
         expect(dialog(first)).to_have_count(0, timeout=5_000)
         expect(dialog(second)).to_have_count(0, timeout=5_000)
         wait_until_closed(handle)
-        assert handle.closed
+        assert handle._impl.removed
     finally:
         context.close()

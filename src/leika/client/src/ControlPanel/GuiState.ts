@@ -31,6 +31,8 @@ export interface GuiState {
     [containerUuid: string]: { [uuid: string]: true } | undefined;
   };
   modals: GuiModalMessage[];
+  /** Each tab group's tabs, in order. */
+  tabsFromGroupUuid: { [groupUuid: string]: GuiTab[] | undefined };
   guiOrderFromUuid: { [id: string]: number };
   /** The most recent form submit, as its form's UUID and a counter that only
    * goes up. A signal rather than a state: a form's popout closes when its
@@ -48,6 +50,9 @@ export interface GuiState {
   /** Registered command palette actions, keyed by UUID. */
   commands: { [uuid: string]: RegisterCommandMessage };
 }
+
+/** One tab of a tab group: the container it shows, and its label and icon. */
+export type GuiTab = Pick<GuiTabMessage, "uuid" | "props">;
 
 /** Server messages that change the GUI tree, modals or commands. */
 export type GuiStateMessage =
@@ -114,6 +119,7 @@ const cleanGuiState: GuiState = {
   connectionError: null,
   guiUuidSetFromContainerUuid: { [ROOT_GUI_CONTAINER_ID]: {} },
   modals: [],
+  tabsFromGroupUuid: {},
   guiOrderFromUuid: {},
   lastFormSubmit: null,
   uploadsInProgress: {},
@@ -126,10 +132,15 @@ export function applyGuiConfigUpdate(
   config: GuiComponentMessage,
   updates: Record<string, unknown>,
 ): GuiComponentMessage {
-  const { value, ...propUpdates } = updates;
+  // `value` is the top-level field of an input; a display element such as
+  // the progress bar keeps its `value` among its props.
+  const { value, ...rest } = updates;
+  const isInput = "value" in config;
+  const propUpdates = isInput ? rest : updates;
   const props = config.props as Record<string, unknown>;
   let next = config;
   if (
+    isInput &&
     "value" in updates &&
     !Object.is((config as { value?: unknown }).value, value)
   )
@@ -170,8 +181,8 @@ export function createGuiState() {
   const store = createStore<GuiState>(cleanGuiState);
 
   // Per-component config store, keyed by UUID, so one component's update
-  // re-renders one component. Tab groups own their tab descriptors, which the
-  // flat tab lifecycle maintains through this index from tab to group.
+  // re-renders one component. Tabs have their own flat lifecycle, indexed
+  // here from each tab to its group.
   const configStore = createKeyedStore<GuiComponentMessage>();
   const tabOwnerFromUuid = new Map<string, string>();
 
@@ -203,49 +214,41 @@ export function createGuiState() {
 
     const setTabs = (
       groupUuid: string,
-      update: (tabs: GuiTabGroupTabs) => GuiTabGroupTabs,
+      update: (tabs: GuiTab[]) => GuiTab[],
     ) => {
-      const group = config(groupUuid);
-      if (group?.type !== "GuiTabGroupMessage") return;
-      configUpdates[groupUuid] = {
-        ...group,
-        props: { ...group.props, _tabs: update(group.props._tabs) },
-      };
+      const tabs = edit("tabsFromGroupUuid");
+      tabs[groupUuid] = update(tabs[groupUuid] ?? []);
     };
 
-    // Python lists every removed descendant, so removal needs no local walk.
-    const remove = (components: readonly string[], tabs: readonly string[]) => {
-      for (const uuid of components) {
+    // Python lists every removed descendant, tabs included, so removal needs
+    // no local walk.
+    const remove = (uuids: readonly string[]) => {
+      for (const uuid of uuids) {
+        const groupUuid = tabOwnerFromUuid.get(uuid);
+        if (groupUuid !== undefined) {
+          tabOwnerFromUuid.delete(uuid);
+          const tabs = edit("tabsFromGroupUuid");
+          // Absent when the group was removed first, in the same removal.
+          tabs[groupUuid] &&= tabs[groupUuid].filter(
+            (tab) => tab.uuid !== uuid,
+          );
+          continue;
+        }
         const previous = config(uuid);
         if (previous !== undefined)
           delete members(previous.container_uuid)[uuid];
         configUpdates[uuid] = undefined;
         delete edit("guiOrderFromUuid")[uuid];
         delete edit("uploadsInProgress")[uuid];
-      }
-      for (const tabUuid of tabs) {
-        const groupUuid = tabOwnerFromUuid.get(tabUuid);
-        tabOwnerFromUuid.delete(tabUuid);
-        if (groupUuid !== undefined)
-          setTabs(groupUuid, (current) =>
-            current.filter((tab) => tab.container_id !== tabUuid),
-          );
+        if (previous?.type === "GuiTabGroupMessage")
+          delete edit("tabsFromGroupUuid")[uuid];
       }
     };
 
     for (const message of messages) {
       if (isGuiComponentMessage(message)) {
         const previous = config(message.uuid);
-        // Tab descriptors come only from the tab lifecycle; a redeclared
-        // group keeps the ones it already has.
-        const next =
-          message.type === "GuiTabGroupMessage" &&
-          previous?.type === "GuiTabGroupMessage"
-            ? {
-                ...message,
-                props: { ...message.props, _tabs: previous.props._tabs },
-              }
-            : message;
+        const next = message;
         if (previous?.container_uuid !== next.container_uuid) {
           if (previous !== undefined)
             delete members(previous.container_uuid)[next.uuid];
@@ -268,31 +271,18 @@ export function createGuiState() {
           break;
         }
         case "GuiRemoveMessage":
-          if (tabOwnerFromUuid.has(message.uuid))
-            remove(message.removed_uuids, [
-              ...message.removed_tab_uuids,
-              message.uuid,
-            ]);
-          else
-            remove(
-              [...message.removed_uuids, message.uuid],
-              message.removed_tab_uuids,
-            );
+          remove([...message.removed_uuids, message.uuid]);
           break;
         case "GuiTabMessage":
         case "GuiTabUpdateMessage": {
-          const descriptor = {
-            label: message.label,
-            icon_html: message.icon_html,
-            container_id: message.uuid,
-          };
+          const tab = { uuid: message.uuid, props: message.props };
           tabOwnerFromUuid.set(message.uuid, message.group_uuid);
           setTabs(message.group_uuid, (current) =>
-            current.some((tab) => tab.container_id === message.uuid)
-              ? current.map((tab) =>
-                  tab.container_id === message.uuid ? descriptor : tab,
+            current.some((other) => other.uuid === message.uuid)
+              ? current.map((other) =>
+                  other.uuid === message.uuid ? tab : other,
                 )
-              : [...current, descriptor],
+              : [...current, tab],
           );
           break;
         }
@@ -301,7 +291,7 @@ export function createGuiState() {
           break;
         case "GuiCloseModalMessage":
           editModals().delete(message.uuid);
-          remove(message.removed_uuids, message.removed_tab_uuids);
+          remove(message.removed_uuids);
           break;
         case "GuiFormSubmitMessage": {
           const previous = draft.lastFormSubmit ?? state.lastFormSubmit;
@@ -360,6 +350,7 @@ export function createGuiState() {
         workspaceId: cleanGuiState.workspaceId,
         guiUuidSetFromContainerUuid: cleanGuiState.guiUuidSetFromContainerUuid,
         modals: cleanGuiState.modals,
+        tabsFromGroupUuid: cleanGuiState.tabsFromGroupUuid,
         guiOrderFromUuid: cleanGuiState.guiOrderFromUuid,
         lastFormSubmit: cleanGuiState.lastFormSubmit,
         uploadsInProgress: cleanGuiState.uploadsInProgress,
@@ -417,14 +408,10 @@ export function createGuiState() {
 
 type EditableField =
   | "guiUuidSetFromContainerUuid"
+  | "tabsFromGroupUuid"
   | "guiOrderFromUuid"
   | "uploadsInProgress"
   | "commands";
-
-type GuiTabGroupTabs = Extract<
-  GuiComponentMessage,
-  { type: "GuiTabGroupMessage" }
->["props"]["_tabs"];
 
 /** Own one GUI session for the lifetime of the mounted viewer. */
 export function useGuiState(): GuiSession {

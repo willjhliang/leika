@@ -516,7 +516,7 @@ def test_frames_reuse_bytes_encoded_once_at_push() -> None:
     asyncio.run(scenario())
 
 
-def test_delivery_backpressure_coalesces_pending_updates_until_receipt() -> None:
+def test_backpressure_coalesces_pending_updates_until_receipt() -> None:
     async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
         socket = _RecordingSocket()
@@ -541,7 +541,7 @@ def test_delivery_backpressure_coalesces_pending_updates_until_receipt() -> None
     asyncio.run(scenario())
 
 
-def test_delivery_backpressure_does_not_block_another_client() -> None:
+def test_backpressure_does_not_block_another_client() -> None:
     async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=True)
         slow, fast = _RecordingSocket(), _RecordingSocket(automatic_receipts=True)

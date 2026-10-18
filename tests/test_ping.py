@@ -29,11 +29,7 @@ class _Client:
 
     def __init__(self) -> None:
         self._websock_connection = _RecordingConnection()
-        self.gui = type(
-            "_Gui",
-            (),
-            {"_retire_scope_without_queue": lambda self: None},
-        )()
+        self.gui = type("_Gui", (), {"_retire_scope": lambda self: None})()
         self.flushes = 0
 
     def flush(self) -> None:

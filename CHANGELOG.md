@@ -5,6 +5,41 @@ versioning.
 
 ## Unreleased
 
+- GUI (breaking): overlapping controls are merged into one each.
+  `add_list(..., mark="check" | "radio")` replaces `add_checklist()` and
+  `add_radio_list()`, with `handle.marked` in place of `checked` and
+  `selected`; `add_vector()` takes two or three components in place of
+  `add_vector2()`/`add_vector3()`; `add_color()` takes an RGB or RGBA tuple in
+  place of `add_rgb()`/`add_rgba()`; `add_folder(..., popup=True)` replaces
+  `add_popup()`; `add_form(mini=True)` replaces `add_mini_form()`; and
+  `add_toggle()` takes only a sequence of options, with `add_checkbox()` for a
+  single true/false value. Their handles are `GuiListHandle`,
+  `GuiVectorHandle`, `GuiColorHandle`, `GuiFolderHandle`, and
+  `GuiToggleGroupHandle`.
+- GUI (breaking): GUI elements are no longer limited (4,096 components per
+  scope, 1,024 commands, 32 modals, 128 notifications, 64 levels of nesting,
+  4,096 items per collection, 16,384-character labels and entries,
+  1 Mi-character text and HTML, scope and server budgets, 256 callbacks per
+  handle, a 256 MiB upload budget and 128 active uploads); browser input keeps
+  its bounds, including the 64 MiB upload limit. A removed handle keeps its
+  last state for reading and refuses updates and callbacks. Each property
+  change is validated once and published in one message before it commits,
+  and assigning a misspelled property, or a private one such as `_source`, now
+  raises instead of setting a plain attribute. Programmatic callbacks run in
+  the order the changes were made, without a queue cap. Slider `marks` and
+  button and toggle `merge` are public properties.
+- GUI (breaking): containers are filled only with `with container:`; the
+  direct `folder.add_*(...)` methods are removed. Also removed:
+  `leika.GuiTabGroup`, `GuiApi.set_panel_label()` (set
+  `server.pages.default.name`), `GuiModalHandle.remove()` (use `close()`),
+  `leika.DownloadContent` and `leika.PreviewContent` (use `FileContent`),
+  `Server.add_notification()` and `ClientHandle.add_notification()` (use
+  `.gui.add_notification()`), `GuiFormHandle.actions`, and
+  `add_playback(sync_group=...)` (use `add_video_controls(sync_group=...)`).
+- GUI: a form's Reset and Submit are drawn by the browser rather than added
+  as a row of buttons, so children may use any order. A file button stays busy
+  while it sends without changing its `disabled` property, and the progress
+  bar is display only.
 - Server: synchronous callbacks and deferred file transfers share one plain
   32-thread pool, without the 256-job pending cap. `stop()` called from a
   callback now waits for the server thread directly instead of handing the

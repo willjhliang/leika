@@ -276,7 +276,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
     value = _messages.GuiUpdateMessage("field", {"value": 1})
     label = _messages.GuiUpdateMessage("field", {"label": "Field"})
     script = _messages.RunJavascriptMessage("same")
-    tab = _messages.GuiTabMessage("tab", "tabs", "Tab", None)
+    tab = _messages.GuiTabMessage("tab", "tabs", _messages.GuiTabProps("Tab", None))
     child = _text("child", "tab")
     pages = _messages.PageCatalogMessage(("alpha",))
     snapshot_a = _messages.ViewportPaneSnapshotMessage("alpha", ("one",))
@@ -289,7 +289,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
             script,
             tab,
             child,
-            _messages.GuiTabUpdateMessage("tab", "tabs", "Old", None),
+            _messages.GuiTabUpdateMessage("tab", "tabs", _messages.GuiTabProps("Old", None)),
             _messages.ServerPongMessage(1.0),
             _messages.ThemeConfigurationMessage("floating", "auto"),
             _messages.GuiFormSubmitMessage("form"),
@@ -299,7 +299,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
         ]
     )
     newest = [
-        _messages.GuiTabUpdateMessage("tab", "tabs", "New", None),
+        _messages.GuiTabUpdateMessage("tab", "tabs", _messages.GuiTabProps("New", None)),
         _messages.ServerPongMessage(2.0),
         _messages.ThemeConfigurationMessage("left", "dark"),
         _messages.GuiFormSubmitMessage("form"),
@@ -323,7 +323,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
                 _messages.GuiFolderMessage(
                     uuid="parent",
                     container_uuid="root",
-                    props=_messages.GuiFolderProps(0.0, "Parent", True, True),
+                    props=_messages.GuiFolderProps(0.0, "Parent", True, True, False),
                 ),
                 _text("child", "parent"),
                 _messages.GuiUpdateMessage("child", {"value": "updated"}),
@@ -336,24 +336,24 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
         ),
         pytest.param(
             [
-                _messages.GuiTabMessage("tab", "tabs", "Tab", None),
+                _messages.GuiTabMessage("tab", "tabs", _messages.GuiTabProps("Tab", None)),
                 _text("child", "tab"),
-                _messages.GuiTabUpdateMessage("tab", "tabs", "Renamed", None),
-                _messages.GuiTabMessage("other", "tabs", "Other", None),
+                _messages.GuiTabUpdateMessage(
+                    "tab", "tabs", _messages.GuiTabProps("Renamed", None)
+                ),
+                _messages.GuiTabMessage("other", "tabs", _messages.GuiTabProps("Other", None)),
             ],
             _messages.GuiRemoveMessage("tab", removed_uuids=("child",)),
-            [_messages.GuiTabMessage("other", "tabs", "Other", None)],
+            [_messages.GuiTabMessage("other", "tabs", _messages.GuiTabProps("Other", None))],
             id="tab",
         ),
         pytest.param(
             [
-                _messages.GuiTabMessage("outer", "group-a", "Outer", None),
-                _messages.GuiTabMessage("inner", "group-b", "Inner", None),
+                _messages.GuiTabMessage("outer", "group-a", _messages.GuiTabProps("Outer", None)),
+                _messages.GuiTabMessage("inner", "group-b", _messages.GuiTabProps("Inner", None)),
                 _text("child", "inner"),
             ],
-            _messages.GuiRemoveMessage(
-                "folder", removed_uuids=("child",), removed_tab_uuids=("inner", "outer")
-            ),
+            _messages.GuiRemoveMessage("folder", removed_uuids=("outer", "inner", "child")),
             [],
             id="nested-tabs",
         ),
@@ -405,17 +405,17 @@ def test_recreated_entity_replays_without_its_purged_state() -> None:
     group = _messages.GuiTabGroupMessage(
         uuid="tabs",
         container_uuid="root",
-        props=_messages.GuiTabGroupProps(_tabs=(), order=0.0, visible=True),
+        props=_messages.GuiTabGroupProps(order=0.0, visible=True),
     )
     assert buffer.push_many(
         [
             group,
-            _messages.GuiTabMessage("tab", "tabs", "Old", None),
+            _messages.GuiTabMessage("tab", "tabs", _messages.GuiTabProps("Old", None)),
             _text("child", "tab"),
             _messages.GuiRemoveMessage("tab", removed_uuids=("child",)),
         ]
     )
-    recreated = _messages.GuiTabMessage("tab", "tabs", "New", None)
+    recreated = _messages.GuiTabMessage("tab", "tabs", _messages.GuiTabProps("New", None))
     assert buffer.push(recreated)
     retained = _retained(buffer)
     assert retained[0] == group.encode()

@@ -97,12 +97,7 @@ function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
       onOpenChange={setOpen}
     >
       <form
-        // The actions sit a step further down than the fields sit from each
-        // other: they are what to do with the answer rather than another
-        // part of it, and the panel's own row gap reads as neither. The
-        // server keeps them last (see GuiFormHandle.__exit__), so the last
-        // child is who they are.
-        className="flex w-full min-w-0 flex-col gap-2 [&>:last-child]:mt-2"
+        className="flex w-full min-w-0 flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           guiContext.messageSender(
@@ -111,10 +106,31 @@ function PopoutForm({ uuid, props: { label } }: GuiFormMessage) {
           );
         }}
       >
-        {/* What makes Enter in a single-line text input submit the form:
-              implicit submission needs a submit button to activate. */}
-        <button type="submit" hidden tabIndex={-1} />
         <guiContext.GuiContainer containerUuid={uuid} unwrapped />
+        {/* A step further down than the fields sit from each other: these are
+            what to do with the answer rather than another part of it. Reset
+            and Submit are parted, being opposite moves, with the accent behind
+            Submit alone. Submit is the form's submit button, so it is also
+            what Enter in a single-line text input activates. */}
+        <div className="mt-2 flex w-full min-w-0 gap-1" data-leika-form-actions>
+          <Button
+            type="button"
+            variant="outline"
+            className="min-w-fit flex-1"
+            data-leika-button
+            onClick={() =>
+              guiContext.messageSender(
+                { type: "GuiFormResetMessage", uuid },
+                { coalesce: false },
+              )
+            }
+          >
+            Reset
+          </Button>
+          <Button type="submit" className="min-w-fit flex-1" data-leika-button>
+            Submit
+          </Button>
+        </div>
       </form>
     </GuiPopout>
   );

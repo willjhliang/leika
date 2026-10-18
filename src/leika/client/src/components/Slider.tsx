@@ -20,7 +20,7 @@ export default function SliderComponent({
     precision,
     step,
     show_value: showValue,
-    _marks: marks,
+    marks,
   },
 }: GuiSliderMessage) {
   const { setValue } = useGuiComponent();

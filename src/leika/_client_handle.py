@@ -14,7 +14,6 @@ from . import _messages
 from ._async_errors import print_async_errors
 from ._file_transfer import PREVIEW_MAX_BYTES, file_parts, format_bytes, validate_file_send
 from ._gui_api import GuiApi
-from ._notification_handle import NotificationHandle
 from ._transport._websocket import WebsockClientConnection
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 
@@ -179,7 +178,7 @@ class ClientHandle:
                     )
                 # Said rather than sent: the alternative is a tab that stops
                 # responding with nothing on screen to explain why.
-                self.add_notification(
+                self.gui.add_notification(
                     "Too large to preview",
                     f"{filename} is {format_bytes(rejected_size)}, over the"
                     f" {format_bytes(max_bytes)} preview limit.",
@@ -278,37 +277,3 @@ class ClientHandle:
             with self._transfer_lock:
                 del self._transfer_cancel_from_uuid[transfer_uuid]
         return None
-
-    def add_notification(
-        self,
-        title: str,
-        body: str = "",
-        *,
-        loading: bool = False,
-        with_close_button: bool = True,
-        auto_close_seconds: float | None = 5.0,
-    ) -> NotificationHandle:
-        """Add a notification to the client's interface.
-
-        This method creates a new notification that will be displayed at the
-        top left corner of the client's viewer. Notifications are useful for
-        providing alerts or status updates to users.
-
-        Args:
-            title: Title to display on the notification.
-            body: Message to display on the notification body.
-            loading: Whether the notification shows loading icon.
-            with_close_button: Whether the notification can be manually closed.
-            auto_close_seconds: Time before the notification automatically
-                closes; None if the notification does not close on its own.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        return self.gui.add_notification(
-            title,
-            body,
-            loading=loading,
-            with_close_button=with_close_button,
-            auto_close_seconds=auto_close_seconds,
-        )

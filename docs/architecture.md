@@ -25,12 +25,11 @@ transition has a clear home.
 
 | Responsibility | Python modules |
 | --- | --- |
-| Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
+| Workspace composition, client lifecycle, and broadcast operations | `_server.py` |
 | One browser's GUI, outgoing transfers, and transfer cancellation | `_client_handle.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
 | Renderer preparation shared by GUI controls and panes | `_image_encoding.py`, `_plotly.py`, `_markdown.py` |
-| Retained GUI resource measurement | `_gui_resources.py` |
 | Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
 | WebSocket lifecycle, dispatch, replay, and flow control | `_transport/_websocket.py`, `_transport/_message_buffer.py` |
 | HTTP request policy, password gate, routing, assets, and the Viser proxy | `_transport/_http_security.py`, `_transport/_auth.py`, `_transport/_http.py`, `_transport/_http_assets.py`, `_transport/_viser_proxy.py` |
@@ -38,10 +37,18 @@ transition has a clear home.
 
 `Server` composes the public APIs and shared resources. `ClientHandle` depends
 on the server only for its instance's services and type annotations; the server
-creates and retires clients. Renderer preparation and resource measurement do
-not depend on GUI handles or pane registries. Both kinds of surface call those
-shared helpers directly. A pane change queues its message before it commits the
+creates and retires clients. Renderer preparation does not depend on GUI
+handles or pane registries; both kinds of surface call those shared helpers
+directly. A pane or GUI change queues its message before it commits the
 handle's state, so a failed queue leaves the handle unchanged.
+
+Every GUI handle -- controls, containers, tabs, modals, commands and
+notifications -- shares one state record and one change path: the handle's
+validation normalizes a candidate state, one message is queued, and the state is
+committed. Programmatic value changes then run the input's callbacks on the
+event loop in the order the changes were made. Removal sends one message listing
+every descendant, so the browser needs no tree walk, and retires the subtree in
+Python. A removed handle keeps its last state for reading and refuses updates.
 
 `leika._transport` is private. `Server` alone owns connect and disconnect
 callbacks and shutdown; the transport runs one worker thread whose teardown
@@ -141,51 +148,29 @@ client advance independently. This keeps stale frames from building up on slow
 links at the cost of a round trip per batch. It acknowledges byte delivery, not
 rendering; connection keepalive and shutdown own timeouts.
 
-Tab groups use an explicit flat lifecycle. The group declaration is retained
-separately from stable tab create, update, and remove records, so every replay
-prefix is valid and recursive removal retires both a descriptor and its GUI
-subtree. This is an internal contract between a server and the client built
-from the same code.
+Tabs use an explicit flat lifecycle. A tab group's declaration is retained
+separately from each tab's create, update, and remove records, so every replay
+prefix is valid and tabs keep their order. This is an internal contract between
+a server and the client built from the same code.
 
-## Bounded Leika-owned state
+## Bounds on browser input
 
-Each `GuiApi` scope (`server.gui` or one `client.gui`) admits at most 4,096 live
-components, 1,024 commands, 32 modals, and 128 notifications. A GUI graph is at
-most 64 edges deep. One collection or tab group has at most 4,096 entries; one
-scope retains at most 16,384 collection entries and 16,384 tab descriptors in
-aggregate. Common renderer strings and collection entries are limited to
-16,384 UTF-16 code units, while one `GuiText` value is limited to 1,048,576.
-The scope-wide budgets are 16 Mi UTF-16 code units, 128 MiB of retained text
-and binary payload, and 64 Mi-pixels. Notifications additionally share a
-separate 2 Mi UTF-16 text ledger.
-
-The browser applies GUI, modal, command, and notification messages as they
-arrive, without limits of its own; it removes exactly the descendants a removal
-lists. Each handle retains at most 256 callbacks. Programmatic GUI
-callbacks queue at most 1,024 snapshots and 128 MiB before later callbacks are
-reported and declined.
-
-Across all GUI scopes on one server, retained GUI state is capped at 256 MiB
-and GUI rasters at 128 Mi-pixels, and `server.gui` rasters at 64 Mi-pixels.
-Pages, panes, and their content have no Leika-imposed limits.
-
-These are ownership limits for Leika's GUI, wire, and rendered state, not
-a bound on total Python-process memory. Registered callbacks and lazy file
-providers remain trusted caller-owned callables and may close over arbitrary
-state.
+Leika trusts its own server and the Python program using it, so GUI elements,
+pages, panes, and their content have no Leika-imposed limits. What a browser
+sends to Python is validated and bounded.
 
 Browser-to-server protocol messages are limited to 4 MiB, and each decoded
-message to 100,000 values, depth 64, and 4 MiB of strings and bytes. A
-server-to-browser window carries at most 128 messages and takes no more once
-its encoded messages pass 8 MiB. The browser opens the socket on the page's
+message to 100,000 values, depth 64, and 4 MiB of strings and bytes. Each
+browser value is checked against the control it targets, and a disabled,
+hidden, or read-only input takes no new value.
+
+In the other direction, a server-to-browser window carries at most 128 messages
+and takes no more once its encoded messages pass 8 MiB. The browser opens the socket on the page's
 main thread, decodes each frame as it arrives, and applies the queued messages
 once per animation frame (or on a short timer while the tab is hidden).
 
-Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
-The server's 256 MiB combined upload budget includes transfers in progress,
-transient conversion headroom, and retained `UploadedFile` values; explicit
-cancellation releases a transfer's reservation. The server admits at most 128
-active uploads per server instance.
+Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each,
+with one upload at a time per browser and upload button.
 
 Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
 share 128 MiB, beyond which the oldest registrations are evicted and their URLs
@@ -214,8 +199,6 @@ The final transfer remains the complete downloadable document. Reopened cached
 documents mount in batches of 96 blocks; following an internal link completes
 mounting before resolving its target. Markdown images load lazily.
 
-GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character).
-Public creation and update raise `ValueError` before publishing a larger source.
 The browser waits for the Plotly runtime the server sends and renders each
 figure as it arrives.
 

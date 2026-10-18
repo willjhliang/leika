@@ -81,7 +81,7 @@ def test_extreme_float16_image_values_saturate_without_overflow_warning() -> Non
 
 @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
 def test_float_normalization_preserves_values_and_caller_storage(dtype: Any) -> None:
-    from leika._assignable_props_api import colors_to_uint8
+    from leika._image_encoding import colors_to_uint8
 
     source = np.linspace(-0.5, 1.5, 120, dtype=dtype).reshape(5, 8, 3)
     before = source.copy()

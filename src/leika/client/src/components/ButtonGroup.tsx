@@ -31,7 +31,7 @@ import {
  */
 export default function ButtonGroupComponent({
   uuid,
-  props: { hint, label, disabled, options, color, _merge: merge },
+  props: { hint, label, disabled, options, color, merge },
 }: GuiButtonGroupMessage) {
   const { setValue } = useGuiComponent();
   const runs = runsOf(options, merge);

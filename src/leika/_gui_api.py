@@ -4,7 +4,6 @@ import builtins
 import contextlib
 import contextvars
 import dataclasses
-import inspect
 import os
 import threading
 import time
@@ -17,51 +16,27 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ContextManager,
     Iterable,
-    Protocol,
     Sequence,
     TypeVar,
     cast,
-    get_args,
     overload,
 )
 
 import numpy as np
-from typing_extensions import (
-    Literal,
-    LiteralString,
-    TypedDict,
-    assert_never,
-)
+from typing_extensions import Literal, LiteralString, assert_never
 
 from . import _messages
-from ._async_errors import (
-    print_async_errors,
-    print_async_exception,
-)
+from ._async_errors import print_async_errors, print_async_exception
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_handles import (
-    _GUI_AGGREGATE_COLLECTION_MAX,
-    _GUI_AGGREGATE_PAYLOAD_MAX_BYTES,
-    _GUI_AGGREGATE_PIXELS_MAX,
-    _GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS,
-    _GUI_COMMAND_MAX,
-    _GUI_FORM_ACTION_ORDER,
-    _GUI_MODAL_MAX,
-    _GUI_NOTIFICATION_MAX,
-    _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX,
-    _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES,
-    _GUI_TEXT_MAX_UTF16_CODE_UNITS,
     CommandEvent,
     CommandHandle,
-    DownloadContent,
+    FileContent,
     GuiButtonGroupHandle,
     GuiButtonHandle,
     GuiCheckboxHandle,
-    GuiChecklistHandle,
-    GuiContainer,
-    GuiContainerProtocol,
+    GuiColorHandle,
     GuiDividerHandle,
     GuiDownloadButtonHandle,
     GuiDropdownHandle,
@@ -70,82 +45,39 @@ from ._gui_handles import (
     GuiFormHandle,
     GuiHtmlHandle,
     GuiImageHandle,
+    GuiInputHandle,
     GuiListHandle,
     GuiModalHandle,
     GuiMultiSliderHandle,
     GuiNumberHandle,
     GuiPlaybackHandle,
     GuiPlotlyHandle,
-    GuiPopupHandle,
     GuiPreviewButtonHandle,
     GuiProgressBarHandle,
-    GuiRadioListHandle,
-    GuiRgbaHandle,
-    GuiRgbHandle,
     GuiSliderHandle,
     GuiTabGroupHandle,
-    GuiTabHandle,
     GuiTextHandle,
     GuiToggleGroupHandle,
-    GuiToggleHandle,
     GuiUploadButtonHandle,
-    GuiVector2Handle,
-    GuiVector3Handle,
+    GuiVectorHandle,
     GuiVideoControlsHandle,
     PlaybackEvent,
-    PreviewContent,
-    SupportsRemoveProtocol,
     UploadedFile,
-    _bounded_tuple,
-    _cast_vector,
-    _checklist_items,
-    _colors_to_int_tuple,
-    _CommandHandleState,
-    _discard_gui_subtree,
-    _gui_descendant_tab_uuids,
-    _gui_descendant_uuids,
-    _gui_text_source,
+    _file_content,
     _GuiFileButtonHandle,
     _GuiHandle,
     _GuiHandleState,
-    _GuiInputHandle,
     _make_uuid,
-    _radio_list_items,
-    _retire_gui_handle_without_queue_locked,
-    _string_options,
-    _tab_subtree_uuids,
-    _validate_collection_string,
-    _validate_gui_html_content,
-    _validate_slider_marks,
-    _validate_unicode_string,
-    install_container_add_methods,
-    not_container_scoped,
+    _options,
 )
-from ._gui_resources import _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
 from ._image_encoding import _validate_image_encoding_options, prepare_image
-from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
-from ._notification_handle import (
-    NotificationHandle,
-    _NotificationHandleState,
-    validate_auto_close_seconds,
-)
+from ._messages import ButtonColor, FileTransferPartAck
+from ._notification_handle import NotificationHandle
 from ._plotly import plotly_config, plotly_json, plotly_theme_templates
-from ._validation import (
-    utf16_code_unit_length,
-    utf16_code_unit_length_exceeds,
-    validate_renderer_string,
-)
-from ._validation import (
-    validate_finite_number as _validate_number,
-)
-from ._validation import (
-    validate_nonnegative_integer as _validate_nonnegative_integer,
-)
-from ._validation import (
-    validate_positive_number as _validate_positive_number,
-)
+from ._validation import validate_finite_number as _validate_number
+from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -154,16 +86,15 @@ if TYPE_CHECKING:
     from ._server import Server
     from ._transport._websocket import ClientId
 
-GuiInputPropsType = TypeVar("GuiInputPropsType", bound=GuiBaseProps)
 IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
-T = TypeVar("T")
+THandle = TypeVar("THandle", bound=_GuiHandle)
 
 _PreviewWorkKind = Literal["warm", "preview", "reload", "watch"]
 
 _FILE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
-"""Maximum contents retained for one upload-backed ``UploadedFile``."""
+"""Largest file a browser may upload."""
 
 _FILE_UPLOAD_PART_BYTES = 512 * 1024
 """Exact upload part size, except for the final part."""
@@ -171,11 +102,6 @@ _FILE_UPLOAD_PART_BYTES = 512 * 1024
 _PROTOCOL_IDENTIFIER_MAX_CHARS = 128
 _MIME_TYPE_MAX_CHARS = 255
 _PREVIEW_PENDING_PER_SOURCE_MAX = 32
-
-
-def _freeze_upload_content(content: bytearray) -> bytes:
-    """Convert a completed bounded upload builder to its immutable value."""
-    return bytes(content)
 
 
 def _valid_protocol_identifier(value: object) -> bool:
@@ -214,6 +140,16 @@ class _PreviewWorkState:
     worker: Future[Any] | None = None
 
 
+@dataclasses.dataclass
+class _Upload:
+    """One browser upload in progress."""
+
+    handle: GuiUploadButtonHandle
+    filename: str
+    size: int
+    content: bytearray = dataclasses.field(default_factory=bytearray)
+
+
 def _compute_step(x: float | None) -> float:
     """For number inputs: compute an increment size from some number.
 
@@ -225,180 +161,6 @@ def _compute_step(x: float | None) -> float:
         0.004 => 0.001
     """
     return 1.0 if x is None else 10.0 ** (-_compute_precision_digits(x))
-
-
-def _validate_button_color(color: object) -> ButtonColor:
-    """Reject anything but the two button roles at runtime, where the
-    ``Literal`` annotation alone would let ``"blue"`` through and quietly draw
-    the default. Shared by ``add_button`` and ``add_upload_button``."""
-    if type(color) is not str or color not in ("default", "inverse"):
-        raise ValueError(
-            f"Button color must be 'default' or 'inverse', not {color!r}. Buttons take"
-            " a role rather than a color; the accent itself is a viewer setting."
-        )
-    return cast(ButtonColor, color)
-
-
-def _validate_file_content(content: object, filename: str | None, factory: str) -> DownloadContent:
-    """Validate and detach a bounded synchronous source before publication."""
-    if filename is not None:
-        validate_file_display_name(filename)
-    if type(content) is bytes:
-        normalized: object = content
-    elif isinstance(content, Path):
-        normalized = Path(os.fspath(content))
-    elif callable(content):
-        call = getattr(content, "__call__", None)
-        if inspect.iscoroutinefunction(content) or inspect.iscoroutinefunction(call):
-            raise TypeError(
-                "content providers must be synchronous callables; async providers are not supported"
-            )
-        normalized = content
-    else:
-        raise TypeError(
-            "content= must be bytes, a Path, or a synchronous callable returning one of those"
-        )
-    if filename is None and type(normalized) is bytes:
-        raise ValueError(
-            f"filename= is required when the contents are bytes, which carry"
-            f" no name of their own. Passed to {factory}."
-        )
-    return cast(DownloadContent, normalized)
-
-
-def _initial_toggles(
-    options: tuple[str, ...],
-    initial_value: bool | str | Sequence[str] | None,
-    *,
-    multiple: bool,
-    required: bool,
-) -> tuple[str, ...]:
-    """Which options a row of toggles starts on, as a tuple in every case.
-
-    Accepts the shapes a caller reaches for -- nothing, one option's text, or
-    a sequence of them -- and rejects an option that is not in the row, which
-    would otherwise start a group in a state the user cannot click their way
-    back to. A required row left unset starts on its first option, since it is
-    not allowed to be empty and something has to be chosen.
-    """
-    if initial_value is None:
-        return (options[0],) if required else ()
-    if isinstance(initial_value, bool):
-        raise ValueError(
-            "A row of toggles starts on the options named, so initial_value= is"
-            f" an option or a sequence of them; got {initial_value!r}."
-        )
-    wanted = (
-        (initial_value,)
-        if isinstance(initial_value, str)
-        else _bounded_tuple(initial_value, "initial toggle value")
-    )
-    unknown = [option for option in wanted if option not in options]
-    if len(set(wanted)) != len(wanted):
-        raise ValueError("initial_value cannot repeat a toggle option.")
-    if len(unknown) > 0:
-        raise ValueError(f"initial_value={unknown!r} is not among the options {options!r}.")
-    if not multiple and len(wanted) > 1:
-        raise ValueError(
-            f"initial_value={wanted!r} turns on {len(wanted)} options, but this row"
-            " holds one at a time. Pass multiple=True to allow several."
-        )
-    if required and len(wanted) == 0:
-        raise ValueError(
-            "A required row cannot start empty: pass the option to start on, or"
-            " required=False to let the row hold nothing."
-        )
-    # Declaration order, not the order they were named: the value reads the
-    # same way the row does.
-    return tuple(option for option in options if option in wanted)
-
-
-def _button_colors(
-    count: int,
-    color: ButtonColor | Sequence[ButtonColor],
-    *,
-    noun: str = "button",
-) -> tuple[ButtonColor, ...]:
-    """One colorway per BUTTON, the way ``_merge_flags`` gives one per gap: a
-    single role answers for the whole row, a sequence one button at a time
-    (a main action with something quieter beside it)."""
-    if type(color) is str:
-        return (_validate_button_color(color),) * count
-    colors = _bounded_tuple(color, f"{noun} colors")
-    if len(colors) != count:
-        raise ValueError(
-            f"color= takes one role per {noun}: {count} for this row, but got"
-            f" {len(colors)}. Pass a single role to answer for every button at"
-            " once."
-        )
-    return tuple(_validate_button_color(one) for one in colors)
-
-
-def _merge_flags(count: int, merge: bool | Sequence[bool]) -> tuple[bool, ...]:
-    """One flag per GAP between buttons: True joins the pair, False parts them.
-
-    A single bool answers for every gap at once, which is the common case; a
-    sequence answers each in turn, so a row can join some pairs and part
-    others. Normalized here rather than in the client so the wire carries one
-    shape, and so a mismatched length is a Python error with a Python
-    traceback rather than a row that quietly renders wrong.
-    """
-    gaps = max(0, count - 1)
-    if isinstance(merge, bool):
-        return (merge,) * gaps
-    flags = _bounded_tuple(merge, "merge flags")
-    if any(type(flag) is not bool for flag in flags):
-        raise TypeError("merge= sequence entries must be bools.")
-    if len(flags) != gaps:
-        raise ValueError(
-            f"merge= takes one flag per gap between buttons: {gaps} for {count}"
-            f" button(s), but got {len(flags)}. Pass a single bool to answer for"
-            " every gap at once."
-        )
-    return flags
-
-
-def _build_slider_marks(
-    marks: Iterable[float | tuple[float, str]] | None,
-) -> tuple[GuiSliderMark, ...] | None:
-    """Normalize and bound public slider marks before message construction."""
-    if marks is None:
-        return None
-    materialized = _bounded_tuple(marks, "slider marks")
-    normalized: list[GuiSliderMark] = []
-    for item in materialized:
-        if isinstance(item, tuple):
-            if len(item) != 2:
-                raise ValueError("slider mark tuples must contain a value and label")
-            raw_value, label = item
-            if type(label) is not str:
-                raise TypeError("slider mark labels must be strings")
-            _validate_collection_string(label, "slider mark labels")
-        else:
-            raw_value, label = item, None
-        value = _validate_number(raw_value, "slider mark value")
-        normalized.append(GuiSliderMark(value=float(value), label=label))
-    return _validate_slider_marks(tuple(normalized))
-
-
-def _infer_vector_step(
-    value: tuple[float, ...],
-    min: tuple[float, ...] | None,
-    max: tuple[float, ...] | None,
-    step: float | None,
-) -> float:
-    """Pick a default step for a vector input from its value/min/max components
-    when the caller didn't pass one. Shared by add_vector2 and add_vector3 so
-    the inference can't drift between the two."""
-    if step is not None:
-        return step
-    possible_steps: list[float] = []
-    possible_steps.extend([_compute_step(x) for x in value])
-    if min is not None:
-        possible_steps.extend([_compute_step(x) for x in min])
-    if max is not None:
-        possible_steps.extend([_compute_step(x) for x in max])
-    return float(np.min(possible_steps))
 
 
 def _compute_precision_digits(x: float) -> int:
@@ -417,32 +179,23 @@ def _compute_precision_digits(x: float) -> int:
     return digits
 
 
-@dataclasses.dataclass
-class _RootGuiContainer:
-    _children: dict[str, SupportsRemoveProtocol]
+def _infer_vector_step(
+    value: Iterable[float],
+    min: Iterable[float] | None,
+    max: Iterable[float] | None,
+) -> float:
+    """Pick a default step for a vector input from its value/min/max components."""
+    components = [*value, *(min or ()), *(max or ())]
+    return float(np.min([_compute_step(float(x)) for x in components]))
 
 
-class _UploadAckRejected(Exception):
-    """Internal rollback signal when a final flow-control ACK cannot queue."""
-
-
-class _FileUploadState(TypedDict):
-    client_id: ClientId
-    source_component_uuid: str
-    filename: str
-    part_count: int
-    content: bytearray
-    next_part_index: int
-    total_bytes: int
-    transferred_bytes: int
-    reserved_bytes: int
-
-
-class GuiApi(GuiContainer):
+class GuiApi:
     """Interface for working with the 2D GUI in Leika.
 
     Used by both our global server object, for sharing the same GUI elements
-    with all clients, and by individual client handles."""
+    with all clients, and by individual client handles. Containers place the
+    elements created inside their ``with`` block into themselves.
+    """
 
     _container_stack: contextvars.ContextVar[tuple[str, ...]]
     """Containers the current execution context is inside, innermost last.
@@ -479,278 +232,178 @@ class GuiApi(GuiContainer):
         """Interface for sending and listening to messages."""
 
         self._terminal = False
-        self._live_component_count = 0
-        self._resource_from_gui_uuid: dict[str, _GuiResourceCost] = {}
-        self._retained_extra_bytes_from_gui_uuid: dict[str, int] = {}
-        self._reset_baseline_resource_from_gui_uuid: dict[str, _GuiResourceCost] = {}
-        self._resource_total = _GuiResourceCost()
-        self._container_depth_from_uuid: dict[str, int] = {"root": 0}
-        self._notification_handle_from_uuid: dict[str, NotificationHandle] = {}
-        self._notification_text_units_from_uuid: dict[str, int] = {}
-        self._notification_text_units = 0
-        self._is_server_scope = isinstance(owner, Server)
-        self._gui_input_handle_from_uuid: dict[str, _GuiInputHandle[Any]] = {}
-        self._playback_handle_from_uuid: dict[str, GuiPlaybackHandle] = {}
-        self._container_handle_from_uuid: dict[str, GuiContainerProtocol] = {
-            "root": _RootGuiContainer({})
-        }
-        self._modal_handle_from_uuid: dict[str, GuiModalHandle] = {}
-        self._command_handle_from_uuid: dict[str, CommandHandle] = {}
-        self._current_file_upload_states: dict[tuple[ClientId, str], _FileUploadState] = {}
-        self._retained_file_upload_bytes: dict[str, int] = {}
-        # Upload handlers read handle registries and commit values/resources, so
-        # this must remain the canonical GUI lock rather than an independent lock.
-        self._file_upload_lock = self._lock
+        self._handles: dict[str, _GuiHandle[Any]] = {}
+        """Every live handle in this scope, by UUID."""
+        self._root_children: dict[str, _GuiHandle[Any]] = {}
+        self._uploads: dict[tuple[ClientId, str], _Upload] = {}
         self._preview_work_from_key: dict[tuple[ClientId, str], _PreviewWorkState] = {}
         self._preview_work_lock = threading.RLock()
-        self._programmatic_callback_lock = threading.Lock()
-        self._programmatic_callback_queue: deque[
-            tuple[tuple[Callable[[Any], object], ...], object, int]
-        ] = deque()
-        self._programmatic_callback_retained_bytes = 0
-        self._programmatic_callback_scheduled = False
+        self._callback_queue: deque[tuple[tuple[Callable[[Any], object], ...], object]] = deque()
+        self._callback_draining = False
 
-        self._websock_interface.register_handler(
-            _messages.GuiUpdateMessage, self._handle_gui_updates
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiPlaybackCommandMessage, self._handle_playback_command
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiRefreshMessage, self._handle_gui_refresh
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiButtonHoldMessage, self._handle_gui_button_hold
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiPreviewOpenMessage, self._handle_gui_preview_open
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiPreviewReloadMessage, self._handle_gui_preview_reload
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiPreviewWatchMessage, self._handle_gui_preview_watch
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiFormSubmitMessage, self._handle_gui_form_submit
-        )
-        self._websock_interface.register_handler(
-            _messages.FileTransferStartUpload, self._handle_file_transfer_start
-        )
-        self._websock_interface.register_handler(
-            _messages.FileTransferPart,
-            self._handle_file_transfer_part,
-        )
-        self._websock_interface.register_handler(
-            _messages.FileTransferAbort,
-            self._handle_file_transfer_abort,
-        )
-        self._websock_interface.register_handler(
-            _messages.CommandTriggerMessage, self._handle_command_trigger
-        )
-        self._websock_interface.register_handler(
-            _messages.GuiCloseModalMessage, self._handle_gui_close_modal
-        )
+        register = self._websock_interface.register_handler
+        register(_messages.GuiUpdateMessage, self._handle_gui_updates)
+        register(_messages.GuiPlaybackCommandMessage, self._handle_playback_command)
+        register(_messages.GuiRefreshMessage, self._handle_gui_refresh)
+        register(_messages.GuiButtonHoldMessage, self._handle_gui_button_hold)
+        register(_messages.GuiPreviewOpenMessage, self._handle_gui_preview_open)
+        register(_messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm)
+        register(_messages.GuiPreviewReloadMessage, self._handle_gui_preview_reload)
+        register(_messages.GuiPreviewWatchMessage, self._handle_gui_preview_watch)
+        register(_messages.GuiFormSubmitMessage, self._handle_gui_form_submit)
+        register(_messages.GuiFormResetMessage, self._handle_gui_form_reset)
+        register(_messages.FileTransferStartUpload, self._handle_file_transfer_start)
+        register(_messages.FileTransferPart, self._handle_file_transfer_part)
+        register(_messages.FileTransferAbort, self._handle_file_transfer_abort)
+        register(_messages.CommandTriggerMessage, self._handle_command_trigger)
+        register(_messages.GuiCloseModalMessage, self._handle_gui_close_modal)
 
     def _check_active_locked(self) -> None:
         if self._terminal:
-            raise RuntimeError("This client-local GUI is no longer active.")
-
-    def _set_gui_resource_locked(
-        self,
-        uuid: str,
-        cost: _GuiResourceCost,
-    ) -> _GuiResourceCost:
-        old = self._resource_from_gui_uuid.get(uuid, _GuiResourceCost())
-        prospective = self._resource_total - old + cost
-        if prospective.collection_items > _GUI_AGGREGATE_COLLECTION_MAX:
             raise RuntimeError(
-                f"A GUI scope cannot retain more than "
-                f"{_GUI_AGGREGATE_COLLECTION_MAX} collection items."
+                "This GUI is no longer active: its client disconnected or the server stopped."
             )
-        if prospective.text_units > _GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS:
-            raise RuntimeError("A GUI scope exceeded its 16 Mi UTF-16 text budget.")
-        if prospective.payload_bytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("A GUI scope exceeded its 128 MiB retained payload budget.")
-        if prospective.decoded_pixels > _GUI_AGGREGATE_PIXELS_MAX:
-            raise RuntimeError("A GUI scope exceeded its 64 Mi-pixel decoded raster budget.")
-        self._server._replace_gui_resource_cost(
-            old,
-            cost,
-            page_global=self._is_server_scope,
-        )
-        self._resource_total = prospective
-        if cost == _GuiResourceCost():
-            self._resource_from_gui_uuid.pop(uuid, None)
-        else:
-            self._resource_from_gui_uuid[uuid] = cost
-        return old
 
-    @contextlib.contextmanager
-    def _gui_resource_transaction_locked(
+    def _add(
         self,
-        uuid: str,
-        value: object,
-        props: object,
+        handle_type: type[THandle],
+        props: Any,
+        value: Any = None,
         *,
-        decoded_pixels: int | None = None,
-        retained_extra_bytes: int | None = None,
-    ) -> Any:
-        self._check_active_locked()
-        if decoded_pixels is None:
-            decoded_pixels = self._resource_from_gui_uuid.get(
-                uuid, _GuiResourceCost()
-            ).decoded_pixels
-        if retained_extra_bytes is None:
-            retained_extra_bytes = self._retained_extra_bytes_from_gui_uuid.get(uuid, 0)
-        cost = _gui_resource_cost(
-            value,
-            props,
-            decoded_pixels=decoded_pixels,
-            retained_extra_bytes=retained_extra_bytes,
-        )
-        cost += self._reset_baseline_resource_from_gui_uuid.get(uuid, _GuiResourceCost())
-        old_extra = self._retained_extra_bytes_from_gui_uuid.get(uuid, 0)
-        old = self._set_gui_resource_locked(uuid, cost)
-        if retained_extra_bytes:
-            self._retained_extra_bytes_from_gui_uuid[uuid] = retained_extra_bytes
-        else:
-            self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
-        try:
-            yield
-        except BaseException:
-            self._set_gui_resource_locked(uuid, old)
-            if old_extra:
-                self._retained_extra_bytes_from_gui_uuid[uuid] = old_extra
-            else:
-                self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
-            raise
+        parent: str | None,
+        icon: IconName | None = None,
+        **attributes: Any,
+    ) -> THandle:
+        """Validate, register and publish a new handle inside ``parent``."""
+        if icon is not None:
+            props = dataclasses.replace(props, _icon_html=svg_from_icon(icon))
+        with self._lock:
+            self._check_active_locked()
+            handle = handle_type(_GuiHandleState(_make_uuid(), self, props, value, parent, icon))
+            for name, attribute in attributes.items():
+                object.__setattr__(handle, name, attribute)
+            impl = handle._impl
+            impl.props, impl.value = handle._validate(props, value)
+            if isinstance(handle, GuiInputHandle) and handle._is_field():
+                impl.initial_value = impl.value
+            impl.update_timestamp = time.time()
+            siblings = None if parent is None else self._children(parent)
+            container = self._handles.get(parent) if parent is not None else None
+            if isinstance(container, GuiFormHandle):
+                container._admit(handle)
+            self._websock_interface.queue_message_or_raise(handle._create_message())
+            self._handles[impl.uuid] = handle
+            if siblings is not None:
+                siblings[impl.uuid] = handle
+        return handle
 
-    def _release_gui_resource_locked(self, uuid: str) -> None:
-        self._set_gui_resource_locked(uuid, _GuiResourceCost())
-        self._retained_extra_bytes_from_gui_uuid.pop(uuid, None)
-        self._reset_baseline_resource_from_gui_uuid.pop(uuid, None)
-
-    def _container_depth_locked(self, container_uuid: str) -> int:
-        try:
-            return self._container_depth_from_uuid[container_uuid]
-        except KeyError as error:
-            raise RuntimeError("GUI parent container is no longer active") from error
-
-    @contextlib.contextmanager
-    def _notification_resource_transaction_locked(
+    def _add_input(
         self,
-        uuid: str,
-        props: _messages.NotificationProps,
-    ) -> Any:
-        old_units = self._notification_text_units_from_uuid.get(uuid, 0)
-        new_units = utf16_code_unit_length(props.title) + utf16_code_unit_length(props.body)
-        prospective = self._notification_text_units - old_units + new_units
-        if prospective > 2 * 1024 * 1024:
-            raise RuntimeError("A GUI scope exceeded its 2 Mi UTF-16 notification text budget.")
-        with self._gui_resource_transaction_locked(f"notification:{uuid}", None, props):
-            self._notification_text_units = prospective
-            self._notification_text_units_from_uuid[uuid] = new_units
-            try:
-                yield
-            except BaseException:
-                self._notification_text_units = (
-                    self._notification_text_units - new_units + old_units
-                )
-                if old_units:
-                    self._notification_text_units_from_uuid[uuid] = old_units
-                else:
-                    self._notification_text_units_from_uuid.pop(uuid, None)
-                raise
+        handle_type: type[THandle],
+        value: Any,
+        *,
+        label: str | None,
+        hint: str | None,
+        disabled: bool,
+        visible: bool,
+        order: float | None,
+        **props: Any,
+    ) -> THandle:
+        """Add an input whose props start with the fields every input shares."""
+        props_type = next(
+            base for base in handle_type.__mro__ if "__dataclass_fields__" in vars(base)
+        )
+        return self._add(
+            handle_type,
+            props_type(
+                order=self._apply_default_order(order),
+                label=label,
+                hint=hint,
+                disabled=disabled,
+                visible=visible,
+                **props,
+            ),
+            value,
+            parent=self._get_container_uuid(),
+        )
 
-    def _release_notification_resource_locked(self, uuid: str) -> None:
-        units = self._notification_text_units_from_uuid.pop(uuid, 0)
-        self._notification_text_units -= units
-        self._release_gui_resource_locked(f"notification:{uuid}")
+    def _children(self, container_uuid: str) -> dict[str, _GuiHandle[Any]]:
+        if container_uuid == "root":
+            return self._root_children
+        container = self._handles.get(container_uuid)
+        if container is None:
+            raise RuntimeError("GUI parent container has been removed.")
+        return container._impl.children
 
-    def _schedule_programmatic_callbacks(
+    def _unregister(self, handle: _GuiHandle[Any]) -> None:
+        """Forget a retired handle and the work it owns."""
+        impl = handle._impl
+        self._handles.pop(impl.uuid, None)
+        parent = impl.parent_container_id
+        if parent == "root":
+            self._root_children.pop(impl.uuid, None)
+        elif parent in self._handles:
+            self._handles[parent]._impl.children.pop(impl.uuid, None)
+        if isinstance(handle, GuiUploadButtonHandle):
+            self._discard_file_uploads(source_component_uuid=impl.uuid)
+        if isinstance(handle, GuiPreviewButtonHandle):
+            self._discard_preview_work(source_component_uuid=impl.uuid)
+
+    def _ancestor_form(self, container_uuid: str | None) -> GuiFormHandle | None:
+        """The form enclosing a container, through folders, tab groups and tabs."""
+        while container_uuid is not None and container_uuid != "root":
+            container = self._handles.get(container_uuid)
+            if container is None:
+                return None
+            if isinstance(container, GuiFormHandle):
+                return container
+            container_uuid = container._impl.parent_container_id
+        return None
+
+    def _schedule_callbacks(
         self,
         callbacks: tuple[Callable[[Any], object], ...],
         event: object,
     ) -> None:
-        """Queue a bounded callback snapshot without changing commit outcome."""
+        """Run callbacks for a committed programmatic change, in submission order."""
         if not callbacks:
             return
-        event_value = getattr(event, "value", None)
-        cost = _gui_resource_cost(event_value, None)
-        retained_bytes = 256 + cost.text_units * 2 + cost.payload_bytes + cost.collection_items * 64
-        with self._programmatic_callback_lock:
-            if (
-                len(self._programmatic_callback_queue) >= _GUI_PROGRAMMATIC_CALLBACK_BATCH_MAX
-                or self._programmatic_callback_retained_bytes + retained_bytes
-                > _GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES
-            ):
-                # State and wire publication already committed before callback
-                # dispatch. Report overload without making a successful assignment
-                # appear to have rolled back or retaining unbounded snapshots.
-                print_async_exception(
-                    RuntimeError("The programmatic GUI callback queue exceeded its safety limit.")
-                )
+        with self._lock:
+            self._callback_queue.append((callbacks, event))
+            if self._callback_draining:
                 return
-            self._programmatic_callback_queue.append((callbacks, event, retained_bytes))
-            self._programmatic_callback_retained_bytes += retained_bytes
-            if self._programmatic_callback_scheduled:
-                return
-            self._programmatic_callback_scheduled = True
-
-        def clear_queued_locked() -> None:
-            released = sum(item[2] for item in self._programmatic_callback_queue)
-            self._programmatic_callback_queue.clear()
-            self._programmatic_callback_retained_bytes -= released
-            if self._programmatic_callback_retained_bytes < 0:
-                raise RuntimeError("programmatic callback accounting underflow")
+            self._callback_draining = True
 
         def start() -> None:
-            task = self._event_loop.create_task(self._drain_programmatic_callbacks())
-            task.add_done_callback(print_async_errors)
+            self._event_loop.create_task(self._drain_callbacks()).add_done_callback(
+                print_async_errors
+            )
 
         try:
             self._event_loop.call_soon_threadsafe(start)
         except Exception as error:
-            with self._programmatic_callback_lock:
-                clear_queued_locked()
-                self._programmatic_callback_scheduled = False
+            # State and wire publication already committed; report the loss.
+            with self._lock:
+                self._callback_queue.clear()
+                self._callback_draining = False
             print_async_exception(error)
 
-    async def _drain_programmatic_callbacks(self) -> None:
+    async def _drain_callbacks(self) -> None:
         try:
             while True:
-                with self._programmatic_callback_lock:
-                    if not self._programmatic_callback_queue:
-                        self._programmatic_callback_scheduled = False
+                with self._lock:
+                    if not self._callback_queue:
                         return
-                    callbacks, event, retained_bytes = self._programmatic_callback_queue.popleft()
-                try:
-                    for callback in callbacks:
-                        await self._server._await_user_callback(callback, event)
-                finally:
-                    with self._programmatic_callback_lock:
-                        self._programmatic_callback_retained_bytes -= retained_bytes
-                        if self._programmatic_callback_retained_bytes < 0:
-                            raise RuntimeError("programmatic callback accounting underflow")
-        except BaseException:
-            with self._programmatic_callback_lock:
-                released = sum(item[2] for item in self._programmatic_callback_queue)
-                self._programmatic_callback_queue.clear()
-                self._programmatic_callback_retained_bytes -= released
-                self._programmatic_callback_scheduled = False
-            raise
+                    callbacks, event = self._callback_queue.popleft()
+                await self._run_callbacks(callbacks, event)
+        finally:
+            with self._lock:
+                self._callback_draining = False
 
-    @property
-    def _child_gui_api(self) -> GuiApi:
-        return self
-
-    @property
-    def _child_container_id(self) -> str:
-        return "root"
+    async def _run_callbacks(self, callbacks: Iterable[Callable[..., Any]], event: object) -> None:
+        """Run a callback snapshot in order, outside the lock; failures are reported."""
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
     def _apply_default_order(self, order: float | None) -> float:
         """Return a finite explicit order, or the next owner order."""
@@ -783,7 +436,7 @@ class GuiApi(GuiContainer):
         if not 1 <= len(message.request_id) <= 128:
             return
         with self._lock:
-            if message.uuid not in self._gui_input_handle_from_uuid:
+            if not isinstance(self._handles.get(message.uuid), GuiInputHandle):
                 return
         try:
             await self._handle_gui_updates(
@@ -805,71 +458,49 @@ class GuiApi(GuiContainer):
         *,
         preview_request: _messages.GuiPreviewOpenMessage | None = None,
     ) -> None:
-        """Handle one browser value update as a linearized state transition."""
+        """Apply one browser value, echo it to the other browsers, then run callbacks."""
         client = self._resolve_client(client_id)
-        if client is None or set(message.updates.keys()) != {"value"}:
+        if client is None or message.updates.keys() != {"value"}:
             return
-        raw_value = message.updates["value"]
-
         with self._lock:
-            handle = self._gui_input_handle_from_uuid.get(message.uuid)
-            if handle is None or handle._impl.removed:
+            handle = self._handles.get(message.uuid)
+            if not isinstance(handle, GuiInputHandle) or not handle._accepts_input():
                 return
-            props = handle._impl.props
-            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
-                return
-            handle_state = handle._impl
             try:
-                prop_value = handle._coerce_client_value(raw_value)
+                change = handle._prepare({"value": handle._client_value(message.updates["value"])})
             except (TypeError, ValueError, OverflowError):
                 return
-
-            try:
-                has_changed = handle_state.value != prop_value
-            except (TypeError, ValueError):
-                has_changed = True
-            if not handle_state.is_button and not has_changed:
+            file_button = isinstance(handle, _GuiFileButtonHandle)
+            if change is None or (file_button and handle._impl.props._busy):
                 return
+            # The source browser already shows its own edit.
+            handle._commit(change, exclude_client=client_id)
+            if file_button:
+                # Busy until the file is out, so one press sends one file.
+                handle._update({"_busy": True})
+            event = GuiEvent(client, client_id, handle, change.value)
+            callbacks = tuple(handle._impl.callbacks)
 
-            # Synchronize before publishing local state. A stopped/overloaded
-            # destination leaves state unchanged and no callback observes a
-            # value peers never received.
-            with self._gui_resource_transaction_locked(
-                handle_state.uuid, prop_value, handle_state.props
-            ):
-                if handle_state.sync_cb is not None:
-                    handle_state.sync_cb(client_id, {"value": prop_value})
-                if has_changed:
-                    handle_state.value = prop_value
-                handle_state.update_timestamp = time.time()
-            event = GuiEvent(client, client_id, handle)
-            callbacks = tuple(handle_state.update_cb)
-            is_preview = isinstance(handle, GuiPreviewButtonHandle)
-            is_file_button = isinstance(handle, _GuiFileButtonHandle)
-            if is_file_button and not handle._begin_file_press_locked():
-                return
-
-        if is_preview:
+        if isinstance(handle, GuiDownloadButtonHandle):
+            # The file is on its way before whatever else the press does.
+            callbacks = (handle._send, *callbacks)
+        if isinstance(handle, GuiPreviewButtonHandle):
+            preview = handle
             try:
                 accepted = self._queue_preview_work(
                     "preview",
                     client_id,
                     client,
-                    handle,
-                    lambda: (
-                        handle._open(event, preview_request)
-                        if preview_request is not None
-                        else handle._send(event)
-                    ),
+                    preview,
+                    lambda: preview._send(event, preview_request),
                 )
             except BaseException:
-                handle._finish_file_press()
+                preview._finish_press()
                 raise
             if not accepted:
-                handle._finish_file_press()
+                preview._finish_press()
         # User code never runs under the registry/state lock.
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_playback_command(
         self, client_id: ClientId, message: _messages.GuiPlaybackCommandMessage
@@ -878,10 +509,14 @@ class GuiApi(GuiContainer):
         if client is None:
             return
         with self._lock:
-            handle = self._playback_handle_from_uuid.get(message.uuid)
-            if handle is None or handle._impl.removed or handle.disabled or not handle.visible:
-                return
-            if handle.duration == 0:
+            handle = self._handles.get(message.uuid)
+            if (
+                not isinstance(handle, GuiPlaybackHandle)
+                or handle._impl.removed
+                or handle.disabled
+                or not handle.visible
+                or handle.duration == 0
+            ):
                 return
             try:
                 handle._command(message.action, message.value)
@@ -895,9 +530,8 @@ class GuiApi(GuiContainer):
                 message.value if message.action in ("seek", "step", "speed") else None,
                 handle.state,
             )
-            callbacks = tuple(handle._impl.update_cb)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+            callbacks = tuple(handle._impl.callbacks)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_gui_button_hold(
         self, client_id: ClientId, message: _messages.GuiButtonHoldMessage
@@ -907,40 +541,28 @@ class GuiApi(GuiContainer):
         if client is None:
             return
         with self._lock:
-            handle = self._gui_input_handle_from_uuid.get(message.uuid)
-            if not isinstance(handle, GuiButtonHandle) or handle._impl.removed:
+            handle = self._handles.get(message.uuid)
+            if not isinstance(handle, GuiButtonHandle) or not handle._accepts_input():
                 return
-            props = handle._impl.props
-            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
-                return
-            callbacks = cast(
-                tuple[Callable[[GuiEvent[Any]], object], ...],
-                tuple(handle._hold_cbs_from_freq.get(message.frequency, ())),
-            )
-            if not callbacks:
-                return
-            event = GuiEvent(client, client_id, handle)
-
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+            callbacks = tuple(handle._hold_callbacks.get(message.frequency, ()))
+            event = GuiEvent(client, client_id, handle, handle._impl.value)
+        await self._run_callbacks(callbacks, event)
 
     def _preview_button_for(
         self, uuid: str, client_id: ClientId
     ) -> tuple[GuiPreviewButtonHandle, ClientHandle] | None:
         """The button a preview message names, and the client that sent it.
 
-        None for every mismatch there is -- a stale uuid, a button that is not
-        a preview button, a client gone between queueing and dispatch -- so
-        that each of these messages can be a quiet return. All three are the
-        browser asking on its own account about a file it was already sent;
-        none of them is a press that a caller is waiting on, so there is
-        nobody an error would reach.
+        None for every mismatch -- a stale uuid, another kind of button, a
+        client gone between queueing and dispatch -- so each preview message
+        can be a quiet return: the browser asks on its own account about a file
+        it was already sent, and nobody is waiting on an error.
         """
         client = self._resolve_client(client_id)
         if client is None:
             return None
         with self._lock:
-            handle = self._gui_input_handle_from_uuid.get(uuid)
+            handle = self._handles.get(uuid)
             if not isinstance(handle, GuiPreviewButtonHandle) or handle._impl.removed:
                 return None
             return handle, client
@@ -969,15 +591,10 @@ class GuiApi(GuiContainer):
         key = (client_id, handle._impl.uuid)
 
         with self._preview_work_lock:
-            state = self._preview_work_from_key.get(key)
-            if state is None:
-                state = _PreviewWorkState()
-                self._preview_work_from_key[key] = state
-
+            state = self._preview_work_from_key.setdefault(key, _PreviewWorkState())
             has_work = state.active_kind is not None or bool(state.pending)
             if kind in ("warm", "watch") and has_work:
                 return False
-
             if kind in ("preview", "reload"):
                 state.pending = deque(
                     queued for queued in state.pending if queued.kind not in ("warm", "watch")
@@ -985,26 +602,17 @@ class GuiApi(GuiContainer):
             if len(state.pending) >= _PREVIEW_PENDING_PER_SOURCE_MAX:
                 return False
             state.pending.append(item)
-
             if state.worker is not None:
                 return True
             try:
-                state.worker = self._thread_executor.submit(
-                    self._run_preview_work,
-                    key,
-                    state,
-                )
+                state.worker = self._thread_executor.submit(self._run_preview_work, key, state)
             except BaseException:
                 self._preview_work_from_key.pop(key, None)
                 raise
             state.worker.add_done_callback(print_async_errors)
             return True
 
-    def _run_preview_work(
-        self,
-        key: tuple[ClientId, str],
-        state: _PreviewWorkState,
-    ) -> None:
+    def _run_preview_work(self, key: tuple[ClientId, str], state: _PreviewWorkState) -> None:
         """Drain one preview FIFO. Called by exactly one pool worker."""
         while True:
             with self._preview_work_lock:
@@ -1026,9 +634,7 @@ class GuiApi(GuiContainer):
                 ):
                     item.run()
             except BaseException as error:
-                # Each operation used to own an executor future, where one
-                # failure was reported without preventing later submissions.
-                # Preserve that isolation inside the serialized worker.
+                # One failure is reported without preventing later work.
                 print_async_exception(error)
                 if item.kind == "preview":
                     # The click already opened a local loading popup. A
@@ -1037,13 +643,13 @@ class GuiApi(GuiContainer):
                         item.client._websock_connection.queue_message(
                             _messages.GuiPreviewCancelMessage(item.handle._impl.uuid)
                         )
-                        item.client.add_notification(
+                        item.client.gui.add_notification(
                             "Could not preview file",
                             "The file could not be prepared. Try again after checking its source.",
                         )
             finally:
                 if item.kind == "preview":
-                    item.handle._finish_file_press()
+                    item.handle._finish_press()
                 with self._preview_work_lock:
                     if self._preview_work_from_key.get(key) is state:
                         state.active_kind = None
@@ -1056,7 +662,7 @@ class GuiApi(GuiContainer):
     ) -> None:
         """Drop queued preview work for a disconnected client or removed source."""
         workers: list[Future[Any]] = []
-        discarded_preview_handles: list[GuiPreviewButtonHandle] = []
+        discarded_presses: list[GuiPreviewButtonHandle] = []
         with self._preview_work_lock:
             stale = [
                 key
@@ -1066,7 +672,7 @@ class GuiApi(GuiContainer):
             ]
             for key in stale:
                 state = self._preview_work_from_key.pop(key)
-                discarded_preview_handles.extend(
+                discarded_presses.extend(
                     item.handle for item in state.pending if item.kind == "preview"
                 )
                 state.pending.clear()
@@ -1078,13 +684,10 @@ class GuiApi(GuiContainer):
         # the missing state above makes it stop before the next queued item.
         for worker in workers:
             worker.cancel()
-
-        # A preview press acquires the file-button lease before it enters this
-        # queue. Pending items that are discarded never reach the worker's
-        # finally block, so release their leases explicitly. Do this outside
-        # the preview lock because release takes the canonical GUI lock.
-        for handle in discarded_preview_handles:
-            handle._finish_file_press()
+        # Discarded presses never reach the worker's release, so release them
+        # here, outside the preview lock, since release takes the GUI lock.
+        for handle in discarded_presses:
+            handle._finish_press()
 
     async def _handle_gui_preview_open(
         self, client_id: ClientId, message: _messages.GuiPreviewOpenMessage
@@ -1101,111 +704,81 @@ class GuiApi(GuiContainer):
     async def _handle_gui_preview_warm(
         self, client_id: ClientId, message: _messages.GuiPreviewWarmMessage
     ) -> None:
-        """A preview button has scrolled into view; start its press's transfer.
-
-        Advisory: the press, if one comes, is unaffected either way -- it
-        always sends fresh.
-        """
+        """A preview button has scrolled into view; start its press's transfer."""
         found = self._preview_button_for(message.uuid, client_id)
         if found is None:
             return
         handle, client = found
-        props = handle._impl.props
-        if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
-            return
-        self._queue_preview_work(
-            "warm",
-            client_id,
-            client,
-            handle,
-            lambda: handle._warm(client),
-        )
+        if handle._accepts_input():
+            self._queue_preview_work(
+                "warm", client_id, client, handle, lambda: handle._warm(client)
+            )
 
     async def _handle_gui_preview_reload(
         self, client_id: ClientId, message: _messages.GuiPreviewReloadMessage
     ) -> None:
         """A reader has asked an open preview for the file again.
 
-        Off the thread pool like a press, and for the same reason: resolving
-        the contents may run the caller's function, or read a large file off
-        disk, and neither belongs on the event loop.
+        Off the event loop, like a press: resolving the contents may run the
+        caller's function or read a large file.
         """
         found = self._preview_button_for(message.uuid, client_id)
         if found is None:
             return
         handle, client = found
-        event = GuiEvent(client, client_id, handle)
-        self._queue_preview_work(
-            "reload",
-            client_id,
-            client,
-            handle,
-            lambda: handle._reload(event),
-        )
+        event = GuiEvent(client, client_id, handle, handle._impl.value)
+        self._queue_preview_work("reload", client_id, client, handle, lambda: handle._reload(event))
 
     async def _handle_gui_preview_watch(
         self, client_id: ClientId, message: _messages.GuiPreviewWatchMessage
     ) -> None:
-        """An open preview is asking whether its file has moved on.
-
-        Arrives on a timer for as long as a dialog is open, so the work it
-        does when the answer is no has to be nothing much: one `stat`, off the
-        event loop, and a return.
-        """
+        """An open preview is asking whether its file has moved on: one `stat`,
+        off the event loop, and usually a return."""
         found = self._preview_button_for(message.uuid, client_id)
         if found is None:
             return
         handle, client = found
         version = message.version
         self._queue_preview_work(
-            "watch",
-            client_id,
-            client,
-            handle,
-            lambda: handle._watch(client, version),
+            "watch", client_id, client, handle, lambda: handle._watch(client, version)
         )
+
+    def _form_for(
+        self, client_id: ClientId, uuid: str
+    ) -> tuple[GuiFormHandle, ClientHandle] | None:
+        client = self._resolve_client(client_id)
+        with self._lock:
+            form = self._handles.get(uuid)
+            if client is None or not isinstance(form, GuiFormHandle) or form._impl.removed:
+                return None
+            return form, client
 
     async def _handle_gui_form_submit(
         self, client_id: ClientId, message: _messages.GuiFormSubmitMessage
     ) -> None:
-        """Publish a browser form submit, then run a stable callback snapshot."""
-        client = self._resolve_client(client_id)
-        if client is None:
+        """Publish a browser form submit, then run the form's callbacks."""
+        found = self._form_for(client_id, message.uuid)
+        if found is None:
             return
-        with self._lock:
-            handle = self._container_handle_from_uuid.get(message.uuid)
-            if not isinstance(handle, GuiFormHandle) or handle._impl.removed:
-                return
-            # Broadcast before entering user code so every client closes the
-            # form even if an async submit callback raises.
-            self._websock_interface.queue_message_or_raise(
-                _messages.GuiFormSubmitMessage(uuid=message.uuid)
-            )
-            callbacks = tuple(handle._submit_cb)
-            event = GuiEvent(client, client_id, handle)
+        form, client = found
+        await self._run_callbacks(form._submit(), GuiEvent(client, client_id, form))
 
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+    async def _handle_gui_form_reset(
+        self, client_id: ClientId, message: _messages.GuiFormResetMessage
+    ) -> None:
+        found = self._form_for(client_id, message.uuid)
+        # Only a visible regular form draws a Reset.
+        if found is not None and found[0].visible and not found[0].mini:
+            found[0].reset_form()
 
-    def _queue_upload_message(self, client_id: ClientId, message: _messages.Message) -> bool:
+    def _queue_to_client(self, client_id: ClientId, message: _messages.Message) -> bool:
         """Send upload flow control only to its originating browser."""
         client = self._resolve_client(client_id)
         return client is not None and client._websock_connection.queue_message(message) is not False
 
-    def _drop_file_upload_locked(self, key: tuple[ClientId, str]) -> _FileUploadState | None:
-        """Drop one transfer and release its exact aggregate reservation."""
-        state = self._current_file_upload_states.pop(key, None)
-        if state is not None:
-            self._server._release_file_upload(state["reserved_bytes"])
-        return state
-
-    def _queue_upload_abort(self, client_id: ClientId, transfer_uuid: str, reason: str) -> None:
-        self._queue_upload_message(
-            client_id,
-            _messages.FileTransferAbort(
-                transfer_uuid=transfer_uuid,
-                reason=reason[:160],
-            ),
+    def _abort_upload(self, client_id: ClientId, transfer_uuid: str, reason: str) -> None:
+        self._queue_to_client(
+            client_id, _messages.FileTransferAbort(transfer_uuid=transfer_uuid, reason=reason)
         )
 
     def _handle_file_transfer_start(
@@ -1214,301 +787,105 @@ class GuiApi(GuiContainer):
         transfer_uuid = message.transfer_uuid
         if not _valid_protocol_identifier(transfer_uuid):
             # There is no safe identifier with which to correlate an abort.
-            return
-        source_component_uuid = message.source_component_uuid
-        if not _valid_protocol_identifier(source_component_uuid):
-            self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload metadata.")
-            return
-
-        metadata_valid = (
-            type(message.part_count) is int
-            and type(message.size_bytes) is int
-            and message.part_count >= 0
-            and message.size_bytes >= 0
-            and message.part_count
-            == (message.size_bytes + _FILE_UPLOAD_PART_BYTES - 1) // _FILE_UPLOAD_PART_BYTES
-            and _valid_mime_type(message.mime_type)
-        )
-        try:
-            validate_file_display_name(message.filename)
-        except (TypeError, ValueError):
-            metadata_valid = False
-        if not metadata_valid:
-            self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload metadata.")
-            return
-
-        key = (client_id, transfer_uuid)
-        completion = None
-        with self._file_upload_lock:
-            handle = self._gui_input_handle_from_uuid.get(source_component_uuid)
+            return None
+        with self._lock:
+            handle = self._handles.get(message.source_component_uuid)
             # Incoming messages are dispatched to both global and client-local
             # GUI APIs. Only the API that owns this component may respond.
             if not isinstance(handle, GuiUploadButtonHandle):
-                return
-            if handle._impl.removed:
-                self._queue_upload_abort(client_id, transfer_uuid, "Upload target removed.")
-                return
-            props = handle._impl.props
-            if isinstance(props, GuiBaseProps) and (props.disabled or not props.visible):
-                self._queue_upload_abort(client_id, transfer_uuid, "Upload target unavailable.")
-                return
-            if any(
-                state["client_id"] == client_id
-                and state["source_component_uuid"] == source_component_uuid
-                for state in self._current_file_upload_states.values()
+                return None
+            try:
+                validate_file_display_name(message.filename)
+                metadata_valid = (
+                    message.size_bytes >= 0
+                    and message.part_count == -(-message.size_bytes // _FILE_UPLOAD_PART_BYTES)
+                    and _valid_mime_type(message.mime_type)
+                )
+            except (TypeError, ValueError):
+                metadata_valid = False
+            if not metadata_valid:
+                reason = "Invalid upload metadata."
+            elif not handle._accepts_input():
+                reason = "Upload target unavailable."
+            elif message.size_bytes > _FILE_UPLOAD_MAX_BYTES:
+                reason = "Upload exceeds the 64 MiB limit."
+            elif (client_id, transfer_uuid) in self._uploads or any(
+                key[0] == client_id and upload.handle is handle
+                for key, upload in self._uploads.items()
             ):
-                self._queue_upload_abort(
-                    client_id, transfer_uuid, "An upload is already active for this control."
-                )
-                return
-            if key in self._current_file_upload_states:
-                self._queue_upload_abort(client_id, transfer_uuid, "Duplicate upload transfer.")
-                return
-            if message.size_bytes > _FILE_UPLOAD_MAX_BYTES:
-                self._queue_upload_abort(
-                    client_id, transfer_uuid, "Upload exceeds the 64 MiB limit."
-                )
-                return
-            if not self._server._reserve_file_upload(message.size_bytes):
-                self._queue_upload_abort(
-                    client_id, transfer_uuid, "Server upload capacity is full."
-                )
-                return
-
-            self._current_file_upload_states[key] = {
-                "client_id": client_id,
-                "source_component_uuid": source_component_uuid,
-                "filename": message.filename,
-                "part_count": message.part_count,
-                "content": bytearray(),
-                "next_part_index": 0,
-                "total_bytes": message.size_bytes,
-                "transferred_bytes": 0,
-                "reserved_bytes": message.size_bytes,
-            }
-            prepared_completion = None
-            if message.part_count == 0:
-                try:
-                    prepared_completion = self._prepare_file_upload_completion_locked(key)
-                except MemoryError:
-                    self._drop_file_upload_locked(key)
-                    self._queue_upload_abort(
-                        client_id, transfer_uuid, "Server could not store upload."
-                    )
-                    return
-            completion = self._admit_upload_ack_locked(
-                key,
-                FileTransferPartAck(
-                    source_component_uuid=source_component_uuid,
-                    transfer_uuid=transfer_uuid,
-                    transferred_bytes=0,
-                    total_bytes=message.size_bytes,
-                ),
-                prepared_completion,
-            )
-
-        if completion is not None and completion[3]:
-            return self._dispatch_file_upload_completion(completion)
-        return None
-
-    def _prepare_file_upload_completion_locked(
-        self,
-        key: tuple[ClientId, str],
-    ) -> (
-        tuple[
-            GuiUploadButtonHandle,
-            UploadedFile,
-            tuple[Callable[..., Any], ...],
-        ]
-        | None
-    ):
-        """Freeze a completed upload without committing any owner state."""
-        state = self._current_file_upload_states.get(key)
-        if state is None:
+                reason = "An upload is already active for this control."
+            else:
+                upload = _Upload(handle, message.filename, message.size_bytes)
+                self._uploads[(client_id, transfer_uuid)] = upload
+                return self._acknowledge_upload(client_id, transfer_uuid, upload)
+            self._abort_upload(client_id, transfer_uuid, reason)
             return None
-        handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
-        if not isinstance(handle, GuiUploadButtonHandle) or handle._impl.removed:
-            self._drop_file_upload_locked(key)
-            return None
-        content = _freeze_upload_content(state["content"])
-        value = UploadedFile(name=state["filename"], content=content)
-        return handle, value, tuple(handle._impl.update_cb)
-
-    def _commit_file_upload_completion_locked(
-        self,
-        key: tuple[ClientId, str],
-        prepared: tuple[
-            GuiUploadButtonHandle,
-            UploadedFile,
-            tuple[Callable[..., Any], ...],
-        ],
-    ) -> tuple[
-        ClientId,
-        GuiUploadButtonHandle,
-        UploadedFile,
-        tuple[Callable[..., Any], ...],
-    ]:
-        """Commit a prepared upload only after its final ACK is admitted."""
-        state = self._current_file_upload_states[key]
-        handle, value, callbacks = prepared
-        source_uuid = state["source_component_uuid"]
-        replaced_bytes = self._retained_file_upload_bytes.get(source_uuid, 0)
-        self._server._complete_file_upload(state["reserved_bytes"], replaced_bytes)
-        self._current_file_upload_states.pop(key)
-        self._retained_file_upload_bytes[source_uuid] = len(value.content)
-        handle._impl.value = value
-        handle._impl.update_timestamp = time.time()
-        return state["client_id"], handle, value, callbacks
-
-    def _admit_upload_ack_locked(
-        self,
-        key: tuple[ClientId, str],
-        ack: FileTransferPartAck,
-        prepared: tuple[
-            GuiUploadButtonHandle,
-            UploadedFile,
-            tuple[Callable[..., Any], ...],
-        ]
-        | None,
-    ) -> (
-        tuple[
-            ClientId,
-            GuiUploadButtonHandle,
-            UploadedFile,
-            tuple[Callable[..., Any], ...],
-        ]
-        | None
-    ):
-        """Reserve final owner state before ACK, then commit without a gap."""
-        if prepared is None:
-            if not self._queue_upload_message(key[0], ack):
-                self._drop_file_upload_locked(key)
-            return None
-        handle, value, _ = prepared
-        try:
-            with self._gui_resource_transaction_locked(
-                handle._impl.uuid, value, handle._impl.props
-            ):
-                if not self._queue_upload_message(key[0], ack):
-                    raise _UploadAckRejected
-                return self._commit_file_upload_completion_locked(key, prepared)
-        except _UploadAckRejected:
-            self._drop_file_upload_locked(key)
-            return None
-        except (ValueError, RuntimeError):
-            self._drop_file_upload_locked(key)
-            self._queue_upload_abort(key[0], key[1], "Server upload storage capacity is full.")
-            return None
-
-    async def _dispatch_file_upload_completion(
-        self,
-        completion: tuple[
-            ClientId,
-            GuiUploadButtonHandle,
-            UploadedFile,
-            tuple[Callable[..., Any], ...],
-        ],
-    ) -> None:
-        """Run completion callbacks without holding the upload-state lock."""
-        client_id, handle, value, callbacks = completion
-        client = self._resolve_client(client_id)
-        if client is None:
-            return
-        for cb in callbacks:
-            await self._server._await_user_callback(cb, GuiEvent(client, client_id, handle, value))
 
     def _handle_file_transfer_part(
         self, client_id: ClientId, message: _messages.FileTransferPart
     ) -> Coroutine[Any, Any, None] | None:
-        transfer_uuid = message.transfer_uuid
-        if not _valid_protocol_identifier(transfer_uuid):
+        key = (client_id, message.transfer_uuid)
+        with self._lock:
+            upload = self._uploads.get(key)
+            if upload is None:
+                return None
+            received = len(upload.content)
+            if not (
+                message.source_component_uuid == upload.handle.id
+                and message.part_index == received // _FILE_UPLOAD_PART_BYTES
+                and isinstance(message.content, bytes)
+                and len(message.content) == min(_FILE_UPLOAD_PART_BYTES, upload.size - received) > 0
+            ):
+                del self._uploads[key]
+                self._abort_upload(client_id, message.transfer_uuid, "Invalid upload part.")
+                return None
+            upload.content.extend(message.content)
+            return self._acknowledge_upload(client_id, message.transfer_uuid, upload)
+
+    def _acknowledge_upload(
+        self, client_id: ClientId, transfer_uuid: str, upload: _Upload
+    ) -> Coroutine[Any, Any, None] | None:
+        """Acknowledge an upload's progress, committing its value once complete."""
+        done = len(upload.content) == upload.size
+        acknowledged = self._queue_to_client(
+            client_id,
+            FileTransferPartAck(
+                source_component_uuid=upload.handle.id,
+                transfer_uuid=transfer_uuid,
+                transferred_bytes=len(upload.content),
+                total_bytes=upload.size,
+            ),
+        )
+        if done or not acknowledged:
+            self._uploads.pop((client_id, transfer_uuid), None)
+        if not done or not acknowledged:
+            return None
+        handle = upload.handle
+        value = UploadedFile(upload.filename, bytes(upload.content))
+        handle._impl.value = value
+        handle._impl.update_timestamp = time.time()
+        callbacks = tuple(handle._impl.callbacks)
+        return self._run_upload_callbacks(client_id, handle, value, callbacks)
+
+    async def _run_upload_callbacks(
+        self,
+        client_id: ClientId,
+        handle: GuiUploadButtonHandle,
+        value: UploadedFile,
+        callbacks: tuple[Callable[..., Any], ...],
+    ) -> None:
+        client = self._resolve_client(client_id)
+        if client is None:
             return
-        key = (client_id, transfer_uuid)
-        completion = None
-        with self._file_upload_lock:
-            state = self._current_file_upload_states.get(key)
-            if state is None:
-                return
-
-            content = message.content
-            envelope_valid = (
-                _valid_protocol_identifier(message.source_component_uuid)
-                and type(message.part_index) is int
-                and isinstance(content, bytes)
-            )
-            if not envelope_valid:
-                self._drop_file_upload_locked(key)
-                self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload part.")
-                return
-            content = cast(bytes, content)
-
-            handle = self._gui_input_handle_from_uuid.get(state["source_component_uuid"])
-            expected_size = min(
-                _FILE_UPLOAD_PART_BYTES,
-                state["total_bytes"] - state["transferred_bytes"],
-            )
-            valid_part = (
-                message.source_component_uuid == state["source_component_uuid"]
-                and isinstance(handle, GuiUploadButtonHandle)
-                and not handle._impl.removed
-                and message.part_index == state["next_part_index"]
-                and len(content) == expected_size
-                and expected_size > 0
-            )
-            transferred_bytes = state["transferred_bytes"] + len(content)
-            next_part_index = state["next_part_index"] + 1
-            parts_remaining = state["part_count"] - next_part_index
-            valid_part = (
-                valid_part
-                and parts_remaining >= 0
-                and (parts_remaining == 0) == (transferred_bytes == state["total_bytes"])
-            )
-            if not valid_part:
-                self._drop_file_upload_locked(key)
-                self._queue_upload_abort(client_id, transfer_uuid, "Invalid upload part.")
-                return
-
-            try:
-                state["content"].extend(content)
-            except MemoryError:
-                self._drop_file_upload_locked(key)
-                self._queue_upload_abort(client_id, transfer_uuid, "Server could not store upload.")
-                return
-            state["transferred_bytes"] = transferred_bytes
-            state["next_part_index"] = next_part_index
-            prepared_completion = None
-            if parts_remaining == 0:
-                try:
-                    prepared_completion = self._prepare_file_upload_completion_locked(key)
-                except MemoryError:
-                    self._drop_file_upload_locked(key)
-                    self._queue_upload_abort(
-                        client_id, transfer_uuid, "Server could not store upload."
-                    )
-                    return
-            completion = self._admit_upload_ack_locked(
-                key,
-                FileTransferPartAck(
-                    source_component_uuid=state["source_component_uuid"],
-                    transfer_uuid=transfer_uuid,
-                    transferred_bytes=transferred_bytes,
-                    total_bytes=state["total_bytes"],
-                ),
-                prepared_completion,
-            )
-
-        if completion is not None and completion[3]:
-            return self._dispatch_file_upload_completion(completion)
-        return None
+        event = GuiEvent(client, client_id, handle, value)
+        await self._run_callbacks(callbacks, event)
 
     def _handle_file_transfer_abort(
         self, client_id: ClientId, message: _messages.FileTransferAbort
     ) -> None:
         """Release a browser-cancelled or timed-out upload."""
-        if not _valid_protocol_identifier(message.transfer_uuid):
-            return
-        with self._file_upload_lock:
-            self._drop_file_upload_locked((client_id, message.transfer_uuid))
+        with self._lock:
+            self._uploads.pop((client_id, message.transfer_uuid), None)
 
     def _discard_file_uploads(
         self,
@@ -1517,97 +894,46 @@ class GuiApi(GuiContainer):
         source_component_uuid: str | None = None,
     ) -> None:
         """Discard incomplete uploads for a disconnected client or removed button."""
-        with self._file_upload_lock:
-            stale = [
-                key
-                for key, state in self._current_file_upload_states.items()
-                if (client_id is None or state["client_id"] == client_id)
-                and (
-                    source_component_uuid is None
-                    or state["source_component_uuid"] == source_component_uuid
-                )
-            ]
-            for key in stale:
-                self._drop_file_upload_locked(key)
-            if source_component_uuid is not None:
-                retained = self._retained_file_upload_bytes.pop(source_component_uuid, 0)
-                if retained:
-                    self._server._release_retained_file_upload(retained)
+        with self._lock:
+            for key, upload in tuple(self._uploads.items()):
+                if (client_id is None or key[0] == client_id) and (
+                    source_component_uuid is None or upload.handle.id == source_component_uuid
+                ):
+                    del self._uploads[key]
 
-    def _retire_scope_without_queue(self) -> None:
-        """Terminally retire every owner after disconnect or server shutdown."""
+    def _retire_scope(self) -> None:
+        """Retire every handle without messages, after disconnect or server shutdown."""
         with self._lock:
             if self._terminal:
                 return
             self._terminal = True
-            root = self._container_handle_from_uuid.get("root")
-            if isinstance(root, _RootGuiContainer):
-                _discard_gui_subtree(root, self)
-            for modal in tuple(self._modal_handle_from_uuid.values()):
-                _discard_gui_subtree(modal)
-                modal.closed = True
-                modal._create_message = None
-            for command in tuple(self._command_handle_from_uuid.values()):
-                command._retire_without_queue_locked()
-            for notification in tuple(self._notification_handle_from_uuid.values()):
-                notification._retire_without_queue()
-            self._modal_handle_from_uuid.clear()
-            self._command_handle_from_uuid.clear()
-            self._notification_handle_from_uuid.clear()
-            self._notification_text_units_from_uuid.clear()
-            self._notification_text_units = 0
-            self._gui_input_handle_from_uuid.clear()
-            self._playback_handle_from_uuid.clear()
-            self._container_handle_from_uuid = {"root": _RootGuiContainer({})}
-            self._container_depth_from_uuid = {"root": 0}
-            # Defensive release for any record not reachable from a corrupted tree.
-            for uuid in tuple(self._resource_from_gui_uuid):
-                self._release_gui_resource_locked(uuid)
-            self._live_component_count = 0
-        with self._programmatic_callback_lock:
-            released = sum(item[2] for item in self._programmatic_callback_queue)
-            self._programmatic_callback_queue.clear()
-            self._programmatic_callback_retained_bytes -= released
-            self._programmatic_callback_scheduled = False
+            for handle in self._handles.values():
+                handle._impl.removed = True
+            self._handles.clear()
+            self._root_children.clear()
+            self._uploads.clear()
+            self._callback_queue.clear()
+        self._discard_preview_work()
 
-    def _discard_client_work(
-        self, client_id: ClientId, *, release_retained_uploads: bool = False
-    ) -> None:
-        """Discard connection-owned work that must not outlive its browser."""
+    def _discard_client_work(self, client_id: ClientId) -> None:
+        """Discard work owned by a browser that has disconnected."""
         self._discard_file_uploads(client_id=client_id)
-        if release_retained_uploads:
-            with self._file_upload_lock:
-                for source_uuid, size_bytes in tuple(self._retained_file_upload_bytes.items()):
-                    handle = self._gui_input_handle_from_uuid.get(source_uuid)
-                    if isinstance(handle, GuiUploadButtonHandle):
-                        handle._impl.value = UploadedFile("", b"")
-                    self._server._release_retained_file_upload(size_bytes)
-                self._retained_file_upload_bytes.clear()
-        if release_retained_uploads:
-            # The connection-local message buffer is already closed when its
-            # disconnect callback runs. Retiring the scope first marks every
-            # preview handle terminal, so releasing discarded leases cannot
-            # try to publish an enabled state to that closed connection.
-            self._retire_scope_without_queue()
-        else:
-            self._discard_preview_work(client_id=client_id)
+        self._discard_preview_work(client_id=client_id)
 
     async def _handle_command_trigger(
         self, client_id: ClientId, message: _messages.CommandTriggerMessage
     ) -> None:
-        """Handle one command trigger using an immutable callback snapshot."""
+        """Run a triggered command's callbacks."""
         client = self._resolve_client(client_id)
         if client is None:
             return
         with self._lock:
-            handle = self._command_handle_from_uuid.get(message.uuid)
-            if handle is None or handle._impl.removed or handle._impl.props.disabled:
+            handle = self._handles.get(message.uuid)
+            if not isinstance(handle, CommandHandle) or handle._impl.removed or handle.disabled:
                 return
-            callbacks = tuple(handle._impl.trigger_cb)
-            event = CommandEvent(client, client_id, handle)
-
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+            callbacks = tuple(handle._impl.callbacks)
+        event = CommandEvent(client, client_id, handle)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_gui_close_modal(
         self, client_id: ClientId, message: _messages.GuiCloseModalMessage
@@ -1624,10 +950,9 @@ class GuiApi(GuiContainer):
         # Absent when the server closed the modal first, or when a second client
         # dismissed it in the same instant. Either way it is already gone.
         with self._lock:
-            handle = self._modal_handle_from_uuid.get(message.uuid)
-            if handle is None:
-                return
-            handle.close()
+            handle = self._handles.get(message.uuid)
+            if isinstance(handle, GuiModalHandle) and not handle._impl.removed:
+                handle.close()
 
     def _get_container_uuid(self) -> str:
         """Container that new GUI elements in this execution context belong to."""
@@ -1646,90 +971,20 @@ class GuiApi(GuiContainer):
         self._container_stack.set(stack[:-1])
 
     def reset(self) -> None:
-        """Atomically remove every GUI-owned entity in this scope."""
+        """Remove every GUI element, modal, command and notification in this scope."""
         with self._lock:
             self._check_active_locked()
-            root_container = self._container_handle_from_uuid["root"]
-            children = tuple(root_container._children.values())
-            modals = tuple(self._modal_handle_from_uuid.values())
-            commands = tuple(self._command_handle_from_uuid.values())
-            notifications = tuple(self._notification_handle_from_uuid.values())
-            messages: list[_messages.Message] = []
-            for child in children:
-                if not isinstance(child, _GuiHandle):
-                    raise RuntimeError("root GUI registry contains an invalid owner")
-                if isinstance(child, GuiTabGroupHandle):
-                    descendants = tuple(
-                        uuid for tab in child._tab_handles for uuid in _gui_descendant_uuids(tab)
-                    )
-                    removed_tabs = tuple(
-                        uuid for tab in child._tab_handles for uuid in _tab_subtree_uuids(tab)
-                    )
-                elif isinstance(child, GuiContainer):
-                    descendants = _gui_descendant_uuids(child)
-                    removed_tabs = _gui_descendant_tab_uuids(child)
-                else:
-                    descendants = ()
-                    removed_tabs = ()
-                messages.append(_messages.GuiRemoveMessage(child.id, descendants, removed_tabs))
-            messages.extend(
-                _messages.GuiCloseModalMessage(
-                    modal.id,
-                    _gui_descendant_uuids(modal),
-                    _gui_descendant_tab_uuids(modal),
+            top = [
+                handle
+                for handle in self._handles.values()
+                if handle._impl.parent_container_id in ("root", None)
+            ]
+            if top:
+                self._websock_interface.queue_messages_or_raise(
+                    [handle._removal_message() for handle in top]
                 )
-                for modal in modals
-            )
-            messages.extend(_messages.RemoveCommandMessage(command.id) for command in commands)
-            messages.extend(
-                _messages.RemoveNotificationMessage(notification.id)
-                for notification in notifications
-            )
-            if messages:
-                self._websock_interface.queue_messages_or_raise(messages)
-
-            for child in children:
-                _retire_gui_handle_without_queue_locked(cast(_GuiHandle[Any], child))
-            root_container._children.clear()
-            for modal in modals:
-                _discard_gui_subtree(modal)
-                modal.closed = True
-                modal._create_message = None
-                self._container_handle_from_uuid.pop(modal.id, None)
-                self._container_depth_from_uuid.pop(modal.id, None)
-                self._modal_handle_from_uuid.pop(modal.id, None)
-                self._release_gui_resource_locked(f"modal:{modal.id}")
-            for command in commands:
-                command._retire_without_queue_locked()
-            for notification in notifications:
-                notification._retire_without_queue()
-
-    def set_panel_label(self, label: str | None) -> None:
-        """Compatibility alias for naming the server's default page.
-
-        The panel header now selects pages, so it has no visualization-wide
-        label of its own. Calls on ``server.gui`` rename the authoritative
-        default page; calls on a client-local GUI send that rename only to the
-        owning browser, preserving the historical connection-local behavior.
-
-        Args:
-            label: Default-page name. ``None`` and ``""`` become ``"Main"``.
-        """
-        from ._pages import _page_name_from_label
-        from ._server import Server
-
-        name = _page_name_from_label(label)
-        if isinstance(self._owner, Server):
-            self._owner.pages.default.name = name
-            return
-        with self._lock:
-            self._check_active_locked()
-            self._websock_interface.queue_message_or_raise(
-                _messages.PageUpdateMessage(
-                    page_id=str(self._server.pages.default.page_id),
-                    name=name,
-                )
-            )
+            for handle in top:
+                handle._retire()
 
     def configure_theme(
         self,
@@ -1760,11 +1015,7 @@ class GuiApi(GuiContainer):
             "left",
             "right",
         ):
-            raise ValueError(
-                "control_layout must be 'floating', 'left', or 'right'. The"
-                " 'collapsible' and 'fixed' sidebar layouts were removed; use"
-                " 'left' or 'right' to start the panel docked to that edge."
-            )
+            raise ValueError("control_layout must be 'floating', 'left', or 'right'.")
         if theme is not None and (type(theme) is not str or theme not in ("auto", "light", "dark")):
             raise ValueError("theme must be None, 'auto', 'light', or 'dark'.")
 
@@ -1775,7 +1026,6 @@ class GuiApi(GuiContainer):
             ),
         )
 
-    @not_container_scoped
     def add_notification(
         self,
         title: str,
@@ -1795,62 +1045,21 @@ class GuiApi(GuiContainer):
             auto_close_seconds: Time before the notification closes on its own;
                 ``None`` or ``0`` keeps it up until dismissed, removed, or updated to a positive timeout.
         """
-        title = cast(str, validate_renderer_string(title, "notification title"))
-        body = cast(str, validate_renderer_string(body, "notification body"))
-        if type(loading) is not bool:
-            raise TypeError("loading must be a bool")
-        if type(with_close_button) is not bool:
-            raise TypeError("with_close_button must be a bool")
-        auto_close_seconds = validate_auto_close_seconds(auto_close_seconds)
         with self._lock:
-            self._check_active_locked()
-            if len(self._notification_handle_from_uuid) >= _GUI_NOTIFICATION_MAX:
-                raise RuntimeError(
-                    f"A GUI scope cannot own more than {_GUI_NOTIFICATION_MAX} notifications."
-                )
-            notification_uuid = _make_uuid()
-
-            def retire(uuid: str) -> None:
-                with self._lock:
-                    self._notification_handle_from_uuid.pop(uuid, None)
-                    self._release_notification_resource_locked(uuid)
-
-            def notification_resources(
-                props: _messages.NotificationProps,
-            ) -> ContextManager[object]:
-                return self._notification_resource_transaction_locked(notification_uuid, props)
-
-            handle = NotificationHandle(
-                _NotificationHandleState(
-                    websock_interface=self._websock_interface,
-                    event_loop=self._event_loop,
-                    uuid=notification_uuid,
-                    state_lock=self._lock,
-                    on_terminal=retire,
-                    resource_transaction=notification_resources,
-                    props=_messages.NotificationProps(
-                        title=title,
-                        body=body,
-                        loading=loading,
-                        with_close_button=with_close_button,
-                        auto_close_seconds=auto_close_seconds,
-                    ),
-                )
+            handle = self._add(
+                NotificationHandle,
+                _messages.NotificationProps(
+                    title=title,
+                    body=body,
+                    loading=loading,
+                    with_close_button=with_close_button,
+                    auto_close_seconds=auto_close_seconds,
+                ),
+                parent=None,
             )
-            self._notification_handle_from_uuid[notification_uuid] = handle
-            try:
-                with self._notification_resource_transaction_locked(
-                    notification_uuid, handle._impl.props
-                ):
-                    handle._show()
-            except BaseException:
-                self._notification_handle_from_uuid.pop(notification_uuid, None)
-                handle._retire_without_queue()
-                raise
-
+            handle._restart_expiry()
         return handle
 
-    @not_container_scoped
     def add_command(
         self,
         label: str,
@@ -1896,64 +1105,23 @@ class GuiApi(GuiContainer):
             :meth:`CommandHandle.on_trigger`, update properties, or remove the
             command.
         """
-        label = cast(str, validate_renderer_string(label, "command label"))
-        description = cast(
-            str | None,
-            validate_renderer_string(description, "command description", optional=True),
-        )
         if callback is not None and not callable(callback):
             raise TypeError("callback must be callable or None")
-        if type(disabled) is not bool:
-            raise TypeError("disabled must be a bool")
-        valid_hotkeys = get_args(_messages.HotkeyKey)
-        if hotkey is not None and (type(hotkey) is not str or hotkey not in valid_hotkeys):
-            raise ValueError(f"hotkey must be one of {valid_hotkeys!r} or None")
-        if hotkey is None and modifier is not None:
-            raise ValueError("add_command(modifier=...) requires hotkey= to also be set.")
-        # Validate + canonicalize the modifier string. Raises on bad input.
-        normalized_modifier = _messages._normalize_key_modifier(modifier)
-        command_uuid = _make_uuid()
-        props = _messages.CommandProps(
-            label=label,
-            description=description,
-            hotkey=hotkey,
-            modifier=normalized_modifier,
-            disabled=disabled,
-            _icon_html=None if icon is None else svg_from_icon(icon),
-        )
-        handle_state = _CommandHandleState(
-            uuid=command_uuid,
-            gui_api=self,
-            props=props,
+        handle = self._add(
+            CommandHandle,
+            _messages.CommandProps(
+                label=label,
+                description=description,
+                hotkey=hotkey,
+                modifier=modifier,
+                _icon_html=None,
+                disabled=disabled,
+            ),
+            parent=None,
             icon=icon,
         )
-        handle = CommandHandle(handle_state)
         if callback is not None:
-            # Install the shorthand before publishing: a client can trigger
-            # the command as soon as its registration reaches the browser.
-            def trigger(_: CommandEvent) -> Any:
-                return callback()
-
-            handle_state.trigger_cb.append(trigger)
-
-        # Register in the local map before publishing, so an immediate
-        # trigger from the client can be resolved here.
-        with self._lock:
-            self._check_active_locked()
-            if len(self._command_handle_from_uuid) >= _GUI_COMMAND_MAX:
-                raise RuntimeError(f"A GUI scope cannot own more than {_GUI_COMMAND_MAX} commands.")
-            self._command_handle_from_uuid[command_uuid] = handle
-            try:
-                with self._gui_resource_transaction_locked(f"command:{command_uuid}", None, props):
-                    self._websock_interface.queue_message_or_raise(
-                        _messages.RegisterCommandMessage(
-                            uuid=command_uuid,
-                            props=props,
-                        )
-                    )
-            except BaseException:
-                self._command_handle_from_uuid.pop(command_uuid, None)
-                raise
+            handle.on_trigger(lambda _: callback())
         return handle
 
     def add_folder(
@@ -1962,6 +1130,7 @@ class GuiApi(GuiContainer):
         *,
         order: float | None = None,
         expand_by_default: bool = True,
+        popup: bool = False,
         visible: bool = True,
     ) -> GuiFolderHandle:
         """Add a folder, and return a handle that can be used to populate it.
@@ -1972,84 +1141,32 @@ class GuiApi(GuiContainer):
                 layout grouping.
             order: Optional ordering, smallest values will be displayed first.
             expand_by_default: Open the folder by default. Set to False to collapse it by
-                default. Ignored when ``label`` is ``None``.
+                default. Ignored when ``label`` is ``None`` or ``popup`` is set.
+            popup: Draw the folder as one labelled row whose children open in a
+                popout, keeping them out of the panel until the viewer opens
+                it. Needs a label.
             visible: Whether the component is visible.
 
         Returns:
             A handle that can be used as a context to populate the folder.
         """
-        folder_container_id = _make_uuid()
-        order = self._apply_default_order(order)
-        props = _messages.GuiFolderProps(
-            order=order,
-            label=label,
-            expand_by_default=expand_by_default,
-            visible=visible,
-        )
-        message = _messages.GuiFolderMessage(
-            uuid=folder_container_id,
-            container_uuid=self._get_container_uuid(),
-            props=props,
-        )
-        return GuiFolderHandle(
-            _GuiHandleState(
-                folder_container_id,
-                self,
-                None,
-                props=props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            )
-        )
-
-    def add_popup(
-        self,
-        label: str,
-        *,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiPopupHandle:
-        """Add a popup, and return a handle that can be used to populate it.
-
-        A popup has the same container behavior as a folder, but keeps its
-        children out of the panel until the viewer presses Open popup.
-
-        Args:
-            label: Label shown beside the popup's open button.
-            order: Optional ordering, smallest values will be displayed first.
-            visible: Whether the component is visible.
-
-        Returns:
-            A handle that can be used as a context to populate the popup.
-        """
-        label = cast(str, validate_renderer_string(label, "popup label"))
-        popup_container_id = _make_uuid()
-        order = self._apply_default_order(order)
-        props = _messages.GuiPopupProps(
-            order=order,
-            label=label,
-            visible=visible,
-        )
-        message = _messages.GuiPopupMessage(
-            uuid=popup_container_id,
-            container_uuid=self._get_container_uuid(),
-            props=props,
-        )
-        return GuiPopupHandle(
-            _GuiHandleState(
-                popup_container_id,
-                self,
-                None,
-                props=props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            )
+        return self._add(
+            GuiFolderHandle,
+            _messages.GuiFolderProps(
+                order=self._apply_default_order(order),
+                label=label,
+                expand_by_default=expand_by_default,
+                popup=popup,
+                visible=visible,
+            ),
+            parent=self._get_container_uuid(),
         )
 
     def add_form(
         self,
         *,
         label: str | None = None,
+        mini: bool = False,
         order: float | None = None,
         visible: bool = True,
     ) -> GuiFormHandle:
@@ -2060,58 +1177,14 @@ class GuiApi(GuiContainer):
         Args:
             label: Label shown beside the form's row, opposite the button that
                 opens it. If ``None``, that button takes the whole row, the
-                same rule a labelless :meth:`add_button` follows.
-            order: Optional ordering, smallest values will be displayed first.
-            visible: Whether the component is visible.
-
-        Returns:
-            A handle that can be used as a context to populate the form.
-        """
-        handle = self._create_form(label=label, order=order, visible=visible, mini=False)
-        # Reset parted from Submit -- they are opposite moves, and joining
-        # them would invite the wrong one -- with the accent behind Submit alone.
-        with handle:
-            handle.actions = self._add_button_group(
-                ("Reset", "Submit"),
-                label=None,
-                color=("default", "inverse"),
-                merge=False,
-                disabled=False,
-                visible=True,
-                hint=None,
-                order=_GUI_FORM_ACTION_ORDER,
-                _is_form_actions=True,
-            )
-
-        def _act(event: GuiEvent[GuiButtonGroupHandle]) -> None:
-            if event.target.value == "Reset":
-                handle.reset_form()
-            else:
-                handle.submit_form()
-
-        handle.actions.on_click(_act)
-        return handle
-
-    def add_mini_form(
-        self,
-        *,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiFormHandle:
-        """Add a form around a single field, and return a handle to populate it.
-
-        The same commit semantics as :meth:`add_form` in the space of one row:
-        no popout and no row of its own, just the field's own row with a send
-        button on the end of it. One field is not worth a door.
-
-        Exactly one direct, editable field goes inside. A sibling row, nested
-        container, or second field raises :class:`ValueError` before it is
-        published.
-        Sending is the button, or Enter in a single-line text input, and both
-        fire :meth:`GuiFormHandle.on_submit`.
-        There is no Reset: with one field, undoing is retyping.
-
-        Args:
+                same rule a labelless :meth:`add_button` follows. Ignored for a
+                mini form.
+            mini: Wrap a single field instead: the same commit semantics in the
+                space of one row, drawn as the field's own row with a send
+                button on the end of it, and no popout or Reset. Exactly one
+                direct, editable field goes inside; a sibling row, nested
+                container, or second field raises :class:`ValueError` before it
+                is published.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
@@ -2120,73 +1193,28 @@ class GuiApi(GuiContainer):
 
         Example::
 
-            with server.gui.add_mini_form() as ask:
+            with server.gui.add_form(mini=True) as ask:
                 query = server.gui.add_text("Search", "")
 
             @ask.on_submit
             def _(event):
                 run_search(query.value)
         """
-        return self._create_form(label=None, order=order, visible=visible, mini=True)
-
-    def _create_form(
-        self,
-        *,
-        label: str | None,
-        order: float | None,
-        visible: bool,
-        mini: bool,
-    ) -> GuiFormHandle:
-        """The container both form flavors are built on."""
-        # Nested forms would produce invalid HTML on the client (nested
-        # <form> elements are not allowed and the browser flattens
-        # them). Walk through folders, tabs, and tab groups -- they
-        # share a DOM context with their ancestors. Stop at modals,
-        # which render into a separate React portal where a fresh
-        # <form> is well-formed.
-        container = self._get_container_uuid()
-        while container != "root":
-            parent = self._container_handle_from_uuid.get(container)
-            if isinstance(parent, GuiFormHandle):
-                raise ValueError(
-                    "Nested forms are not supported: add_form() was called "
-                    "inside an existing form's context."
-                )
-            if isinstance(parent, GuiModalHandle):
-                break
-            if isinstance(parent, GuiTabHandle):
-                container = parent._parent._impl.parent_container_id
-            elif isinstance(parent, (GuiFolderHandle, GuiPopupHandle, GuiTabGroupHandle)):
-                container = parent._impl.parent_container_id
-            else:
-                break
-
-        form_container_id = _make_uuid()
-        order = self._apply_default_order(order)
-        props = _messages.GuiFormProps(
-            order=order,
-            label=label,
-            visible=visible,
-            mini=mini,
-        )
-        message = _messages.GuiFormMessage(
-            uuid=form_container_id,
-            container_uuid=self._get_container_uuid(),
-            props=props,
-        )
-        handle = GuiFormHandle(
-            _GuiHandleState(
-                form_container_id,
-                self,
-                None,
-                props=props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
+        # Nested <form> elements are invalid HTML. Modals render in a separate
+        # portal, where the walk stops and a fresh <form> is well-formed.
+        if self._ancestor_form(self._get_container_uuid()) is not None:
+            raise ValueError(
+                "Nested forms are not supported: add_form() was called "
+                "inside an existing form's context."
             )
+        return self._add(
+            GuiFormHandle,
+            _messages.GuiFormProps(
+                order=self._apply_default_order(order), label=label, visible=visible, mini=mini
+            ),
+            parent=self._get_container_uuid(),
         )
-        return handle
 
-    @not_container_scoped
     def add_modal(
         self,
         title: str,
@@ -2203,22 +1231,12 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used as a context to populate the modal.
         """
-        title = cast(str, validate_renderer_string(title, "modal title"))
-        with self._lock:
-            self._check_active_locked()
-            if len(self._modal_handle_from_uuid) >= _GUI_MODAL_MAX:
-                raise RuntimeError(f"A GUI scope cannot own more than {_GUI_MODAL_MAX} modals.")
-        modal_container_id = _make_uuid()
-        order = self._apply_default_order(order)
-        message = _messages.GuiModalMessage(
-            order=order,
-            uuid=modal_container_id,
-            title=title,
-        )
-        return GuiModalHandle(
-            _gui_api=self,
-            _uuid=modal_container_id,
-            _create_message=message,
+        return self._add(
+            GuiModalHandle,
+            None,
+            parent=None,
+            _order=self._apply_default_order(order),
+            _title=title,
         )
 
     def add_tab_group(
@@ -2236,27 +1254,10 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used as a context to populate the tab group.
         """
-        tab_group_id = _make_uuid()
-        order = self._apply_default_order(order)
-
-        message = _messages.GuiTabGroupMessage(
-            uuid=tab_group_id,
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiTabGroupProps(
-                order=order,
-                _tabs=(),
-                visible=visible,
-            ),
-        )
-        return GuiTabGroupHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                value=None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            )
+        return self._add(
+            GuiTabGroupHandle,
+            _messages.GuiTabGroupProps(order=self._apply_default_order(order), visible=visible),
+            parent=self._get_container_uuid(),
         )
 
     def add_html(
@@ -2274,47 +1275,21 @@ class GuiApi(GuiContainer):
         sanitized it for this exact use.
 
         Args:
-            content: Trusted raw HTML to display. The bundled browser accepts
-                at most 1,048,576 UTF-16 code units per element.
+            content: Trusted raw HTML to display.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        content = _validate_gui_html_content(content)
-        message = _messages.GuiHtmlMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiHtmlProps(
-                order=self._apply_default_order(order),
-                content=content,
-                visible=visible,
+        return self._add(
+            GuiHtmlHandle,
+            _messages.GuiHtmlProps(
+                order=self._apply_default_order(order), content=content, visible=visible
             ),
+            parent=self._get_container_uuid(),
         )
-        handle = GuiHtmlHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            ),
-        )
-        return handle
 
-    @overload
-    def add_playback(
-        self,
-        label: str | None = None,
-        *,
-        sync_group: str,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiVideoControlsHandle: ...
-
-    @overload
     def add_playback(
         self,
         label: str | None = None,
@@ -2329,35 +1304,15 @@ class GuiApi(GuiContainer):
         disabled: bool = False,
         order: float | None = None,
         visible: bool = True,
-    ) -> GuiPlaybackHandle: ...
+    ) -> GuiPlaybackHandle:
+        """Add play/pause, seek, speed, loop and optional frame-step controls
+        for a timeline that Python owns.
 
-    def add_playback(
-        self,
-        label: str | None = None,
-        *,
-        sync_group: str | None = None,
-        duration: float | None = None,
-        time: float = 0.0,
-        playing: bool = False,
-        speed: float = 1.0,
-        loop: bool = True,
-        fps: float | None = None,
-        buffering: bool = False,
-        disabled: bool = False,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiPlaybackHandle | GuiVideoControlsHandle:
-        """Add play/pause, seek, speed, loop and optional frame-step controls.
-
-        For videos, pass only ``sync_group="episode"`` and give video panes
-        that same group. The browser owns playback; duration and frame rate
-        come from the videos. Returns :class:`GuiVideoControlsHandle`.
-
-        For custom content, pass ``duration`` in seconds. Python owns the clock
-        and receives browser commands through ``handle.on_update``. Publish
-        actual progress with ``handle.time = seconds``, or call
-        ``handle.advance(elapsed_seconds)`` in your render loop. No automatic
-        background work runs. Returns :class:`GuiPlaybackHandle`.
+        Pass ``duration`` in seconds. Python owns the clock and receives
+        browser commands through ``handle.on_update``. Publish actual progress
+        with ``handle.time = seconds``, or call ``handle.advance(elapsed_seconds)``
+        in your render loop. No automatic background work runs. For videos,
+        whose clock the browser owns, use :meth:`add_video_controls`.
 
         ``fps`` enables frame stepping. ``buffering`` indicates that content is
         being prepared without disabling pause or seek. ``duration=0`` disables
@@ -2366,31 +1321,10 @@ class GuiApi(GuiContainer):
         With ``label=None`` the full row includes previous/next frame and time;
         a label selects the compact row. State of Python-controlled playback
         follows the GUI scope: shared on ``server.gui``, private on ``client.gui``.
-        Video playback stays local to each browser.
         """
-        if sync_group is not None:
-            if (
-                duration is not None
-                or time != 0
-                or playing
-                or speed != 1
-                or not loop
-                or fps is not None
-                or buffering
-                or disabled
-            ):
-                raise ValueError(
-                    "video playback settings belong on video panes; pass only sync_group, label, order and visible"
-                )
-            return self.add_video_controls(
-                label, sync_group=sync_group, order=order, visible=visible
-            )
-        if duration is None:
-            raise ValueError("pass duration for custom playback or sync_group for videos")
-        message = _messages.GuiPlaybackMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiPlaybackProps(
+        return self._add(
+            GuiPlaybackHandle,
+            _messages.GuiPlaybackProps(
                 order=self._apply_default_order(order),
                 label=label,
                 visible=visible,
@@ -2403,16 +1337,7 @@ class GuiApi(GuiContainer):
                 fps=fps,
                 buffering=buffering,
             ),
-        )
-        return GuiPlaybackHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            )
+            parent=self._get_container_uuid(),
         )
 
     def add_video_controls(
@@ -2436,25 +1361,15 @@ class GuiApi(GuiContainer):
         Frame stepping requires an equal, known ``fps`` on all group members.
         Group names follow the same nonempty 1,024 UTF-16-unit limit as pane IDs.
         """
-        message = _messages.GuiVideoControlsMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiVideoControlsProps(
+        return self._add(
+            GuiVideoControlsHandle,
+            _messages.GuiVideoControlsProps(
                 order=self._apply_default_order(order),
                 label=label,
                 sync_group=sync_group,
                 visible=visible,
             ),
-        )
-        return GuiVideoControlsHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            )
+            parent=self._get_container_uuid(),
         )
 
     def add_divider(
@@ -2472,25 +1387,11 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        message = _messages.GuiDividerMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiDividerProps(
-                order=self._apply_default_order(order),
-                visible=visible,
-            ),
+        return self._add(
+            GuiDividerHandle,
+            _messages.GuiDividerProps(order=self._apply_default_order(order), visible=visible),
+            parent=self._get_container_uuid(),
         )
-        handle = GuiDividerHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            ),
-        )
-        return handle
 
     def add_image(
         self,
@@ -2515,37 +1416,19 @@ class GuiApi(GuiContainer):
         Returns:
             Handle for manipulating the image element.
         """
-        if label is not None and not isinstance(label, str):
-            raise TypeError("label must be a string or None")
-        if type(visible) is not bool:
-            raise TypeError("visible must be a bool")
-        if order is not None:
-            _validate_number(order, "order")
         _validate_image_encoding_options(format, jpeg_quality)
-        image_array, resolved_format, data = prepare_image(image, format, jpeg_quality)
-        message = _messages.GuiImageMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiImageProps(
-                _data=data,
-                label=label,
-                _format=resolved_format,
+        snapshot, resolved_format, data = prepare_image(image, format, jpeg_quality)
+        return self._add(
+            GuiImageHandle,
+            _messages.GuiImageProps(
                 order=self._apply_default_order(order),
+                label=label,
+                _data=data,
+                _format=resolved_format,
                 visible=visible,
             ),
-        )
-        return GuiImageHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-                decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
-                retained_extra_bytes=int(image_array.nbytes),
-            ),
-            _image=image_array,
+            parent=self._get_container_uuid(),
+            _image=snapshot,
             _jpeg_quality=jpeg_quality,
             _user_format=format,
         )
@@ -2580,36 +1463,19 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
-        _validate_positive_number(aspect, "aspect")
-        if type(visible) is not bool:
-            raise TypeError("visible must be a bool")
-        if order is not None:
-            _validate_number(order, "order")
         config = plotly_config(config)
         json_str = plotly_json(figure, config)
         self._server._ensure_plotly_runtime()
-
-        message = _messages.GuiPlotlyMessage(
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiPlotlyProps(
+        return self._add(
+            GuiPlotlyHandle,
+            _messages.GuiPlotlyProps(
                 order=self._apply_default_order(order),
                 _plotly_json_str=json_str,
                 _theme_templates=plotly_theme_templates(),
                 aspect=aspect,
                 visible=visible,
             ),
-        )
-        return GuiPlotlyHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                value=None,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            ),
+            parent=self._get_container_uuid(),
             _config=config,
         )
 
@@ -2702,58 +1568,78 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
         if not isinstance(text, str):
             if icon is not None:
                 raise ValueError(
                     "icon= is for a single button; a group of buttons has one face per"
                     " option and nowhere to say which of them the icon belongs to."
                 )
-            return self._add_button_group(
-                text,
+            options = tuple(text)
+            return self._add_input(
+                GuiButtonGroupHandle,
+                options[0] if options else None,
                 label=label,
-                color=color,
-                merge=merge,
+                hint=hint,
                 disabled=disabled,
                 visible=visible,
-                hint=hint,
                 order=order,
+                color=color,
+                options=options,
+                merge=merge,
             )
-
-        if not isinstance(merge, bool):
+        if not isinstance(merge, bool) or not isinstance(color, str):
             raise ValueError(
-                "merge= is about the gaps between buttons in a row; a single button has none."
+                "color= and merge= take one value for a single button, which has no row"
+                " of faces or gaps to give them per option."
             )
-        if type(color) is not str:
-            raise ValueError(
-                "color= takes one role per button, and a single button is one button;"
-                " pass the role itself rather than a sequence."
-            )
-        color = _validate_button_color(color)
-
-        # Re-wrap the GUI handle with a button interface.
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        props = _messages.GuiButtonProps(
-            order=order,
+        return self._add_button(
+            GuiButtonHandle,
+            text,
             label=label,
-            text=text,
-            hint=hint,
             color=color,
-            _icon_html=None if icon is None else svg_from_icon(icon),
-            _hold_callback_freqs=(),
-            _prefetch=False,
             disabled=disabled,
             visible=visible,
-        )
-        message = _messages.GuiButtonMessage(
-            value=False,
-            uuid=uuid,
-            container_uuid=self._get_container_uuid(),
-            props=props,
+            hint=hint,
+            icon=icon,
+            order=order,
         )
 
-        return GuiButtonHandle(self._create_gui_input(False, message, is_button=True), _icon=icon)
+    def _add_button(
+        self,
+        handle_type: type[THandle],
+        text: str,
+        *,
+        label: str | None,
+        color: ButtonColor,
+        disabled: bool,
+        visible: bool,
+        hint: str | None,
+        icon: IconName | None,
+        order: float | None,
+        prefetch: bool = False,
+        **attributes: Any,
+    ) -> THandle:
+        """A single button, or a file button built on one."""
+        return self._add(
+            handle_type,
+            _messages.GuiButtonProps(
+                order=self._apply_default_order(order),
+                label=label,
+                hint=hint,
+                visible=visible,
+                disabled=disabled,
+                text=text,
+                color=color,
+                _icon_html=None,
+                _hold_callback_freqs=(),
+                _prefetch=prefetch,
+                _busy=False,
+            ),
+            False,
+            parent=self._get_container_uuid(),
+            icon=icon,
+            **attributes,
+        )
 
     def add_upload_button(
         self,
@@ -2768,8 +1654,11 @@ class GuiApi(GuiContainer):
         mime_type: str = "*/*",
         order: float | None = None,
     ) -> GuiUploadButtonHandle:
-        """Add a button to the GUI. The value of this input is set to `True` every time
-        it is clicked; to detect clicks, we can manually set it back to `False`.
+        """Add a button that uploads a file from the browser.
+
+        The handle's ``value`` is the last uploaded :class:`UploadedFile`, and
+        ``on_upload`` callbacks run once each upload completes. Files are
+        limited to 64 MiB.
 
         Args:
             text: Text to display on the button itself.
@@ -2787,39 +1676,28 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
-        color = _validate_button_color(color)
-
-        # Re-wrap the GUI handle with a button interface.
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiUploadButtonHandle(
-            self._create_gui_input(
-                value=UploadedFile("", b""),
-                message=_messages.GuiUploadButtonMessage(
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiUploadButtonProps(
-                        disabled=disabled,
-                        visible=visible,
-                        order=order,
-                        label=label,
-                        text=text,
-                        hint=hint,
-                        color=color,
-                        mime_type=mime_type,
-                        _icon_html=None if icon is None else svg_from_icon(icon),
-                    ),
-                ),
-                is_button=True,
+        return self._add(
+            GuiUploadButtonHandle,
+            _messages.GuiUploadButtonProps(
+                order=self._apply_default_order(order),
+                label=label,
+                hint=hint,
+                visible=visible,
+                disabled=disabled,
+                text=text,
+                color=color,
+                _icon_html=None,
+                mime_type=mime_type,
             ),
-            _icon=icon,
+            UploadedFile("", b""),
+            parent=self._get_container_uuid(),
+            icon=icon,
         )
 
     def add_download_button(
         self,
         text: str,
-        content: DownloadContent,
+        content: FileContent,
         *,
         filename: str | None = None,
         label: str | None = None,
@@ -2835,7 +1713,7 @@ class GuiApi(GuiContainer):
         A button wired to :meth:`ClientHandle.send_file_download`, which is the
         wiring worth having done for you: the file goes to the one client that
         pressed rather than to everyone connected, the browser saves it as soon
-        as it arrives, and the button stays disabled until the transfer is out,
+        as it arrives, and the button stays busy until the transfer is out,
         so a slow export cannot be started twice. Sending a file at a moment
         that is not a click -- when a job finishes, on a timer -- is what the
         underlying method is for, and it can offer the file as a link instead.
@@ -2865,51 +1743,24 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
-        color = _validate_button_color(color)
-        content = cast(
-            DownloadContent,
-            _validate_file_content(content, filename, "add_download_button()"),
-        )
-
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        props = _messages.GuiButtonProps(
-            order=order,
+        return self._add_button(
+            GuiDownloadButtonHandle,
+            text,
             label=label,
-            text=text,
-            hint=hint,
             color=color,
-            _icon_html=None if icon is None else svg_from_icon(icon),
-            _hold_callback_freqs=(),
-            _prefetch=False,
             disabled=disabled,
             visible=visible,
-        )
-        message = _messages.GuiButtonMessage(
-            value=False,
-            uuid=uuid,
-            container_uuid=self._get_container_uuid(),
-            props=props,
-        )
-
-        state = self._create_gui_input(False, message, is_button=True)
-        state.retained_extra_bytes = len(cast(bytes, content)) if type(content) is bytes else 0
-        handle = GuiDownloadButtonHandle(
-            state,
-            _icon=icon,
-            _content=content,
+            hint=hint,
+            icon=icon,
+            order=order,
+            _content=_file_content(content, filename, "add_download_button()"),
             _filename=filename,
         )
-        # Registered ahead of any `on_click` the caller adds, so the file is on
-        # its way before whatever else the press was meant to do.
-        handle._impl.update_cb.append(handle._send)
-        return handle
 
     def add_preview_button(
         self,
         text: str,
-        content: PreviewContent,
+        content: FileContent,
         *,
         filename: str | None = None,
         label: str | None = None,
@@ -2988,105 +1839,26 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
-        color = _validate_button_color(color)
-        content = cast(
-            PreviewContent,
-            _validate_file_content(content, filename, "add_preview_button()"),
-        )
         _validate_nonnegative_integer(max_bytes, "max_bytes")
-
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        message = _messages.GuiButtonMessage(
-            value=False,
-            uuid=uuid,
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiButtonProps(
-                order=order,
-                label=label,
-                text=text,
-                hint=hint,
-                color=color,
-                _icon_html=None if icon is None else svg_from_icon(icon),
-                _hold_callback_freqs=(),
-                _prefetch=True,
-                disabled=disabled,
-                visible=visible,
-            ),
-        )
-
-        state = self._create_gui_input(False, message, is_button=True)
-        state.retained_extra_bytes = len(cast(bytes, content)) if type(content) is bytes else 0
-        handle = GuiPreviewButtonHandle(
-            state,
-            _icon=icon,
-            _content=content,
+        return self._add_button(
+            GuiPreviewButtonHandle,
+            text,
+            label=label,
+            color=color,
+            disabled=disabled,
+            visible=visible,
+            hint=hint,
+            icon=icon,
+            order=order,
+            prefetch=True,
+            _content=_file_content(content, filename, "add_preview_button()"),
             _filename=filename,
             _max_bytes=max_bytes,
         )
-        return handle
 
-    def _add_button_group(
-        self,
-        options: Sequence[str],
-        *,
-        label: str | None,
-        color: ButtonColor | Sequence[ButtonColor],
-        merge: bool | Sequence[bool],
-        disabled: bool,
-        visible: bool,
-        hint: str | None,
-        order: float | None,
-        _is_form_actions: bool = False,
-    ) -> GuiButtonGroupHandle:
-        """The many-faced half of :meth:`add_button`."""
-        options = _string_options(options, "add_button()")
-        value = options[0]
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiButtonGroupHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiButtonGroupMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiButtonGroupProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        color=_button_colors(len(options), color),
-                        options=options,
-                        _merge=_merge_flags(len(options), merge),
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-                is_button=True,
-                is_form_actions=_is_form_actions,
-            ),
-        )
-
-    @overload
     def add_toggle(
         self,
-        text: str,
-        *,
-        initial_value: bool = False,
-        label: str | None = None,
-        color: Literal["default", "inverse"] = "default",
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        icon: IconName | None = None,
-        order: float | None = None,
-    ) -> GuiToggleHandle: ...
-
-    @overload
-    def add_toggle(
-        self,
-        text: list[str] | tuple[str, ...],
+        text: Sequence[str],
         *,
         initial_value: str | Sequence[str] | None = None,
         label: str | None = None,
@@ -3097,150 +1869,67 @@ class GuiApi(GuiContainer):
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
-        icon: None = None,
         order: float | None = None,
-    ) -> GuiToggleGroupHandle: ...
-
-    def add_toggle(
-        self,
-        text: str | list[str] | tuple[str, ...],
-        *,
-        initial_value: bool | str | Sequence[str] | None = None,
-        label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "default",
-        multiple: bool = False,
-        required: bool | None = None,
-        merge: bool | Sequence[bool] = True,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        icon: IconName | None = None,
-        order: float | None = None,
-    ) -> GuiToggleHandle | GuiToggleGroupHandle:
-        """Add a toggle, or a row of them, to the GUI.
+    ) -> GuiToggleGroupHandle:
+        """Add a row of toggles to the GUI.
 
         A toggle is a button that stays pressed: same faces, same colorways,
         same label rule and heights as :meth:`add_button`, but it holds its
         state instead of firing and returning to rest. On, it takes the
         appearance that button has under the pointer at the moment of a click.
-
-        Passing a string gives one toggle, whose value is whether it is on.
-        Passing a sequence gives a row of them, whose value is the tuple of
-        options currently on -- a tuple in both modes, so reading a group does
-        not depend on how it was configured.
+        The value is the tuple of options currently on. For one true/false
+        value, use :meth:`add_checkbox`.
 
         Args:
-            text: Text on the toggle's face. A sequence gives a row with one
-                toggle per entry.
-            initial_value: What starts on: a bool for a single toggle, and for
-                a row either one option's text or a sequence of them. Left
-                unset, everything starts off.
+            text: The options, one toggle per entry.
+            initial_value: What starts on: one option's text or a sequence of
+                them. Left unset, a required row starts on its first option
+                and any other row starts empty.
             label: Optional label for the row; see :meth:`add_button`.
             color: Colorway; see :meth:`add_button`.
-            multiple: Whether more than one option in a row may be on at once.
-                Off by default, which makes the row a choice between its
-                options: turning one on turns the others off.
+            multiple: Whether more than one option may be on at once. Off by
+                default, which makes the row a choice between its options:
+                turning one on turns the others off.
             required: Whether one option must always be on, so the toggle that
                 is on cannot be turned off. Left unset, a row behaves like the
                 control it resembles: one at a time requires a choice, the way
                 a radio group does, and a ``multiple`` row does not, the way
-                checkboxes do not. A required row given no ``initial_value``
-                starts on its first option.
+                checkboxes do not.
             merge: Whether neighbouring toggles are joined or parted; see
                 :meth:`add_button`.
-            disabled: Whether the toggle is disabled.
-            visible: Whether the toggle is visible.
+            disabled: Whether the toggles are disabled.
+            visible: Whether the toggles are visible.
             hint: Optional hint to display on hover.
-            icon: Optional icon to display on the toggle. Single toggles only,
-                for the reason :meth:`add_button` gives.
             order: Optional ordering, smallest values will be displayed first.
 
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
         if isinstance(text, str):
-            if not isinstance(merge, bool):
-                raise ValueError(
-                    "merge= is about the gaps between toggles in a row; a single toggle has none."
-                )
-            if type(color) is not str:
-                raise ValueError(
-                    "color= takes one role per toggle, and a single toggle is one"
-                    " toggle; pass the role itself rather than a sequence."
-                )
-            color = _validate_button_color(color)
-            if multiple or required is not None:
-                raise ValueError(
-                    "multiple= and required= are about how many options in a ROW may be"
-                    " on; a single toggle is simply on or off."
-                )
-            if initial_value is not None and not isinstance(initial_value, bool):
-                raise ValueError(
-                    "A single toggle is on or off, so initial_value= is a bool;"
-                    f" got {initial_value!r}."
-                )
-            uuid = _make_uuid()
-            order = self._apply_default_order(order)
-            return GuiToggleHandle(
-                self._create_gui_input(
-                    initial_value is True,
-                    message=_messages.GuiToggleMessage(
-                        value=initial_value is True,
-                        uuid=uuid,
-                        container_uuid=self._get_container_uuid(),
-                        props=_messages.GuiToggleProps(
-                            order=order,
-                            label=label,
-                            text=text,
-                            hint=hint,
-                            color=color,
-                            disabled=disabled,
-                            visible=visible,
-                            _icon_html=None if icon is None else svg_from_icon(icon),
-                        ),
-                    ),
-                )
-            )
-
-        if icon is not None:
             raise ValueError(
-                "icon= is for a single toggle; a row has one face per option and"
-                " nowhere to say which of them the icon belongs to."
+                "add_toggle() takes a sequence of options; for one true/false value,"
+                " use add_checkbox()."
             )
-        if type(multiple) is not bool:
-            raise ValueError("multiple must be a bool.")
-        if required is not None and type(required) is not bool:
-            raise ValueError("required must be a bool or None.")
-        options = _string_options(text, "add_toggle()")
+        options = tuple(text)
         # A row behaves like the control it resembles unless told otherwise: a
         # choice between options is required the way a radio group is, and a row
         # of independent switches is not, the way checkboxes are not.
         required = (not multiple) if required is None else required
-        value = _initial_toggles(options, initial_value, multiple=multiple, required=required)
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiToggleGroupHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiToggleGroupMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiToggleGroupProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        color=_button_colors(len(options), color, noun="toggle"),
-                        options=options,
-                        multiple=multiple,
-                        required=required,
-                        _merge=_merge_flags(len(options), merge),
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
+        if initial_value is None:
+            initial_value = options[:1] if required else ()
+        return self._add_input(
+            GuiToggleGroupHandle,
+            initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            color=color,
+            options=options,
+            multiple=multiple,
+            required=required,
+            merge=merge,
         )
 
     def add_checkbox(
@@ -3266,27 +1955,14 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value = initial_value
-        if not isinstance(value, bool):
-            raise ValueError(f"initial_value must be a bool, not {type(value).__name__}.")
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiCheckboxHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiCheckboxMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiCheckboxProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
+        return self._add_input(
+            GuiCheckboxHandle,
+            initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
         )
 
     def add_text(
@@ -3348,87 +2024,96 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value = initial_value
-        if not isinstance(value, str):
-            raise ValueError(f"initial_value must be a string, not {type(value).__name__}.")
-        value = _validate_unicode_string(value, "text input value")
-        if utf16_code_unit_length_exceeds(value, _GUI_TEXT_MAX_UTF16_CODE_UNITS):
-            raise ValueError("Text exceeds the 1 Mi-character browser render limit.")
-        if rows is not None:
-            if type(rows) is not int or rows < 1:
-                raise ValueError(
-                    f"rows= is a height in lines and must be a positive integer; got {rows!r}."
-                )
-        if type(editable) is not bool or type(markdown) is not bool or type(multiline) is not bool:
-            raise TypeError("editable, markdown, and multiline must be bools.")
-        if markdown and editable:
-            raise ValueError("markdown text must be read-only (editable=False).")
-        if image_root is not None:
-            if not isinstance(image_root, Path):
-                raise TypeError("image_root must be a pathlib.Path or None.")
-            image_root = Path(os.fspath(image_root))
-        source = _gui_text_source(
-            value,
-            markdown=markdown,
-            editable=editable,
-            image_root=image_root,
-            server=self._server,
-        )
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiTextHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiTextMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiTextProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                        editable=editable,
-                        markdown=markdown,
-                        multiline=multiline,
-                        rows=rows,
-                        _source=source,
-                    ),
-                ),
+        if image_root is not None and not isinstance(image_root, Path):
+            raise TypeError("image_root must be a pathlib.Path or None.")
+        return self._add(
+            GuiTextHandle,
+            _messages.GuiTextProps(
+                order=self._apply_default_order(order),
+                label=label,
+                hint=hint,
+                visible=visible,
+                disabled=disabled,
+                multiline=multiline,
+                rows=rows,
+                editable=editable,
+                markdown=markdown,
+                _source="",
             ),
-            _image_root=image_root,
+            initial_value,
+            parent=self._get_container_uuid(),
+            _image_root=None if image_root is None else Path(os.fspath(image_root)),
         )
 
+    @overload
     def add_list(
         self,
         label: str | None = None,
         initial_value: Sequence[str] = (),
         *,
+        mark: None = None,
         frozen: bool = False,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiListHandle:
-        """Add an editable list of text entries to the GUI.
+    ) -> GuiListHandle[tuple[str, ...]]: ...
 
-        A stack of text boxes rather than one: the value is a tuple of strings,
-        and a viewer can edit any of them, add an entry, remove one, or drag
-        one to another place in the list. Every one of those reports the whole
-        tuple, so ``on_update`` sees the list as it now reads.
+    @overload
+    def add_list(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        mark: Literal["check", "radio"],
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiListHandle[tuple[tuple[str, bool], ...]]: ...
+
+    def add_list(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        mark: Literal["check", "radio"] | None = None,
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiListHandle[Any]:
+        """Add an editable list of text rows to the GUI, each optionally marked.
+
+        A stack of text boxes rather than one. A viewer can edit any row, add
+        one, remove one, or drag one to another place in the list, and every
+        one of those reports the whole tuple, so ``on_update`` sees the list as
+        it now reads.
+
+        Without a mark, the value is a tuple of strings. With
+        ``mark="check"``, each row carries a box to tick, and with
+        ``mark="radio"`` a radio of which at most one is selected; the value is
+        then one ``(text, marked)`` pair per row, and a row given as a bare
+        string starts unmarked::
+
+            items = server.gui.add_list("Preflight", ["Fuel", ("Doors", True)], mark="check")
+            items.marked  # ("Doors",)
 
         Args:
-            initial_value: The entries the list starts with. An empty list is
-                a list with nothing in it yet, not an error.
             label: Optional label for the row. Left unset, the list takes the
                 whole width of the panel, which a stack of boxes usually wants;
-                given one, the label takes the left column and the entries sit
+                given one, the label takes the left column and the rows sit
                 beside it, like every other labelled control.
-            frozen: Fix the list's length and order. The entries can still be
-                edited; what goes is adding, removing, and reordering, along
-                with the controls that do them. Use ``disabled`` to stop the
-                editing too.
+            initial_value: The rows the list starts with: strings, or with a
+                mark strings and ``(text, marked)`` pairs. An empty list is a
+                list with nothing in it yet, not an error.
+            mark: What each row carries: nothing, ``"check"``, or ``"radio"``.
+            frozen: Fix the rows' number and order, and with a mark their
+                words too, which are then drawn as text so the viewer only
+                marks them. Without a mark the entries can still be edited. Use
+                ``disabled`` to stop all editing.
             disabled: Whether the list is disabled.
             visible: Whether the list is visible.
             hint: Optional hint to display on hover.
@@ -3437,175 +2122,16 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        if isinstance(initial_value, str):
-            raise ValueError("add_list() initial_value must be a sequence, not one string.")
-        entries = _bounded_tuple(initial_value, "list")
-        for entry in entries:
-            if not isinstance(entry, str):
-                raise ValueError(
-                    "add_list() holds text entries, so initial_value= is a sequence of"
-                    f" strings; got {entry!r}. Pass str(...) for anything else."
-                )
-            _validate_collection_string(entry, "list")
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiListHandle(
-            self._create_gui_input(
-                entries,
-                message=_messages.GuiListMessage(
-                    value=entries,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiListProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                        frozen=frozen,
-                    ),
-                ),
-            )
-        )
-
-    def add_checklist(
-        self,
-        label: str | None = None,
-        initial_value: Sequence[str | tuple[str, bool]] = (),
-        *,
-        frozen: bool = False,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiChecklistHandle:
-        """Add a checklist to the GUI: entries with a box each to tick.
-
-        A list whose rows carry an answer. The value is one ``(text, checked)``
-        pair per item, in the order they are shown, so it reads back the way it
-        is written::
-
-            for text, checked in items.value:
-                ...
-
-        An item given as a bare string is one nobody has ticked yet, which
-        saves a ``False`` per line and is what makes ``items.value +=
-        ("Lights",)`` work::
-
-            items = server.gui.add_checklist("Preflight",
-                                             ["Fuel", ("Doors", True)])
-            items.checked  # ("Doors",)
-
-        Everything a viewer can do -- ticking a box, typing in an entry, adding
-        one, removing one, dragging one somewhere else -- reports the whole
-        tuple, and a row's tick travels with the words it is against.
-
-        Args:
-            label: Optional label for the row. Left unset, the checklist takes
-                the whole width of the panel, which a stack of rows usually
-                wants; given one, the label takes the left column and the items
-                sit beside it, like every other labelled control.
-            initial_value: The items the checklist starts with, each a string or
-                a ``(text, checked)`` pair. An empty checklist is one with
-                nothing on it yet, not an error.
-            frozen: Fix the items: their words, their number, and their order.
-                Frozen, a row is the words rather than a box to type them in,
-                and all the viewer does is tick -- which is the checklist that
-                is a checklist rather than a list to write. Stronger than a
-                list's ``frozen``, which leaves the typing alone: here the
-                answer being asked for is the ticks. Use ``disabled`` to stop
-                those too.
-            disabled: Whether the checklist is disabled.
-            visible: Whether the checklist is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        items = _checklist_items(initial_value)
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiChecklistHandle(
-            self._create_gui_input(
-                items,
-                message=_messages.GuiChecklistMessage(
-                    value=items,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiChecklistProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                        frozen=frozen,
-                    ),
-                ),
-            )
-        )
-
-    def add_radio_list(
-        self,
-        label: str | None = None,
-        initial_value: Sequence[str | tuple[str, bool]] = (),
-        *,
-        frozen: bool = False,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiRadioListHandle:
-        """Add a radio list to the GUI: choices of which at most one is selected.
-
-        Like :meth:`add_checklist`, the value is one ``(text, selected)`` pair
-        per item and bare strings start unselected. Unlike a checklist, choosing
-        one item clears the previous selection::
-
-            mode = server.gui.add_radio_list(
-                "Mode", ("Default", ("Comfortable", True), "Compact")
-            )
-            mode.selected  # "Comfortable"
-
-        Editing, adding, removing, and reordering report the whole tuple, and a
-        selection travels with its text. An empty list and a list with no
-        selection are both valid.
-
-        Args:
-            label: Optional label for the row. Left unset, the radio list takes
-                the whole panel width.
-            initial_value: Choices as strings or ``(text, selected)`` pairs.
-                At most one pair may be selected.
-            frozen: Fix the choices' words, number, and order while leaving the
-                viewer able to select one. Use ``disabled`` to stop selection.
-            disabled: Whether the radio list is disabled.
-            visible: Whether the radio list is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        items = _radio_list_items(initial_value)
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiRadioListHandle(
-            self._create_gui_input(
-                items,
-                message=_messages.GuiRadioListMessage(
-                    value=items,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiRadioListProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                        frozen=frozen,
-                    ),
-                ),
-            )
+        return self._add_input(
+            GuiListHandle,
+            initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            mark=mark,
+            frozen=frozen,
         )
 
     def add_number(
@@ -3638,203 +2164,119 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value: IntOrFloat = initial_value
-        _validate_number(value, "initial_value")
-        if min is not None:
-            _validate_number(min, "min")
-        if max is not None:
-            _validate_number(max, "max")
-        if step is not None:
-            _validate_positive_number(step, "step")
-        if min is not None and max is not None and min > max:
-            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
-        if min is not None and value < min:
-            raise ValueError(f"initial_value {value} is below min={min}.")
-        if max is not None and value > max:
-            raise ValueError(f"initial_value {value} is above max={max}.")
-
-        # Incoming client edits are cast to the type of the stored value, so an
-        # int value with float bounds would truncate every edit. Promote it.
-        if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
-            value = cast(IntOrFloat, float(value))
-
+        value = _validate_number(initial_value, "initial_value")
+        # Browser edits are cast to the type of the stored value, so an int
+        # value with float bounds would truncate every edit. Promote it.
+        if type(value) is int and float in (type(min), type(max), type(step)):
+            value = float(value)
         if step is None:
-            # It's ok that `step` is always a float, even if the value is an integer,
-            # because things all become `number` types after serialization.
             step = cast(
                 IntOrFloat,
-                float(
-                    np.min(
-                        [
-                            _compute_step(value),
-                            _compute_step(min),
-                            _compute_step(max),
-                        ]
-                    )
-                ),
+                builtins.min(_compute_step(value), _compute_step(min), _compute_step(max)),
             )
+        return self._add_input(
+            GuiNumberHandle,
+            value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            precision=_compute_precision_digits(step),
+            step=step,
+            min=min,
+            max=max,
+        )
+
+    @overload
+    def add_vector(
+        self,
+        label: str,
+        initial_value: tuple[float, float],
+        *,
+        min: tuple[float, float] | None = None,
+        max: tuple[float, float] | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[tuple[float, float]]: ...
+
+    @overload
+    def add_vector(
+        self,
+        label: str,
+        initial_value: tuple[float, float, float],
+        *,
+        min: tuple[float, float, float] | None = None,
+        max: tuple[float, float, float] | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[tuple[float, float, float]]: ...
+
+    @overload
+    def add_vector(
+        self,
+        label: str,
+        initial_value: np.ndarray,
+        *,
+        min: tuple[float, ...] | np.ndarray | None = None,
+        max: tuple[float, ...] | np.ndarray | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[tuple[float, ...]]: ...
+
+    def add_vector(
+        self,
+        label: str,
+        initial_value: tuple[float, ...] | np.ndarray,
+        *,
+        min: tuple[float, ...] | np.ndarray | None = None,
+        max: tuple[float, ...] | np.ndarray | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[Any]:
+        """Add a vector input of two or three components to the GUI.
+
+        Args:
+            label: Label to display on the vector input.
+            initial_value: Initial value, whose length (2 or 3) the vector keeps.
+            min: Optional minimum value of each component.
+            max: Optional maximum value of each component.
+            step: Optional step size of the vector input. Computed automatically if not
+                specified.
+            disabled: Whether the vector input is disabled.
+            visible: Whether the vector input is visible.
+            hint: Optional hint to display on hover.
+            order: Optional ordering, smallest values will be displayed first.
+
+        Returns:
+            A handle that can be used to interact with the GUI element.
+        """
         if step is None:
-            raise RuntimeError("number input step computation did not produce a value")
-
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiNumberHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiNumberMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiNumberProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        min=min,
-                        max=max,
-                        precision=_compute_precision_digits(step),
-                        step=step,
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-                is_button=False,
-            )
-        )
-
-    def add_vector2(
-        self,
-        label: str,
-        initial_value: tuple[float, float] | np.ndarray,
-        *,
-        min: tuple[float, float] | np.ndarray | None = None,
-        max: tuple[float, float] | np.ndarray | None = None,
-        step: float | None = None,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiVector2Handle:
-        """Add a length-2 vector input to the GUI.
-
-        Args:
-            label: Label to display on the vector input.
-            initial_value: Initial value of the vector input.
-            min: Optional minimum value of the vector input.
-            max: Optional maximum value of the vector input.
-            step: Optional step size of the vector input. Computed automatically if not
-            disabled: Whether the vector input is disabled.
-            visible: Whether the vector input is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        value = initial_value
-        value = _cast_vector(value, 2)
-        min = _cast_vector(min, 2) if min is not None else None
-        max = _cast_vector(max, 2) if max is not None else None
-        if step is not None:
-            _validate_positive_number(step, "step")
-        if min is not None and max is not None and any(lo > hi for lo, hi in zip(min, max)):
-            raise ValueError("Each vector min component must be at most its max component.")
-        if min is not None and any(component < lo for component, lo in zip(value, min)):
-            raise ValueError("initial_value has a component below min.")
-        if max is not None and any(component > hi for component, hi in zip(value, max)):
-            raise ValueError("initial_value has a component above max.")
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-
-        step = _infer_vector_step(value, min, max, step)
-
-        return GuiVector2Handle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiVector2Message(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiVector2Props(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        min=min,
-                        max=max,
-                        step=step,
-                        precision=_compute_precision_digits(step),
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
-        )
-
-    def add_vector3(
-        self,
-        label: str,
-        initial_value: tuple[float, float, float] | np.ndarray,
-        *,
-        min: tuple[float, float, float] | np.ndarray | None = None,
-        max: tuple[float, float, float] | np.ndarray | None = None,
-        step: float | None = None,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiVector3Handle:
-        """Add a length-3 vector input to the GUI.
-
-        Args:
-            label: Label to display on the vector input.
-            initial_value: Initial value of the vector input.
-            min: Optional minimum value of the vector input.
-            max: Optional maximum value of the vector input.
-            step: Optional step size of the vector input. Computed automatically if not
-            disabled: Whether the vector input is disabled.
-            visible: Whether the vector input is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        value = initial_value
-        value = _cast_vector(value, 3)
-        min = _cast_vector(min, 3) if min is not None else None
-        max = _cast_vector(max, 3) if max is not None else None
-        if step is not None:
-            _validate_positive_number(step, "step")
-        if min is not None and max is not None and any(lo > hi for lo, hi in zip(min, max)):
-            raise ValueError("Each vector min component must be at most its max component.")
-        if min is not None and any(component < lo for component, lo in zip(value, min)):
-            raise ValueError("initial_value has a component below min.")
-        if max is not None and any(component > hi for component, hi in zip(value, max)):
-            raise ValueError("initial_value has a component above max.")
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-
-        step = _infer_vector_step(value, min, max, step)
-
-        return GuiVector3Handle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiVector3Message(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiVector3Props(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        min=min,
-                        max=max,
-                        step=step,
-                        precision=_compute_precision_digits(step),
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
+            step = _infer_vector_step(initial_value, min, max)
+        return self._add_input(
+            GuiVectorHandle,
+            initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            min=min,
+            max=max,
+            step=step,
+            precision=_compute_precision_digits(step),
         )
 
     # See add_dropdown for notes on overloads.
@@ -3883,7 +2325,8 @@ class GuiApi(GuiContainer):
         Args:
             label: Label to display on the dropdown.
             options: Sequence of options to display in the dropdown.
-            initial_value: Initial value of the dropdown.
+            initial_value: Initial value of the dropdown; the first option when
+                left unset.
             disabled: Whether the dropdown is disabled.
             visible: Whether the dropdown is visible.
             searchable: Whether the open dropdown offers a search box to filter
@@ -3896,41 +2339,17 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        # Materialize once so a one-shot iterable isn't consumed by the checks
-        # below and again by the message construction.
-        options_tuple = cast(
-            "tuple[TLiteralString, ...] | tuple[TString, ...]",
-            _string_options(options, "add_dropdown()"),
-        )
-        value = initial_value
-        if value is None:
-            value = options_tuple[0]
-        else:
-            value = next((option for option in options_tuple if option == value), None)
-            if value is None:
-                raise ValueError(
-                    f"Dropdown initial_value is not one of the options {options_tuple!r}."
-                )
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiDropdownHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiDropdownMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiDropdownProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        options=options_tuple,
-                        disabled=disabled,
-                        visible=visible,
-                        searchable=searchable,
-                    ),
-                ),
-            ),
+        option_tuple = _options(options, "Dropdown")
+        return self._add_input(
+            GuiDropdownHandle,
+            option_tuple[0] if initial_value is None else initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            options=option_tuple,
+            searchable=searchable,
         )
 
     def add_progress_bar(
@@ -3945,6 +2364,7 @@ class GuiApi(GuiContainer):
 
         Args:
             initial_value: Initial value of the progress bar, from 0 to 100.
+                Assign the handle's ``value`` to move it.
             visible: Whether the progress bar is visible.
             animated: Whether the progress bar is in an animated loading state.
             order: Optional ordering, smallest values will be displayed first.
@@ -3952,32 +2372,16 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        _validate_number(initial_value, "initial_value")
-        if not 0 <= initial_value <= 100:
-            raise ValueError(
-                f"initial_value= is a percentage, so it lives in [0, 100]; got {initial_value}."
-            )
-        message = _messages.GuiProgressBarMessage(
-            value=initial_value,
-            uuid=_make_uuid(),
-            container_uuid=self._get_container_uuid(),
-            props=_messages.GuiProgressBarProps(
+        return self._add(
+            GuiProgressBarHandle,
+            _messages.GuiProgressBarProps(
                 order=self._apply_default_order(order),
+                value=initial_value,
                 animated=animated,
                 visible=visible,
             ),
+            parent=self._get_container_uuid(),
         )
-        handle = GuiProgressBarHandle(
-            _GuiHandleState(
-                message.uuid,
-                self,
-                value=initial_value,
-                props=message.props,
-                parent_container_id=message.container_uuid,
-                create_message=message,
-            ),
-        )
-        return handle
 
     def add_slider(
         self,
@@ -4016,48 +2420,25 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        value: IntOrFloat = initial_value
-        _validate_number(value, "initial_value")
-        _validate_number(min, "min")
-        _validate_number(max, "max")
-        _validate_positive_number(step, "step")
-        if max < min:
-            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
-        if max > min:
-            step = builtins.min(step, max - min)
-        if not (min <= value <= max):
-            raise ValueError(f"initial_value {value} is outside [{min}, {max}].")
-
-        # Incoming client edits are cast to the type of the stored value, so an
-        # int value with float bounds would truncate every edit. Promote it.
-        if type(value) is int and (type(min) is float or type(max) is float or type(step) is float):
-            value = cast(IntOrFloat, float(value))
-
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiSliderHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiSliderMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiSliderProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        min=min,
-                        max=max,
-                        step=step,
-                        precision=_compute_precision_digits(step),
-                        show_value=show_value,
-                        visible=visible,
-                        disabled=disabled,
-                        _marks=_build_slider_marks(marks),
-                    ),
-                ),
-                is_button=False,
-            )
+        value = initial_value
+        # Browser edits are cast to the type of the stored value, so an int
+        # value with float bounds would truncate every edit. Promote it.
+        if type(value) is int and float in (type(min), type(max), type(step)):
+            value = float(value)
+        return self._add_input(
+            GuiSliderHandle,
+            value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            min=min,
+            max=max,
+            step=step,
+            precision=_compute_precision_digits(step),
+            show_value=show_value,
+            marks=marks,
         )
 
     def add_multi_slider(
@@ -4097,210 +2478,84 @@ class GuiApi(GuiContainer):
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-        _validate_number(min, "min")
-        _validate_number(max, "max")
-        _validate_positive_number(step, "step")
-        if max < min:
-            raise ValueError(f"max= must be at least min=; got {min} > {max}.")
-        initial_value = _bounded_tuple(initial_value, "multi-slider values")
-        if not initial_value:
-            raise ValueError("initial_value must contain at least one slider value.")
-        for value in initial_value:
-            _validate_number(value, "initial_value entries")
-        if any(left > right for left, right in zip(initial_value, initial_value[1:])):
-            raise ValueError("initial_value entries must be in ascending order.")
-        if min_range is not None:
-            _validate_number(min_range, "min_range")
-            if min_range < 0:
-                raise ValueError("min_range must be non-negative.")
-            if any(
-                right - left < min_range for left, right in zip(initial_value, initial_value[1:])
-            ):
-                raise ValueError("initial_value entries are closer than min_range.")
-        step = builtins.min(step, max - min)
-        if not all(min <= x <= max for x in initial_value):
-            raise ValueError(f"initial_value {initial_value} has entries outside [{min}, {max}].")
-
-        # GUI callbacks cast incoming values to match the type of the initial value. If
-        # any of the arguments are floats, we should always use a float value.
-        #
-        # This should also match what the IntOrFloat TypeVar resolves to.
-        if (
-            type(min) is float
-            or type(max) is float
-            or type(step) is float
-            or type(min_range) is float
-        ):
-            initial_value = cast(tuple[IntOrFloat, ...], tuple(float(x) for x in initial_value))
-
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiMultiSliderHandle(
-            self._create_gui_input(
-                value=initial_value,
-                message=_messages.GuiMultiSliderMessage(
-                    value=initial_value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiMultiSliderProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        min=min,
-                        min_range=min_range,
-                        max=max,
-                        step=step,
-                        visible=visible,
-                        disabled=disabled,
-                        fixed_endpoints=fixed_endpoints,
-                        precision=_compute_precision_digits(step),
-                        _marks=_build_slider_marks(marks),
-                    ),
-                ),
-                is_button=False,
-            )
+        values = tuple(_validate_number(value, "initial_value entries") for value in initial_value)
+        # Browser edits are cast to the type of the stored values; any float
+        # argument makes them floats.
+        if float in (type(min), type(max), type(step), type(min_range)):
+            values = tuple(float(value) for value in values)
+        return self._add_input(
+            GuiMultiSliderHandle,
+            values,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
+            min=min,
+            max=max,
+            step=step,
+            min_range=min_range,
+            precision=_compute_precision_digits(step),
+            fixed_endpoints=fixed_endpoints,
+            marks=marks,
         )
 
-    def add_rgb(
+    @overload
+    def add_color(
         self,
         label: str,
-        initial_value: tuple[int, int, int],
+        initial_value: tuple[float, float, float],
         *,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiRgbHandle:
-        """Add an RGB picker to the GUI.
+    ) -> GuiColorHandle[tuple[int, int, int]]: ...
+
+    @overload
+    def add_color(
+        self,
+        label: str,
+        initial_value: tuple[float, float, float, float],
+        *,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiColorHandle[tuple[int, int, int, int]]: ...
+
+    def add_color(
+        self,
+        label: str,
+        initial_value: tuple[float, ...],
+        *,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiColorHandle[Any]:
+        """Add a color picker to the GUI: RGB for three channels, RGBA for four.
 
         Integer channels are in [0, 255]; float channels in [0, 1] are scaled to
-        match (matplotlib convention), so ``1.0`` is white.
+        match (matplotlib convention), so ``1.0`` is white or opaque.
 
         Args:
-            label: Label to display on the RGB picker.
-            initial_value: Initial value of the RGB picker.
-            disabled: Whether the RGB picker is disabled.
-            visible: Whether the RGB picker is visible.
+            label: Label to display on the color picker.
+            initial_value: Initial value, whose channel count the color keeps.
+            disabled: Whether the color picker is disabled.
+            visible: Whether the color picker is visible.
             hint: Optional hint to display on hover.
             order: Optional ordering, smallest values will be displayed first.
 
         Returns:
             A handle that can be used to interact with the GUI element.
         """
-
-        value = cast("tuple[int, int, int]", _colors_to_int_tuple(initial_value, 3))
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiRgbHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiRgbMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiRgbProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
+        return self._add_input(
+            GuiColorHandle,
+            initial_value,
+            label=label,
+            hint=hint,
+            disabled=disabled,
+            visible=visible,
+            order=order,
         )
-
-    def add_rgba(
-        self,
-        label: str,
-        initial_value: tuple[int, int, int, int],
-        *,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiRgbaHandle:
-        """Add an RGBA picker to the GUI.
-
-        Integer channels are in [0, 255]; float channels in [0, 1] are scaled to
-        match (matplotlib convention), so ``1.0`` is white/opaque.
-
-        Args:
-            label: Label to display on the RGBA picker.
-            initial_value: Initial value of the RGBA picker.
-            disabled: Whether the RGBA picker is disabled.
-            visible: Whether the RGBA picker is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        value = cast("tuple[int, int, int, int]", _colors_to_int_tuple(initial_value, 4))
-        uuid = _make_uuid()
-        order = self._apply_default_order(order)
-        return GuiRgbaHandle(
-            self._create_gui_input(
-                value,
-                message=_messages.GuiRgbaMessage(
-                    value=value,
-                    uuid=uuid,
-                    container_uuid=self._get_container_uuid(),
-                    props=_messages.GuiRgbaProps(
-                        order=order,
-                        label=label,
-                        hint=hint,
-                        disabled=disabled,
-                        visible=visible,
-                    ),
-                ),
-            )
-        )
-
-    class _GuiMessage(Protocol[GuiInputPropsType]):
-        uuid: str
-        props: GuiInputPropsType
-
-    def _create_gui_input(
-        self,
-        value: T,
-        message: _GuiMessage,
-        is_button: bool = False,
-        is_form_actions: bool = False,
-    ) -> _GuiHandleState[T]:
-        """Private helper for adding a simple GUI element."""
-
-        if not isinstance(message, _messages.Message):
-            raise TypeError("GUI input messages must derive from Message")
-
-        # Construct state first. The concrete handle registers itself and only
-        # then publishes this deferred creation message, so an event-loop
-        # consumer can never answer an element Python has not registered yet.
-        handle_state = _GuiHandleState(
-            props=message.props,
-            gui_api=self,
-            value=value,
-            update_timestamp=time.time(),
-            parent_container_id=self._get_container_uuid(),
-            update_cb=[],
-            is_button=is_button,
-            is_form_actions=is_form_actions,
-            sync_cb=None,
-            uuid=message.uuid,
-            create_message=message,
-        )
-
-        # For broadcasted GUI handles, we should synchronize all clients.
-        # This will be a no-op for client handles.
-        if not is_button:
-
-            def sync_other_clients(client_id: ClientId, updates: dict[str, Any]) -> None:
-                message = _messages.GuiUpdateMessage(handle_state.uuid, updates)
-                message.excluded_self_client = client_id
-                self._websock_interface.queue_message_or_raise(message)
-
-            handle_state.sync_cb = sync_other_clients
-
-        return handle_state
-
-
-install_container_add_methods(GuiApi)

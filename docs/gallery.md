@@ -85,24 +85,24 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_number()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_vector2">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_vector">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/vector2-light.png" alt="Vector2" loading="lazy">
-<img class="only-dark" src="_static/gallery/vector2-dark.png" alt="Vector2" loading="lazy">
+<img class="only-light" src="_static/gallery/vector-light.png" alt="Vector" loading="lazy">
+<img class="only-dark" src="_static/gallery/vector-dark.png" alt="Vector" loading="lazy">
 </span>
 <span class="gallery-caption">
-<span>Vector2</span>
-<code>add_vector2()</code>
+<span>Vector</span>
+<code>add_vector()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_vector3">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_vector">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/vector3-light.png" alt="Vector3" loading="lazy">
-<img class="only-dark" src="_static/gallery/vector3-dark.png" alt="Vector3" loading="lazy">
+<img class="only-light" src="_static/gallery/vector-3d-light.png" alt="3D vector" loading="lazy">
+<img class="only-dark" src="_static/gallery/vector-3d-dark.png" alt="3D vector" loading="lazy">
 </span>
 <span class="gallery-caption">
-<span>Vector3</span>
-<code>add_vector3()</code>
+<span>3D vector</span>
+<code>add_vector()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_text">
@@ -145,44 +145,44 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_list()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_checklist">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_list">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/checklist-light.png" alt="Checklist" loading="lazy">
 <img class="only-dark" src="_static/gallery/checklist-dark.png" alt="Checklist" loading="lazy">
 </span>
 <span class="gallery-caption">
 <span>Checklist</span>
-<code>add_checklist()</code>
+<code>add_list()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_checklist">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_list">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/frozen-checklist-light.png" alt="Frozen checklist" loading="lazy">
 <img class="only-dark" src="_static/gallery/frozen-checklist-dark.png" alt="Frozen checklist" loading="lazy">
 </span>
 <span class="gallery-caption">
 <span>Frozen checklist</span>
-<code>add_checklist()</code>
+<code>add_list()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_radio_list">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_list">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/radio-list-light.png" alt="Radio list" loading="lazy">
 <img class="only-dark" src="_static/gallery/radio-list-dark.png" alt="Radio list" loading="lazy">
 </span>
 <span class="gallery-caption">
 <span>Radio list</span>
-<code>add_radio_list()</code>
+<code>add_list()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_radio_list">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_list">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/frozen-radio-list-light.png" alt="Frozen radio list" loading="lazy">
 <img class="only-dark" src="_static/gallery/frozen-radio-list-dark.png" alt="Frozen radio list" loading="lazy">
 </span>
 <span class="gallery-caption">
 <span>Frozen radio list</span>
-<code>add_radio_list()</code>
+<code>add_list()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_checkbox">
@@ -217,16 +217,6 @@ the Plotly sample therefore keeps its light template in both images.
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_toggle">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/toggle-light.png" alt="Toggle" loading="lazy">
-<img class="only-dark" src="_static/gallery/toggle-dark.png" alt="Toggle" loading="lazy">
-</span>
-<span class="gallery-caption">
-<span>Toggle</span>
-<code>add_toggle()</code>
-</span>
-</a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_toggle">
-<span class="gallery-media">
 <img class="only-light" src="_static/gallery/toggle-group-light.png" alt="Toggle group" loading="lazy">
 <img class="only-dark" src="_static/gallery/toggle-group-dark.png" alt="Toggle group" loading="lazy">
 </span>
@@ -235,24 +225,24 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_toggle()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_rgb">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_color">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/rgb-light.png" alt="RGB color" loading="lazy">
-<img class="only-dark" src="_static/gallery/rgb-dark.png" alt="RGB color" loading="lazy">
+<img class="only-light" src="_static/gallery/color-light.png" alt="Color" loading="lazy">
+<img class="only-dark" src="_static/gallery/color-dark.png" alt="Color" loading="lazy">
 </span>
 <span class="gallery-caption">
-<span>RGB color</span>
-<code>add_rgb()</code>
+<span>Color</span>
+<code>add_color()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_rgba">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_color">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/rgba-light.png" alt="RGBA color" loading="lazy">
-<img class="only-dark" src="_static/gallery/rgba-dark.png" alt="RGBA color" loading="lazy">
+<img class="only-light" src="_static/gallery/color-alpha-light.png" alt="Color with alpha" loading="lazy">
+<img class="only-dark" src="_static/gallery/color-alpha-dark.png" alt="Color with alpha" loading="lazy">
 </span>
 <span class="gallery-caption">
-<span>RGBA color</span>
-<code>add_rgba()</code>
+<span>Color with alpha</span>
+<code>add_color()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_progress_bar">
@@ -342,14 +332,14 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_folder()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_popup">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_folder">
 <span class="gallery-media">
-<img class="only-light" src="_static/gallery/popup-light.png" alt="Popup" loading="lazy">
-<img class="only-dark" src="_static/gallery/popup-dark.png" alt="Popup" loading="lazy">
+<img class="only-light" src="_static/gallery/popup-light.png" alt="Popup folder" loading="lazy">
+<img class="only-dark" src="_static/gallery/popup-dark.png" alt="Popup folder" loading="lazy">
 </span>
 <span class="gallery-caption">
-<span>Popup</span>
-<code>add_popup()</code>
+<span>Popup folder</span>
+<code>add_folder()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_form">
@@ -362,14 +352,14 @@ the Plotly sample therefore keeps its light template in both images.
 <code>add_form()</code>
 </span>
 </a>
-<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_mini_form">
+<a class="gallery-card" href="api/gui.html#leika.GuiApi.add_form">
 <span class="gallery-media">
 <img class="only-light" src="_static/gallery/mini-form-light.png" alt="Mini form" loading="lazy">
 <img class="only-dark" src="_static/gallery/mini-form-dark.png" alt="Mini form" loading="lazy">
 </span>
 <span class="gallery-caption">
 <span>Mini form</span>
-<code>add_mini_form()</code>
+<code>add_form()</code>
 </span>
 </a>
 <a class="gallery-card" href="api/gui.html#leika.GuiApi.add_tab_group">

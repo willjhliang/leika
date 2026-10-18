@@ -6,7 +6,6 @@ The browser's TypeScript types are generated from these dataclasses; see
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import functools
 import math
@@ -132,15 +131,6 @@ class GuiSliderMark:
     label: Optional[str]
 
 
-@dataclasses.dataclass(frozen=True)
-class GuiTab:
-    """One tab of a tab group: its label, its icon, and the container it shows."""
-
-    label: str
-    icon_html: Optional[str]
-    container_id: str
-
-
 TagLiteral = Literal["GuiComponentMessage"]
 
 # Entity lifecycle markers, which drive coalescing and garbage collection.
@@ -263,11 +253,12 @@ class Message:
 
     def encode(self) -> bytes:
         """Check every field against its annotation and encode the message."""
-        fields = _wire_fields(type(self))
-        for name, annotation in fields:
-            _check_outbound(getattr(self, name), annotation)
+        check_wire_types(self)
         return _ENCODER.encode(
-            {"type": type(self).__name__, **{name: getattr(self, name) for name, _ in fields}}
+            {
+                "type": type(self).__name__,
+                **{name: getattr(self, name) for name, _ in _wire_fields(type(self))},
+            }
         )
 
 
@@ -285,6 +276,15 @@ def _wire_fields(cls: type) -> tuple[tuple[str, Any], ...]:
     """A dataclass's wire fields with their resolved annotations, in order."""
     hints = get_type_hints(cls)
     return tuple((field.name, hints[field.name]) for field in dataclasses.fields(cls))
+
+
+def check_wire_types(record: object) -> None:
+    """Check each field of a wire dataclass against its annotation."""
+    for name, annotation in _wire_fields(type(record)):
+        try:
+            _check_outbound(getattr(record, name), annotation)
+        except TypeError as error:
+            raise TypeError(f"{type(record).__name__}.{name}: {error}") from None
 
 
 def _type_error(annotation: object, value: object) -> TypeError:
@@ -342,16 +342,9 @@ def _check_outbound(value: Any, annotation: Any) -> None:
     if dataclasses.is_dataclass(annotation):
         if type(value) is not annotation:
             raise _type_error(annotation, value)
-        for name, field_annotation in _wire_fields(annotation):
-            _check_outbound(getattr(value, name), field_annotation)
+        check_wire_types(value)
         return
     raise TypeError(f"unsupported protocol annotation: {annotation!r}")
-
-
-def validated_protocol_value_copy(value: Any) -> Any:
-    """A private copy of one dynamic property value the wire can carry."""
-    _ENCODER.encode(value)
-    return copy.deepcopy(value)
 
 
 # Bounds on what one decoded browser message may contain, beyond the
@@ -496,19 +489,15 @@ class GuiRemoveMessage(
     Message,
     entity=EntityLifecycle("gui", "remove", "uuid"),
 ):
-    """Remove one GUI element, its tabs, and named descendants atomically."""
+    """Remove one GUI element or tab, and every descendant it lists, atomically."""
 
     uuid: str
     removed_uuids: Tuple[str, ...] = ()
-    removed_tab_uuids: Tuple[str, ...] = ()
+    """Every descendant, tabs included, so the browser needs no tree walk."""
 
     @override
     def purge_entities(self) -> tuple[tuple[str, object], ...]:
-        return (
-            ("gui", self.uuid),
-            *(("gui", uuid) for uuid in self.removed_uuids),
-            *(("gui", uuid) for uuid in self.removed_tab_uuids),
-        )
+        return (("gui", self.uuid), *(("gui", uuid) for uuid in self.removed_uuids))
 
 
 @dataclasses.dataclass
@@ -596,30 +585,15 @@ class GuiFolderProps:
     """Visibility state of the GUI folder."""
     expand_by_default: bool
     """Whether the folder should be expanded by default."""
+    popup: bool
+    """Whether the folder is one labelled row whose children open in a popout,
+    rather than a section in the panel."""
 
 
 @dataclasses.dataclass
 class GuiFolderMessage(_CreateGuiComponentMessage):
     container_uuid: str
     props: GuiFolderProps
-
-
-@dataclasses.dataclass
-class GuiPopupProps:
-    order: float
-    """Order value for arranging GUI elements."""
-    label: str
-    """Label for the popup's row."""
-    visible: bool
-    """Visibility state of the GUI popup."""
-
-
-@dataclasses.dataclass
-class GuiPopupMessage(_CreateGuiComponentMessage):
-    """A folder-like container whose children open in a popout."""
-
-    container_uuid: str
-    props: GuiPopupProps
 
 
 @dataclasses.dataclass
@@ -649,6 +623,13 @@ class GuiFormMessage(_CreateGuiComponentMessage):
 
     container_uuid: str
     props: GuiFormProps
+
+
+@dataclasses.dataclass
+class GuiFormResetMessage(Message):
+    """Sent client->server when the user presses a form's Reset."""
+
+    uuid: str
 
 
 @dataclasses.dataclass
@@ -753,6 +734,8 @@ class GuiDividerMessage(_CreateGuiComponentMessage):
 class GuiProgressBarProps:
     order: float
     """Order value for arranging GUI elements. """
+    value: float
+    """Progress as a percentage, from 0 to 100."""
     animated: bool
     """Whether the progress bar should be animated."""
     visible: bool
@@ -761,7 +744,6 @@ class GuiProgressBarProps:
 
 @dataclasses.dataclass
 class GuiProgressBarMessage(_CreateGuiComponentMessage):
-    value: float
     container_uuid: str
     props: GuiProgressBarProps
 
@@ -811,10 +793,6 @@ class GuiImageMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiTabGroupProps:
-    _tabs: Tuple[GuiTab, ...]
-    """(Private) Server/client-local descriptor projection. The group create
-    carries an empty tuple; flat ``GuiTabMessage`` lifecycle records declare,
-    update, and remove tabs before their child components."""
     order: float
     """Order value for arranging GUI elements. """
     visible: bool
@@ -828,16 +806,26 @@ class GuiTabGroupMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiTabProps:
+    label: str
+    """Label on the tab."""
+    _icon_html: Optional[str]
+    """(Private) HTML string for the icon displayed on the tab."""
+
+
+@dataclasses.dataclass
 class GuiTabMessage(
     Message,
     entity=EntityLifecycle("gui", "create", "uuid"),
 ):
-    """Declare one stable tab container before any of its child components."""
+    """Declare one stable tab container of a group, before any of its children.
+
+    Tabs keep their own create, update and remove records, separate from the
+    group's, so every replay prefix is valid and tabs keep their order."""
 
     uuid: str
     group_uuid: str
-    label: str
-    icon_html: Optional[str]
+    props: GuiTabProps
 
 
 @dataclasses.dataclass
@@ -845,12 +833,11 @@ class GuiTabUpdateMessage(
     Message,
     entity=EntityLifecycle("gui", "update_simple", "uuid"),
 ):
-    """Update presentation metadata for an already-declared tab container."""
+    """Update the props of an already-declared tab."""
 
     uuid: str
     group_uuid: str
-    label: str
-    icon_html: Optional[str]
+    props: GuiTabProps
 
 
 @dataclasses.dataclass
@@ -870,15 +857,10 @@ class GuiCloseModalMessage(
 ):
     uuid: str
     removed_uuids: Tuple[str, ...] = ()
-    removed_tab_uuids: Tuple[str, ...] = ()
 
     @override
     def purge_entities(self) -> tuple[tuple[str, object], ...]:
-        return (
-            ("modal", self.uuid),
-            *(("gui", uuid) for uuid in self.removed_uuids),
-            *(("gui", uuid) for uuid in self.removed_tab_uuids),
-        )
+        return (("modal", self.uuid), *(("gui", uuid) for uuid in self.removed_uuids))
 
 
 @dataclasses.dataclass
@@ -897,6 +879,9 @@ class GuiButtonProps(GuiBaseProps):
     """(Private) Whether the press's work can be begun before the press: a
     button that shows a file asks for it when it scrolls into view
     (``GuiPreviewWarmMessage``), so the press finds the file already here."""
+    _busy: bool
+    """(Private) Whether a file button is producing its file. Drawn as
+    disabled, separately from the caller's own ``disabled``."""
 
 
 @dataclasses.dataclass
@@ -1065,8 +1050,8 @@ class GuiSliderProps(GuiBaseProps):
     """Number of decimal places to display for the slider value."""
     show_value: bool
     """Whether to show the editable number box beside the slider."""
-    _marks: Optional[Tuple[GuiSliderMark, ...]]
-    """(Private) Optional tuple of GuiSliderMark objects to display custom marks on the slider."""
+    marks: Optional[Tuple[GuiSliderMark, ...]]
+    """Optional marks to display on the slider."""
 
 
 @dataclasses.dataclass
@@ -1090,8 +1075,8 @@ class GuiMultiSliderProps(GuiBaseProps):
     """Number of decimal places to display for the multi-slider values."""
     fixed_endpoints: bool
     """If True, the first and last handles cannot be moved."""
-    _marks: Optional[Tuple[GuiSliderMark, ...]]
-    """(Private) Optional tuple of GuiSliderMark objects to display custom marks on the multi-slider."""
+    marks: Optional[Tuple[GuiSliderMark, ...]]
+    """Optional marks to display on the multi-slider."""
 
 
 @dataclasses.dataclass
@@ -1121,48 +1106,6 @@ class GuiNumberMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiRgbProps(GuiBaseProps):
-    pass
-
-
-@dataclasses.dataclass
-class GuiRgbMessage(_CreateGuiComponentMessage):
-    value: Tuple[int, int, int]
-    container_uuid: str
-    props: GuiRgbProps
-
-
-@dataclasses.dataclass
-class GuiRgbaProps(GuiBaseProps):
-    pass
-
-
-@dataclasses.dataclass
-class GuiRgbaMessage(_CreateGuiComponentMessage):
-    value: Tuple[int, int, int, int]
-    container_uuid: str
-    props: GuiRgbaProps
-
-
-@dataclasses.dataclass
-class GuiToggleProps(GuiBaseProps):
-    text: str
-    """Text on the toggle's own face; see `GuiButtonProps.text`."""
-    color: ButtonColor
-    """Colorway for the toggle. The same two roles a button takes, and the ON
-    state is that button's own pressed appearance."""
-    _icon_html: Optional[str]
-    """(Private) HTML string for the icon to be displayed on the toggle."""
-
-
-@dataclasses.dataclass
-class GuiToggleMessage(_CreateGuiComponentMessage):
-    value: bool
-    container_uuid: str
-    props: GuiToggleProps
-
-
-@dataclasses.dataclass
 class GuiToggleGroupProps(GuiBaseProps):
     color: Tuple[ButtonColor, ...]
     """One colorway per toggle; see `GuiButtonGroupProps.color`."""
@@ -1174,9 +1117,8 @@ class GuiToggleGroupProps(GuiBaseProps):
     required: bool
     """Whether one option must always be on. True refuses the press that would
     empty the row, so the value is never an empty tuple."""
-    _merge: Tuple[bool, ...]
-    """(Private) One flag per gap between toggles; see
-    `GuiButtonGroupProps._merge`."""
+    merge: Tuple[bool, ...]
+    """One flag per gap between toggles; see `GuiButtonGroupProps.merge`."""
 
 
 @dataclasses.dataclass
@@ -1186,6 +1128,19 @@ class GuiToggleGroupMessage(_CreateGuiComponentMessage):
     one unless the group is `multiple`."""
     container_uuid: str
     props: GuiToggleGroupProps
+
+
+@dataclasses.dataclass
+class GuiColorProps(GuiBaseProps):
+    pass
+
+
+@dataclasses.dataclass
+class GuiColorMessage(_CreateGuiComponentMessage):
+    value: Union[Tuple[int, int, int], Tuple[int, int, int, int]]
+    """RGB or RGBA channels in [0, 255]."""
+    container_uuid: str
+    props: GuiColorProps
 
 
 @dataclasses.dataclass
@@ -1201,10 +1156,10 @@ class GuiCheckboxMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiVector2Props(GuiBaseProps):
-    min: Optional[Tuple[float, float]]
+class GuiVectorProps(GuiBaseProps):
+    min: Optional[Tuple[float, ...]]
     """Minimum allowed values for each component of the vector."""
-    max: Optional[Tuple[float, float]]
+    max: Optional[Tuple[float, ...]]
     """Maximum allowed values for each component of the vector."""
     step: float
     """Step size for incrementing/decrementing each component of the vector."""
@@ -1213,29 +1168,11 @@ class GuiVector2Props(GuiBaseProps):
 
 
 @dataclasses.dataclass
-class GuiVector2Message(_CreateGuiComponentMessage):
-    value: Tuple[float, float]
+class GuiVectorMessage(_CreateGuiComponentMessage):
+    value: Tuple[float, ...]
+    """Two or three components."""
     container_uuid: str
-    props: GuiVector2Props
-
-
-@dataclasses.dataclass
-class GuiVector3Props(GuiBaseProps):
-    min: Optional[Tuple[float, float, float]]
-    """Minimum allowed values for each component of the vector."""
-    max: Optional[Tuple[float, float, float]]
-    """Maximum allowed values for each component of the vector."""
-    step: float
-    """Step size for incrementing/decrementing each component of the vector."""
-    precision: int
-    """Number of decimal places to display for each component of the vector."""
-
-
-@dataclasses.dataclass
-class GuiVector3Message(_CreateGuiComponentMessage):
-    value: Tuple[float, float, float]
-    container_uuid: str
-    props: GuiVector3Props
+    props: GuiVectorProps
 
 
 @dataclasses.dataclass
@@ -1253,9 +1190,9 @@ class GuiTextProps(GuiBaseProps):
     """Whether the value is drawn as markdown. Only for a read-only field: an
     editable field is editing the source, so it always shows it."""
     _source: str
-    """(Private) The value with its relative image paths resolved to data URLs
-    -- the browser cannot read a path on the server's disk. Kept in step with
-    the value whenever a rendered field could be looking at it."""
+    """(Private) The Markdown the browser renders: the value, with relative
+    image paths pointed at server URLs -- the browser cannot read a path on the
+    server's disk. Empty unless ``markdown`` is set."""
 
 
 @dataclasses.dataclass
@@ -1267,54 +1204,24 @@ class GuiTextMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiListProps(GuiBaseProps):
+    mark: Optional[Literal["check", "radio"]]
+    """What each row carries beside its text: nothing, a box to tick, or one of
+    a set of radios of which at most one is selected."""
     frozen: bool
-    """Whether the list's LENGTH and ORDER are fixed. Frozen, the entries can
-    still be edited but none can be added, removed, or moved, and the controls
-    that would do those things are not drawn. Separate from ``disabled``, which
-    stops the entries being edited as well."""
+    """Whether the rows' number and order are fixed. Frozen, no row can be
+    added, removed, or moved, and the controls that would do those things are
+    not drawn. A marked list's rows also keep their words, drawn as text, so
+    the viewer only marks them. Separate from ``disabled``, which stops all
+    editing."""
 
 
 @dataclasses.dataclass
 class GuiListMessage(_CreateGuiComponentMessage):
-    value: Tuple[str, ...]
+    value: Union[Tuple[str, ...], Tuple[Tuple[str, bool], ...]]
+    """The entries, or with a mark one (text, marked) pair per row, in the
+    order they are shown."""
     container_uuid: str
     props: GuiListProps
-
-
-@dataclasses.dataclass
-class GuiChecklistProps(GuiBaseProps):
-    frozen: bool
-    """Whether the ITEMS are fixed: their words, their number, and their order.
-    Frozen, a row is the words rather than a box to type them in, and what the
-    viewer does with the list is tick it. Separate from ``disabled``, which
-    stops the ticking too. Stronger than a list's ``frozen``, which leaves the
-    typing alone, because on a checklist the answer being asked for is the
-    ticks and the words are only what they are against."""
-
-
-@dataclasses.dataclass
-class GuiChecklistMessage(_CreateGuiComponentMessage):
-    value: Tuple[Tuple[str, bool], ...]
-    """One (text, checked) pair per item, in the order they are shown."""
-    container_uuid: str
-    props: GuiChecklistProps
-
-
-@dataclasses.dataclass
-class GuiRadioListProps(GuiBaseProps):
-    frozen: bool
-    """Whether the ITEMS are fixed: their words, their number, and their order.
-    Frozen, a row is the words rather than a box to type them in, and what the
-    viewer does with the list is select one. Separate from ``disabled``, which
-    stops selection too."""
-
-
-@dataclasses.dataclass
-class GuiRadioListMessage(_CreateGuiComponentMessage):
-    value: Tuple[Tuple[str, bool], ...]
-    """One (text, selected) pair per item, with at most one selected."""
-    container_uuid: str
-    props: GuiRadioListProps
 
 
 @dataclasses.dataclass
@@ -1343,9 +1250,9 @@ class GuiButtonGroupProps(GuiBaseProps):
     ``options``; the Python API fills a single role across the row."""
     options: Tuple[str, ...]
     """Tuple of buttons for the button group."""
-    _merge: Tuple[bool, ...]
-    """(Private) One flag per gap between buttons: True joins that pair into
-    one block, False parts them. Always ``len(options) - 1`` long."""
+    merge: Tuple[bool, ...]
+    """One flag per gap between buttons: True joins that pair into one block,
+    False parts them. Always ``len(options) - 1`` long."""
 
 
 @dataclasses.dataclass

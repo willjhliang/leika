@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import gc
 import json
-import sys
 import threading
 import time
 import weakref
-from collections import deque
-from collections.abc import Sequence
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,9 +15,6 @@ import numpy as np
 import pytest
 
 import leika
-import leika._gui_api as gui_api_impl
-import leika._gui_handles as gui_handles_impl
-import leika._gui_resources as gui_resources_impl
 import leika._notification_handle as notification_impl
 from leika import _messages
 from leika._server import ClientHandle
@@ -47,6 +40,11 @@ def _open_recorder(output: list[Any]):
     return queue
 
 
+def _queued(server: leika.Server) -> tuple[_messages.Message, ...]:
+    """The messages the server retains for browsers that connect later."""
+    return tuple(queued_messages(server._websock_server.get_message_buffer()).values())
+
+
 def _client_connection_stub(
     server: leika.Server,
     client_id: ClientId,
@@ -63,6 +61,30 @@ def _client_connection_stub(
         queue_message_or_raise=queued.append,
         queue_messages_or_raise=queued.extend,
         get_message_buffer=lambda: message_buffer,
+    )
+
+
+def _browser_update(server: leika.Server, handle: Any, value: object, client: int = 1) -> None:
+    asyncio.run(
+        server.gui._handle_gui_updates(
+            ClientId(client), _messages.GuiUpdateMessage(handle.id, {"value": value})
+        )
+    )
+
+
+def _start_upload(
+    server: leika.Server, client_id: int, upload: Any, transfer_uuid: str, size: int
+) -> Any:
+    return server.gui._handle_file_transfer_start(
+        ClientId(client_id),
+        _messages.FileTransferStartUpload(
+            source_component_uuid=upload.id,
+            transfer_uuid=transfer_uuid,
+            filename=f"client-{client_id}.bin",
+            mime_type="application/octet-stream",
+            part_count=-(-size // (512 * 1024)),
+            size_bytes=size,
+        ),
     )
 
 
@@ -154,24 +176,39 @@ def test_text_is_read_or_written_and_renders_markdown_when_read(
     and drawn as markdown if it is asked to be."""
     written = server.gui.add_text("Name", "Ada")
     assert (written.editable, written.markdown) == (True, False)
+    # Only rendered Markdown needs a source beside the value.
+    assert written._source == ""
 
     read = server.gui.add_text(None, "**Hello**", editable=False, markdown=True)
     assert (read.editable, read.markdown, read.label) == (False, True, None)
     assert read.value == "**Hello**"
-
-    # The client renders the SOURCE: the value with its image paths resolved,
-    # which the browser cannot do itself. It follows the value.
     assert read._source == "**Hello**"
     read.value = "## Updated"
     assert read._source == "## Updated"
 
-    # And it follows a change of mind about rendering, so a field turned
-    # read-only after the viewer typed in it renders what they typed rather
-    # than what was there before.
+    # It follows a change of mind about rendering, so a field turned read-only
+    # after the viewer typed in it renders what they typed.
     written.value = "# Typed"
-    written.editable = False
-    written.markdown = True
+    written.update(editable=False, markdown=True)
     assert written._source == "# Typed"
+
+    with pytest.raises(UnicodeEncodeError):
+        server.gui.add_text("Invalid", "\ud800")
+
+
+def test_updates_take_only_public_properties(server: leika.Server) -> None:
+    text = server.gui.add_text("Text", "value")
+    with pytest.raises(TypeError, match="no settable property '_source'"):
+        text.update(_source="forged")
+    with pytest.raises(AttributeError, match="derived internal state"):
+        text._source = "forged"
+    with pytest.raises(TypeError, match="no settable property 'lable'"):
+        text.lable = "typo"  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        _ = text.lable  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="no settable property 'value'"):
+        server.gui.add_folder("Folder").update(value=1)
+    assert text._source == ""
 
 
 def test_option_validation(server: leika.Server) -> None:
@@ -195,11 +232,11 @@ def test_option_validation(server: leika.Server) -> None:
     ):
         with pytest.raises(ValueError, match="unique"):
             add()
-    with pytest.raises(ValueError, match="strings"):
+    with pytest.raises(TypeError, match="strings"):
         server.gui.add_dropdown("Invalid", ("valid", 1))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="strings"):
+    with pytest.raises(TypeError, match="strings"):
         server.gui.add_button(("valid", None))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="sequence"):
+    with pytest.raises(ValueError, match="not one string"):
         server.gui.add_dropdown("Invalid", "not a sequence")
     with pytest.raises(ValueError, match="unique"):
         dropdown.options = ("same", "same")
@@ -207,11 +244,18 @@ def test_option_validation(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="must be one of"):
         dropdown.value = "missing"
 
+    # Options without the current value select the first, and say so.
+    seen: list[str] = []
+    dropdown.on_update(lambda event: seen.append(event.value))
+    dropdown.options = ("c", "d")
+    assert dropdown.value == "c"
+    _wait_for(lambda: seen == ["c"])
+
 
 def test_hold_frequency_is_positive_and_finite(server: leika.Server) -> None:
     button = server.gui.add_button("Hold")
-    for frequency in (0, -1, float("inf"), float("nan"), True):
-        with pytest.raises(ValueError, match="positive, finite"):
+    for frequency in (0, -1, float("inf"), float("nan"), True, 61):
+        with pytest.raises(ValueError, match="callback_hz"):
             button.on_hold(callback_hz=frequency)  # type: ignore[arg-type]
 
     callback = button.on_hold(callback_hz=20)(lambda _: None)
@@ -219,7 +263,7 @@ def test_hold_frequency_is_positive_and_finite(server: leika.Server) -> None:
     assert button._hold_callback_freqs == (20.0,)
 
 
-def test_internal_icon_and_hold_updates_roll_back_on_queue_failure(
+def test_queue_failures_leave_icons_and_hold_callbacks_unchanged(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     button = server.gui.add_button("Button")
@@ -231,34 +275,28 @@ def test_internal_icon_and_hold_updates_roll_back_on_queue_failure(
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
     for handle in (button, upload, command):
-        props_before = dataclasses.replace(handle._impl.props)
+        props_before = handle._impl.props
         with pytest.raises(RuntimeError, match="queue rejected"):
             handle.icon = leika.Icon.PLAY
         assert handle.icon is None
-        assert handle._impl.props == props_before
+        assert handle._impl.props is props_before
 
     callback = lambda _: None
-    hold_props = dataclasses.replace(button._impl.props)
     with pytest.raises(RuntimeError, match="queue rejected"):
         button.on_hold(callback, callback_hz=20.0)
-    assert button._hold_cbs_from_freq == {}
-    assert button._impl.props == hold_props
+    assert button._hold_callbacks == {}
+    assert button._hold_callback_freqs == ()
 
-    monkeypatch.setattr(
-        server.gui._websock_interface,
-        "queue_message_or_raise",
-        lambda _: None,
-    )
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", lambda _: None)
     button.on_hold(callback, callback_hz=20.0)
-    assert button._hold_cbs_from_freq == {20.0: [callback]}
+    assert button._hold_callbacks == {20.0: [callback]}
     assert button._hold_callback_freqs == (20.0,)
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
-    props_before = dataclasses.replace(button._impl.props)
     with pytest.raises(RuntimeError, match="queue rejected"):
         button.remove_hold_callback(callback, callback_hz=20.0)
-    assert button._hold_cbs_from_freq == {20.0: [callback]}
-    assert button._impl.props == props_before
+    assert button._hold_callbacks == {20.0: [callback]}
+    assert button._hold_callback_freqs == (20.0,)
 
 
 def test_async_callbacks_are_scheduled_on_the_server_loop(server: leika.Server) -> None:
@@ -369,13 +407,8 @@ def test_wire_callbacks_await_sync_returned_and_callable_object_awaitables(
         await server.gui._handle_command_trigger(
             ClientId(1), _messages.CommandTriggerMessage(command.id)
         )
-        await server.gui._dispatch_file_upload_completion(
-            (
-                ClientId(1),
-                upload,
-                leika.UploadedFile("file.bin", b"contents"),
-                (upload_callback,),
-            )
+        await server.gui._run_upload_callbacks(
+            ClientId(1), upload, leika.UploadedFile("file.bin", b"contents"), (upload_callback,)
         )
 
     asyncio.run(run())
@@ -417,10 +450,11 @@ def test_programmatic_callbacks_schedule_every_awaitable_result(
     form.submit_form()
 
     assert completed.wait(2.0)
-    assert sorted(seen) == ["dropdown", "form", "input", "text"]
+    # Submitted in order, and run in that order.
+    assert seen == ["input", "text", "dropdown", "form"]
 
 
-def test_programmatic_callback_schedule_rejected_by_closed_loop_is_released_and_reported(
+def test_programmatic_callbacks_rejected_by_a_closed_loop_are_reported(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -430,13 +464,11 @@ def test_programmatic_callback_schedule_rejected_by_closed_loop_is_released_and_
     monkeypatch.setattr(server.gui, "_event_loop", closed_loop)
     invoked: list[object] = []
 
-    event = SimpleNamespace(value="retained")
-    server.gui._schedule_programmatic_callbacks((invoked.append,), event)
+    server.gui._schedule_callbacks((invoked.append,), SimpleNamespace(value="retained"))
 
     assert invoked == []
-    assert server.gui._programmatic_callback_queue == deque()
-    assert server.gui._programmatic_callback_retained_bytes == 0
-    assert server.gui._programmatic_callback_scheduled is False
+    assert not server.gui._callback_queue
+    assert server.gui._callback_draining is False
     assert "RuntimeError: Event loop is closed" in capsys.readouterr().err
 
 
@@ -558,90 +590,122 @@ def test_raising_async_hold_and_command_callbacks_do_not_skip_peers(
     assert "RuntimeError: command callback failed" in errors
 
 
-def test_handle_values_preserve_constructor_invariants(server: leika.Server) -> None:
+def test_handle_values_preserve_constructor_invariants(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
     entries = server.gui.add_list("Entries", ("one",))
-    with pytest.raises(ValueError, match="sequence of strings"):
+    with pytest.raises(ValueError, match="not one string"):
         entries.value = "one"  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="strings"):
+    with pytest.raises(ValueError, match="Rows are strings"):
         entries.value = ("one", None)  # type: ignore[assignment]
 
     toggles = server.gui.add_toggle(("A", "B"))
-    with pytest.raises(ValueError, match="only one"):
+    with pytest.raises(ValueError, match="one at a"):
         toggles.value = ("A", "B")
-    with pytest.raises(ValueError, match="requires one"):
+    with pytest.raises(ValueError, match="cannot be empty"):
         toggles.value = ()
+    # One option's text names that option alone.
+    toggles.value = "B"
+    assert toggles.value == ("B",)
 
-    color = server.gui.add_rgb("Color", (1, 2, 3))
+    color = server.gui.add_color("Color", (1, 2, 3))
     with pytest.raises(ValueError, match="3 color channels"):
         color.value = (1, 2)  # type: ignore[assignment]
-    rgba = server.gui.add_rgba("Alpha", (1, 2, 3, 4))
-    for handle, invalid in ((color, [1, 2]), (rgba, [1, 2, 3])):
-        asyncio.run(
-            server.gui._handle_gui_updates(
-                ClientId(1),
-                _messages.GuiUpdateMessage(handle.id, {"value": invalid}),
-            )
-        )
+    rgba = server.gui.add_color("Alpha", (1, 2, 3, 4))
+    # A browser sends exact integer channels; Python may also give floats.
+    for handle, invalid in (
+        (color, [1, 2]),
+        (rgba, [1, 2, 3]),
+        (color, [0.5, 0.5, 0.5]),
+        (color, [1, 2, 300]),
+    ):
+        _browser_update(server, handle, invalid)
     assert color.value == (1, 2, 3)
     assert rgba.value == (1, 2, 3, 4)
+    color.value = (0, 0.5, 300)
+    assert color.value == (0, 127, 255)
+    with pytest.raises(ValueError, match="3 \\(RGB\\) or 4 \\(RGBA\\)"):
+        server.gui.add_color("Gray", (1, 2))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2 or 3 components"):
+        server.gui.add_vector("Point", (1.0, 2.0, 3.0, 4.0), step=0.1)  # type: ignore[arg-type]
 
-    vector = server.gui.add_vector2("Point", (0.0, 0.0), min=(-1.0, -1.0), max=(1.0, 1.0))
-    with pytest.raises(ValueError, match="shape"):
+    vector = server.gui.add_vector("Point", (0.0, 0.0), min=(-1.0, -1.0), max=(1.0, 1.0))
+    with pytest.raises(ValueError, match="2 components"):
         vector.value = (0.0, 0.0, 0.0)  # type: ignore[assignment]
     with pytest.raises(ValueError, match="above max"):
         vector.value = (2.0, 0.0)
-
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(1),
-            _messages.GuiUpdateMessage(vector.id, {"value": [2.0, 0.0]}),
-        )
-    )
+    _browser_update(server, vector, [2.0, 0.0])
     assert vector.value == (0.0, 0.0)
+    vector.value = np.array([0.5, -0.5])
+    assert vector.value == (0.5, -0.5)
 
     progress = server.gui.add_progress_bar(50)
     with pytest.raises(ValueError, match=r"\[0, 100\]"):
         progress.value = 101
+    assert progress.value == 50
 
     slider = server.gui.add_slider("Bounded", 0.5, min=0.0, max=1.0, step=0.1)
-    with pytest.raises(ValueError, match="within"):
+    with pytest.raises(ValueError, match="outside"):
         slider.value = 2.0
 
 
-def test_popup_is_a_folder_compatible_container(server: leika.Server) -> None:
-    with server.gui.add_popup("Display details", order=7.0) as popup:
+def test_progress_bar_is_display_only(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    progress = server.gui.add_progress_bar(10, animated=True)
+    assert not isinstance(progress, leika.GuiInputHandle)
+    _browser_update(server, progress, 90)
+    assert progress.value == 10
+    sent: list[Any] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
+    progress.value = 40
+    assert sent[-1].updates == {"value": 40}
+
+
+def test_a_popup_folder_opens_its_children_from_one_row(server: leika.Server) -> None:
+    with server.gui.add_folder("Display details", popup=True, order=7.0) as popup:
         enabled = server.gui.add_checkbox("Enabled", initial_value=True)
         with server.gui.add_folder("Advanced") as folder:
             gain = server.gui.add_number("Gain", initial_value=1.0)
 
-    assert isinstance(popup, leika.GuiPopupHandle)
-    assert popup.label == "Display details"
-    assert popup.order == 7.0
+    assert isinstance(popup, leika.GuiFolderHandle)
+    assert (popup.label, popup.popup, popup.order) == ("Display details", True, 7.0)
     assert enabled._impl.parent_container_id == popup.id
     assert folder._impl.parent_container_id == popup.id
     assert gain._impl.parent_container_id == folder.id
     assert any(
-        isinstance(message, _messages.GuiPopupMessage) and message.uuid == popup.id
-        for message in queued_messages(server._websock_server.get_message_buffer()).values()
+        isinstance(message, _messages.GuiFolderMessage)
+        and message.uuid == popup.id
+        and message.props.popup
+        for message in _queued(server)
     )
 
     popup.update(label="Rendering", visible=False, order=8.0)
     assert (popup.label, popup.visible, popup.order) == ("Rendering", False, 8.0)
+    with pytest.raises(ValueError, match="needs a label"):
+        popup.label = None
+    with pytest.raises(ValueError, match="needs a label"):
+        server.gui.add_folder(None, popup=True)
 
     popup.remove()
     assert popup._impl.removed
     assert enabled._impl.removed
     assert folder._impl.removed
     assert gain._impl.removed
-    with pytest.raises(RuntimeError, match="removed popup"):
-        popup.add_text("Rejected", initial_value="")
+    with pytest.raises(RuntimeError, match="removed GuiFolderHandle"):
+        with popup:
+            pass
 
 
-def test_form_compatibility_and_submission(server: leika.Server) -> None:
+def test_form_submission_and_its_browser_reset(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with server.gui.add_form(label="Profile") as form:
         name = server.gui.add_text("Name", initial_value="Ada")
-    # One row holding the form's two ways out, and no row label of its own.
-    assert (form.actions.options, form.actions.label) == (("Reset", "Submit"), None)
+    # Reset and Submit are the browser's, not children of the form.
+    assert list(form._impl.children.values()) == [name]
     submitted: list[str] = []
 
     @form.on_submit
@@ -654,146 +718,46 @@ def test_form_compatibility_and_submission(server: leika.Server) -> None:
     form.submit_form()
     _wait_for(lambda: submitted == ["Ada", "Grace"])
 
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+
+    def browser_reset(target: leika.GuiFormHandle) -> None:
+        reset = _messages.GuiFormResetMessage(target.id)
+        asyncio.run(server.gui._handle_gui_form_reset(ClientId(1), reset))
+
+    browser_reset(form)
+    assert name.value == "Ada"
+    assert submitted == ["Ada", "Grace"]
+
+    # Only a visible regular form draws a Reset to press.
+    name.value = "Grace"
+    form.visible = False
+    browser_reset(form)
+    assert name.value == "Grace"
+    with server.gui.add_form(mini=True) as mini:
+        query = server.gui.add_text("Query", "")
+    query.value = "typed"
+    browser_reset(mini)
+    assert query.value == "typed"
+
+    # A form keeps its kind, so the mini form's one-field rule holds.
+    with pytest.raises(ValueError, match="cannot change between mini and regular"):
+        form.mini = True
+
+    # Any order is a child's to use.
+    with form:
+        last = server.gui.add_text("Last", "", order=float.fromhex("0x1.fffffffffffffp+1023"))
+    assert last.order > name.order
+
     with server.gui.add_form(label="Outer"):
         with pytest.raises(ValueError, match="Nested forms"):
             server.gui.add_form(label="Inner")
 
 
-def test_form_action_buttons_stay_below_fields_without_fallible_restamps(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Actions use one finite terminal order; later children need no update."""
-    with server.gui.add_form() as form:
-        first = server.gui.add_text("Name", initial_value="Ada")
-        last = server.gui.add_checkbox("Subscribe", initial_value=False)
-    assert form.actions.order == sys.float_info.max
-    assert form.actions.order > last.order > first.order
-
-    buffer = server._websock_server.get_message_buffer()
-    before_ids = set(queued_messages(buffer))
-    before_count = server.gui._live_component_count
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
-    original_queue = server.gui._websock_interface.queue_message_or_raise
-
-    def reject_child(message: _messages.Message) -> None:
-        if isinstance(message, _messages.GuiTextMessage):
-            raise RuntimeError("child queue rejected")
-        original_queue(message)
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject_child)
-    with pytest.raises(RuntimeError, match="child queue rejected"):
-        form.add_text("Rejected", initial_value="")
-    assert not form._impl.removed
-    assert server.gui._live_component_count == before_count
-    assert server.gui._resource_from_gui_uuid == before_resources
-    assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
-    assert set(queued_messages(buffer)) == before_ids
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", original_queue)
-    before_success = set(queued_messages(buffer))
-    added = form.add_text("Nickname", initial_value="")
-    published = [
-        message
-        for message_id, message in queued_messages(buffer).items()
-        if message_id not in before_success
-    ]
-    assert not any(
-        isinstance(message, _messages.GuiUpdateMessage)
-        and message.uuid == form.actions.id
-        and "order" in message.updates
-        for message in published
-    )
-    assert form.actions.order == sys.float_info.max
-    assert form.actions.order > added.order > last.order
-
-    before_tie = queued_messages(buffer)
-    before_count = server.gui._live_component_count
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    with pytest.raises(ValueError, match="reserved for a form's Reset/Submit"):
-        form.add_text("Tied", "", order=sys.float_info.max)
-    assert queued_messages(buffer) == before_tie
-    assert server.gui._live_component_count == before_count
-    assert server.gui._resource_from_gui_uuid == before_resources
-
-    old_order = added.order
-    with pytest.raises(ValueError, match="reserved for a form's Reset/Submit"):
-        added.order = sys.float_info.max
-    assert added.order == old_order
-    assert queued_messages(buffer) == before_tie
-
-    outside = server.gui.add_text("Outside", "", order=sys.float_info.max)
-    assert outside.order == sys.float_info.max
-
-    action_props = dataclasses.replace(form.actions._impl.props)
-    action_buffer = queued_messages(buffer)
-    action_resource = server.gui._resource_total
-    with pytest.raises(ValueError, match="actions must keep their terminal order"):
-        form.actions.order = 0.0
-    assert form.actions._impl.props == action_props
-    assert queued_messages(buffer) == action_buffer
-    assert server.gui._resource_total == action_resource
-
-    with pytest.raises(ValueError, match="actions must keep their terminal order"):
-        form.actions.update(order=0.0)
-    assert form.actions._impl.props == action_props
-    assert queued_messages(buffer) == action_buffer
-    assert server.gui._resource_total == action_resource
-
-    with pytest.raises(TypeError, match="must be a number"):
-        form.actions.update(order=None)
-    with pytest.raises(ValueError, match="exactly Reset and Submit"):
-        form.actions.options = ("Reset", "Cancel")
-    with pytest.raises(ValueError, match="exactly Reset and Submit"):
-        form.actions.update(options=("Reset", "Cancel"))
-    assert form.actions._impl.props == action_props
-    assert queued_messages(buffer) == action_buffer
-    assert server.gui._resource_total == action_resource
-
-
-def test_add_form_action_creation_failure_leaves_no_form_ghost(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    buffer = server._websock_server.get_message_buffer()
-    before_count = server.gui._live_component_count
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
-    original_queue = server.gui._websock_interface.queue_message_or_raise
-    form_uuid: list[str] = []
-
-    def reject_actions(message: _messages.Message) -> None:
-        if isinstance(message, _messages.GuiFormMessage):
-            form_uuid.append(message.uuid)
-            original_queue(message)
-            return
-        if isinstance(message, _messages.GuiButtonGroupMessage):
-            raise RuntimeError("actions queue rejected")
-        original_queue(message)
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject_actions)
-    with pytest.raises(RuntimeError, match="actions queue rejected"):
-        server.gui.add_form(label="Rejected")
-
-    assert len(form_uuid) == 1
-    assert form_uuid[0] not in server.gui._container_handle_from_uuid
-    assert server.gui._get_container_uuid() == "root"
-    assert server.gui._live_component_count == before_count
-    assert server.gui._resource_from_gui_uuid == before_resources
-    assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
-    assert not any(
-        isinstance(message, _messages.GuiFormMessage) and message.uuid == form_uuid[0]
-        for message in queued_messages(buffer).values()
-    )
-
-
-def test_a_mini_form_holds_one_field_and_no_action_buttons(
-    server: leika.Server,
-) -> None:
+def test_a_mini_form_holds_one_field(server: leika.Server) -> None:
     """A mini form is drawn as its field's own row with a send button, so it
-    has no buttons of its own -- and nowhere to put a second field."""
-    with server.gui.add_mini_form() as mini:
+    has nowhere to put a second field or another row."""
+    with server.gui.add_form(mini=True) as mini:
         field = server.gui.add_text("Search", initial_value="")
-    assert not hasattr(mini, "actions")
 
     submitted: list[str] = []
     mini.on_submit(lambda _: submitted.append(field.value))
@@ -806,25 +770,26 @@ def test_a_mini_form_holds_one_field_and_no_action_buttons(
     assert field.value == ""
 
     with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form():
+        with server.gui.add_form(mini=True):
             server.gui.add_text("One", initial_value="")
             server.gui.add_text("Two", initial_value="")
 
-    # The mini renderer has one left-hand control cell. Sibling display rows
-    # and nested containers are rejected before publication, even before its
-    # one field is declared.
-    with server.gui.add_mini_form() as strict:
-        with pytest.raises(ValueError, match="direct editable field"):
-            strict.add_text(
-                None,
-                "Ask away",
-                editable=False,
-                markdown=True,
-                multiline=True,
-            )
-        with pytest.raises(ValueError, match="direct editable field"):
-            strict.add_folder("Nested")
-        strict.add_text("Query", initial_value="")
+    with server.gui.add_form(mini=True) as strict:
+        for add_incompatible in (
+            lambda: server.gui.add_text(None, "Ask away", editable=False, markdown=True),
+            lambda: server.gui.add_folder("Nested"),
+            server.gui.add_tab_group,
+            lambda: server.gui.add_html("<p>Sibling</p>"),
+            lambda: server.gui.add_button("Sibling"),
+        ):
+            before = dict(strict._impl.children)
+            with pytest.raises(ValueError, match="direct editable field"):
+                add_incompatible()
+            assert strict._impl.children == before
+        server.gui.add_text("Query", initial_value="")
+        with pytest.raises(ValueError, match="single field"):
+            server.gui.add_text("Second", initial_value="")
+    assert len(strict._impl.children) == 1
 
 
 def test_form_reset_restores_what_the_fields_were_declared_with(
@@ -837,7 +802,9 @@ def test_form_reset_restores_what_the_fields_were_declared_with(
         with server.gui.add_folder("More"):
             age = server.gui.add_number("Age", initial_value=36)
             tags = server.gui.add_toggle(("A", "B"), label="Tags", multiple=True)
-    late = form.add_text("Nickname", initial_value="Countess")
+        name.value = "Changed before the context exits"
+    with form:
+        late = server.gui.add_text("Nickname", initial_value="Countess")
 
     name.value = "Grace"
     age.value = 45
@@ -845,12 +812,7 @@ def test_form_reset_restores_what_the_fields_were_declared_with(
     late.value = "Amazing"
 
     form.reset_form()
-    assert (name.value, age.value, tags.value, late.value) == (
-        "Ada",
-        36,
-        (),
-        "Countess",
-    )
+    assert (name.value, age.value, tags.value, late.value) == ("Ada", 36, (), "Countess")
 
     # A field removed since is skipped rather than resurrected.
     late.remove()
@@ -858,68 +820,120 @@ def test_form_reset_restores_what_the_fields_were_declared_with(
     assert name.value == "Ada"
 
 
-def test_gui_html_enforces_browser_utf16_limit_on_create_and_update(
+def test_form_reset_rebuilds_markdown_source_for_the_current_mode(
+    server: leika.Server, tmp_path: Path
+) -> None:
+    image = tmp_path / "dot.png"
+    ihdr = (1).to_bytes(4, "big") * 2 + b"\x08\x02\x00\x00\x00"
+    image.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + len(ihdr).to_bytes(4, "big")
+        + b"IHDR"
+        + ihdr
+        + b"\x00\x00\x00\x00"
+        + b"\x00\x00\x00\x00IDAT\x00\x00\x00\x00"
+        + b"\x00\x00\x00\x00IEND\x00\x00\x00\x00"
+    )
+    declared = "![dot](dot.png)"
+    with server.gui.add_form(label="Profile") as form:
+        field = server.gui.add_text("Body", declared, image_root=tmp_path)
+
+    field.update(editable=False, markdown=True)
+    field.value = "changed"
+    form.reset_form()
+
+    assert field.value == declared
+    assert "/leika-assets/" in field._source
+    assert field._source != declared
+
+
+def test_form_reset_batch_failure_changes_no_field_or_callback(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(gui_handles_impl, "_GUI_HTML_MAX_UTF16_CODE_UNITS", 2)
+    with server.gui.add_form(label="Profile") as form:
+        name = server.gui.add_text("Name", "Ada")
+        age = server.gui.add_number("Age", 36)
+    name.value = "Grace"
+    age.value = 45
+    callbacks: list[object] = []
+    name.on_update(lambda event: callbacks.append(event.value))
+    age.on_update(lambda event: callbacks.append(event.value))
 
-    handle = server.gui.add_html("😀")
-    assert handle.content == "😀"
-    with pytest.raises(ValueError, match="1 Mi-character"):
-        handle.content = "😀x"
-    assert handle.content == "😀"
+    def reject(_: Any) -> None:
+        raise RuntimeError("batch rejected")
 
-    with pytest.raises(ValueError, match="1 Mi-character"):
-        server.gui.add_html("😀x")
-    with pytest.raises(TypeError, match="must be a string"):
-        server.gui.add_html(123)  # type: ignore[arg-type]
+    monkeypatch.setattr(server.gui._websock_interface, "queue_messages_or_raise", reject)
+    with pytest.raises(RuntimeError, match="batch rejected"):
+        form.reset_form()
+
+    assert (name.value, age.value) == ("Grace", 45)
+    time.sleep(0.05)
+    assert callbacks == []
 
 
-def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
+def test_failed_and_invalid_form_contexts_retire_the_whole_subtree(
+    server: leika.Server,
+) -> None:
+    form = None
+    child = None
+    with pytest.raises(RuntimeError, match="construction failed"):
+        with server.gui.add_form(label="Broken") as form:
+            child = server.gui.add_text("Partial", "")
+            raise RuntimeError("construction failed")
+    assert form is not None and form._impl.removed
+    assert child is not None and child._impl.removed
+    assert form.id not in server.gui._handles
+    assert child.id not in server.gui._handles
+
+    with pytest.raises(ValueError, match="single field"):
+        with server.gui.add_form(mini=True) as empty:
+            pass
+    assert empty._impl.removed
+    assert empty.id not in server.gui._handles
+
+    first = second = None
+    with pytest.raises(ValueError, match="single field"):
+        with server.gui.add_form(mini=True) as invalid:
+            first = server.gui.add_text("One", "")
+            second = server.gui.add_text("Two", "")
+    assert invalid._impl.removed
+    assert first is not None and first._impl.removed
+    assert second is None  # Rejected before publication or registration.
+
+
+def test_removed_handles_keep_their_last_state_and_refuse_changes(
     server: leika.Server,
 ) -> None:
     frame = np.full((24, 32, 3), 127, dtype=np.uint8)
-    image = server.gui.add_image(frame, label="Frame", format="png", jpeg_quality=73)
-    download = server.gui.add_download_button("Save", b"payload" * 512, filename="capture.bin")
-    command = server.gui.add_command(
-        "Run",
-        lambda: None,
-        description="description" * 128,
-        icon=leika.Icon.PLAY,
-    )
-    notification = server.gui.add_notification("Working", "body" * 256, auto_close_seconds=None)
-    ids = (image.id, download.id, command.id, notification.id)
+    image = server.gui.add_image(frame, label="Frame", format="png")
+    download = server.gui.add_download_button("Save", b"payload", filename="capture.bin")
+    command = server.gui.add_command("Run", lambda: None, icon=leika.Icon.PLAY)
+    notification = server.gui.add_notification("Working", "body", auto_close_seconds=None)
+    checkbox = server.gui.add_checkbox("Check", True)
 
-    for handle in (image, download, command, notification):
+    for handle in (image, download, command, notification, checkbox):
         handle.remove()
 
-    for read in (
-        lambda: image.image,
-        lambda: image.label,
-        lambda: download.content,
-        lambda: download.value,
-        lambda: command.label,
-        lambda: command.icon,
-        lambda: notification.title,
-        lambda: notification.body,
+    np.testing.assert_array_equal(image.image, frame)
+    assert image.label == "Frame"
+    assert download.content == b"payload"
+    assert (command.label, command.icon) == ("Run", leika.Icon.PLAY)
+    assert notification.title == "Working"
+    assert checkbox.value is True
+
+    for change in (
+        lambda: setattr(image, "image", frame),
+        lambda: setattr(download, "content", b"other"),
+        lambda: setattr(command, "label", "Other"),
+        lambda: setattr(notification, "title", "Other"),
+        lambda: setattr(checkbox, "value", False),
+        lambda: checkbox.on_update(lambda _: None),
     ):
         with pytest.raises(RuntimeError, match="removed"):
-            read()
+            change()
 
-    assert (image.id, download.id, command.id, notification.id) == ids
-    assert image._image.size == 0
-    assert image._user_format == "auto"
-    assert image._jpeg_quality is None
-    assert image._impl.props._data == b""
-    assert download._content == b""
-    assert download._impl.value is None
-    assert command._impl.icon is None
-    assert command._impl.trigger_cb == []
-    assert command._impl.props.label == ""
-    assert command._impl.props.description in (None, "")
-    assert command._impl.props._icon_html in (None, "")
-    assert notification._impl.props.title == ""
-    assert notification._impl.props.body == ""
+    with pytest.warns(UserWarning, match="already removed"):
+        checkbox.remove()
 
 
 def test_removed_control_can_be_collected_while_server_is_alive(server: leika.Server) -> None:
@@ -931,13 +945,10 @@ def test_removed_control_can_be_collected_while_server_is_alive(server: leika.Se
     assert reference() is None
 
 
-def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
+def test_caller_owned_path_and_primitive_subclasses(
     server: leika.Server,
     tmp_path: Path,
 ) -> None:
-    class Payload:
-        pass
-
     class RichStr(str):
         pass
 
@@ -950,53 +961,16 @@ def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
     class RichBytes(bytes):
         pass
 
-    class RichPath(type(Path())):
-        pass
-
     source = tmp_path / "payload.bin"
     source.write_bytes(b"payload")
-    path_payload = Payload()
-    path_payload_ref = weakref.ref(path_payload)
-    rich_path = RichPath(source)
-    rich_path.payload = path_payload
-
-    download = server.gui.add_download_button("Save", rich_path)
-    assert download.content == source
-    assert type(download.content) is type(Path())
-
-    del rich_path, path_payload
-    gc.collect()
-    assert path_payload_ref() is None
-
-    provider_path = RichPath(source)
-    provider_path.payload = Payload()
-    provider = server.gui.add_download_button("Provider", lambda _: provider_path)
+    provider = server.gui.add_download_button("Provider", lambda _: source)
     filename, resolved = provider._resolve(leika.GuiEvent(None, None, provider))
-    assert filename == source.name
-    assert resolved == source
-    assert type(resolved) is type(Path())
-
-    root_payload = Payload()
-    root_payload_ref = weakref.ref(root_payload)
-    rich_root = RichPath(tmp_path)
-    rich_root.payload = root_payload
-    text = server.gui.add_text("Text", "plain", image_root=rich_root)
-    assert text._image_root == tmp_path
-    assert type(text._image_root) is type(Path())
-    del rich_root, root_payload
-    gc.collect()
-    assert root_payload_ref() is None
-    text.remove()
-    assert text._image_root is None
+    assert (filename, resolved) == (source.name, source)
 
     with pytest.raises(TypeError, match="image_root"):
         server.gui.add_text("Bad root", "plain", image_root="not-a-path")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="filename"):
-        server.gui.add_download_button(
-            "Bad name",
-            b"x",
-            filename=RichStr("payload.bin"),
-        )
+        server.gui.add_download_button("Bad name", b"x", filename=RichStr("payload.bin"))
     with pytest.raises(TypeError, match="content"):
         server.gui.add_download_button(
             "Bad bytes",
@@ -1008,13 +982,13 @@ def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
         server.gui.add_number("Number", RichFloat(1.0))
     with pytest.raises(ValueError, match="positive integer"):
         server.gui.add_text("Rows", "", multiline=True, rows=RichInt(2))
-    with pytest.raises(ValueError, match="one role per button"):
+    with pytest.raises(ValueError, match="'default' or 'inverse'"):
         server.gui.add_button("Run", color=RichStr("default"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="control_layout"):
         server.gui.configure_theme(control_layout=RichStr("left"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="theme"):
         server.gui.configure_theme(theme=RichStr("auto"))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="hotkey"):
+    with pytest.raises(TypeError, match="hotkey"):
         server.gui.add_command("Run", hotkey=RichStr("R"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="format"):
         server.gui.add_image(
@@ -1022,17 +996,9 @@ def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
             format=RichStr("png"),  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="jpeg_quality"):
-        server.gui.add_image(
-            np.zeros((1, 1, 3), dtype=np.uint8),
-            jpeg_quality=RichInt(80),
-        )
+        server.gui.add_image(np.zeros((1, 1, 3), dtype=np.uint8), jpeg_quality=RichInt(80))
     with pytest.raises(ValueError, match="max_bytes"):
-        server.gui.add_preview_button(
-            "Preview",
-            b"x",
-            filename="x.txt",
-            max_bytes=RichInt(1),
-        )
+        server.gui.add_preview_button("Preview", b"x", filename="x.txt", max_bytes=RichInt(1))
 
 
 def test_equal_string_subclasses_are_canonicalized_to_declared_options(
@@ -1042,207 +1008,75 @@ def test_equal_string_subclasses_are_canonicalized_to_declared_options(
         pass
 
     initial = RichStr("A")
-    initial.payload = object()
     dropdown = server.gui.add_dropdown("Choice", ("A", "B"), initial_value=initial)
     assert dropdown.value is dropdown.options[0]
     assert type(dropdown.value) is str
 
-    replacement = RichStr("B")
-    replacement.payload = object()
-    dropdown.value = replacement
+    dropdown.value = RichStr("B")
     assert dropdown.value is dropdown.options[1]
-    assert type(dropdown.value) is str
 
     buttons = server.gui.add_button(("A", "B"))
-    button_value = RichStr("B")
-    button_value.payload = object()
-    buttons.value = button_value
+    buttons.value = RichStr("B")
     assert buttons.value is buttons.options[1]
-    assert type(buttons.value) is str
 
     with server.gui.add_form() as form:
-        field = server.gui.add_dropdown(
-            "Form choice",
-            ("A", "B"),
-            initial_value=RichStr("A"),
-        )
+        field = server.gui.add_dropdown("Form choice", ("A", "B"), initial_value=RichStr("A"))
     assert field._impl.initial_value is field.options[0]
     field.value = RichStr("B")
     form.reset_form()
     assert field.value is field.options[0]
-    assert type(field.value) is str
 
 
-def test_failed_gui_terminal_removal_preserves_readable_payloads(
+def test_failed_removal_preserves_the_handle(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     frame = np.full((8, 12, 3), 63, dtype=np.uint8)
     image = server.gui.add_image(frame, label="Frame")
-    content = b"payload" * 64
-    download = server.gui.add_download_button("Save", content, filename="capture.bin")
+    download = server.gui.add_download_button("Save", b"payload", filename="capture.bin")
     command = server.gui.add_command("Run", description="Description", icon=leika.Icon.PLAY)
     notification = server.gui.add_notification("Working", "Still running", auto_close_seconds=None)
-    image_data = image._impl.props._data
-    command_props = dataclasses.replace(command._impl.props)
-    notification_props = dataclasses.replace(notification._impl.props)
+    with server.gui.add_folder("Folder") as folder:
+        child = server.gui.add_text("Child", "")
 
     def reject(_: _messages.Message) -> None:
         raise RuntimeError("closed")
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
-    for handle in (image, download, command, notification):
+    for handle in (image, download, command, notification, folder):
         with pytest.raises(RuntimeError, match="closed"):
             handle.remove()
 
-    np.testing.assert_array_equal(image.image, frame)
-    assert image.label == "Frame"
-    assert image._impl.props._data == image_data
-    assert download.content == content
-    assert download.value is False
-    assert command.label == "Run"
-    assert command.icon == leika.Icon.PLAY
-    assert command._impl.props == command_props
-    assert notification.title == "Working"
-    assert notification.body == "Still running"
-    assert notification._impl.props == notification_props
-    assert not any(handle._impl.removed for handle in (image, download, command, notification))
+    assert not any(
+        handle._impl.removed for handle in (image, download, command, notification, folder, child)
+    )
+    assert child.id in folder._impl.children
+    assert set(server.gui._handles) >= {image.id, command.id, folder.id, child.id}
 
 
-@pytest.mark.plotly
-def test_server_stop_scrubs_all_retained_gui_owners(
-    server: leika.Server,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-
-    text_handle = server.gui.add_text("Text", "value" * 128)
+def test_server_stop_retires_every_handle(server: leika.Server) -> None:
     with server.gui.add_form(label="Form") as form:
-        form_field = server.gui.add_text("Baseline", "declaration" * 128)
-    image = server.gui.add_image(np.zeros((16, 24, 3), dtype=np.uint8))
-    plotly = server.gui.add_plotly(
-        go.Figure(go.Scatter(y=[1, 2, 3])), config={"displayModeBar": False}
-    )
+        field = server.gui.add_text("Field", "value")
     tabs = server.gui.add_tab_group()
-    tab = tabs.add_tab("Tab label", icon=leika.Icon.PLAY)
-    with tab:
-        tab_text = server.gui.add_text("Nested", "payload" * 128)
-    with server.gui.add_modal("Modal title") as modal:
-        modal_text = server.gui.add_html("<strong>modal payload</strong>")
-    command = server.gui.add_command(
-        "Command", description="description" * 128, icon=leika.Icon.PLAY
-    )
-    notification = server.gui.add_notification(
-        "Notification", "body" * 128, auto_close_seconds=None
-    )
-    stable_ids = (
-        text_handle.id,
-        form.id,
-        form_field.id,
-        image.id,
-        plotly.id,
-        tab.id,
-        modal.id,
-        command.id,
-        notification.id,
-    )
+    tab = tabs.add_tab("Tab", icon=leika.Icon.PLAY)
+    with server.gui.add_modal("Modal") as modal:
+        modal_text = server.gui.add_html("<strong>modal</strong>")
+    command = server.gui.add_command("Command")
+    notification = server.gui.add_notification("Notification", auto_close_seconds=None)
+    handles = (form, field, tabs, tab, modal, modal_text, command, notification)
 
     server.stop()
 
-    for read in (
-        lambda: text_handle.value,
-        lambda: form_field.value,
-        lambda: image.image,
-        lambda: plotly.figure,
-        lambda: tab.icon,
-        lambda: tab_text.value,
-        lambda: modal_text.content,
-        lambda: command.label,
-        lambda: notification.title,
-    ):
-        with pytest.raises(RuntimeError, match="removed"):
-            read()
-    assert (
-        text_handle.id,
-        form.id,
-        form_field.id,
-        image.id,
-        plotly.id,
-        tab.id,
-        modal.id,
-        command.id,
-        notification.id,
-    ) == stable_ids
-
-    assert form._impl.removed and form_field._impl.initial_value is None
-    assert image._image.size == 0 and image._impl.props._data == b""
-    assert plotly._impl.props._plotly_json_str == ""
-    assert tab.removed and tab._label == "" and tab._icon is None
-    assert modal.closed and modal._children == {} and modal._create_message is None
-    assert command._impl.trigger_cb == [] and command._impl.icon is None
-    assert notification._impl.props.title == "" and notification._impl.props.body == ""
-
-    assert server.gui._resource_from_gui_uuid == {}
-    assert server.gui._retained_extra_bytes_from_gui_uuid == {}
-    assert server.gui._reset_baseline_resource_from_gui_uuid == {}
-    assert server.gui._resource_total.collection_items == 0
-    assert server.gui._resource_total.text_units == 0
-    assert server.gui._resource_total.payload_bytes == 0
-    assert server.gui._resource_total.decoded_pixels == 0
-    assert server._gui_retained_units_and_bytes == 0
-    assert server._gui_decoded_pixels == 0
-    assert server._page_global_decoded_pixels == 0
-
-
-@pytest.mark.plotly
-def test_gui_plotly_terminal_removal_scrubs_figure_config_and_json(
-    server: leika.Server,
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    figure = go.Figure(go.Scatter(y=[1, 3, 2]))
-    handle = server.gui.add_plotly(figure, config={"displayModeBar": False}, aspect=2.0)
-    handle_id = handle.id
-
-    handle.remove()
-
-    for read in (lambda: handle.figure, lambda: handle.aspect):
-        with pytest.raises(RuntimeError, match="removed"):
-            read()
-    assert handle.id == handle_id
-    assert handle._impl.props._plotly_json_str == ""
-
-
-@pytest.mark.plotly
-def test_failed_gui_plotly_removal_preserves_figure_config_and_json(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    figure = go.Figure(go.Bar(y=[2, 1]))
-    handle = server.gui.add_plotly(figure, config={"displayModeBar": False}, aspect=2.0)
-    json_before = handle._impl.props._plotly_json_str
-
-    def reject(_: _messages.Message) -> None:
-        raise RuntimeError("closed")
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
-    with pytest.raises(RuntimeError, match="closed"):
-        handle.remove()
-
-    assert handle.figure is not figure
-    assert tuple(handle.figure.data[0].y) == (2, 1)
-    assert handle.aspect == 2.0
-    assert json.loads(handle._impl.props._plotly_json_str)["config"] == {"displayModeBar": False}
-    assert handle._impl.props._plotly_json_str == json_before
-    assert not handle._impl.removed
+    assert all(handle._impl.removed for handle in handles)
+    assert server.gui._handles == {} and server.gui._root_children == {}
+    assert field.value == "value" and tab.icon == leika.Icon.PLAY
+    with pytest.raises(RuntimeError, match="no longer active"):
+        server.gui.add_text("Late", "")
 
 
 def test_theme_defaults_to_following_the_browser_color_scheme(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An app has to ask for a scheme; otherwise the viewer's OS decides.
-
-    The wire value matters as much as the default: ``"auto"`` is what tells the
-    client to read ``prefers-color-scheme`` rather than pin a scheme, so a
-    boolean sent in its place would not name a valid Settings selection.
-    """
+    """An app has to ask for a scheme; otherwise the viewer's OS decides."""
     sent: list[Any] = []
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
 
@@ -1251,39 +1085,22 @@ def test_theme_defaults_to_following_the_browser_color_scheme(
     server.gui.configure_theme(theme="auto")
     server.gui.configure_theme(theme="light")
     server.gui.configure_theme(theme="dark")
+    server.gui.configure_theme(control_layout="left")
+    server.gui.configure_theme(control_layout="right")
 
-    assert [message.theme for message in sent] == ["auto", "auto", "auto", "light", "dark"]
+    assert [message.theme for message in sent] == ["auto"] * 3 + ["light", "dark", "auto", "auto"]
+    assert [message.control_layout for message in sent][-2:] == ["left", "right"]
 
 
 def test_theme_rejects_unknown_wire_values(server: leika.Server) -> None:
-    with pytest.raises(ValueError, match="control_layout"):
-        server.gui.configure_theme(control_layout="wide")  # type: ignore[arg-type]
+    for layout in ("wide", "fixed", "collapsible"):
+        with pytest.raises(ValueError, match="'floating', 'left', or 'right'"):
+            server.gui.configure_theme(control_layout=layout)  # type: ignore[arg-type]
     for invalid in (True, False, 1, "system", "Dark", "", [], {}):
         with pytest.raises(ValueError, match="theme"):
             server.gui.configure_theme(theme=invalid)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="dark_mode"):
         server.gui.configure_theme(dark_mode=True)  # type: ignore[call-arg]
-    # The removed sidebar layouts fail with the replacement named, not as
-    # anonymous typos: code written against 0.3.0 gets told where to go.
-    with pytest.raises(ValueError, match="left"):
-        server.gui.configure_theme(control_layout="fixed")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="left"):
-        server.gui.configure_theme(control_layout="collapsible")  # type: ignore[arg-type]
-
-
-def test_theme_sends_the_docked_edge_on_the_wire(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The layout is a starting position the client applies verbatim, so the
-    wire value is the API value -- no mapping in between to drift."""
-    sent: list[Any] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
-
-    server.gui.configure_theme()
-    server.gui.configure_theme(control_layout="left")
-    server.gui.configure_theme(control_layout="right")
-
-    assert [message.control_layout for message in sent] == ["floating", "left", "right"]
 
 
 def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> None:
@@ -1292,30 +1109,28 @@ def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> N
     role per element."""
     row = server.gui.add_button(("Reset", "Submit"), color=("default", "inverse"))
     assert row.color == ("default", "inverse")
-    # A single role still answers for the whole row, and reads back per button.
     plain = server.gui.add_toggle(("A", "B", "C"), color="default")
     assert plain.color == ("default", "default", "default")
 
     # Live, with the same latitude as the constructor.
     plain.color = ("inverse", "default", "inverse")
     assert plain.color == ("inverse", "default", "inverse")
-    plain.color = "inverse"
+    plain.color = "inverse"  # type: ignore[assignment]
     assert plain.color == ("inverse", "inverse", "inverse")
 
-    with pytest.raises(ValueError, match="one role per button"):
+    with pytest.raises(ValueError, match="one role per option"):
         server.gui.add_button(("One", "Two"), color=("inverse",))
-    with pytest.raises(ValueError, match="one role per toggle"):
+    with pytest.raises(ValueError, match="one role per option"):
         server.gui.add_toggle(("One", "Two"), color=("inverse", "inverse", "inverse"))
     with pytest.raises(ValueError, match="must be 'default' or 'inverse'"):
         server.gui.add_button(("One", "Two"), color=("inverse", "blue"))  # type: ignore[arg-type]
-    # A single button is one button: the sequence form has nothing to spread.
-    with pytest.raises(ValueError, match="a single button is one button"):
+    with pytest.raises(ValueError, match="a single button"):
         server.gui.add_button("Solo", color=("inverse",))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="a single toggle is one toggle"):
-        server.gui.add_toggle("Solo", color=("inverse",))  # type: ignore[arg-type]
 
 
-def test_gui_image_state_is_transactional_and_private(server: leika.Server) -> None:
+def test_gui_image_state_is_private_and_unchanged_by_failures(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
     frame = np.zeros((2, 3, 3), dtype=np.uint8)
     image = server.gui.add_image(frame, format="png")
 
@@ -1331,82 +1146,23 @@ def test_gui_image_state_is_transactional_and_private(server: leika.Server) -> N
     assert image.format == "png"
     assert image._data == old_data
 
-
-def test_gui_image_format_preparation_is_two_phase_and_race_safe(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    original = np.zeros((3, 4, 3), dtype=np.uint8)
-    image = server.gui.add_image(original, format="auto")
-    real_prepare = gui_handles_impl.prepare_image
-    entered = threading.Event()
-    release = threading.Event()
-
-    def blocking_prepare(value: np.ndarray, format: Any, jpeg_quality: int | None) -> Any:
-        if threading.current_thread().name.startswith("format-worker"):
-            entered.set()
-            assert release.wait(2)
-        return real_prepare(value, format, jpeg_quality)
-
-    monkeypatch.setattr(gui_handles_impl, "prepare_image", blocking_prepare)
-    failures: list[BaseException] = []
-
-    def change_format(target: Any) -> None:
-        try:
-            target.format = "png"
-        except BaseException as error:
-            failures.append(error)
-
-    worker = threading.Thread(target=change_format, args=(image,), name="format-worker-replace")
-    worker.start()
-    assert entered.wait(1)
-    replacement = np.full_like(original, 17)
-    image.image = replacement
-    release.set()
-    worker.join(2)
-    assert not worker.is_alive()
-    assert len(failures) == 1
-    assert isinstance(failures.pop(), RuntimeError)
-    assert image.format == "auto"
-    np.testing.assert_array_equal(image.image, replacement)
-
-    entered.clear()
-    release.clear()
-    removed = server.gui.add_image(original, format="auto")
-    worker = threading.Thread(target=change_format, args=(removed,), name="format-worker-remove")
-    worker.start()
-    assert entered.wait(1)
-    removed.remove()
-    release.set()
-    worker.join(2)
-    assert not worker.is_alive()
-    assert len(failures) == 1
-    assert isinstance(failures.pop(), RuntimeError)
-
-    admitted = server.gui.add_image(original, format="auto")
-    old_data = admitted._data
-
     def reject(_: object) -> None:
         raise RuntimeError("queue rejected")
 
-    monkeypatch.setattr(admitted._impl.gui_api._websock_interface, "queue_message_or_raise", reject)
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
     with pytest.raises(RuntimeError, match="queue rejected"):
-        admitted.format = "png"
-    assert admitted.format == "auto"
-    assert admitted._data == old_data
+        image.format = "jpeg"
+    with pytest.raises(RuntimeError, match="queue rejected"):
+        image.image = np.full((2, 3, 3), 9, dtype=np.uint8)
+    assert image.format == "png"
+    assert image._data == old_data
+    assert np.all(image.image == 0)
 
 
-def test_tab_lifecycle_publishes_before_children_and_rolls_back(
+def test_tabs_publish_before_their_children_and_remove_with_them(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buffer = server._websock_server._broadcast_buffer
     tabs = server.gui.add_tab_group()
-    group_create = next(
-        message
-        for message in queued_messages(buffer).values()
-        if isinstance(message, _messages.GuiTabGroupMessage) and message.uuid == tabs.id
-    )
-    assert group_create.props._tabs == ()
-
     alpha = tabs.add_tab("Alpha")
     with alpha:
         alpha_child = server.gui.add_text("Alpha child", "a")
@@ -1415,77 +1171,55 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     with beta:
         beta_child = server.gui.add_text("Beta child", "b")
 
-    forged = (_messages.GuiTab("Forged", None, "missing"),)
-    with pytest.raises(AttributeError, match="internal state"):
-        tabs._tabs = forged
-    with pytest.raises(AttributeError, match="internal state"):
-        tabs.update(_tabs=forged)
-
-    messages = tuple(queued_messages(buffer).items())
-    alpha_declaration_id = next(
-        message_id
-        for message_id, message in messages
-        if isinstance(message, _messages.GuiTabMessage) and message.uuid == alpha.id
-    )
-    alpha_child_id = next(
-        message_id
-        for message_id, message in messages
-        if isinstance(message, _messages.GuiTextMessage) and message.uuid == alpha_child.id
-    )
-    beta_declaration_id = next(
-        message_id
-        for message_id, message in messages
-        if isinstance(message, _messages.GuiTabMessage) and message.uuid == beta.id
-    )
-    beta_child_id = next(
-        message_id
-        for message_id, message in messages
-        if isinstance(message, _messages.GuiTextMessage) and message.uuid == beta_child.id
-    )
-    assert alpha_declaration_id < alpha_child_id < beta_declaration_id < beta_child_id
+    messages = _queued(server)
+    order = [
+        index
+        for uuid in (alpha.id, alpha_child.id, beta.id, beta_child.id)
+        for index, message in enumerate(messages)
+        if getattr(message, "uuid", None) == uuid
+        and not isinstance(message, (_messages.GuiUpdateMessage, _messages.GuiTabUpdateMessage))
+    ]
+    assert order == sorted(order) and len(order) == 4
     alpha_update = next(
         message
-        for message in queued_messages(buffer).values()
+        for message in messages
         if isinstance(message, _messages.GuiTabUpdateMessage) and message.uuid == alpha.id
     )
-    assert alpha_update.icon_html is not None
-    assert [descriptor.label for descriptor in tabs._tabs] == ["Alpha", "Beta"]
+    assert alpha_update.props._icon_html is not None
+    assert list(tabs._impl.children) == [alpha.id, beta.id]
+    beta.label = "Renamed"
+    assert beta.label == "Renamed"
 
     alpha.remove()
-    assert all(
-        getattr(message, "uuid", None) not in {alpha.id, alpha_child.id}
-        or isinstance(message, _messages.GuiRemoveMessage)
-        for message in queued_messages(buffer).values()
-    )
-    assert [descriptor.container_id for descriptor in tabs._tabs] == [beta.id]
+    assert list(tabs._impl.children) == [beta.id]
+    assert alpha_child._impl.removed
 
-    old_icon = beta.icon
-    old_tabs = tabs._tabs
-    old_buffer = queued_messages(buffer)
+    def reject(_: _messages.Message) -> None:
+        raise RuntimeError("tab update rejected")
 
-    def reject(_: Sequence[_messages.Message]) -> None:
-        raise RuntimeError("tab lifecycle batch rejected")
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_messages_or_raise", reject)
-    with pytest.raises(RuntimeError, match="tab lifecycle batch rejected"):
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", reject)
+    with pytest.raises(RuntimeError, match="tab update rejected"):
         beta.icon = leika.Icon.PLAY
-    assert beta.icon == old_icon
-    assert tabs._tabs == old_tabs
-    assert queued_messages(buffer) == old_buffer
+    assert beta.icon is None
+
+    sent: list[_messages.Message] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message_or_raise", sent.append)
+    tabs.remove()
+    assert sent == [_messages.GuiRemoveMessage(tabs.id, (beta.id, beta_child.id))]
 
 
 def test_removed_containers_reject_new_actions(server: leika.Server) -> None:
     tabs = server.gui.add_tab_group()
     tab = tabs.add_tab("One")
     tab.remove()
-    with pytest.raises(RuntimeError, match="removed tab"):
+    with pytest.raises(RuntimeError, match="removed GuiTabHandle"):
         tab.icon = leika.Icon.PLAY
 
     tabs.remove()
-    with pytest.raises(RuntimeError, match="removed GuiTabGroupHandle"):
+    with pytest.raises(RuntimeError, match="has been removed"):
         tabs.add_tab("Too late")
 
-    form = server.gui.add_mini_form()
+    form = server.gui.add_form()
     form.remove()
     with pytest.raises(RuntimeError, match="removed GuiFormHandle"):
         form.submit_form()
@@ -1495,6 +1229,8 @@ def test_numeric_constructors_reject_invalid_ranges(server: leika.Server) -> Non
     fixed = server.gui.add_slider("Fixed", 1.0, min=1.0, max=1.0, step=0.1)
     # A fixed range remains valid, but must never emit a zero step.
     assert fixed.step == 0.1
+    # A step wider than the range is clamped to it.
+    assert server.gui.add_slider("Narrow", 0, min=0, max=2, step=5).step == 2
     with pytest.raises(ValueError, match="at least min"):
         server.gui.add_slider("Backwards", 1.0, min=2.0, max=1.0, step=0.1)
     with pytest.raises(ValueError, match="greater than zero"):
@@ -1518,100 +1254,60 @@ def test_uploads_are_isolated_and_validated_per_client(
     acknowledgements: dict[int, list[Any]] = {1: [], 2: []}
     clients = {
         client_id: SimpleNamespace(
-            _websock_connection=SimpleNamespace(
-                queue_message=acknowledgements[client_id].append,
-                queue_message_or_raise=acknowledgements[client_id].append,
-            )
+            _websock_connection=SimpleNamespace(queue_message=_open_recorder(messages))
         )
-        for client_id in acknowledgements
+        for client_id, messages in acknowledgements.items()
     }
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(broadcast))
     monkeypatch.setattr(server.gui, "_resolve_client", clients.get)
+    uploaded: list[tuple[str, bytes]] = []
+    upload.on_upload(lambda event: uploaded.append((event.value.name, event.value.content)))
 
-    def start(client_id: int, *, transfer_uuid: str = "same", parts: int = 1) -> None:
-        server.gui._handle_file_transfer_start(
-            ClientId(client_id),
-            _messages.FileTransferStartUpload(
-                source_component_uuid=upload.id,
-                transfer_uuid=transfer_uuid,
-                filename=f"client-{client_id}.bin",
-                mime_type="application/octet-stream",
-                part_count=parts,
-                size_bytes=parts,
-            ),
-        )
+    _start_upload(server, 1, upload, "same", 1)
+    _start_upload(server, 2, upload, "same", 1)
+    assert len(server.gui._uploads) == 2
 
-    start(1)
-    start(2)
-    assert len(server.gui._current_file_upload_states) == 2
-
-    server.gui._handle_file_transfer_part(
+    completion = server.gui._handle_file_transfer_part(
         ClientId(1), _messages.FileTransferPart(upload.id, "same", 0, b"a")
     )
-    assert upload.value.content == b"a"
-    assert upload.value.name == "client-1.bin"
-    assert len(server.gui._current_file_upload_states) == 1
+    assert upload.value == leika.UploadedFile("client-1.bin", b"a")
+    assert len(server.gui._uploads) == 1
+    assert completion is not None
+    asyncio.run(completion)
+    assert uploaded == [("client-1.bin", b"a")]
 
     # The same transfer UUID from another client remains independent.
     server.gui._handle_file_transfer_part(
         ClientId(2), _messages.FileTransferPart(upload.id, "same", 0, b"c")
     )
     assert upload.value.content == b"c"
-    assert server.gui._current_file_upload_states == {}
+    assert server.gui._uploads == {}
     assert not any(isinstance(message, _messages.FileTransferPartAck) for message in broadcast)
     assert {client_id: len(messages) for client_id, messages in acknowledgements.items()} == {
         1: 2,
         2: 2,
     }
 
+    # Assignments from Python are validated like any other value.
+    upload.value = leika.UploadedFile("python.bin", b"x")
+    with pytest.raises(TypeError, match="content must be bytes"):
+        upload.value = leika.UploadedFile("bad.bin", bytearray(b"x"))  # type: ignore[arg-type]
+    assert upload.value == leika.UploadedFile("python.bin", b"x")
+
     # Removing a button releases any incomplete transfer.
-    start(1, transfer_uuid="pending", parts=1)
+    _start_upload(server, 1, upload, "pending", 1)
     upload.remove()
-    assert server.gui._current_file_upload_states == {}
+    assert server.gui._uploads == {}
 
 
-def test_final_upload_freeze_failure_aborts_without_ack_or_accounting_leak(
+def test_malformed_or_unavailable_uploads_are_aborted(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    upload = server.gui.add_upload_button("Upload")
-    queued: list[_messages.Message] = []
-    client = SimpleNamespace(
-        _websock_connection=SimpleNamespace(queue_message=_open_recorder(queued))
-    )
+    messages: list[Any] = []
+    client = SimpleNamespace(_websock_connection=SimpleNamespace(queue_message=messages.append))
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
-    server.gui._handle_file_transfer_start(
-        ClientId(1),
-        _messages.FileTransferStartUpload(
-            source_component_uuid=upload.id,
-            transfer_uuid="memory",
-            filename="data.bin",
-            mime_type="application/octet-stream",
-            part_count=1,
-            size_bytes=1,
-        ),
-    )
-    assert isinstance(queued.pop(), _messages.FileTransferPartAck)
-
-    def fail_freeze(_: bytearray) -> bytes:
-        raise MemoryError("simulated conversion pressure")
-
-    monkeypatch.setattr("leika._gui_api._freeze_upload_content", fail_freeze)
-    result = server.gui._handle_file_transfer_part(
-        ClientId(1),
-        _messages.FileTransferPart(upload.id, "memory", 0, b"x"),
-    )
-
-    assert result is None
-    assert server.gui._current_file_upload_states == {}
-    assert server._file_upload_bytes_reserved == 0
-    assert upload.value == leika.UploadedFile("", b"")
-    assert len(queued) == 1
-    assert isinstance(queued[0], _messages.FileTransferAbort)
-    assert not isinstance(queued[0], _messages.FileTransferPartAck)
-
-
-def test_malformed_upload_messages_are_dropped(server: leika.Server) -> None:
     upload = server.gui.add_upload_button("Upload")
+
     server.gui._handle_file_transfer_start(
         ClientId(1),
         _messages.FileTransferStartUpload(
@@ -1623,30 +1319,35 @@ def test_malformed_upload_messages_are_dropped(server: leika.Server) -> None:
             size_bytes=1,
         ),
     )
-    assert server.gui._current_file_upload_states == {}
-
-    server.gui._handle_file_transfer_start(
-        ClientId(1),
-        _messages.FileTransferStartUpload(
-            source_component_uuid=upload.id,
-            transfer_uuid="oversize",
-            filename="bad.bin",
-            mime_type="application/octet-stream",
-            part_count=1,
-            size_bytes=1,
-        ),
-    )
+    _start_upload(server, 1, upload, "oversize", 64 * 1024 * 1024 + 1)
+    _start_upload(server, 1, upload, "wrong-size", 1)
     server.gui._handle_file_transfer_part(
-        ClientId(1), _messages.FileTransferPart(upload.id, "oversize", 0, b"too long")
+        ClientId(1), _messages.FileTransferPart(upload.id, "wrong-size", 0, b"too long")
     )
-    assert server.gui._current_file_upload_states == {}
+    assert server.gui._uploads == {}
     assert upload.value.content == b""
+    assert [message.reason for message in messages if hasattr(message, "reason")] == [
+        "Invalid upload metadata.",
+        "Upload exceeds the 64 MiB limit.",
+        "Invalid upload part.",
+    ]
+
+    upload.disabled = True
+    _start_upload(server, 1, upload, "disabled", 1)
+    assert server.gui._uploads == {}
+    assert messages[-1].reason == "Upload target unavailable."
+
+    # A repeated start does not cancel the transfer already under way.
+    upload.disabled = False
+    _start_upload(server, 1, upload, "active", 1)
+    _start_upload(server, 1, upload, "active", 1)
+    assert messages[-1].reason == "An upload is already active for this control."
+    assert (ClientId(1), "active") in server.gui._uploads
 
 
 def test_upload_part_and_button_removal_are_serialized(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert server.gui._file_upload_lock is server.gui._lock
     upload = server.gui.add_upload_button("Upload")
     ack_started = threading.Event()
     release_ack = threading.Event()
@@ -1658,17 +1359,7 @@ def test_upload_part_and_button_removal_are_serialized(
 
     client = SimpleNamespace(_websock_connection=SimpleNamespace(queue_message=queue_message))
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
-    server.gui._handle_file_transfer_start(
-        ClientId(1),
-        _messages.FileTransferStartUpload(
-            source_component_uuid=upload.id,
-            transfer_uuid="race",
-            filename="race.bin",
-            mime_type="application/octet-stream",
-            part_count=1,
-            size_bytes=1,
-        ),
-    )
+    _start_upload(server, 1, upload, "race", 1)
     part_thread = threading.Thread(
         target=server.gui._handle_file_transfer_part,
         args=(ClientId(1), _messages.FileTransferPart(upload.id, "race", 0, b"a")),
@@ -1692,15 +1383,11 @@ def test_upload_part_and_button_removal_are_serialized(
     assert not part_thread.is_alive()
     assert not remove_thread.is_alive()
     assert removed.is_set()
-    assert server.gui._current_file_upload_states == {}
+    assert server.gui._uploads == {}
 
 
 def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) -> None:
-    """Entering the same container twice must not lose the outer target.
-
-    Each container used to remember a single restore ID, so a re-entered
-    ``with`` block overwrote it and the outer exit had nothing to go back to.
-    """
+    """Entering the same container twice must not lose the outer target."""
     outer = server.gui.add_folder("Outer")
     with outer:
         inner = server.gui.add_folder("Inner")
@@ -1716,66 +1403,7 @@ def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) 
     assert shallow._impl.parent_container_id == outer.id
     assert sibling._impl.parent_container_id == outer.id
     assert root._impl.parent_container_id == "root"
-    # Nothing left behind for this context once every block has unwound.
     assert server.gui._container_stack.get() == ()
-
-
-def test_full_component_graph_depth_is_bounded_transactionally(
-    server: leika.Server,
-) -> None:
-    """Root and modal graphs accept depth 64 and reject every node at 65."""
-
-    buffer = server._websock_server.get_message_buffer()
-
-    def state() -> tuple[object, ...]:
-        return (
-            queued_messages(buffer),
-            server.gui._live_component_count,
-            server.gui._resource_total,
-            dict(server.gui._resource_from_gui_uuid),
-            dict(server.gui._reset_baseline_resource_from_gui_uuid),
-            set(server.gui._gui_input_handle_from_uuid),
-            set(server.gui._container_handle_from_uuid),
-            dict(server.gui._container_depth_from_uuid),
-            server._gui_retained_units_and_bytes,
-            server._gui_decoded_pixels,
-        )
-
-    def check_graph_root(root: Any, prefix: str) -> None:
-        parent = root
-        for depth in range(1, 64):
-            parent = parent.add_folder(f"{prefix} folder {depth}", order=float(depth))
-            assert server.gui._container_depth_from_uuid[parent.id] == depth
-
-        leaf = parent.add_text(f"{prefix} leaf", "", order=-3.0)
-        tabs = parent.add_tab_group(order=-2.0)
-        deepest_folder = parent.add_folder(f"{prefix} deepest", order=-1.0)
-        assert server.gui._container_depth_from_uuid[tabs.id] == 64
-        assert server.gui._container_depth_from_uuid[deepest_folder.id] == 64
-        assert leaf.id in server.gui._gui_input_handle_from_uuid
-
-        before = state()
-        deepest_children = dict(deepest_folder._children)
-        with pytest.raises(RuntimeError, match="graph depth cannot exceed 64"):
-            deepest_folder.add_text("Too deep", "", order=0.0)
-        assert state() == before
-        assert deepest_folder._children == deepest_children
-
-        with pytest.raises(RuntimeError, match="graph depth cannot exceed 64"):
-            deepest_folder.add_tab_group(order=0.0)
-        assert state() == before
-        assert deepest_folder._children == deepest_children
-
-        before_tabs = tuple(tabs._tab_handles)
-        with pytest.raises(RuntimeError, match="graph depth cannot exceed 64"):
-            tabs.add_tab("Too deep")
-        assert state() == before
-        assert tuple(tabs._tab_handles) == before_tabs
-
-    check_graph_root(server.gui, "root")
-    modal = server.gui.add_modal("Depth-root modal")
-    assert server.gui._container_depth_from_uuid[modal.id] == 0
-    check_graph_root(modal, "modal")
 
 
 def test_container_targets_are_isolated_between_async_tasks(server: leika.Server) -> None:
@@ -1798,7 +1426,6 @@ def test_container_targets_are_isolated_between_async_tasks(server: leika.Server
             await first_entered.wait()
             with second:
                 second_entered.set()
-                # Give the first task a chance to add while this context is active.
                 await asyncio.sleep(0)
                 return server.gui.add_checkbox("Second child", True)
 
@@ -1814,12 +1441,7 @@ def test_container_targets_are_isolated_between_async_tasks(server: leika.Server
 def test_media_elements_are_created_from_their_content(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No create-then-backfill: an image or plot arrives complete.
-
-    The create message used to carry a placeholder that a property assignment
-    immediately replaced, so every element cost a second message -- for images,
-    a second copy of the encoded bytes.
-    """
+    """No create-then-backfill: an image or plot arrives complete."""
     plotly = pytest.importorskip("plotly.graph_objects")
     sent: list[Any] = []
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
@@ -1847,8 +1469,7 @@ def test_plotly_runtime_is_queued_once_for_every_scope(server: leika.Server) -> 
     client = ClientHandle(connection, server)  # type: ignore[arg-type]
 
     def runtimes() -> list[_messages.Message]:
-        broadcast = queued_messages(server._websock_server._broadcast_buffer).values()
-        return [m for m in broadcast if isinstance(m, _messages.RunJavascriptMessage)]
+        return [m for m in _queued(server) if isinstance(m, _messages.RunJavascriptMessage)]
 
     assert runtimes() == []
     client.gui.add_plotly(plotly.Figure())
@@ -1860,38 +1481,30 @@ def test_plotly_runtime_is_queued_once_for_every_scope(server: leika.Server) -> 
 
 
 def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
-    """A toggle is a bool; a row of them is the tuple of options that are on."""
-    single = server.gui.add_toggle("Bookmark", initial_value=True)
-    assert single.value is True
-
+    """A row of toggles holds the tuple of options that are on."""
     row = server.gui.add_toggle(("Bold", "Italic"), initial_value="Italic")
     assert row.value == ("Italic",)
     # One at a time is required by default, like a radio group, so a row left
     # without an initial value starts on its first option rather than empty.
     assert server.gui.add_toggle(("Bold", "Italic")).value == ("Bold",)
     assert server.gui.add_toggle(("Bold", "Italic"), required=False).value == ()
-    # A tuple in both modes, and always in declaration order rather than the
-    # order the caller named them in.
     many = server.gui.add_toggle(
         ("Bold", "Italic", "Under"), multiple=True, initial_value=("Under", "Bold")
     )
     assert many.value == ("Bold", "Under")
-    # `multiple` is the other default pair, like checkboxes: optional, so empty.
     assert server.gui.add_toggle(("Grid", "Axes"), multiple=True).value == ()
     assert server.gui.add_toggle(("Grid", "Axes"), multiple=True, required=True).value == ("Grid",)
 
-    with pytest.raises(ValueError, match="not among the options"):
+    with pytest.raises(ValueError, match="Unknown toggle option"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value="Underline")
-    with pytest.raises(ValueError, match="one at a time"):
+    with pytest.raises(ValueError, match="one at a"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value=("Bold", "Italic"))
-    with pytest.raises(ValueError, match="an option or a sequence"):
-        server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[call-overload]
-    with pytest.raises(ValueError, match="is a bool"):
-        server.gui.add_toggle("Bookmark", initial_value="on")  # type: ignore[call-overload]
-    with pytest.raises(ValueError, match="cannot start empty"):
+    with pytest.raises(TypeError):
+        server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="cannot be empty"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value=())
-    with pytest.raises(ValueError, match="how many options in a ROW"):
-        server.gui.add_toggle("Bookmark", multiple=True)  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="use add_checkbox"):
+        server.gui.add_toggle("Bookmark")
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_toggle([])
 
@@ -1905,38 +1518,28 @@ def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> No
 
     seen: list[tuple[str, ...]] = []
     entries.on_update(lambda event: seen.append(event.value))
-    entries.value = ("alpha", "beta", "gamma")  # Appended.
-    entries.value = ("gamma", "alpha")  # Removed one and reordered the rest.
+    entries.value = ("alpha", "beta", "gamma")
+    entries.value = ("gamma", "alpha")
     _wait_for(lambda: seen == [("alpha", "beta", "gamma"), ("gamma", "alpha")])
 
-    # An empty list is a list with nothing in it, and starts that way by
-    # default -- the viewer's first Add is what fills it.
     assert server.gui.add_list().value == ()
 
-    # Frozen fixes the length and the order, and says so on the wire; the
-    # entries themselves are still editable, which `disabled` is for.
     fixed = server.gui.add_list("Fixed", ("read", "only"), frozen=True)
     assert fixed.frozen is True
     fixed.frozen = False
     assert fixed.frozen is False
 
-    # Text entries, so anything else is a mistake worth naming rather than a
-    # str() applied behind the caller's back.
-    with pytest.raises(ValueError, match="sequence of strings"):
+    with pytest.raises(ValueError, match="Rows are strings"):
         server.gui.add_list("Bad", ("fine", 3))  # type: ignore[arg-type]
 
 
-def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
-    """The value is (text, checked) per item, so it reads back the way it is
-    written -- and a bare string is an item nobody has ticked yet."""
-    items = server.gui.add_checklist("Preflight", ["Fuel", ("Doors", True), "Lights"])
+def test_a_checked_list_pairs_each_row_with_a_box(server: leika.Server) -> None:
+    """With a mark, the value is (text, marked) per row, and a bare string is
+    a row nobody has marked yet."""
+    items = server.gui.add_list("Preflight", ["Fuel", ("Doors", True), "Lights"], mark="check")
     assert items.value == (("Fuel", False), ("Doors", True), ("Lights", False))
-    assert [text for text, _ in items.value] == ["Fuel", "Doors", "Lights"]
-    assert items.checked == ("Doors",)
-    assert items.frozen is False
+    assert items.marked == ("Doors",)
 
-    # Assigning takes the same latitude the constructor does, which is what
-    # lets a bare string be appended to a list of pairs.
     items.value += ("Chocks",)
     assert items.value[-1] == ("Chocks", False)
 
@@ -1944,49 +1547,43 @@ def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
     items.on_update(lambda event: seen.append(event.target.value))
     items.value = [("Fuel", True), ("Doors", True)]
     _wait_for(lambda: seen == [(("Fuel", True), ("Doors", True))])
-    assert items.checked == ("Fuel", "Doors")
+    assert items.marked == ("Fuel", "Doors")
 
-    # An empty checklist is one with nothing on it yet, and starts that way.
-    assert server.gui.add_checklist().value == ()
+    assert server.gui.add_list(mark="check").value == ()
 
-    # Frozen fixes the items -- their words as well as their number and their
-    # order, since what a checklist is asked for is the ticks.
-    fixed = server.gui.add_checklist("Fixed", ("read", "only"), frozen=True)
-    assert fixed.frozen is True
-    fixed.frozen = False
-    assert fixed.frozen is False
-
-    # Pairs, so anything that is not one is a mistake worth naming.
     with pytest.raises(ValueError, match="strings or"):
-        server.gui.add_checklist("Bad", [("fine", True), 3])  # type: ignore[list-item]
-    with pytest.raises(ValueError, match="item's text is a string"):
-        server.gui.add_checklist("Bad", [(3, True)])  # type: ignore[list-item]
+        server.gui.add_list("Bad", [("fine", True), 3], mark="check")  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="strings or"):
+        server.gui.add_list("Bad", [(3, True)], mark="check")  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="strings or"):
+        items.value = [("one", "false")]  # type: ignore[list-item]
+    assert items.marked == ("Fuel", "Doors")
+    with pytest.raises(ValueError, match="mark must be"):
+        server.gui.add_list("Bad", mark="star")  # type: ignore[arg-type]
+
+    # The mark can change; without one, rows keep only their words.
+    items.mark = None
+    assert items.value == ("Fuel", "Doors")
+    assert items.marked == ()
+    items.mark = "radio"
+    assert items.value == (("Fuel", False), ("Doors", False))
 
 
-def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> None:
-    choices = server.gui.add_radio_list("Density", ["Default", ("Comfortable", True), "Compact"])
-    assert choices.value == (
-        ("Default", False),
-        ("Comfortable", True),
-        ("Compact", False),
+def test_a_radio_list_has_at_most_one_selected_row(server: leika.Server) -> None:
+    choices = server.gui.add_list(
+        "Density", ["Default", ("Comfortable", True), "Compact"], mark="radio"
     )
-    assert choices.selected == "Comfortable"
-    assert choices.frozen is False
+    assert choices.marked == ("Comfortable",)
 
     choices.value += ("Spacious",)
     assert choices.value[-1] == ("Spacious", False)
 
     choices.value = [("Default", True), "Comfortable", "Compact"]
-    assert choices.selected == "Default"
-    assert server.gui.add_radio_list().selected is None
-
-    frozen = server.gui.add_radio_list("Fixed", (("Default", True), "Compact"), frozen=True)
-    assert frozen.frozen is True
-    frozen.frozen = False
-    assert frozen.frozen is False
+    assert choices.marked == ("Default",)
+    assert server.gui.add_list(mark="radio").marked == ()
 
     with pytest.raises(ValueError, match="at most one selected"):
-        server.gui.add_radio_list("Invalid", [("one", True), ("two", True)])
+        server.gui.add_list("Invalid", [("one", True), ("two", True)], mark="radio")
 
     before = choices.value
     with pytest.raises(ValueError, match="at most one selected"):
@@ -1994,79 +1591,58 @@ def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> N
     assert choices.value == before
 
 
-@pytest.mark.parametrize("factory", ["add_checklist", "add_radio_list"])
-def test_frozen_pair_lists_only_accept_client_state_changes(
+@pytest.mark.parametrize("mark", ["check", "radio"])
+def test_frozen_marked_lists_only_accept_client_mark_changes(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
-    factory: str,
+    mark: str,
 ) -> None:
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    handle = getattr(server.gui, factory)(
+    handle = server.gui.add_list(
         "Frozen",
         [("First", False), ("Second", True)],
+        mark=mark,  # type: ignore[arg-type]
         frozen=True,
     )
 
-    def update(value: object) -> None:
-        asyncio.run(
-            server.gui._handle_gui_updates(
-                ClientId(12),
-                _messages.GuiUpdateMessage(
-                    handle.id,
-                    {"value": value},
-                ),
-            )
-        )
-
-    update(
-        [
-            ["First", True],
-            ["Second", False],
-        ]
-    )
+    _browser_update(server, handle, [["First", True], ["Second", False]])
     expected = (("First", True), ("Second", False))
     assert handle.value == expected
 
-    tampered_values = (
+    for tampered in (
         [["Renamed", True], ["Second", False]],
         [["First", True]],
-        [
-            ["First", True],
-            ["Second", False],
-            ["Third", False],
-        ],
+        [["First", True], ["Second", False], ["Third", False]],
         [["Second", False], ["First", True]],
-    )
-    for tampered in tampered_values:
-        update(tampered)
+    ):
+        _browser_update(server, handle, tampered)
         assert handle.value == expected
+
+
+def test_a_frozen_list_keeps_its_count_but_not_its_words(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    handle = server.gui.add_list("Frozen", ["one", "two"], frozen=True)
+    _browser_update(server, handle, ["uno", "two"])
+    assert handle.value == ("uno", "two")
+    _browser_update(server, handle, ["uno", "two", "three"])
+    assert handle.value == ("uno", "two")
 
 
 def test_radio_list_rejects_multiple_client_selections(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    choices = server.gui.add_radio_list("Density", [("Default", True), "Compact"])
-
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(12),
-            _messages.GuiUpdateMessage(
-                choices.id,
-                {"value": [["Default", True], ["Compact", True]]},
-            ),
-        )
-    )
-
+    choices = server.gui.add_list("Density", [("Default", True), "Compact"], mark="radio")
+    _browser_update(server, choices, [["Default", True], ["Compact", True]])
     assert choices.value == (("Default", True), ("Compact", False))
-    assert choices.selected == "Default"
 
 
 @pytest.mark.parametrize(
     ("factory", "initial", "bad"),
     [
         ("add_checkbox", True, "false"),
-        ("add_toggle", True, "false"),
         ("add_text", "text", 123),
     ],
 )
@@ -2076,20 +1652,10 @@ def test_scalar_value_assignment_rejects_silent_coercion(
     initial: object,
     bad: object,
 ) -> None:
-    if factory == "add_toggle":
-        handle = server.gui.add_toggle("Strict", initial_value=initial)
-    else:
-        handle = getattr(server.gui, factory)("Strict", initial)
+    handle = getattr(server.gui, factory)("Strict", initial)
     with pytest.raises(TypeError):
         handle.value = bad
     assert handle.value == initial
-
-
-def test_checklist_assignment_requires_exact_checked_bools(server: leika.Server) -> None:
-    checklist = server.gui.add_checklist("Strict", [("one", False)])
-    with pytest.raises(ValueError, match="checked state is a bool"):
-        checklist.value = [("one", "false")]  # type: ignore[list-item]
-    assert checklist.value == (("one", False),)
 
 
 @pytest.mark.parametrize("factory", ["add_number", "add_slider"])
@@ -2105,172 +1671,68 @@ def test_numeric_client_updates_reject_bool_and_string(
     else:
         handle = server.gui.add_slider("Slider", 1.0, min=0.0, max=2.0, step=0.1)
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(1), _messages.GuiUpdateMessage(handle.id, {"value": bad})
-        )
-    )
+    _browser_update(server, handle, bad)
     assert handle.value == 1.0
 
 
-@pytest.mark.parametrize("factory", ["add_vector2", "add_vector3"])
-@pytest.mark.parametrize(
-    "bad",
-    [
-        (True, False),
-        ("1", "2"),
-    ],
-)
+@pytest.mark.parametrize("length", [2, 3])
+@pytest.mark.parametrize("bad", [(True, False), ("1", "2")])
 def test_vectors_reject_boolean_and_string_components_at_every_boundary(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
-    factory: str,
+    length: int,
     bad: tuple[object, object],
 ) -> None:
-    length = 2 if factory == "add_vector2" else 3
     bad_value = bad if length == 2 else (*bad, 0.0)
-    add = getattr(server.gui, factory)
-    with pytest.raises(ValueError, match="real numbers"):
-        add("Invalid", bad_value)
+    with pytest.raises(TypeError, match="real numbers"):
+        server.gui.add_vector("Invalid", bad_value, step=0.1)  # type: ignore[arg-type]
 
-    handle = add("Vector", (0.0,) * length)
-    with pytest.raises(ValueError, match="real numbers"):
-        handle.value = bad_value
+    handle = server.gui.add_vector("Vector", (0.0,) * length)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="real numbers"):
+        handle.value = bad_value  # type: ignore[assignment]
 
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(1),
-            _messages.GuiUpdateMessage(handle.id, {"value": list(bad_value)}),
-        )
-    )
+    _browser_update(server, handle, list(bad_value))
     assert handle.value == (0.0,) * length
 
 
-def test_assignable_props_reject_schema_invalid_primitives_and_literals(
-    server: leika.Server,
-) -> None:
+def test_props_are_checked_against_their_wire_types(server: leika.Server) -> None:
     checkbox = server.gui.add_checkbox("Strict", True)
-    with pytest.raises(TypeError, match="bool"):
+    with pytest.raises(TypeError, match="disabled"):
         checkbox.disabled = "no"  # type: ignore[assignment]
-    with pytest.raises(TypeError, match="does not match"):
+    with pytest.raises(TypeError, match="label"):
         checkbox.label = 3  # type: ignore[assignment]
     assert checkbox.disabled is False
     assert checkbox.label == "Strict"
 
     button = server.gui.add_button("Action")
-    with pytest.raises(ValueError, match="one of"):
+    with pytest.raises(ValueError, match="'default' or 'inverse'"):
         button.color = "danger"  # type: ignore[assignment]
     assert button.color == "default"
 
-
-def test_assignable_props_validate_pep604_unions(server: leika.Server) -> None:
-    checkbox = server.gui.add_checkbox("PEP 604", True)
-    assert checkbox._cast_value_recursive(str | None, "valid") == "valid"
-    assert checkbox._cast_value_recursive(str | None, None) is None
-    with pytest.raises(TypeError, match="does not match"):
-        checkbox._cast_value_recursive(str | None, 3)
-
-
-def test_vector_live_props_normalize_one_dimensional_numpy_arrays(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    vector = server.gui.add_vector2("Point", (0.0, 0.0))
-    queued: list[Any] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(queued))
-
-    vector.min = np.array([-1.0, -2.0])
+    vector = server.gui.add_vector("Point", (0.0, 0.0))
+    vector.min = np.array([-1.0, -2.0])  # type: ignore[assignment]
     assert vector.min == (-1.0, -2.0)
-    assert queued[-1].updates == {"min": (-1.0, -2.0)}
-    with pytest.raises(TypeError, match="one-dimensional tuple"):
-        vector.max = np.zeros((2, 1))
+    with pytest.raises(ValueError, match="vector of 2"):
+        vector.max = np.zeros((2, 1))  # type: ignore[assignment]
 
 
-def test_color_values_are_length_bounded_before_conversion(
+def test_client_array_controls_reject_mapping_payloads(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rgb = server.gui.add_rgb("RGB", (1, 2, 3))
-    rgba = server.gui.add_rgba("RGBA", (1, 2, 3, 4))
-    messages: list[_messages.Message] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(messages))
-    huge_array = np.zeros(1_000_000, dtype=np.uint8)
-    monkeypatch.setattr(
-        gui_handles_impl.np,
-        "asarray",
-        lambda *_args, **_kwargs: pytest.fail("color admission called np.asarray"),
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    controls = (
+        server.gui.add_list("List", ("one",)),
+        server.gui.add_list("Checklist", (("one", False),), mark="check"),
+        server.gui.add_list("Radio list", (("one", False),), mark="radio"),
+        server.gui.add_toggle(("one", "two"), multiple=True),
+        server.gui.add_multi_slider("Range", (0.25, 0.75), min=0.0, max=1.0, step=0.1),
+        server.gui.add_vector("Vector", (0.0, 0.0)),
     )
-
-    with pytest.raises(ValueError, match="3 color channels"):
-        rgb.value = huge_array
-    assert rgb.value == (1, 2, 3)
-    assert messages == []
-
-    yielded = 0
-
-    def infinite() -> Any:
-        nonlocal yielded
-        while True:
-            yielded += 1
-            yield 1
-
-    with pytest.raises(ValueError, match="3 color channels"):
-        rgb.value = infinite()
-    assert yielded == 4
-    assert rgb.value == (1, 2, 3)
-    assert messages == []
-
-    class HugeSequence(Sequence[int]):
-        touched = False
-
-        def __len__(self) -> int:
-            return 1_000_000
-
-        def __getitem__(self, index: int) -> int:
-            self.touched = True
-            raise AssertionError(index)
-
-    huge_sequence = HugeSequence()
-    with pytest.raises(ValueError, match="4 color channels"):
-        rgba.value = huge_sequence
-    assert not huge_sequence.touched
-    assert rgba.value == (1, 2, 3, 4)
-    assert messages == []
-
-    rgb.value = (0, 0.5, 300)
-    rgba.value = [255, 1.0, -10, 128]
-    assert rgb.value == (0, 127, 255)
-    assert rgba.value == (255, 255, 0, 128)
-    assert len(messages) == 2
-
-
-def test_tuple_props_bound_ndarrays_before_python_scalar_materialization(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class NoListArray(np.ndarray):
-        tolist_called = False
-
-        def tolist(self) -> Any:
-            self.tolist_called = True
-            raise AssertionError("oversized ndarray was materialized")
-
-    vector = server.gui.add_vector2("Vector", (0.0, 0.0))
-    button_row = server.gui.add_button(("One", "Two"))
-    messages: list[_messages.Message] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(messages))
-
-    wrong_fixed = np.zeros(3, dtype=np.float64).view(NoListArray)
-    with pytest.raises(TypeError, match="does not match"):
-        vector.min = wrong_fixed
-    assert not wrong_fixed.tolist_called
-    assert vector.min is None
-    assert messages == []
-
-    huge_variadic = np.zeros(4097, dtype=np.float64).view(NoListArray)
-    with pytest.raises(TypeError, match="array subclasses"):
-        button_row._merge = huge_variadic
-    assert not huge_variadic.tolist_called
-    assert button_row._merge == (True,)
-    assert messages == []
+    before = tuple(control.value for control in controls)
+    for control in controls:
+        _browser_update(server, control, {"one": True})
+    assert tuple(control.value for control in controls) == before
 
 
 def test_public_value_callbacks_use_a_stable_snapshot(server: leika.Server) -> None:
@@ -2294,146 +1756,36 @@ def test_public_value_callbacks_use_a_stable_snapshot(server: leika.Server) -> N
     _wait_for(lambda: calls == ["first", "second", "first", "late"])
 
 
-def test_uploaded_file_is_immutable_and_public_assignment_is_accounted(
-    server: leika.Server,
-) -> None:
-    upload = server.gui.add_upload_button("Upload")
-    first = leika.UploadedFile("first.bin", b"abc")
-    upload.value = first
-    assert upload.value == first
-    assert upload.value is not first
-    assert server._file_upload_bytes_reserved == 3
-    assert server.gui._retained_file_upload_bytes[upload.id] == 3
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        upload.value.content = b"changed"  # type: ignore[misc]
-
-    second = leika.UploadedFile("second.bin", b"12")
-    upload.value = second
-    assert upload.value == second
-    assert upload.value is not second
-    assert server._file_upload_bytes_reserved == 2
-    assert server.gui._retained_file_upload_bytes[upload.id] == 2
-
-    object.__setattr__(second, "content", b"external mutation")
-    object.__setattr__(second, "extra", bytearray(1024))
-    exposed = upload.value
-    object.__setattr__(exposed, "content", b"getter mutation")
-    object.__setattr__(exposed, "extra", bytearray(1024))
-    assert upload.value == leika.UploadedFile("second.bin", b"12")
-    assert server._file_upload_bytes_reserved == 2
-    assert server.gui._retained_file_upload_bytes[upload.id] == 2
-
-    class RichUpload(leika.UploadedFile):
-        pass
-
-    rich = RichUpload("rich.bin", b"x")
-    object.__setattr__(rich, "extra", bytearray(1024))
-    upload.value = rich
-    assert type(upload.value) is leika.UploadedFile
-    assert upload.value == leika.UploadedFile("rich.bin", b"x")
-    assert upload.value is not rich
-    assert server._file_upload_bytes_reserved == 1
-
-    class RichBytes(bytes):
-        pass
-
-    with pytest.raises(TypeError, match="content must be bytes"):
-        upload.value = leika.UploadedFile("bad.bin", RichBytes(b"x"))
-    assert upload.value == leika.UploadedFile("rich.bin", b"x")
-    assert server._file_upload_bytes_reserved == 1
-
-
-def test_upload_assignment_capacity_rejection_queues_nothing(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    upload = server.gui.add_upload_button("Upload")
-    queued: list[Any] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(queued))
-    monkeypatch.setattr("leika._server._FILE_UPLOAD_AGGREGATE_MAX_BYTES", 2)
-
-    with pytest.raises(ValueError, match="memory limit"):
-        upload.value = leika.UploadedFile("large.bin", b"abc")
-
-    assert upload.value == leika.UploadedFile("", b"")
-    assert queued == []
-    assert server._file_upload_bytes_reserved == 0
-    assert server.gui._retained_file_upload_bytes == {}
-
-
-def test_upload_assignment_queue_failure_rolls_back_accounting_and_state(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    upload = server.gui.add_upload_button("Upload")
-    upload.value = leika.UploadedFile("old.bin", b"old")
-    old_timestamp = upload.update_timestamp
-    # Upload controls are buttons and ordinarily don't echo value assignments.
-    # Exercise the shared transaction's queue-failure branch explicitly.
-    upload._impl.is_button = False
-
-    def fail(_: Any) -> None:
-        raise RuntimeError("queue failed")
-
-    monkeypatch.setattr(server.gui._websock_interface.get_message_buffer(), "push", fail)
-    with pytest.raises(RuntimeError, match="queue failed"):
-        upload.value = leika.UploadedFile("new.bin", b"new value")
-
-    assert upload.value == leika.UploadedFile("old.bin", b"old")
-    assert upload.update_timestamp == old_timestamp
-    assert server._file_upload_bytes_reserved == 3
-    assert server.gui._retained_file_upload_bytes[upload.id] == 3
-
-
-def test_gui_creators_register_before_publication_and_roll_back_on_failure(
+def test_gui_creators_register_at_publication_and_leave_nothing_on_failure(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gui = server.gui
     published: list[_messages.Message] = []
-
-    def assert_registered(message: _messages.Message) -> bool:
-        published.append(message)
-        uuid = getattr(message, "uuid", None)
-        if isinstance(message, _messages.GuiModalMessage):
-            assert uuid in gui._container_handle_from_uuid
-            assert uuid in gui._modal_handle_from_uuid
-        elif hasattr(message, "container_uuid") and hasattr(message, "props"):
-            container_uuid = getattr(message, "container_uuid")
-            parent = gui._container_handle_from_uuid[container_uuid]
-            assert uuid in parent._children
-            if hasattr(message, "value"):
-                assert uuid in gui._gui_input_handle_from_uuid
-        return True
-
-    monkeypatch.setattr(gui._websock_interface, "queue_message", assert_registered)
+    monkeypatch.setattr(gui._websock_interface, "queue_message", _open_recorder(published))
     gui.add_text("Text", "")
     gui.add_folder("Folder")
     gui.add_tab_group()
     gui.add_modal("Modal")
     gui.add_image(np.zeros((1, 1, 3), dtype=np.uint8))
-    assert published
+    assert len(published) == 5
+    assert set(gui._handles) == {getattr(message, "uuid") for message in published}
 
-    parent = gui._container_handle_from_uuid["root"]
-    children_before = set(parent._children)
-    inputs_before = set(gui._gui_input_handle_from_uuid)
-    containers_before = set(gui._container_handle_from_uuid)
-    modals_before = set(gui._modal_handle_from_uuid)
+    handles_before = set(gui._handles)
+    children_before = set(gui._root_children)
 
     def fail(_: _messages.Message) -> bool:
         raise RuntimeError("publication failed")
 
     monkeypatch.setattr(gui._websock_interface, "queue_message", fail)
-    with pytest.raises(RuntimeError, match="publication failed"):
-        gui.add_text("Rejected", "")
-    with pytest.raises(RuntimeError, match="publication failed"):
-        gui.add_folder("Rejected")
-    with pytest.raises(RuntimeError, match="publication failed"):
-        gui.add_modal("Rejected")
-
-    assert set(parent._children) == children_before
-    assert set(gui._gui_input_handle_from_uuid) == inputs_before
-    assert set(gui._container_handle_from_uuid) == containers_before
-    assert set(gui._modal_handle_from_uuid) == modals_before
+    for add in (
+        lambda: gui.add_text("Rejected", ""),
+        lambda: gui.add_folder("Rejected"),
+        lambda: gui.add_modal("Rejected"),
+    ):
+        with pytest.raises(RuntimeError, match="publication failed"):
+            add()
+    assert set(gui._handles) == handles_before
+    assert set(gui._root_children) == children_before
 
 
 def test_disconnected_gui_update_and_sync_failure_leave_state_unchanged(
@@ -2460,11 +1812,11 @@ def test_disconnected_gui_update_and_sync_failure_leave_state_unchanged(
     assert checkbox.update_timestamp == timestamp
 
 
-def test_container_lifecycle_queue_failures_are_transactional(
+def test_container_lifecycle_queue_failures_change_nothing(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    folder = server.gui.add_folder("Folder")
-    child = folder.add_text("Child", "")
+    with server.gui.add_folder("Folder") as folder:
+        child = server.gui.add_text("Child", "")
     tabs = server.gui.add_tab_group()
     tab = tabs.add_tab("Tab")
     modal = server.gui.add_modal("Modal")
@@ -2473,47 +1825,39 @@ def test_container_lifecycle_queue_failures_are_transactional(
         raise RuntimeError("queue failed")
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", fail)
-    monkeypatch.setattr(
-        server.gui._websock_interface,
-        "queue_messages_or_raise",
-        lambda *_: fail(_messages.GuiRemoveMessage("unused")),
-    )
     with pytest.raises(RuntimeError, match="queue failed"):
         folder.remove()
     assert not folder._impl.removed
-    assert child.id in folder._children
+    assert child.id in folder._impl.children
 
-    registry_before = set(server.gui._container_handle_from_uuid)
     with pytest.raises(RuntimeError, match="queue failed"):
         tabs.add_tab("Rejected")
-    assert set(server.gui._container_handle_from_uuid) == registry_before
-    assert [existing.id for existing in tabs._tab_handles] == [tab.id]
+    assert list(tabs._impl.children) == [tab.id]
 
     with pytest.raises(RuntimeError, match="queue failed"):
         tabs.remove()
-    assert not tabs._impl.removed
-    assert not tab.removed
+    assert not tabs._impl.removed and not tab._impl.removed
     with pytest.raises(RuntimeError, match="queue failed"):
         modal.close()
-    assert not modal.closed
+    assert not modal._impl.removed
 
 
 def test_container_removal_queues_once_and_retires_the_local_subtree(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    folder = server.gui.add_folder("Folder")
-    child = folder.add_text("Child", "")
+    with server.gui.add_folder("Folder") as folder:
+        child = server.gui.add_text("Child", "")
+        with server.gui.add_folder("Inner") as inner:
+            leaf = server.gui.add_checkbox("Leaf", True)
     sent: list[_messages.Message] = []
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
 
     folder.remove()
 
-    assert len(sent) == 1
-    assert isinstance(sent[0], _messages.GuiRemoveMessage)
-    assert folder._impl.removed
-    assert child._impl.removed
-    assert folder.id not in server.gui._container_handle_from_uuid
-    assert child.id not in server.gui._gui_input_handle_from_uuid
+    assert sent == [_messages.GuiRemoveMessage(folder.id, (child.id, inner.id, leaf.id))]
+    assert all(handle._impl.removed for handle in (folder, child, inner, leaf))
+    assert server.gui._handles == {}
+    assert server.gui._root_children == {}
 
 
 def test_gui_remove_and_update_are_linearized(
@@ -2532,14 +1876,7 @@ def test_gui_remove_and_update_are_linearized(
         return True
 
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", queue)
-    remove_errors: list[BaseException] = []
     update_errors: list[BaseException] = []
-
-    def remove() -> None:
-        try:
-            handle.remove()
-        except BaseException as error:
-            remove_errors.append(error)
 
     def update() -> None:
         try:
@@ -2547,7 +1884,7 @@ def test_gui_remove_and_update_are_linearized(
         except BaseException as error:
             update_errors.append(error)
 
-    remove_thread = threading.Thread(target=remove)
+    remove_thread = threading.Thread(target=handle.remove)
     update_thread = threading.Thread(target=update)
     remove_thread.start()
     assert remove_queued.wait(2.0)
@@ -2558,7 +1895,6 @@ def test_gui_remove_and_update_are_linearized(
     remove_thread.join(2.0)
     update_thread.join(2.0)
 
-    assert remove_errors == []
     assert len(update_errors) == 1
     assert isinstance(update_errors[0], RuntimeError)
     assert [type(message) for message in sent] == [_messages.GuiRemoveMessage]
@@ -2571,15 +1907,11 @@ def test_concurrent_double_remove_queues_one_lifecycle_message(
     handle = server.gui.add_checkbox("Concurrent", True)
     barrier = threading.Barrier(3)
     sent: list[_messages.Message] = []
-    errors: list[BaseException] = []
     monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
 
     def remove() -> None:
         barrier.wait()
-        try:
-            handle.remove()
-        except BaseException as error:
-            errors.append(error)
+        handle.remove()  # The later of the two warns and does nothing else.
 
     threads = [threading.Thread(target=remove) for _ in range(2)]
     for thread in threads:
@@ -2588,7 +1920,6 @@ def test_concurrent_double_remove_queues_one_lifecycle_message(
     for thread in threads:
         thread.join(2.0)
 
-    assert errors == []
     assert sum(isinstance(message, _messages.GuiRemoveMessage) for message in sent) == 1
     assert handle._impl.removed
 
@@ -2610,7 +1941,6 @@ def test_programmatic_callback_failure_does_not_escape_or_suppress_peers(
     handle.value = False
 
     _wait_for(lambda: seen == [False])
-    assert handle.value is False
     output = ""
     deadline = time.monotonic() + 2.0
     while "RuntimeError: programmatic callback failed" not in output:
@@ -2657,228 +1987,119 @@ def test_notification_update_and_remove_are_linearized(
 
     assert len(update_errors) == 1
     assert isinstance(update_errors[0], RuntimeError)
-    with pytest.raises(RuntimeError, match="removed"):
-        _ = notification.title
-    assert notification._impl.props.title == ""
-    assert notification._impl.props.body == ""
+    assert notification.title == "Initial"
     assert [type(message) for message in sent] == [_messages.RemoveNotificationMessage]
 
 
-def test_notification_expiry_mirrors_browser_updates_and_is_race_safe() -> None:
-    from leika._notification_handle import (
-        NotificationHandle,
-        _NotificationHandleState,
-    )
+class _FakeTimer:
+    def __init__(self) -> None:
+        self.cancelled = False
 
-    class Timer:
-        def __init__(self, delay: float, callback: Any) -> None:
-            self.delay = delay
-            self.callback = callback
-            self.cancelled = False
+    def cancel(self) -> None:
+        self.cancelled = True
 
-        def cancel(self) -> None:
-            self.cancelled = True
 
-    class Loop:
-        def __init__(self) -> None:
-            self.pending: list[tuple[Any, tuple[Any, ...]]] = []
-            self.timers: list[Timer] = []
+class _FakeLoop:
+    """Runs scheduled work on demand, so expiry can be stepped through."""
 
-        def call_soon_threadsafe(self, callback: Any, *args: Any) -> None:
-            self.pending.append((callback, args))
+    def __init__(self) -> None:
+        self.pending: list[tuple[Any, tuple[Any, ...]]] = []
+        self.timers: list[tuple[float, Any]] = []
+        self.handles: list[_FakeTimer] = []
 
-        def call_later(self, delay: float, callback: Any) -> Timer:
-            timer = Timer(delay, callback)
-            self.timers.append(timer)
-            return timer
+    def call_soon_threadsafe(self, callback: Any, *args: Any) -> None:
+        self.pending.append((callback, args))
 
-        def drain(self) -> None:
-            while self.pending:
-                callback, args = self.pending.pop(0)
-                callback(*args)
+    def call_later(self, delay: float, callback: Any) -> _FakeTimer:
+        self.timers.append((delay, callback))
+        self.handles.append(_FakeTimer())
+        return self.handles[-1]
 
-    messages: list[_messages.Message] = []
-    loop = Loop()
-    handle = NotificationHandle(
-        _NotificationHandleState(
-            websock_interface=SimpleNamespace(queue_message_or_raise=messages.append),
-            event_loop=loop,  # type: ignore[arg-type]
-            uuid="toast",
-            props=_messages.NotificationProps(
-                title="Working",
-                body="",
-                loading=False,
-                with_close_button=True,
-                auto_close_seconds=5.0,
-            ),
-            state_lock=threading.RLock(),
-        )
-    )
+    def live(self) -> int:
+        return sum(not handle.cancelled for handle in self.handles)
 
-    handle._show()
+    def drain(self) -> None:
+        while self.pending:
+            callback, args = self.pending.pop(0)
+            callback(*args)
+
+
+def test_notification_expiry_mirrors_browser_updates(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = _FakeLoop()
+    monkeypatch.setattr(server.gui, "_event_loop", loop)
+    sent: list[_messages.Message] = []
+    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(sent))
+
+    def removals() -> int:
+        return sum(isinstance(message, _messages.RemoveNotificationMessage) for message in sent)
+
+    handle = server.gui.add_notification("Working", auto_close_seconds=5.0)
     loop.drain()
-    initial_timer = loop.timers[-1]
-    assert initial_timer.delay == 5.0
+    delay, initial = loop.timers[-1]
+    assert delay == 5.0
 
-    # Every browser update restarts the deadline, even if it doesn't touch the
-    # timeout. The stale callback is inert before its cancellation is installed.
+    # Every update restarts the deadline, even one that changes nothing, and
+    # the replaced deadline is cancelled.
     handle.title = "Still working"
-    initial_timer.callback()
-    assert not any(isinstance(message, _messages.RemoveNotificationMessage) for message in messages)
+    initial()
+    assert removals() == 0
     loop.drain()
-    restarted_timer = loop.timers[-1]
-    assert initial_timer.cancelled
+    published = len(sent)
+    handle.title = "Still working"
+    loop.drain()
+    assert len(sent) == published + 1
+    assert loop.live() == 1
+    restarted = loop.timers[-1][1]
 
-    # Loading suppresses expiry. Returning to a non-loading state starts it.
-    handle.loading = True
-    restarted_timer.callback()
-    loop.drain()
-    assert restarted_timer.cancelled
-    timer_count = len(loop.timers)
-    handle.loading = False
-    loop.drain()
-    assert len(loop.timers) == timer_count + 1
-
-    # None and zero are both persistent; either can later become timed.
-    active_timer = loop.timers[-1]
-    handle.auto_close_seconds = None
-    loop.drain()
-    assert active_timer.cancelled
-    timer_count = len(loop.timers)
-    handle.auto_close_seconds = 5
-    loop.drain()
-    assert len(loop.timers) == timer_count + 1
-    active_timer = loop.timers[-1]
+    # Loading suppresses expiry; None and zero are persistent.
+    for persistent in ({"loading": True}, {"loading": False, "auto_close_seconds": None}):
+        timers = len(loop.timers)
+        handle.update(**persistent)
+        loop.drain()
+        assert len(loop.timers) == timers
+    restarted()
+    assert removals() == 0
     handle.auto_close_seconds = 0
     loop.drain()
-    assert active_timer.cancelled
-    assert len(loop.timers) == timer_count + 1
 
-    prior_props = dataclasses.replace(handle._impl.props)
-    prior_messages = list(messages)
-    for invalid in (-1, float("nan"), float("inf"), True):
+    props = handle._impl.props
+    for invalid in (-1, float("nan"), float("inf"), True, 2_147_483.648):
         with pytest.raises((TypeError, ValueError)):
             handle.auto_close_seconds = invalid  # type: ignore[assignment]
-        assert handle._impl.props == prior_props
-        assert messages == prior_messages
+        assert handle._impl.props is props
 
-    # A timer racing explicit removal cannot publish a second tombstone.
+    # The deadline removes the notification, once, and unregisters it.
     handle.auto_close_seconds = 1
     loop.drain()
-    racing_timer = loop.timers[-1]
-    handle.remove()
-    remove_count = sum(
-        isinstance(message, _messages.RemoveNotificationMessage) for message in messages
-    )
-    racing_timer.callback()
+    expire = loop.timers[-1][1]
+    expire()
+    assert handle._impl.removed and handle.id not in server.gui._handles
+    expire()
+    assert removals() == 1
+
+    # A timer racing an explicit removal publishes nothing more.
+    racing = server.gui.add_notification("Racing", auto_close_seconds=1)
     loop.drain()
-    assert racing_timer.cancelled
-    assert (
-        sum(isinstance(message, _messages.RemoveNotificationMessage) for message in messages)
-        == remove_count
-    )
+    racing.remove()
+    loop.drain()
+    assert loop.live() == 0
+    loop.timers[-1][1]()
+    assert removals() == 2
 
 
-def test_notification_expiry_scrubs_terminal_state_and_rejects_reads() -> None:
-    from leika._notification_handle import (
-        NotificationHandle,
-        _NotificationHandleState,
-    )
-
-    class Timer:
-        def __init__(self, callback: Any) -> None:
-            self.callback = callback
-            self.cancelled = False
-
-        def cancel(self) -> None:
-            self.cancelled = True
-
-    class Loop:
-        def __init__(self) -> None:
-            self.timer: Timer | None = None
-
-        def call_soon_threadsafe(self, callback: Any, *args: Any) -> None:
-            callback(*args)
-
-        def call_later(self, delay: float, callback: Any) -> Timer:
-            assert delay == 1.0
-            self.timer = Timer(callback)
-            return self.timer
-
-    messages: list[_messages.Message] = []
-    retired: list[str] = []
-    loop = Loop()
-    handle = NotificationHandle(
-        _NotificationHandleState(
-            websock_interface=SimpleNamespace(queue_message_or_raise=messages.append),
-            event_loop=loop,  # type: ignore[arg-type]
-            uuid="expiring-toast",
-            props=_messages.NotificationProps(
-                title="Working",
-                body="large body" * 256,
-                loading=False,
-                with_close_button=True,
-                auto_close_seconds=1.0,
-            ),
-            state_lock=threading.RLock(),
-            on_terminal=retired.append,
-        )
-    )
-
-    handle._show()
-    assert loop.timer is not None
-    loop.timer.callback()
-
-    assert handle._impl.removed
-    assert retired == ["expiring-toast"]
-    assert isinstance(messages[-1], _messages.RemoveNotificationMessage)
-    for read in (lambda: handle.title, lambda: handle.body):
-        with pytest.raises(RuntimeError, match="removed"):
-            read()
-    assert handle._impl.props.title == ""
-    assert handle._impl.props.body == ""
-    assert handle._impl.expiry_handle is None
-
-
-def test_notification_update_is_atomic_when_queue_admission_fails() -> None:
-    from leika._notification_handle import (
-        NotificationHandle,
-        _NotificationHandleState,
-    )
-
-    class Loop:
-        def call_soon_threadsafe(self, callback: Any, *args: Any) -> None:
-            callback(*args)
-
-        def call_later(self, delay: float, callback: Any) -> Any:
-            return SimpleNamespace(cancel=lambda: None)
-
-    def reject(_: _messages.Message) -> None:
-        raise RuntimeError("closed")
-
-    handle = NotificationHandle(
-        _NotificationHandleState(
-            websock_interface=SimpleNamespace(queue_message_or_raise=reject),
-            event_loop=Loop(),  # type: ignore[arg-type]
-            uuid="toast",
-            props=_messages.NotificationProps(
-                title="Original",
-                body="",
-                loading=False,
-                with_close_button=True,
-                auto_close_seconds=None,
-            ),
-            state_lock=threading.RLock(),
-        )
-    )
-    before = dataclasses.replace(handle._impl.props)
-    generation = handle._impl.expiry_generation
-
-    with pytest.raises(RuntimeError, match="closed"):
-        handle.update(title="Changed", loading=True)
-
-    assert handle._impl.props == before
-    assert handle._impl.expiry_generation == generation
+def test_notification_timeout_matches_javascript_timer_range(
+    server: leika.Server,
+) -> None:
+    maximum = notification_impl._MAX_AUTO_CLOSE_SECONDS
+    notification = server.gui.add_notification("Timer", auto_close_seconds=maximum, loading=True)
+    assert notification.auto_close_seconds == maximum
+    with pytest.raises(ValueError, match="2147483.647"):
+        notification.auto_close_seconds = maximum + 0.001
+    assert notification.auto_close_seconds == maximum
+    with pytest.raises(ValueError, match="2147483.647"):
+        server.gui.add_notification("Too long", auto_close_seconds=maximum + 0.001)
 
 
 def test_live_props_preserve_semantic_invariants_and_update_atomically(
@@ -2895,27 +2116,34 @@ def test_live_props_preserve_semantic_invariants_and_update_atomically(
     assert isinstance(update, _messages.GuiUpdateMessage)
     assert update.updates == {"min": 0.25, "max": 0.75, "step": 0.05}
 
-    before = dataclasses.replace(slider._impl.props)
+    before = slider._impl.props
     messages.clear()
-    for invalid in (
-        {"step": 0},
-        {"min": 0.6, "max": 0.5},
-        {"precision": -1},
-    ):
+    for invalid in ({"step": 0}, {"min": 0.6, "max": 0.5}, {"max": 0.4}):
         with pytest.raises(ValueError):
             slider.update(**invalid)
-        assert slider._impl.props == before
+        assert slider._impl.props is before
         assert messages == []
 
+    slider.marks = (0.25, (0.75, "high"))  # type: ignore[assignment]
+    assert slider.marks == (
+        _messages.GuiSliderMark(0.25, None),
+        _messages.GuiSliderMark(0.75, "high"),
+    )
+    marked = slider._impl.props
+    for marks in ((float("inf"),), ((0.0, 1),), (object(),)):
+        with pytest.raises((TypeError, ValueError)):
+            slider.marks = marks  # type: ignore[assignment]
+        assert slider._impl.props is marked
+
     command = server.gui.add_command("Run")
-    command.update(hotkey="K", modifier="shift+cmd/ctrl")
+    command.update(hotkey="K", modifier="shift+cmd/ctrl")  # type: ignore[arg-type]
     assert command.hotkey == "K"
     assert command.modifier == "cmd/ctrl+shift"
-    command_before = dataclasses.replace(command._impl.props)
+    command_before = command._impl.props
     messages.clear()
     with pytest.raises(ValueError, match="modifier requires hotkey"):
         command.hotkey = None
-    assert command._impl.props == command_before
+    assert command._impl.props is command_before
     assert messages == []
 
     text = server.gui.add_text("Notes", "", multiline=True)
@@ -2924,226 +2152,6 @@ def test_live_props_preserve_semantic_invariants_and_update_atomically(
     with pytest.raises(ValueError, match="read-only"):
         text.markdown = True
     assert (text.rows, text.markdown, text.editable) == (None, False, True)
-
-
-def test_form_initial_values_are_captured_at_field_registration(
-    server: leika.Server,
-) -> None:
-    with server.gui.add_form(label="Profile") as form:
-        field = server.gui.add_text("Name", "Ada")
-        field.value = "Changed before context exit"
-
-    form.reset_form()
-    assert field.value == "Ada"
-
-
-def test_form_reset_baseline_is_charged_reused_and_released(
-    server: leika.Server,
-) -> None:
-    with server.gui.add_form(label="Profile") as form:
-        field = server.gui.add_text("Name", "Declared baseline")
-
-    baseline = server.gui._reset_baseline_resource_from_gui_uuid[field.id]
-    assert baseline == gui_resources_impl._gui_resource_cost("Declared baseline", None)
-    assert server.gui._resource_from_gui_uuid[field.id] == (
-        gui_resources_impl._gui_resource_cost(field.value, field._impl.props) + baseline
-    )
-
-    field.value = ""
-    before_reset = server.gui._resource_total
-    expected = (
-        gui_resources_impl._gui_resource_cost(
-            "Declared baseline",
-            dataclasses.replace(field._impl.props, _source="Declared baseline"),
-        )
-        + baseline
-    )
-    form.reset_form()
-    assert field.value == "Declared baseline"
-    assert server.gui._resource_from_gui_uuid[field.id] == expected
-    assert server.gui._resource_total.text_units > before_reset.text_units
-
-    field.remove()
-    assert field.id not in server.gui._resource_from_gui_uuid
-    assert field.id not in server.gui._reset_baseline_resource_from_gui_uuid
-
-
-def test_form_reset_resource_rejection_rolls_back_every_field(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with server.gui.add_form(label="Profile") as form:
-        first = server.gui.add_text("First", "A" * 64)
-        second = server.gui.add_text("Second", "B" * 64)
-    first.value = ""
-    second.value = ""
-    server.gui.add_text("Budget consumer", "C" * 64)
-
-    before_total = server.gui._resource_total
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    before_props = (first._impl.props, second._impl.props)
-    queued: list[_messages.Message] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_messages_or_raise", queued.extend)
-    monkeypatch.setattr(
-        gui_api_impl,
-        "_GUI_AGGREGATE_TEXT_MAX_UTF16_CODE_UNITS",
-        before_total.text_units,
-    )
-
-    with pytest.raises(RuntimeError, match="text budget"):
-        form.reset_form()
-    assert (first.value, second.value) == ("", "")
-    assert (first._impl.props, second._impl.props) == before_props
-    assert server.gui._resource_total == before_total
-    assert server.gui._resource_from_gui_uuid == before_resources
-    assert queued == []
-
-
-def test_form_reset_rebuilds_markdown_source_for_the_current_mode(
-    server: leika.Server, tmp_path: Path
-) -> None:
-    image = tmp_path / "dot.png"
-    ihdr = (1).to_bytes(4, "big") * 2 + b"\x08\x02\x00\x00\x00"
-    image.write_bytes(
-        b"\x89PNG\r\n\x1a\n"
-        + len(ihdr).to_bytes(4, "big")
-        + b"IHDR"
-        + ihdr
-        + b"\x00\x00\x00\x00"
-        + b"\x00\x00\x00\x00IDAT\x00\x00\x00\x00"
-        + b"\x00\x00\x00\x00IEND\x00\x00\x00\x00"
-    )
-    declared = "![dot](dot.png)"
-    with server.gui.add_form(label="Profile") as form:
-        field = server.gui.add_text("Body", declared, image_root=tmp_path)
-
-    field.update(editable=False, markdown=True)
-    field.value = "changed"
-    form.reset_form()
-
-    assert field.value == declared
-    assert "/leika-assets/" in field._source
-    assert field._source != declared
-
-
-def test_mini_form_rejects_second_direct_or_nested_field_before_publication(
-    server: leika.Server,
-) -> None:
-    with server.gui.add_mini_form() as mini:
-        server.gui.add_text("Only", "")
-
-    buffer = server._websock_server.get_message_buffer()
-    before_messages = queued_messages(buffer)
-    before_count = server.gui._live_component_count
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
-    with pytest.raises(ValueError, match="single field"):
-        mini.add_text("Second", "")
-    assert queued_messages(buffer) == before_messages
-    assert server.gui._live_component_count == before_count
-    assert server.gui._resource_from_gui_uuid == before_resources
-    assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
-
-    for add_incompatible in (
-        lambda: mini.add_folder("Nested"),
-        mini.add_tab_group,
-        lambda: mini.add_html("<p>Sibling</p>"),
-        lambda: mini.add_button("Sibling"),
-    ):
-        before_messages = queued_messages(buffer)
-        before_count = server.gui._live_component_count
-        before_resources = dict(server.gui._resource_from_gui_uuid)
-        before_baselines = dict(server.gui._reset_baseline_resource_from_gui_uuid)
-        before_children = dict(mini._children)
-        with pytest.raises(ValueError, match="direct editable field"):
-            add_incompatible()
-        assert queued_messages(buffer) == before_messages
-        assert server.gui._live_component_count == before_count
-        assert server.gui._resource_from_gui_uuid == before_resources
-        assert server.gui._reset_baseline_resource_from_gui_uuid == before_baselines
-        assert mini._children == before_children
-
-
-def test_failed_and_invalid_form_contexts_retire_the_whole_subtree(
-    server: leika.Server,
-) -> None:
-    form = None
-    child = None
-    with pytest.raises(RuntimeError, match="construction failed"):
-        with server.gui.add_form(label="Broken") as form:
-            child = server.gui.add_text("Partial", "")
-            raise RuntimeError("construction failed")
-    assert form is not None and form._impl.removed
-    assert child is not None and child._impl.removed
-    assert form.id not in server.gui._container_handle_from_uuid
-    assert child.id not in server.gui._gui_input_handle_from_uuid
-
-    with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form() as empty:
-            pass
-    assert empty._impl.removed
-    assert empty.id not in server.gui._container_handle_from_uuid
-
-    first = second = None
-    with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form() as invalid:
-            first = server.gui.add_text("One", "")
-            second = server.gui.add_text("Two", "")
-    assert invalid._impl.removed
-    assert first is not None and first._impl.removed
-    assert second is None  # Rejected before publication or handle registration.
-
-
-def test_form_reset_batch_failure_changes_no_field_or_callback(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with server.gui.add_form(label="Profile") as form:
-        name = server.gui.add_text("Name", "Ada")
-        age = server.gui.add_number("Age", 36)
-    name.value = "Grace"
-    age.value = 45
-    before_total = server.gui._resource_total
-    before_resources = dict(server.gui._resource_from_gui_uuid)
-    before_props = (name._impl.props, age._impl.props)
-    callbacks: list[object] = []
-    name.on_update(lambda event: callbacks.append(event.value))
-    age.on_update(lambda event: callbacks.append(event.value))
-
-    def reject(_: Any) -> None:
-        raise RuntimeError("batch rejected")
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_messages_or_raise", reject)
-    with pytest.raises(RuntimeError, match="batch rejected"):
-        form.reset_form()
-
-    assert (name.value, age.value) == ("Grace", 45)
-    assert (name._impl.props, age._impl.props) == before_props
-    assert server.gui._resource_total == before_total
-    assert server.gui._resource_from_gui_uuid == before_resources
-    assert callbacks == []
-
-
-def test_client_array_controls_reject_mapping_payloads(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    controls = (
-        server.gui.add_list("List", ("one",)),
-        server.gui.add_checklist("Checklist", (("one", False),)),
-        server.gui.add_radio_list("Radio list", (("one", False),)),
-        server.gui.add_toggle(("one", "two"), multiple=True),
-        server.gui.add_multi_slider("Range", (0.25, 0.75), min=0.0, max=1.0, step=0.1),
-    )
-    before = tuple(control.value for control in controls)
-
-    for control in controls:
-        asyncio.run(
-            server.gui._handle_gui_updates(
-                ClientId(12),
-                _messages.GuiUpdateMessage(control.id, {"value": {"one": True}}),
-            )
-        )
-
-    assert tuple(control.value for control in controls) == before
 
 
 def test_disabled_or_hidden_controls_reject_stale_client_actions(
@@ -3156,15 +2164,14 @@ def test_disabled_or_hidden_controls_reject_stale_client_actions(
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
 
     checkbox = server.gui.add_checkbox("Disabled", False, disabled=True)
+    hidden = server.gui.add_checkbox("Hidden", False, visible=False)
+    read_only = server.gui.add_text("Read only", "fixed", editable=False)
     updates: list[bool] = []
     checkbox.on_update(lambda event: updates.append(event.value))
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(1),
-            _messages.GuiUpdateMessage(checkbox.id, {"value": True}),
-        )
-    )
-    assert checkbox.value is False
+    _browser_update(server, checkbox, True)
+    _browser_update(server, hidden, True)
+    _browser_update(server, read_only, "forged")
+    assert (checkbox.value, hidden.value, read_only.value) == (False, False, "fixed")
     assert updates == []
 
     button = server.gui.add_button("Hold", disabled=True)
@@ -3177,25 +2184,6 @@ def test_disabled_or_hidden_controls_reject_stale_client_actions(
     )
     assert holds == []
 
-    upload = server.gui.add_upload_button("Upload", disabled=True)
-    server.gui._handle_file_transfer_start(
-        ClientId(1),
-        _messages.FileTransferStartUpload(
-            source_component_uuid=upload.id,
-            transfer_uuid="disabled-upload",
-            filename="file.bin",
-            mime_type="application/octet-stream",
-            part_count=1,
-            size_bytes=1,
-        ),
-    )
-    assert server.gui._current_file_upload_states == {}
-    assert any(
-        isinstance(message, _messages.FileTransferAbort)
-        and message.transfer_uuid == "disabled-upload"
-        for message in client_messages
-    )
-
     warm_calls: list[object] = []
     preview = server.gui.add_preview_button("Preview", b"x", filename="x.txt", disabled=True)
     monkeypatch.setattr(preview, "_warm", warm_calls.append)
@@ -3207,7 +2195,7 @@ def test_disabled_or_hidden_controls_reject_stale_client_actions(
     assert warm_calls == []
 
 
-def test_file_button_press_is_global_single_flight_and_preserves_manual_disable(
+def test_file_button_press_is_single_flight_and_preserves_manual_disable(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     started = threading.Event()
@@ -3235,6 +2223,7 @@ def test_file_button_press_is_global_single_flight_and_preserves_manual_disable(
     first = threading.Thread(target=press, args=(1,))
     first.start()
     assert started.wait(2.0)
+    assert handle._busy is True
 
     # A second browser cannot enter the producer while the first owns it.
     second = threading.Thread(target=press, args=(2,))
@@ -3243,27 +2232,23 @@ def test_file_button_press_is_global_single_flight_and_preserves_manual_disable(
     assert not second.is_alive()
     assert calls == [1]
 
-    # Caller-owned disable during the transfer is not overwritten by cleanup.
+    # Busy is not `disabled`, so the caller's own setting survives the press.
     handle.disabled = True
     release.set()
     first.join(2.0)
     assert errors == []
+    assert handle._busy is False
     assert handle.disabled is True
 
-    initially_disabled_calls: list[bool] = []
+    blocked_calls: list[bool] = []
     blocked = server.gui.add_download_button(
         "Blocked",
-        lambda _: initially_disabled_calls.append(True) or b"x",
+        lambda _: blocked_calls.append(True) or b"x",
         filename="x.bin",
         disabled=True,
     )
-    asyncio.run(
-        server.gui._handle_gui_updates(
-            ClientId(3), _messages.GuiUpdateMessage(blocked.id, {"value": True})
-        )
-    )
-    assert initially_disabled_calls == []
-    assert blocked.disabled is True
+    _browser_update(server, blocked, True, client=3)
+    assert blocked_calls == []
 
 
 def test_gui_reset_is_one_admission_before_local_retirement(
@@ -3275,6 +2260,7 @@ def test_gui_reset_is_one_admission_before_local_retirement(
         modal_child = server.gui.add_text("Text", "value")
     command = server.gui.add_command("Command")
     notification = server.gui.add_notification("Notice", auto_close_seconds=None)
+    handles = (folder, child, modal, modal_child, command, notification)
 
     def reject(_: Any) -> None:
         raise RuntimeError("reset batch rejected")
@@ -3282,9 +2268,7 @@ def test_gui_reset_is_one_admission_before_local_retirement(
     monkeypatch.setattr(server.gui._websock_interface, "queue_messages_or_raise", reject)
     with pytest.raises(RuntimeError, match="reset batch rejected"):
         server.gui.reset()
-    assert not folder._impl.removed and not child._impl.removed
-    assert not modal.closed and not modal_child._impl.removed
-    assert not command._impl.removed and not notification._impl.removed
+    assert not any(handle._impl.removed for handle in handles)
 
     batches: list[list[_messages.Message]] = []
     monkeypatch.setattr(
@@ -3293,291 +2277,41 @@ def test_gui_reset_is_one_admission_before_local_retirement(
         lambda messages: batches.append(list(messages)),
     )
     server.gui.reset()
-    assert len(batches) == 1
-    assert folder._impl.removed and child._impl.removed
-    assert modal.closed and modal_child._impl.removed
-    assert command._impl.removed and notification._impl.removed
-    assert server.gui._live_component_count == 0
-    assert server.gui._resource_total == gui_resources_impl._GuiResourceCost()
-    assert server.gui._reset_baseline_resource_from_gui_uuid == {}
-    assert server.gui._container_handle_from_uuid.keys() == {"root"}
-    assert server.gui._command_handle_from_uuid == {}
-    assert server.gui._modal_handle_from_uuid == {}
-    assert server.gui._notification_handle_from_uuid == {}
+    assert batches == [
+        [
+            _messages.GuiRemoveMessage(folder.id, (child.id,)),
+            _messages.GuiCloseModalMessage(modal.id, (modal_child.id,)),
+            _messages.RemoveCommandMessage(command.id),
+            _messages.RemoveNotificationMessage(notification.id),
+        ]
+    ]
+    assert all(handle._impl.removed for handle in handles)
+    assert server.gui._handles == {} and server.gui._root_children == {}
 
 
-def test_upload_resource_rejection_precedes_final_ack(
+def test_command_shorthand_and_hotkey_rules(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    upload = server.gui.add_upload_button("Upload")
-    queued: list[_messages.Message] = []
-    client = SimpleNamespace(
-        _websock_connection=SimpleNamespace(queue_message=_open_recorder(queued))
-    )
-    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
-    server.gui._handle_file_transfer_start(
-        ClientId(1),
-        _messages.FileTransferStartUpload(
-            source_component_uuid=upload.id,
-            transfer_uuid="resource-limit",
-            filename="data.bin",
-            mime_type="application/octet-stream",
-            part_count=1,
-            size_bytes=1,
-        ),
-    )
-    assert isinstance(queued.pop(), _messages.FileTransferPartAck)
-    monkeypatch.setattr(
-        gui_api_impl,
-        "_GUI_AGGREGATE_PAYLOAD_MAX_BYTES",
-        server.gui._resource_total.payload_bytes,
-    )
-
-    completion = server.gui._handle_file_transfer_part(
-        ClientId(1),
-        _messages.FileTransferPart(upload.id, "resource-limit", 0, b"x"),
-    )
-
-    assert completion is None
-    assert not any(isinstance(message, _messages.FileTransferPartAck) for message in queued)
-    assert any(isinstance(message, _messages.FileTransferAbort) for message in queued)
-    assert upload.value == leika.UploadedFile("", b"")
-    assert server.gui._current_file_upload_states == {}
-    assert server._file_upload_bytes_reserved == 0
+    ran = threading.Event()
+    command = server.gui.add_command("Run", ran.set, hotkey="R", icon=leika.Icon.PLAY)
+    assert str(command) == command.id
+    assert command._icon_html is not None
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    trigger = _messages.CommandTriggerMessage(command.id)
+    asyncio.run(server.gui._handle_command_trigger(ClientId(1), trigger))
+    assert ran.wait(2.0)
+    command.disabled = True
+    ran.clear()
+    asyncio.run(server.gui._handle_command_trigger(ClientId(1), trigger))
+    assert not ran.is_set()
+    with pytest.raises(ValueError, match="modifier requires hotkey"):
+        server.gui.add_command("Bad", modifier="shift")
+    with pytest.raises(ValueError, match="Unknown modifier"):
+        command.modifier = "meta"  # type: ignore[assignment]
+    command.icon = None
+    assert command._icon_html is None
 
 
-def test_public_collection_iterables_stop_after_limit_plus_one(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(gui_handles_impl, "_GUI_COLLECTION_MAX", 2)
-    yielded: list[int] = []
-
-    def entries():
-        index = 0
-        while True:
-            yielded.append(index)
-            yield str(index)
-            index += 1
-
-    with pytest.raises(ValueError, match="more than 2"):
-        server.gui.add_list("Bounded", entries())
-    assert yielded == [0, 1, 2]
-    assert server.gui.add_list("Exact", (str(i) for i in range(2))).value == ("0", "1")
-
-
-def test_notification_timeout_matches_javascript_timer_range(
-    server: leika.Server,
-) -> None:
-    maximum = notification_impl._MAX_AUTO_CLOSE_SECONDS
-    notification = server.gui.add_notification("Timer", auto_close_seconds=maximum, loading=True)
-    assert notification.auto_close_seconds == maximum
-    with pytest.raises(ValueError, match="2147483.647"):
-        notification.auto_close_seconds = maximum + 0.001
-    assert notification.auto_close_seconds == maximum
-    with pytest.raises(ValueError, match="2147483.647"):
-        server.gui.add_notification("Too long", auto_close_seconds=maximum + 0.001)
-
-
-def test_live_multi_slider_values_are_bounded_before_materialization(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    handle = server.gui.add_multi_slider(
-        "Range",
-        (0.25, 0.75),
-        min=0.0,
-        max=1.0,
-        step=0.01,
-    )
-    messages: list[_messages.Message] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(messages))
-
-    exact = [0.5] * 4096
-    handle.value = exact
-    assert handle.value == tuple(exact)
-    assert len(messages) == 1
-    messages.clear()
-    before = handle.value
-
-    yielded = 0
-
-    def infinite() -> Any:
-        nonlocal yielded
-        while True:
-            yielded += 1
-            yield 0.5
-
-    with pytest.raises(ValueError, match="4096 items"):
-        handle.value = infinite()
-    assert yielded == 4097
-    assert handle.value == before
-    assert messages == []
-
-    class LyingSequence(Sequence[float]):
-        def __len__(self) -> int:
-            return 1
-
-        def __getitem__(self, index: int) -> float:
-            if index < 0:
-                raise IndexError
-            return 0.5
-
-        def __iter__(self) -> Any:
-            yield from infinite()
-
-    yielded = 0
-    with pytest.raises(ValueError, match="4096 items"):
-        handle.value = LyingSequence()
-    assert yielded == 4097
-    assert handle.value == before
-    assert messages == []
-
-    with pytest.raises(ValueError, match="4096 items"):
-        handle.value = [0.5] * 4097
-    assert handle.value == before
-    assert messages == []
-
-
-def test_slider_marks_are_bounded_and_transactionally_validated(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    exact_marks = tuple(float(index) for index in range(4096))
-    slider = server.gui.add_slider(
-        "Marked",
-        0.0,
-        min=0.0,
-        max=4095.0,
-        step=1.0,
-        marks=exact_marks,
-    )
-    assert slider._marks is not None
-    assert len(slider._marks) == 4096
-
-    yielded = 0
-
-    def too_many_marks() -> Any:
-        nonlocal yielded
-        for index in range(4097):
-            yielded += 1
-            yield float(index)
-
-    live_before = server.gui._live_component_count
-    with pytest.raises(ValueError, match="4096 items"):
-        server.gui.add_slider(
-            "Too many",
-            0.0,
-            min=0.0,
-            max=4096.0,
-            step=1.0,
-            marks=too_many_marks(),  # type: ignore[arg-type]
-        )
-    assert yielded == 4097
-    assert server.gui._live_component_count == live_before
-
-    exact_label = "😀" * 8192
-    labeled = server.gui.add_slider(
-        "Labeled",
-        0.0,
-        min=0.0,
-        max=1.0,
-        step=1.0,
-        marks=((0.0, exact_label),),
-    )
-    assert labeled._marks == (_messages.GuiSliderMark(0.0, exact_label),)
-    with pytest.raises(ValueError, match="16384 UTF-16"):
-        server.gui.add_slider(
-            "Oversized label",
-            0.0,
-            min=0.0,
-            max=1.0,
-            step=1.0,
-            marks=((0.0, exact_label + "x"),),
-        )
-    with pytest.raises(ValueError, match="finite"):
-        server.gui.add_slider(
-            "Nonfinite",
-            0.0,
-            min=0.0,
-            max=1.0,
-            step=1.0,
-            marks=(float("nan"),),
-        )
-
-    messages: list[_messages.Message] = []
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", _open_recorder(messages))
-    before = dataclasses.replace(labeled._impl.props)
-    invalid_live_marks: tuple[object, ...] = (
-        (_messages.GuiSliderMark(float("inf"), None),),
-        (_messages.GuiSliderMark(0.0, exact_label + "x"),),
-        tuple(_messages.GuiSliderMark(float(index), None) for index in range(4097)),
-        (object(),),
-    )
-    for marks in invalid_live_marks:
-        with pytest.raises((TypeError, ValueError)):
-            labeled._marks = marks  # type: ignore[assignment]
-        assert labeled._impl.props == before
-        assert messages == []
-
-    def reject(_: _messages.Message) -> bool:
-        return False
-
-    monkeypatch.setattr(server.gui._websock_interface, "queue_message", reject)
-    with pytest.raises(RuntimeError, match="closed"):
-        labeled.update(_marks=(_messages.GuiSliderMark(1.0, "new"),))
-    assert labeled._impl.props == before
-
-
-def test_gui_text_constructor_matches_live_utf16_and_unicode_validation(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(gui_handles_impl, "_GUI_TEXT_MAX_UTF16_CODE_UNITS", 2)
-    monkeypatch.setattr(gui_api_impl, "_GUI_TEXT_MAX_UTF16_CODE_UNITS", 2)
-    handle = server.gui.add_text("Text", "😀")
-    assert handle.value == "😀"
-    with pytest.raises(ValueError, match="1 Mi-character"):
-        server.gui.add_text("Too long", "😀x")
-    with pytest.raises(ValueError, match="surrogate"):
-        server.gui.add_text("Invalid", "\ud800")
-
-
-def test_programmatic_callback_snapshot_budget_is_reported_post_commit(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    handle = server.gui.add_text("Value", "before")
-    handle.on_update(lambda _: None)
-    monkeypatch.setattr(gui_api_impl, "_GUI_PROGRAMMATIC_CALLBACK_RETAINED_MAX_BYTES", 1)
-
-    handle.value = "after"
-
-    assert handle.value == "after"
-    assert server.gui._programmatic_callback_queue == deque()
-    assert server.gui._programmatic_callback_retained_bytes == 0
-    assert "callback queue exceeded" in capsys.readouterr().err
-
-
-def test_programmatic_callback_snapshot_accounting_releases_on_terminal(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scheduled: list[object] = []
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            server.gui._event_loop,
-            "call_soon_threadsafe",
-            scheduled.append,
-        )
-        event = SimpleNamespace(value="retained")
-        server.gui._schedule_programmatic_callbacks((lambda _: None,), event)
-        assert scheduled
-        assert server.gui._programmatic_callback_retained_bytes > 0
-        assert len(server.gui._programmatic_callback_queue) == 1
-
-    server.gui._retire_scope_without_queue()
-    assert server.gui._programmatic_callback_queue == deque()
-    assert server.gui._programmatic_callback_retained_bytes == 0
-
-
-@pytest.mark.plotly
 def test_plotly_config_snapshot_is_isolated_across_scopes(
     server: leika.Server,
 ) -> None:

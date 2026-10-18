@@ -318,14 +318,12 @@ export function accentForeground(accent: string): string {
     : LIGHT_ON_ACCENT;
 }
 
-// Check if two RGB tuples are equal.
-// Input: RGB values in [0, 255].
-export function rgbEqual(a: RgbTuple, b: RgbTuple): boolean {
-  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-}
-
-// Check if two RGBA tuples are equal.
-// Input: RGB values in [0, 255], A in [0, 255].
-export function rgbaEqual(a: RgbaTuple, b: RgbaTuple): boolean {
-  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+// Check if two RGB or RGBA tuples are equal, channel for channel.
+export function colorEqual(
+  a: readonly number[],
+  b: readonly number[],
+): boolean {
+  return (
+    a.length === b.length && a.every((channel, index) => channel === b[index])
+  );
 }

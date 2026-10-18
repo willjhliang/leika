@@ -99,16 +99,16 @@ ENTRIES = [
                 code='gui.add_number("Frequency", initial_value=1.2, min=0.2, max=3.0, step=0.05)',
             ),
             Entry(
-                slug="vector2",
-                title="Vector2",
-                ref="add_vector2",
-                code='gui.add_vector2("Offset", initial_value=(0.0, 0.0), step=0.05)',
+                slug="vector",
+                title="Vector",
+                ref="add_vector",
+                code='gui.add_vector("Offset", initial_value=(0.0, 0.0), step=0.05)',
             ),
             Entry(
-                slug="vector3",
-                title="Vector3",
-                ref="add_vector3",
-                code='gui.add_vector3("Position", initial_value=(0.0, 0.0, 0.0), step=0.05)',
+                slug="vector-3d",
+                title="3D vector",
+                ref="add_vector",
+                code='gui.add_vector("Position", initial_value=(0.0, 0.0, 0.0), step=0.05)',
             ),
             Entry(
                 slug="text",
@@ -141,33 +141,40 @@ ENTRIES = [
             Entry(
                 slug="checklist",
                 title="Checklist",
-                ref="add_checklist",
+                ref="add_list",
                 code="""\
-                gui.add_checklist("To do", (("Sweep gain", True), "Log results", "Export frames"))""",
+                gui.add_list(
+                    "To do", (("Sweep gain", True), "Log results", "Export frames"), mark="check"
+                )""",
             ),
             Entry(
                 slug="frozen-checklist",
                 title="Frozen checklist",
-                ref="add_checklist",
+                ref="add_list",
                 code="""\
-                gui.add_checklist("Checks", (("Lint", True), ("Types", True), "Browser"), frozen=True)""",
+                gui.add_list(
+                    "Checks", (("Lint", True), ("Types", True), "Browser"), mark="check", frozen=True
+                )""",
             ),
             Entry(
                 slug="radio-list",
                 title="Radio list",
-                ref="add_radio_list",
+                ref="add_list",
                 code="""\
-                gui.add_radio_list(
-                    "Density", ("Default", ("Comfortable", True), "Compact")
+                gui.add_list(
+                    "Density", ("Default", ("Comfortable", True), "Compact"), mark="radio"
                 )""",
             ),
             Entry(
                 slug="frozen-radio-list",
                 title="Frozen radio list",
-                ref="add_radio_list",
+                ref="add_list",
                 code="""\
-                gui.add_radio_list(
-                    "Density", ("Default", ("Comfortable", True), "Compact"), frozen=True
+                gui.add_list(
+                    "Density",
+                    ("Default", ("Comfortable", True), "Compact"),
+                    mark="radio",
+                    frozen=True,
                 )""",
             ),
             Entry(
@@ -192,28 +199,22 @@ ENTRIES = [
                 )""",
             ),
             Entry(
-                slug="toggle",
-                title="Toggle",
-                ref="add_toggle",
-                code='gui.add_toggle("Pin the view")',
-            ),
-            Entry(
                 slug="toggle-group",
                 title="Toggle group",
                 ref="add_toggle",
                 code='gui.add_toggle(("Ocean", "Magma", "Viridis"), label="Palette")',
             ),
             Entry(
-                slug="rgb",
-                title="RGB color",
-                ref="add_rgb",
-                code='gui.add_rgb("Plot line", initial_value=(196, 196, 196))',
+                slug="color",
+                title="Color",
+                ref="add_color",
+                code='gui.add_color("Plot line", initial_value=(196, 196, 196))',
             ),
             Entry(
-                slug="rgba",
-                title="RGBA color",
-                ref="add_rgba",
-                code='gui.add_rgba("Tint", initial_value=(20, 90, 210, 45))',
+                slug="color-alpha",
+                title="Color with alpha",
+                ref="add_color",
+                code='gui.add_color("Tint", initial_value=(20, 90, 210, 45))',
             ),
             Entry(
                 slug="progress-bar",
@@ -279,11 +280,11 @@ ENTRIES = [
             ),
             Entry(
                 slug="popup",
-                title="Popup",
-                ref="add_popup",
+                title="Popup folder",
+                ref="add_folder",
                 kind="popup",
                 code="""\
-                with gui.add_popup("Render options"):
+                with gui.add_folder("Render options", popup=True):
                     gui.add_checkbox("Show axes", initial_value=True)
                     gui.add_number("Line width", initial_value=2.0, min=0.5, max=8.0)""",
             ),
@@ -300,9 +301,9 @@ ENTRIES = [
             Entry(
                 slug="mini-form",
                 title="Mini form",
-                ref="add_mini_form",
+                ref="add_form",
                 code="""\
-                with gui.add_mini_form():
+                with gui.add_form(mini=True):
                     gui.add_text("Broadcast", "")""",
             ),
             Entry(
@@ -314,7 +315,7 @@ ENTRIES = [
                 with tabs.add_tab("Signal"):
                     gui.add_slider("Gain", min=0.0, max=2.0, step=0.01, initial_value=1.0)
                 with tabs.add_tab("Style"):
-                    gui.add_rgb("Plot line", initial_value=(196, 196, 196))""",
+                    gui.add_color("Plot line", initial_value=(196, 196, 196))""",
             ),
             Entry(
                 slug="modal",

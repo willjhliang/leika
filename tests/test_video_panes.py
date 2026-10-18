@@ -78,7 +78,7 @@ def test_shared_video_api_replay_and_group_assignment(server: leika.Server) -> N
     controls = server.gui.add_video_controls(sync_group="episode")
     assert controls.label is None
     with server.gui.add_folder("Nested") as folder:
-        nested = folder.add_video_controls("Other", sync_group="episode")
+        nested = server.gui.add_video_controls("Other", sync_group="episode")
     for api in (server.panes, server.panes.add_row(), server.panes.add_grid(columns=2)):
         pane = api.add_video("/clip.mp4", sync_group="episode", fps=30)
         assert pane.sync_group == "episode"

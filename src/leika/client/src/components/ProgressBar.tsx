@@ -2,8 +2,7 @@ import { Progress } from "@/components/ui/progress";
 import { GuiProgressBarMessage } from "../WebsocketMessages";
 
 export default function ProgressBarComponent({
-  value,
-  props: { animated },
+  props: { value, animated },
 }: GuiProgressBarMessage) {
   return (
     <Progress

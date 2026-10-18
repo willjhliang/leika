@@ -9,8 +9,7 @@ import {
   hslToRgb,
   rgbToHsl,
   rgbToHsv,
-  rgbEqual,
-  rgbaEqual,
+  colorEqual,
   colorValueToHex,
   colorAlpha,
   colorFromHex,
@@ -71,12 +70,13 @@ describe("parseToRgba", () => {
   });
 });
 
-describe("rgbEqual / rgbaEqual", () => {
-  it("compares element-wise", () => {
-    expect(rgbEqual([1, 2, 3], [1, 2, 3])).toBe(true);
-    expect(rgbEqual([1, 2, 3], [1, 2, 4])).toBe(false);
-    expect(rgbaEqual([1, 2, 3, 4], [1, 2, 3, 4])).toBe(true);
-    expect(rgbaEqual([1, 2, 3, 4], [1, 2, 3, 5])).toBe(false);
+describe("colorEqual", () => {
+  it("compares channel for channel", () => {
+    expect(colorEqual([1, 2, 3], [1, 2, 3])).toBe(true);
+    expect(colorEqual([1, 2, 3], [1, 2, 4])).toBe(false);
+    expect(colorEqual([1, 2, 3, 4], [1, 2, 3, 4])).toBe(true);
+    expect(colorEqual([1, 2, 3, 4], [1, 2, 3, 5])).toBe(false);
+    expect(colorEqual([1, 2, 3], [1, 2, 3, 255])).toBe(false);
   });
 });
 

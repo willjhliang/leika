@@ -24,7 +24,6 @@ from unittest import mock
 import pytest
 
 import leika
-from leika import _gui_api as gui_api_impl
 from leika import _messages
 from leika._file_transfer import PREVIEW_MAX_BYTES
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
@@ -525,36 +524,6 @@ def test_file_provider_result_is_exact_and_unexpected_coroutine_is_closed(
     assert unexpected_async.disabled is False
 
 
-def test_direct_file_bytes_are_transactionally_charged_and_released(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    handle = server.gui.add_preview_button("Look", b"old", filename="notes.txt")
-    assert server.gui._retained_extra_bytes_from_gui_uuid[handle.id] == 3
-
-    old_total = server.gui._resource_total.payload_bytes
-    monkeypatch.setattr(
-        gui_api_impl,
-        "_GUI_AGGREGATE_PAYLOAD_MAX_BYTES",
-        old_total + 1,
-    )
-    with pytest.raises(RuntimeError, match="retained payload"):
-        handle.content = b"replacement"
-    assert handle.content == b"old"
-    assert server.gui._retained_extra_bytes_from_gui_uuid[handle.id] == 3
-
-    path = tmp_path / "notes.txt"
-    path.write_bytes(b"path-backed")
-    handle.content = path
-    assert handle.content == path
-    assert handle.id not in server.gui._retained_extra_bytes_from_gui_uuid
-
-    handle.remove()
-    with pytest.raises(RuntimeError, match="removed file button"):
-        _ = handle.content
-    assert handle._content == b""
-    assert handle.id not in server.gui._resource_from_gui_uuid
-
-
 def test_preview_work_for_one_client_and_source_is_fifo(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -581,7 +550,7 @@ def test_preview_work_for_one_client_and_source_is_fifo(
             raise AssertionError("test did not release the warm operation")
         events.append("warm:end")
 
-    def preview(event: GuiEvent[Any]) -> None:
+    def preview(event: GuiEvent[Any], request: Any) -> None:
         assert event.client is client
         events.append("preview")
 
@@ -705,7 +674,7 @@ def test_disconnecting_drops_queued_preview_work(
         "_resolve_client",
         lambda requested: client if requested == client_id else None,
     )
-    client.gui = SimpleNamespace(_discard_client_work=lambda *_args, **_kwargs: None)
+    client.gui = SimpleNamespace(_retire_scope=lambda: None)
     with server._client_lock:
         server._connected_clients[client_id] = client  # type: ignore[assignment]
 
@@ -722,7 +691,7 @@ def test_disconnecting_drops_queued_preview_work(
         events.append("warm:end")
 
     monkeypatch.setattr(handle, "_warm", warm)
-    monkeypatch.setattr(handle, "_send", lambda event: events.append("preview"))
+    monkeypatch.setattr(handle, "_send", lambda event, request: events.append("preview"))
     monkeypatch.setattr(handle, "_reload", lambda event: events.append("reload"))
 
     try:
@@ -738,8 +707,7 @@ def test_disconnecting_drops_queued_preview_work(
                 _messages.GuiUpdateMessage(handle.id, {"value": True}),
             )
         )
-        assert handle._file_busy is True
-        assert handle.disabled is True
+        assert handle._busy is True
         for _ in range(2):
             asyncio.run(
                 server.gui._handle_gui_preview_reload(
@@ -755,8 +723,7 @@ def test_disconnecting_drops_queued_preview_work(
         asyncio.run(disconnect(SimpleNamespace(client_id=client_id)))
         with server.gui._preview_work_lock:
             assert (client_id, handle.id) not in server.gui._preview_work_from_key
-        assert handle._file_busy is False
-        assert handle.disabled is False
+        assert handle._busy is False
     finally:
         release_warm.set()
 
@@ -825,7 +792,7 @@ def test_streamed_text_is_complete_ordered_and_utf8_safe(tmp_path: Path, path_ba
 
 def _open_cached(handle: GuiPreviewButtonHandle, server: leika.Server, key: str | None) -> _Client:
     client = _Client(server)
-    handle._open(
+    handle._send(
         GuiEvent(client, 0, handle),  # type: ignore[arg-type]
         _messages.GuiPreviewOpenMessage(handle._impl.uuid, "request", key),
     )
