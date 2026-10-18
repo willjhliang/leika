@@ -451,7 +451,7 @@ class PaneHandle:
             bindings = {
                 uuid: reference
                 for uuid, reference in self._refresh_controls.items()
-                if (control := reference()) is not None and not control._impl.removed
+                if (bound := reference()) is not None and not bound._impl.removed
             }
             for control in controls:
                 bindings[control._impl.uuid] = weakref.ref(control)
@@ -635,7 +635,7 @@ class ImagePaneHandle(PaneHandle):
         overrides the creation quality for this frame only. After
         ``clear()``, restores the image renderer with its previous settings.
         """
-        _validate_image_encoding_options("jpeg", jpeg_quality)
+        _validate_image_encoding_options("auto", jpeg_quality)  # Only quality varies per frame.
         frame = {} if jpeg_quality is None else {"jpeg_quality": jpeg_quality}
         self._publish(ImagePaneHandle, image, None, loading, frame)
 

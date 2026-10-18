@@ -173,11 +173,11 @@ reported and declined.
 
 Across all GUI scopes on one server, retained GUI state is capped at 256 MiB
 and GUI rasters at 128 Mi-pixels, and `server.gui` rasters at 64 Mi-pixels.
-Pages and panes have no Leika-imposed limits. The browser
+Pages, panes, and their content have no Leika-imposed limits. The browser
 counts every mounted copy of a direct raster against its own 128 Mi-pixel
 document budget.
 
-These are ownership limits for Leika's GUI, pane, wire, and rendered state, not
+These are ownership limits for Leika's GUI, wire, and rendered state, not
 a bound on total Python-process memory. Registered callbacks and lazy file
 providers remain trusted caller-owned callables and may close over arbitrary
 state.

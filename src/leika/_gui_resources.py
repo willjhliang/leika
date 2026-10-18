@@ -1,7 +1,6 @@
 """Browser-parity measurement of retained GUI resources.
 
-The cost value is shared by GUI handles, pane registries, and the server's
-aggregate budgets. Measuring a value never depends on a live handle or server.
+The cost value is shared by GUI handles and the server's aggregate budgets. Measuring a value never depends on a live handle or server.
 """
 
 from __future__ import annotations

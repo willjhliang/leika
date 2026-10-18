@@ -275,8 +275,8 @@ Each browser receives its own encoding after queued updates coalesce. A viewer's
 choice or slow connection does not lower another viewer's quality or cadence.
 Switching presets or resizing a pane refreshes its current image even when the
 application is paused. Application arrays and retained source images are unchanged.
-Per-client resizing/encoding runs off the network event loop under the existing
-server image-preparation budget. It adds CPU work when a variant is needed.
+Per-client resizing/encoding runs off the network event loop. It adds CPU work
+when a variant is needed.
 
 Browser rendering preferences automatically enable transport receipt backpressure.
 `Server(delivery_backpressure=True)` remains available for non-browser clients.
