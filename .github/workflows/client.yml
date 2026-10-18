@@ -42,7 +42,7 @@ jobs:
           npm audit --prefix src/leika/client --audit-level=moderate
           npm audit --prefix src/leika/client --omit=dev --audit-level=moderate
       - name: Generated protocol
-        run: uv run --locked --extra dev --python 3.12 python sync_client_server.py --check
+        run: uv run --locked --extra dev --python 3.12 python scripts/generate.py --check
       - name: TypeScript
         working-directory: src/leika/client
         run: npm run typecheck

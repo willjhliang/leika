@@ -1,4 +1,4 @@
-.PHONY: help install install-docs test test-e2e lint typecheck client-test build-client docs gallery docs-serve package
+.PHONY: help install install-docs test test-e2e lint typecheck client-test build-client generate check-generated docs gallery docs-serve package
 UV_DEV = uv run --locked --extra dev
 UV_DOCS = uv run --locked --extra docs
 E2E_WORKERS ?= 4
@@ -21,8 +21,8 @@ test-e2e: ## Run Playwright browser tests
 	$(UV_DEV) pytest tests/e2e -n $(E2E_WORKERS)
 
 lint: ## Check Python formatting and lint rules
-	$(UV_DEV) ruff check src tests examples scripts hatch_build.py sync_client_server.py
-	$(UV_DEV) ruff format --check src tests examples scripts hatch_build.py sync_client_server.py
+	$(UV_DEV) ruff check src tests examples scripts hatch_build.py
+	$(UV_DEV) ruff format --check src tests examples scripts hatch_build.py
 
 typecheck: ## Type-check the Python package and examples
 	$(UV_DEV) pyright src examples
@@ -32,6 +32,12 @@ client-test: ## Type-check, lint, format-check, and unit-test the browser client
 
 build-client: ## Build the single-file browser client if its sources changed
 	python src/leika/_client_autobuild.py
+
+generate: ## Regenerate the TypeScript protocol, version file and icon set
+	$(UV_DEV) python scripts/generate.py
+
+check-generated: ## Fail if a generated file is out of date
+	$(UV_DEV) python scripts/generate.py --check
 
 docs: ## Build the HTML documentation into docs/_build/html
 	$(UV_DOCS) sphinx-build -b html -W --keep-going docs docs/_build/html

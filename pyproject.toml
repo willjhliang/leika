@@ -118,7 +118,6 @@ include = [
   "/Makefile",
   "/README.md",
   "/pyproject.toml",
-  "/sync_client_server.py",
   "/uv.lock",
 ]
 
@@ -134,7 +133,6 @@ exclude = [
   "src/leika/client/.nvmrc",
   "src/leika/client/.gitignore",
   "src/leika/client/.prettierignore",
-  "src/leika/_icons_generate_enum.py",
   "src/leika/client/components.json",
   "src/leika/client/dock_test.html",
   "src/leika/client/eslint.config.mjs",

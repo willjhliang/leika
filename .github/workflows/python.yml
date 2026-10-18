@@ -63,8 +63,8 @@ jobs:
             build-constraints.txt
       - name: Ruff
         run: |
-          uv run --locked --extra dev ruff check src tests examples scripts hatch_build.py sync_client_server.py --output-format github
-          uv run --locked --extra dev ruff format --check src tests examples scripts hatch_build.py sync_client_server.py
+          uv run --locked --extra dev ruff check src tests examples scripts hatch_build.py --output-format github
+          uv run --locked --extra dev ruff format --check src tests examples scripts hatch_build.py
       - name: Pyright
         run: uv run --locked --extra dev --python 3.12 pyright src examples
       - name: Documentation and examples
@@ -193,4 +193,4 @@ jobs:
       - name: Unit tests
         run: uv run --locked --extra dev --python 3.12 pytest --ignore=tests/e2e
       - name: Generated protocol
-        run: uv run --locked --extra dev --python 3.12 python sync_client_server.py --check
+        run: uv run --locked --extra dev --python 3.12 python scripts/generate.py --check

@@ -135,7 +135,7 @@ all regenerated files to the release commit so a clean checkout has the exact
 generation the page references.
 
 ```bash
-python sync_client_server.py
+make generate
 make gallery
 make lint typecheck client-test test
 npm audit --prefix src/leika/client --audit-level=moderate
@@ -266,8 +266,9 @@ boundary; consumers of internal helpers should import their owning module.
   TypeScript contract, and cover both replay and live dispatch. Resource
   reservations must be released on rejected publication as well as removal.
 
-## Generated protocol
+## Generated files
 
-Run `python sync_client_server.py` after changing message dataclasses or the
-package version. CI uses `python sync_client_server.py --check` to reject
-generated-file drift.
+Run `make generate` after changing message dataclasses, the package version,
+or the pinned `lucide-static` version. It regenerates the TypeScript protocol,
+the client's version file, and the `leika.Icon` enum and SVG archive. CI runs
+`make check-generated` to reject generated-file drift.
