@@ -2,12 +2,15 @@
 
 ## State
 
-General playback is implemented and installed in Babble.
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
-The installed Babble wheel is built from `e3a3015`; it still reports 0.4.0, so
-identify it by revision and the wheel SHA256 recorded in
-`build/playback-reconnect.json`. Babble's `docs/VIEWER.md` owns its installation.
+
+Every consumer installs Leika the same way: a regular install of this checkout,
+`leika @ file:///mnt/amlfs-01/home/wiliang/leika`, listed in the requirements
+it installs from (Babble `requirements-viewer.txt`, do_anything
+`requirements.txt`, lwm `requirements/overrides.txt` and its compiled lock).
+All three were installed from `main` at `3f86560` and pass their viewer tests;
+the version stays 0.4.0 until the user releases.
 
 Downstream consumers are Babble (`babble/viewer/app.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
@@ -126,17 +129,14 @@ on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 `LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
 
-The `lwm` env installs Leika editable from this checkout, and its visualizer
-Pilot jobs serve this checkout's `client/build`. After each merge, run
-`make build-client` here (the lwm env has no npm to rebuild a stale client).
-Until the visualizers restart, a page reload fails the protocol check. This
-session owns the lwm and Babble visualizers and restarts them when the series
-is done. do_anything and Babble install fixed wheels; the user wants every
-project to install Leika the same way (see Next actions).
-
-`dist/` in this checkout holds the wheel Babble's `docs/VIEWER.md` verifies by
-SHA256, and `make package` empties `dist/`; build release checks into another
-directory until Babble moves to a newer install.
+Installs copy the code and built page, so merges here don't reach running
+consumers until a rollout. A rollout runs with `main` committed and its client
+build current (consumer envs have no npm): reinstall each project per its
+install doc (lwm syncs with `--reinstall-package leika` and must keep its
+Isaac pins, e.g. Pillow 11.2.1), run its viewer tests, and restart the
+visualizers this session owns: lwm's Pilot jobs `jca01ef3ea83041812226`
+(port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer on
+port 8092 (launch record in Babble's `runs/viewer-checks/`).
 
 After wave 1: 709 Python unit tests, 641 client tests and 216 browser tests
 pass. `test_gui.py::test_plotly_size_is_checked_before_config_json_parse`
@@ -150,9 +150,4 @@ change.
 Wave 2a is running: Python server and panes, and the browser client. Review
 and merge both, then start wave 2b.
 
-Every project installs Leika the same way: a regular (non-editable)
-`pip install /mnt/amlfs-01/home/wiliang/leika` from this checkout while `main`
-is committed and its client build is current, with `leika>=X.Y` declared in
-the project. The rollout at the end of this series bumps the version to 0.5.0,
-reinstalls Babble, do_anything and lwm (lwm leaves its editable install),
-updates their install docs and restarts the visualizers.
+Roll out to all three consumers after the final merge of this series.
