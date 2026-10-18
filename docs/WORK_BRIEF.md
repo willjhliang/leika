@@ -132,7 +132,7 @@ Pilot jobs serve this checkout's `client/build`. After each merge, run
 Until the visualizers restart, a page reload fails the protocol check. This
 session owns the lwm and Babble visualizers and restarts them when the series
 is done. do_anything and Babble install fixed wheels; the user wants every
-project to install Leika the same way (proposal under Next actions).
+project to install Leika the same way (see Next actions).
 
 `dist/` in this checkout holds the wheel Babble's `docs/VIEWER.md` verifies by
 SHA256, and `make package` empties `dist/`; build release checks into another
@@ -150,8 +150,9 @@ change.
 Wave 2a is running: Python server and panes, and the browser client. Review
 and merge both, then start wave 2b.
 
-Proposal (awaiting the user): every project pins an exact `leika==X.Y.Z` and
-installs the wheel `make package` builds into this checkout's `dist/` with
-`pip install --find-links /mnt/amlfs-01/home/wiliang/leika/dist ...`. Each
-rollout bumps the version (0.5.0 for this series) and updates all three
-projects' pins, installs and visualizers together.
+Every project installs Leika the same way: a regular (non-editable)
+`pip install /mnt/amlfs-01/home/wiliang/leika` from this checkout while `main`
+is committed and its client build is current, with `leika>=X.Y` declared in
+the project. The rollout at the end of this series bumps the version to 0.5.0,
+reinstalls Babble, do_anything and lwm (lwm leaves its editable install),
+updates their install docs and restarts the visualizers.
