@@ -24,6 +24,8 @@ export function warnDisconnectedSend(message: Message): void {
 
 /** Application context for Leika's GUI and 2D pane workspace. */
 export type ViewerContextContents = {
+  /** The WebSocket endpoint this page connects to. */
+  server: string;
   videoPlayback: VideoPlaybackRegistry;
   useGui: GuiSession["store"];
   useGuiConfig: GuiSession["configStore"];

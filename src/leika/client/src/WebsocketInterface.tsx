@@ -12,7 +12,6 @@ import { handleMessages } from "./MessageHandler";
 import { resetNotifications } from "./notifications";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
 import { retainedDownloads } from "./retainedDownloadBudget";
-import { syncSearchParamServer } from "./SearchParamsUtils";
 import { useViewer, warnDisconnectedSend } from "./ViewerContext";
 import { LEIKA_PROTOCOL, type Message } from "./WebsocketMessages";
 
@@ -30,11 +29,7 @@ const zstdReady = zstd.init();
  * their messages once per animation frame, and measure the connection. */
 export function WebsocketMessageProducer() {
   const viewer = useViewer();
-  const server = viewer.useGui((state) => state.server);
-
-  // An effect, not a render side effect: `replaceState` mutates shared
-  // browser state, which render must not.
-  React.useEffect(() => syncSearchParamServer(server), [server]);
+  const { server } = viewer;
 
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);

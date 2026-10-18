@@ -26,15 +26,15 @@ function createViewerTransport(): ViewerMutable {
 
 /** Composition boundary for browser state and mutable transport resources. */
 export function ViewerProvider({
-  initialServer,
+  server,
   children,
 }: {
-  initialServer: string;
+  server: string;
   children: React.ReactNode;
 }) {
   const [transport] = React.useState(createViewerTransport);
   const mutable = React.useRef(transport);
-  const guiState = useGuiState(initialServer);
+  const guiState = useGuiState();
   const viewportState = useViewportState();
   const [videoPlayback] = React.useState(() => new VideoPlaybackRegistry());
   React.useEffect(() => {
@@ -54,6 +54,7 @@ export function ViewerProvider({
   // app whenever its provider re-renders.
   const viewer: ViewerContextContents = React.useMemo(
     () => ({
+      server,
       videoPlayback,
       useGui: guiState.store,
       useGuiConfig: guiState.configStore,
@@ -64,7 +65,14 @@ export function ViewerProvider({
       settingsActions: settingsActions,
       mutable,
     }),
-    [guiState, viewportState, settingsStore, settingsActions, videoPlayback],
+    [
+      server,
+      guiState,
+      viewportState,
+      settingsStore,
+      settingsActions,
+      videoPlayback,
+    ],
   );
 
   return (

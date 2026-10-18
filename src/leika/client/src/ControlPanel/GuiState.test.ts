@@ -14,7 +14,7 @@ import {
 import { applyGuiConfigUpdate, createGuiState } from "./GuiState";
 
 function createGuiStateHarness(): ReturnType<typeof createGuiState> {
-  return createGuiState("ws://example.test");
+  return createGuiState();
 }
 
 function modal(uuid: string, order: number): GuiModalMessage {

@@ -84,8 +84,7 @@ function StatRow({
  * nothing but an echo, so a reading that looks bad is bad from where the
  * reader is sitting, which is the only place it matters. */
 function ConnectionRows() {
-  const { useGui } = useViewer();
-  const server = useGui((state) => state.server);
+  const { useGui, server } = useViewer();
   const connectionError = useGui((state) => state.connectionError);
   const websocketState = useGui((state) => state.websocketState);
   const reading = useConnectionReading();

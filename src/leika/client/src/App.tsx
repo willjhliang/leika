@@ -13,7 +13,7 @@ import {
 } from "./ControlPanel/controlPanelLayout";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { LeikaModal } from "./Modal";
-import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
+import { websocketServer } from "./SearchParamsUtils";
 import { useViewer } from "./ViewerContext";
 import { ViewerProvider } from "./ViewerProvider";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
@@ -25,13 +25,8 @@ import { useMobileView } from "./hooks/useMediaQuery";
 import { ViewportWorkspace } from "./viewport/ViewportWorkspace";
 
 export function Root() {
-  const searchParams = new URLSearchParams(window.location.search);
-  const servers = searchParams.getAll(searchParamKey);
-  const initialServer =
-    servers[0] ?? defaultWebsocketServer(window.location.href);
-
   return (
-    <ViewerProvider initialServer={initialServer}>
+    <ViewerProvider server={websocketServer(window.location.href)}>
       <ViewerContents>
         <WebsocketMessageProducer />
       </ViewerContents>

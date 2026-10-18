@@ -18,7 +18,7 @@ describe("viewer state ownership", () => {
     const viewportSessions: ViewportSession[] = [];
     function Harness() {
       const [rendered, setRendered] = React.useState(false);
-      guiSessions.push(useGuiState("ws://example.test"));
+      guiSessions.push(useGuiState());
       viewportSessions.push(useViewportState(null));
       if (!rendered) setRendered(true);
       return null;
@@ -30,13 +30,12 @@ describe("viewer state ownership", () => {
   });
 
   it("creates independent sessions without mounting React", () => {
-    const firstGui = createGuiState("ws://first.test");
-    const secondGui = createGuiState("ws://second.test");
+    const firstGui = createGuiState();
+    const secondGui = createGuiState();
     firstGui.actions.applyMessages([
       { type: "GuiFormSubmitMessage", uuid: "form" },
     ]);
     expect(secondGui.store.get().lastFormSubmit).toBeNull();
-    expect(secondGui.store.get().server).toBe("ws://second.test");
 
     const firstViewport = createViewportState(null);
     const secondViewport = createViewportState(null);

@@ -21,7 +21,6 @@ import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 
 export interface GuiState {
   theme: ThemeConfigurationMessage;
-  server: string;
   /** Server-provided namespace for browser-owned workspace state. */
   workspaceId: string | null;
   websocketState: "connected" | "reconnecting" | "inactive";
@@ -110,7 +109,6 @@ const cleanGuiState: GuiState = {
     // viewer when the first theme message arrives.
     theme: "auto",
   },
-  server: "",
   workspaceId: null,
   websocketState: "inactive",
   connectionError: null,
@@ -168,11 +166,8 @@ function ownImageBytes(
 }
 
 /** Create an independent GUI session without mounting a React component. */
-export function createGuiState(initialServer: string) {
-  const store = createStore<GuiState>({
-    ...cleanGuiState,
-    server: initialServer,
-  });
+export function createGuiState() {
+  const store = createStore<GuiState>(cleanGuiState);
 
   // Per-component config store, keyed by UUID, so one component's update
   // re-renders one component. Tab groups own their tab descriptors, which the
@@ -432,8 +427,8 @@ type GuiTabGroupTabs = Extract<
 >["props"]["_tabs"];
 
 /** Own one GUI session for the lifetime of the mounted viewer. */
-export function useGuiState(initialServer: string): GuiSession {
-  return React.useState(() => createGuiState(initialServer))[0];
+export function useGuiState(): GuiSession {
+  return React.useState(createGuiState)[0];
 }
 
 export type GuiSession = ReturnType<typeof createGuiState>;
