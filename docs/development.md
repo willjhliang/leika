@@ -1,15 +1,18 @@
 # Development
 
-## Bootstrap
+## Environment
+
+Develop in one environment with Python 3.10 or newer and Node.js 24, for
+example a conda environment:
 
 ```bash
-make install   # Uses the tracked uv.lock.
-# pip fallback: python -m pip install -e ".[dev]" && make build-client
+conda create -n leika -c conda-forge python=3.13 nodejs=24
+conda activate leika
+make install   # pip install -e ".[dev]", then build the browser client
 ```
 
-The Python package serves `src/leika/client/build/index.html`. The Python-facing
-Make targets run through the tracked `uv.lock`; `make help` lists every target.
-The pip fallback honors published ranges instead of the development lock.
+Every Make target runs its tools from the active environment; `make help`
+lists them.
 
 ## Building the client
 
@@ -53,10 +56,7 @@ Unit tests must work without the optional plotting libraries unless marked
 `plotly` or `matplotlib`. `make package` builds the distributions and validates
 them with `scripts/check_wheel.py` and `scripts/check_sdist.py`: the browser
 bundle must be present, files that do not belong in a release wheel are
-rejected, and archive size, shape, and integrity limits are enforced. The
-universal `uv.lock` is tracked for repeatable development and CI across every
-supported Python version; CI uses `--locked`, while a separate lowest-direct
-job checks that the broad published lower bounds remain usable.
+rejected, and archive size, shape, and integrity limits are enforced.
 
 ## Pinned simulator environments
 
@@ -111,7 +111,6 @@ regains focus; Viser 0.2.11 retries in the background as well.
 ## Documentation
 
 ```bash
-make install-docs   # or: python -m pip install -e ".[docs]"
 make docs
 ```
 
