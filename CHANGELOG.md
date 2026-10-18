@@ -28,6 +28,8 @@ versioning.
   raises instead of setting a plain attribute. Programmatic callbacks run in
   the order the changes were made, without a queue cap. Slider `marks` and
   button and toggle `merge` are public properties.
+- GUI: text inputs and list entries no longer stop at a browser-side length or
+  entry count; each browser message is bounded by the 4 MiB inbound limit.
 - GUI (breaking): containers are filled only with `with container:`; the
   direct `folder.add_*(...)` methods are removed. Also removed:
   `leika.GuiTabGroup`, `GuiApi.set_panel_label()` (set
