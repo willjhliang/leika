@@ -7,9 +7,26 @@ from io import BytesIO
 from typing import Literal
 
 import numpy as np
+import numpy.typing as npt
 from PIL import Image
 
-from ._assignable_props_api import colors_to_uint8
+
+def colors_to_uint8(colors: np.ndarray) -> npt.NDArray[np.uint8]:
+    """Convert intensities to uint8: floats are read as [0, 1] and integers as
+    [0, 255], saturating outside those ranges. Accepts any shape."""
+    if colors.dtype == np.uint8:
+        return colors
+    if np.issubdtype(colors.dtype, np.floating):
+        if not np.isfinite(colors).all():
+            raise ValueError("Image values must be finite.")
+        # Clip before scaling, so a large finite float16 saturates rather than
+        # overflowing during the multiplication.
+        scaled = np.clip(colors, 0, 1)
+        np.multiply(scaled, 255.0, out=scaled)
+        return scaled.astype(np.uint8)
+    if np.issubdtype(colors.dtype, np.integer):
+        return np.clip(colors, 0, 255).astype(np.uint8)
+    raise TypeError("Image values must use an integer or floating dtype.")
 
 
 def _validate_image_encoding_options(format: object, jpeg_quality: object) -> None:

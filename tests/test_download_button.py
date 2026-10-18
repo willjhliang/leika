@@ -8,13 +8,16 @@ shut while it is going out.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, List, Tuple
 
 import pytest
 
 import leika
+from leika import _messages
 from leika._gui_handles import GuiDownloadButtonHandle, GuiEvent
+from leika._transport._websocket import ClientId
 
 
 class _Client:
@@ -115,19 +118,26 @@ def test_a_str_is_refused_at_creation(server: leika.Server) -> None:
         server.gui.add_download_button("Export", "notes.txt")  # type: ignore[arg-type]
 
 
-def test_the_button_is_shut_while_the_file_is_going_out(server: leika.Server) -> None:
+def test_the_button_is_busy_while_the_file_is_going_out(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Producing a large export takes long enough to click again; the second
-    # press would run the whole thing a second time.
+    # press would run the whole thing a second time. Busy is drawn as
+    # disabled without touching the caller's own `disabled`.
     seen: List[bool] = []
 
     def contents(event: leika.GuiEvent[Any]) -> bytes:
-        seen.append(event.target.disabled)
+        seen.append(event.target._busy)
         return b"done"
 
     handle = server.gui.add_download_button("Export", contents, filename="n.txt")
-    assert handle.disabled is False
-    _press(handle)
+    client = _Client()
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: client)
+    press = _messages.GuiUpdateMessage(handle.id, {"value": True})
+    asyncio.run(server.gui._handle_gui_updates(ClientId(1), press))
     assert seen == [True]
+    assert client.sent == [("n.txt", b"done")]
+    assert handle._busy is False
     assert handle.disabled is False
 
 

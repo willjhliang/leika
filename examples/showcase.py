@@ -666,7 +666,7 @@ def _run_showcase(lifetime: _ShowcaseLifetime) -> None:
 
     @server.on_client_connect
     def _(client: leika.ClientHandle) -> None:
-        client.add_notification(
+        client.gui.add_notification(
             "Welcome to Leika",
             "Drag pane labels, resize dividers, or press Ctrl/Cmd+K.",
             auto_close_seconds=4.0,

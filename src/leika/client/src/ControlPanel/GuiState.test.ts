@@ -53,11 +53,7 @@ function tabs(uuid: string, containerUuid: string): GuiTabGroupMessage {
     type: "GuiTabGroupMessage",
     uuid,
     container_uuid: containerUuid,
-    props: {
-      order: 0,
-      visible: true,
-      _tabs: [],
-    },
+    props: { order: 0, visible: true },
   };
 }
 
@@ -71,8 +67,7 @@ function tab(
     type: "GuiTabMessage",
     uuid,
     group_uuid: groupUuid,
-    label,
-    icon_html: iconHtml,
+    props: { label, _icon_html: iconHtml },
   };
 }
 
@@ -86,8 +81,7 @@ function tabUpdate(
     type: "GuiTabUpdateMessage",
     uuid,
     group_uuid: groupUuid,
-    label,
-    icon_html: iconHtml,
+    props: { label, _icon_html: iconHtml },
   };
 }
 
@@ -110,22 +104,13 @@ function command(
   };
 }
 
-function removal(
-  uuid: string,
-  removedUuids: string[] = [],
-  removedTabUuids: string[] = [],
-): GuiRemoveMessage {
-  return {
-    type: "GuiRemoveMessage",
-    uuid,
-    removed_uuids: removedUuids,
-    removed_tab_uuids: removedTabUuids,
-  };
+function removal(uuid: string, removedUuids: string[] = []): GuiRemoveMessage {
+  return { type: "GuiRemoveMessage", uuid, removed_uuids: removedUuids };
 }
 
 function tabsOf(gui: ReturnType<typeof createGuiState>, uuid: string) {
-  return (gui.configStore.get(uuid) as GuiTabGroupMessage).props._tabs.map(
-    (descriptor) => descriptor.label,
+  return (gui.store.get().tabsFromGroupUuid[uuid] ?? []).map(
+    (tab) => tab.props.label,
   );
 }
 
@@ -224,7 +209,7 @@ describe("createGuiState", () => {
     });
 
     gui.actions.applyMessages([
-      removal("folder", ["form", "tabs", "nested", "leaf"], ["individual-tab"]),
+      removal("folder", ["form", "tabs", "individual-tab", "nested", "leaf"]),
     ]);
 
     for (const uuid of ["folder", "form", "tabs", "nested", "leaf"])
@@ -232,6 +217,7 @@ describe("createGuiState", () => {
     expect(gui.store.get().guiUuidSetFromContainerUuid).toEqual({ root: {} });
     expect(gui.store.get().guiOrderFromUuid).toEqual({});
     expect(gui.store.get().uploadsInProgress).toEqual({});
+    expect(gui.store.get().tabsFromGroupUuid).toEqual({});
   });
 
   it("purges a modal's nested component subtree when the modal closes", () => {
@@ -247,7 +233,6 @@ describe("createGuiState", () => {
         type: "GuiCloseModalMessage",
         uuid: "modal",
         removed_uuids: ["folder", "leaf"],
-        removed_tab_uuids: [],
       },
     ]);
 
@@ -268,7 +253,7 @@ describe("createGuiState", () => {
     ]);
     expect(tabsOf(gui, "group")).toEqual(["Renamed", "Second"]);
 
-    // A redeclared group keeps the descriptors its tabs own.
+    // A redeclared group keeps the tabs, which have their own lifecycle.
     gui.actions.applyMessages([tabs("group", "root")]);
     expect(tabsOf(gui, "group")).toEqual(["Renamed", "Second"]);
     expect(gui.store.get().guiUuidSetFromContainerUuid.second).toEqual({
@@ -287,7 +272,7 @@ describe("createGuiState", () => {
     ]);
 
     gui.actions.applyMessages([
-      removal("outer-tab", ["leaf", "inner-group"], ["inner-tab"]),
+      removal("outer-tab", ["inner-group", "inner-tab", "leaf"]),
     ]);
 
     expect(tabsOf(gui, "outer-group")).toEqual([]);

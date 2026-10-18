@@ -62,14 +62,14 @@ def test_encoding_carries_numpy_scalars_and_tuples_as_plain_values() -> None:
             min_range=None,
             precision=1,
             fixed_endpoints=False,
-            _marks=(_messages.GuiSliderMark(0.0, "low"),),
+            marks=(_messages.GuiSliderMark(0.0, "low"),),
         ),
     )
     encoded = msgspec.msgpack.decode(message.encode())
     assert encoded["type"] == "GuiMultiSliderMessage"
     assert encoded["value"] == [0.5, 1]
     assert encoded["props"]["order"] == 2
-    assert encoded["props"]["_marks"] == [{"value": 0.0, "label": "low"}]
+    assert encoded["props"]["marks"] == [{"value": 0.0, "label": "low"}]
 
 
 @pytest.mark.parametrize(
@@ -95,9 +95,6 @@ def test_outbound_fields_must_match_their_annotations(message: _messages.Message
 def test_dynamic_values_must_be_encodable() -> None:
     with pytest.raises(TypeError, match="unsupported"):
         _messages.GuiUpdateMessage("component", {"value": object()}).encode()
-    assert _messages.validated_protocol_value_copy({"nested": [1, "two"]}) == {"nested": [1, "two"]}
-    with pytest.raises(TypeError):
-        _messages.validated_protocol_value_copy({"value": object()})
 
 
 def test_non_lifecycle_messages_never_coalesce_by_default() -> None:
@@ -107,7 +104,7 @@ def test_non_lifecycle_messages_never_coalesce_by_default() -> None:
 
 
 def test_lifecycle_messages_derive_their_coalescing_keys() -> None:
-    create = _messages.GuiTabMessage("tab", "group", "Label", None)
+    create = _messages.GuiTabMessage("tab", "group", _messages.GuiTabProps("Label", None))
     remove = _messages.GuiRemoveMessage("tab")
     assert create.redundancy_key() == remove.redundancy_key()
     assert remove.purge_entities() == (("gui", "tab"),)

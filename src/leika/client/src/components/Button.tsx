@@ -11,7 +11,7 @@ import { startPreviewWarmObservation } from "./previewWarmObserver";
 export default function ButtonComponent({
   uuid,
   props: {
-    disabled,
+    disabled: disabledProp,
     label,
     text,
     hint,
@@ -19,9 +19,13 @@ export default function ButtonComponent({
     _icon_html: iconHtml,
     _hold_callback_freqs: holdFrequencies,
     _prefetch: prefetch,
+    _busy: busy,
   },
 }: GuiButtonMessage) {
   const { messageSender } = useGuiComponent();
+  // A file button producing its file is busy; it reads as disabled without
+  // changing the caller's own `disabled`.
+  const disabled = disabledProp || busy;
 
   // A button whose press shows a file asks for the file when it scrolls into
   // view, so that the press finds it already in the browser

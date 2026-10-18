@@ -2,7 +2,6 @@ from ._client_handle import ClientHandle as ClientHandle
 from ._gui_api import GuiApi as GuiApi
 from ._gui_handles import CommandEvent as CommandEvent
 from ._gui_handles import CommandHandle as CommandHandle
-from ._gui_handles import DownloadContent as DownloadContent
 from ._gui_handles import FileContent as FileContent
 from ._gui_handles import GuiButtonGroupHandle as GuiButtonGroupHandle
 from ._gui_handles import GuiButtonHandle as GuiButtonHandle
@@ -42,7 +41,6 @@ from ._gui_handles import GuiVector3Handle as GuiVector3Handle
 from ._gui_handles import GuiVideoControlsHandle as GuiVideoControlsHandle
 from ._gui_handles import PlaybackEvent as PlaybackEvent
 from ._gui_handles import PlaybackState as PlaybackState
-from ._gui_handles import PreviewContent as PreviewContent
 from ._gui_handles import UploadedFile as UploadedFile
 from ._icons_enum import Icon as Icon
 from ._icons_enum import IconName as IconName
@@ -64,7 +62,5 @@ from ._panes import PlotlyPaneHandle as PlotlyPaneHandle
 from ._panes import VideoPaneHandle as VideoPaneHandle
 from ._panes import ViserPaneHandle as ViserPaneHandle
 from ._server import Server as Server
-
-GuiTabGroup = GuiTabGroupHandle
 
 __version__ = "0.4.0"

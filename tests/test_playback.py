@@ -90,9 +90,9 @@ def test_playback_validation_publication_and_removal(
     ):
         with pytest.raises((TypeError, ValueError)):
             server.gui.add_playback(**kwargs)
-    assert not server.gui._playback_handle_from_uuid
+    assert not server.gui._handles
     with server.gui.add_folder("Playback") as folder:
-        bar = folder.add_playback(duration=3, time=2)
+        bar = server.gui.add_playback(duration=3, time=2)
     before = bar.state
     with pytest.raises(ValueError):
         bar.duration = 1
@@ -108,21 +108,11 @@ def test_playback_validation_publication_and_removal(
             bar.time = 0.5
         with pytest.raises(RuntimeError):
             server.gui.add_playback(duration=1)
-    assert bar.time == 0 and len(server.gui._playback_handle_from_uuid) == 1
+    assert bar.time == 0 and set(server.gui._handles) == {folder.id, bar.id}
     folder.remove()
-    assert not server.gui._playback_handle_from_uuid
+    assert not server.gui._handles
     with pytest.raises(RuntimeError):
-        bar.advance(0.1)
-
-
-def test_video_playback_adapter_keeps_browser_clock(server: leika.Server) -> None:
-    bar = server.gui.add_playback(sync_group="episode")
-    assert isinstance(bar, leika.GuiVideoControlsHandle)
-    assert bar.sync_group == "episode"
-    with pytest.raises(ValueError):
-        server.gui.add_playback(sync_group="episode", duration=2)  # type: ignore[call-overload]
-    with pytest.raises(ValueError):
-        server.gui.add_playback()  # type: ignore[call-overload]
+        bar.time = 0.25
 
 
 def test_playback_retains_one_valid_state_when_duration_changes(server: leika.Server) -> None:

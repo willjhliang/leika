@@ -7,12 +7,13 @@ Handles are returned by the ``leika.GuiApi.add_*`` methods. Input handles carry
 a ``value`` and support ``on_update`` callbacks; container handles can be used
 as context managers to scope the controls added inside them.
 
-Removal is terminal. A handle's stable ``id`` remains readable, but other
-synchronized state reads, updates, and new callback registrations raise
-``RuntimeError``. Removing a container also makes every descendant terminal,
-and charged payloads are released and scrubbed. Repeating an explicit removal
-emits a warning and is otherwise a harmless no-op. The same lifecycle applies
-to commands, modals, and notifications.
+Assigning a property or calling ``update(...)`` validates the new state and
+publishes it in one message; Python commits it only once that message is
+queued. Removal is terminal: updates and new callback registrations raise
+``RuntimeError``, while reads return the last state. Removing a container
+removes every descendant. Repeating an explicit removal emits a warning and is
+otherwise a harmless no-op. The same lifecycle applies to commands, modals, and
+notifications.
 
 Inputs
 ------
@@ -102,10 +103,6 @@ Containers
 .. autoclass:: GuiTabGroupHandle
    :members:
 
-.. data:: GuiTabGroup
-
-   Alias for :class:`GuiTabGroupHandle`.
-
 .. autoclass:: GuiTabHandle
    :members:
 
@@ -149,7 +146,3 @@ Types
 -----
 
 .. autodata:: FileContent
-
-.. autodata:: DownloadContent
-
-.. autodata:: PreviewContent

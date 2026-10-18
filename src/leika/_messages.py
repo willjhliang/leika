@@ -6,7 +6,6 @@ The browser's TypeScript types are generated from these dataclasses; see
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import functools
 import math
@@ -132,15 +131,6 @@ class GuiSliderMark:
     label: Optional[str]
 
 
-@dataclasses.dataclass(frozen=True)
-class GuiTab:
-    """One tab of a tab group: its label, its icon, and the container it shows."""
-
-    label: str
-    icon_html: Optional[str]
-    container_id: str
-
-
 TagLiteral = Literal["GuiComponentMessage"]
 
 # Entity lifecycle markers, which drive coalescing and garbage collection.
@@ -263,11 +253,12 @@ class Message:
 
     def encode(self) -> bytes:
         """Check every field against its annotation and encode the message."""
-        fields = _wire_fields(type(self))
-        for name, annotation in fields:
-            _check_outbound(getattr(self, name), annotation)
+        check_wire_types(self)
         return _ENCODER.encode(
-            {"type": type(self).__name__, **{name: getattr(self, name) for name, _ in fields}}
+            {
+                "type": type(self).__name__,
+                **{name: getattr(self, name) for name, _ in _wire_fields(type(self))},
+            }
         )
 
 
@@ -285,6 +276,15 @@ def _wire_fields(cls: type) -> tuple[tuple[str, Any], ...]:
     """A dataclass's wire fields with their resolved annotations, in order."""
     hints = get_type_hints(cls)
     return tuple((field.name, hints[field.name]) for field in dataclasses.fields(cls))
+
+
+def check_wire_types(record: object) -> None:
+    """Check each field of a wire dataclass against its annotation."""
+    for name, annotation in _wire_fields(type(record)):
+        try:
+            _check_outbound(getattr(record, name), annotation)
+        except TypeError as error:
+            raise TypeError(f"{type(record).__name__}.{name}: {error}") from None
 
 
 def _type_error(annotation: object, value: object) -> TypeError:
@@ -342,16 +342,9 @@ def _check_outbound(value: Any, annotation: Any) -> None:
     if dataclasses.is_dataclass(annotation):
         if type(value) is not annotation:
             raise _type_error(annotation, value)
-        for name, field_annotation in _wire_fields(annotation):
-            _check_outbound(getattr(value, name), field_annotation)
+        check_wire_types(value)
         return
     raise TypeError(f"unsupported protocol annotation: {annotation!r}")
-
-
-def validated_protocol_value_copy(value: Any) -> Any:
-    """A private copy of one dynamic property value the wire can carry."""
-    _ENCODER.encode(value)
-    return copy.deepcopy(value)
 
 
 # Bounds on what one decoded browser message may contain, beyond the
@@ -496,19 +489,15 @@ class GuiRemoveMessage(
     Message,
     entity=EntityLifecycle("gui", "remove", "uuid"),
 ):
-    """Remove one GUI element, its tabs, and named descendants atomically."""
+    """Remove one GUI element or tab, and every descendant it lists, atomically."""
 
     uuid: str
     removed_uuids: Tuple[str, ...] = ()
-    removed_tab_uuids: Tuple[str, ...] = ()
+    """Every descendant, tabs included, so the browser needs no tree walk."""
 
     @override
     def purge_entities(self) -> tuple[tuple[str, object], ...]:
-        return (
-            ("gui", self.uuid),
-            *(("gui", uuid) for uuid in self.removed_uuids),
-            *(("gui", uuid) for uuid in self.removed_tab_uuids),
-        )
+        return (("gui", self.uuid), *(("gui", uuid) for uuid in self.removed_uuids))
 
 
 @dataclasses.dataclass
@@ -652,6 +641,13 @@ class GuiFormMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiFormResetMessage(Message):
+    """Sent client->server when the user presses a form's Reset."""
+
+    uuid: str
+
+
+@dataclasses.dataclass
 class GuiFormSubmitMessage(Message, entity=EntityLifecycle("gui", "update_simple", "uuid")):
     """Bidirectional form submit signal.
 
@@ -753,6 +749,8 @@ class GuiDividerMessage(_CreateGuiComponentMessage):
 class GuiProgressBarProps:
     order: float
     """Order value for arranging GUI elements. """
+    value: float
+    """Progress as a percentage, from 0 to 100."""
     animated: bool
     """Whether the progress bar should be animated."""
     visible: bool
@@ -761,7 +759,6 @@ class GuiProgressBarProps:
 
 @dataclasses.dataclass
 class GuiProgressBarMessage(_CreateGuiComponentMessage):
-    value: float
     container_uuid: str
     props: GuiProgressBarProps
 
@@ -811,10 +808,6 @@ class GuiImageMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiTabGroupProps:
-    _tabs: Tuple[GuiTab, ...]
-    """(Private) Server/client-local descriptor projection. The group create
-    carries an empty tuple; flat ``GuiTabMessage`` lifecycle records declare,
-    update, and remove tabs before their child components."""
     order: float
     """Order value for arranging GUI elements. """
     visible: bool
@@ -828,16 +821,26 @@ class GuiTabGroupMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiTabProps:
+    label: str
+    """Label on the tab."""
+    _icon_html: Optional[str]
+    """(Private) HTML string for the icon displayed on the tab."""
+
+
+@dataclasses.dataclass
 class GuiTabMessage(
     Message,
     entity=EntityLifecycle("gui", "create", "uuid"),
 ):
-    """Declare one stable tab container before any of its child components."""
+    """Declare one stable tab container of a group, before any of its children.
+
+    Tabs keep their own create, update and remove records, separate from the
+    group's, so every replay prefix is valid and tabs keep their order."""
 
     uuid: str
     group_uuid: str
-    label: str
-    icon_html: Optional[str]
+    props: GuiTabProps
 
 
 @dataclasses.dataclass
@@ -845,12 +848,11 @@ class GuiTabUpdateMessage(
     Message,
     entity=EntityLifecycle("gui", "update_simple", "uuid"),
 ):
-    """Update presentation metadata for an already-declared tab container."""
+    """Update the props of an already-declared tab."""
 
     uuid: str
     group_uuid: str
-    label: str
-    icon_html: Optional[str]
+    props: GuiTabProps
 
 
 @dataclasses.dataclass
@@ -870,15 +872,10 @@ class GuiCloseModalMessage(
 ):
     uuid: str
     removed_uuids: Tuple[str, ...] = ()
-    removed_tab_uuids: Tuple[str, ...] = ()
 
     @override
     def purge_entities(self) -> tuple[tuple[str, object], ...]:
-        return (
-            ("modal", self.uuid),
-            *(("gui", uuid) for uuid in self.removed_uuids),
-            *(("gui", uuid) for uuid in self.removed_tab_uuids),
-        )
+        return (("modal", self.uuid), *(("gui", uuid) for uuid in self.removed_uuids))
 
 
 @dataclasses.dataclass
@@ -897,6 +894,9 @@ class GuiButtonProps(GuiBaseProps):
     """(Private) Whether the press's work can be begun before the press: a
     button that shows a file asks for it when it scrolls into view
     (``GuiPreviewWarmMessage``), so the press finds the file already here."""
+    _busy: bool
+    """(Private) Whether a file button is producing its file. Drawn as
+    disabled, separately from the caller's own ``disabled``."""
 
 
 @dataclasses.dataclass
@@ -1065,8 +1065,8 @@ class GuiSliderProps(GuiBaseProps):
     """Number of decimal places to display for the slider value."""
     show_value: bool
     """Whether to show the editable number box beside the slider."""
-    _marks: Optional[Tuple[GuiSliderMark, ...]]
-    """(Private) Optional tuple of GuiSliderMark objects to display custom marks on the slider."""
+    marks: Optional[Tuple[GuiSliderMark, ...]]
+    """Optional marks to display on the slider."""
 
 
 @dataclasses.dataclass
@@ -1090,8 +1090,8 @@ class GuiMultiSliderProps(GuiBaseProps):
     """Number of decimal places to display for the multi-slider values."""
     fixed_endpoints: bool
     """If True, the first and last handles cannot be moved."""
-    _marks: Optional[Tuple[GuiSliderMark, ...]]
-    """(Private) Optional tuple of GuiSliderMark objects to display custom marks on the multi-slider."""
+    marks: Optional[Tuple[GuiSliderMark, ...]]
+    """Optional marks to display on the multi-slider."""
 
 
 @dataclasses.dataclass
@@ -1174,9 +1174,8 @@ class GuiToggleGroupProps(GuiBaseProps):
     required: bool
     """Whether one option must always be on. True refuses the press that would
     empty the row, so the value is never an empty tuple."""
-    _merge: Tuple[bool, ...]
-    """(Private) One flag per gap between toggles; see
-    `GuiButtonGroupProps._merge`."""
+    merge: Tuple[bool, ...]
+    """One flag per gap between toggles; see `GuiButtonGroupProps.merge`."""
 
 
 @dataclasses.dataclass
@@ -1253,9 +1252,9 @@ class GuiTextProps(GuiBaseProps):
     """Whether the value is drawn as markdown. Only for a read-only field: an
     editable field is editing the source, so it always shows it."""
     _source: str
-    """(Private) The value with its relative image paths resolved to data URLs
-    -- the browser cannot read a path on the server's disk. Kept in step with
-    the value whenever a rendered field could be looking at it."""
+    """(Private) The Markdown the browser renders: the value, with relative
+    image paths pointed at server URLs -- the browser cannot read a path on the
+    server's disk. Empty unless ``markdown`` is set."""
 
 
 @dataclasses.dataclass
@@ -1343,9 +1342,9 @@ class GuiButtonGroupProps(GuiBaseProps):
     ``options``; the Python API fills a single role across the row."""
     options: Tuple[str, ...]
     """Tuple of buttons for the button group."""
-    _merge: Tuple[bool, ...]
-    """(Private) One flag per gap between buttons: True joins that pair into
-    one block, False parts them. Always ``len(options) - 1`` long."""
+    merge: Tuple[bool, ...]
+    """One flag per gap between buttons: True joins that pair into one block,
+    False parts them. Always ``len(options) - 1`` long."""
 
 
 @dataclasses.dataclass

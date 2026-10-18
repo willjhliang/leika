@@ -23,16 +23,7 @@ import { TOGGLE_CLASSES } from "./toggleStyles";
 export default function ToggleGroupComponent({
   uuid,
   value,
-  props: {
-    hint,
-    label,
-    disabled,
-    options,
-    color,
-    multiple,
-    required,
-    _merge: merge,
-  },
+  props: { hint, label, disabled, options, color, multiple, required, merge },
 }: GuiToggleGroupMessage) {
   const { setValue } = useGuiComponent();
   return (

@@ -35,7 +35,6 @@ function GeneratedModal({ conf }: { conf: GuiModalMessage }) {
           type: "GuiCloseModalMessage",
           uuid: conf.uuid,
           removed_uuids: [],
-          removed_tab_uuids: [],
         });
       }}
     >

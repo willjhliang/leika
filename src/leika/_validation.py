@@ -51,14 +51,6 @@ def _utf16_extra_units(value: str) -> Iterator[int]:
         yield len(chunk.encode("utf-16-le", errors="surrogatepass")) // 2 - len(chunk)
 
 
-def utf16_code_unit_length(value: str) -> int:
-    """Return JavaScript String.length without a Python loop per character."""
-    length = len(value)
-    if value.isascii():
-        return length
-    return length + sum(_utf16_extra_units(value))
-
-
 def utf16_code_unit_length_exceeds(value: str, limit: int) -> bool:
     """Whether JavaScript String.length exceeds a limit, with early exit."""
     units = len(value)
@@ -102,24 +94,16 @@ def validate_unicode_string(value: object, name: str) -> str:
     return value
 
 
-_RENDERER_STRING_MAX_UTF16_CODE_UNITS = 16 * 1024
-
-
 def validate_renderer_string(
     value: object,
     name: str,
     *,
     optional: bool = False,
 ) -> str | None:
-    """Validate one short string placed directly into browser-rendered UI."""
+    """Validate one string placed directly into browser-rendered UI."""
     if value is None and optional:
         return None
     if type(value) is not str:
         suffix = " or None" if optional else ""
         raise TypeError(f"{name} must be a string{suffix}.")
-    value = validate_unicode_string(value, name)
-    if utf16_code_unit_length_exceeds(value, _RENDERER_STRING_MAX_UTF16_CODE_UNITS):
-        raise ValueError(
-            f"{name} cannot exceed {_RENDERER_STRING_MAX_UTF16_CODE_UNITS} UTF-16 code units."
-        )
-    return value
+    return validate_unicode_string(value, name)

@@ -101,16 +101,15 @@ export interface GuiDividerMessage {
   container_uuid: string;
   props: { order: number; visible: boolean };
 }
-/** GuiProgressBarMessage(uuid: 'str', value: 'float', container_uuid: 'str', props: 'GuiProgressBarProps')
+/** GuiProgressBarMessage(uuid: 'str', container_uuid: 'str', props: 'GuiProgressBarProps')
  *
  * (automatically generated)
  */
 export interface GuiProgressBarMessage {
   type: "GuiProgressBarMessage";
   uuid: string;
-  value: number;
   container_uuid: string;
-  props: { order: number; animated: boolean; visible: boolean };
+  props: { order: number; value: number; animated: boolean; visible: boolean };
 }
 /** GuiPlotlyMessage(uuid: 'str', container_uuid: 'str', props: 'GuiPlotlyProps')
  *
@@ -152,11 +151,7 @@ export interface GuiTabGroupMessage {
   type: "GuiTabGroupMessage";
   uuid: string;
   container_uuid: string;
-  props: {
-    _tabs: { label: string; icon_html: string | null; container_id: string }[];
-    order: number;
-    visible: boolean;
-  };
+  props: { order: number; visible: boolean };
 }
 /** GuiButtonMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiButtonProps')
  *
@@ -178,6 +173,7 @@ export interface GuiButtonMessage {
     _icon_html: string | null;
     _hold_callback_freqs: number[];
     _prefetch: boolean;
+    _busy: boolean;
   };
 }
 /** GuiUploadButtonMessage(uuid: 'str', container_uuid: 'str', props: 'GuiUploadButtonProps')
@@ -220,7 +216,7 @@ export interface GuiSliderMessage {
     step: number;
     precision: number;
     show_value: boolean;
-    _marks: { value: number; label: string | null }[] | null;
+    marks: { value: number; label: string | null }[] | null;
   };
 }
 /** GuiMultiSliderMessage(uuid: 'str', value: 'Tuple[float, ...]', container_uuid: 'str', props: 'GuiMultiSliderProps')
@@ -244,7 +240,7 @@ export interface GuiMultiSliderMessage {
     min_range: number | null;
     precision: number;
     fixed_endpoints: boolean;
-    _marks: { value: number; label: string | null }[] | null;
+    marks: { value: number; label: string | null }[] | null;
   };
 }
 /** GuiNumberMessage(uuid: 'str', value: 'float', container_uuid: 'str', props: 'GuiNumberProps')
@@ -341,7 +337,7 @@ export interface GuiToggleGroupMessage {
     options: string[];
     multiple: boolean;
     required: boolean;
-    _merge: boolean[];
+    merge: boolean[];
   };
 }
 /** GuiCheckboxMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiCheckboxProps')
@@ -515,10 +511,10 @@ export interface GuiButtonGroupMessage {
     disabled: boolean;
     color: ("default" | "inverse")[];
     options: string[];
-    _merge: boolean[];
+    merge: boolean[];
   };
 }
-/** Remove one GUI element, its tabs, and named descendants atomically.
+/** Remove one GUI element or tab, and every descendant it lists, atomically.
  *
  * (automatically generated)
  */
@@ -526,7 +522,6 @@ export interface GuiRemoveMessage {
   type: "GuiRemoveMessage";
   uuid: string;
   removed_uuids: string[];
-  removed_tab_uuids: string[];
 }
 /** Message for running some arbitrary Javascript on the client.
  * We use this to set up the Plotly.js package, via the plotly.min.js source
@@ -579,6 +574,14 @@ export interface RemoveNotificationMessage {
   type: "RemoveNotificationMessage";
   uuid: string;
 }
+/** Sent client->server when the user presses a form's Reset.
+ *
+ * (automatically generated)
+ */
+export interface GuiFormResetMessage {
+  type: "GuiFormResetMessage";
+  uuid: string;
+}
 /** Bidirectional form submit signal.
  *
  * - Sent client->server when the user submits a form: its submit button, or
@@ -605,7 +608,10 @@ export interface GuiPlaybackCommandMessage {
   action: "play" | "pause" | "seek" | "step" | "speed" | "loop";
   value: number;
 }
-/** Declare one stable tab container before any of its child components.
+/** Declare one stable tab container of a group, before any of its children.
+ *
+ * Tabs keep their own create, update and remove records, separate from the
+ * group's, so every replay prefix is valid and tabs keep their order.
  *
  * (automatically generated)
  */
@@ -613,10 +619,9 @@ export interface GuiTabMessage {
   type: "GuiTabMessage";
   uuid: string;
   group_uuid: string;
-  label: string;
-  icon_html: string | null;
+  props: { label: string; _icon_html: string | null };
 }
-/** Update presentation metadata for an already-declared tab container.
+/** Update the props of an already-declared tab.
  *
  * (automatically generated)
  */
@@ -624,8 +629,7 @@ export interface GuiTabUpdateMessage {
   type: "GuiTabUpdateMessage";
   uuid: string;
   group_uuid: string;
-  label: string;
-  icon_html: string | null;
+  props: { label: string; _icon_html: string | null };
 }
 /** GuiModalMessage(order: 'float', uuid: 'str', title: 'str')
  *
@@ -637,7 +641,7 @@ export interface GuiModalMessage {
   uuid: string;
   title: string;
 }
-/** GuiCloseModalMessage(uuid: 'str', removed_uuids: 'Tuple[str, ...]' = (), removed_tab_uuids: 'Tuple[str, ...]' = ())
+/** GuiCloseModalMessage(uuid: 'str', removed_uuids: 'Tuple[str, ...]' = ())
  *
  * (automatically generated)
  */
@@ -645,7 +649,6 @@ export interface GuiCloseModalMessage {
   type: "GuiCloseModalMessage";
   uuid: string;
   removed_uuids: string[];
-  removed_tab_uuids: string[];
 }
 /** Message sent from client->server when a button is being held.
  *
@@ -1263,6 +1266,7 @@ export type Message =
   | NotificationShowMessage
   | NotificationUpdateMessage
   | RemoveNotificationMessage
+  | GuiFormResetMessage
   | GuiFormSubmitMessage
   | GuiPlaybackCommandMessage
   | GuiTabMessage
@@ -1381,4 +1385,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "fb026827e2d1";
+export const LEIKA_PROTOCOL = "0460178c9c86";
