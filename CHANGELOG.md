@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Browser: the client keeps its WebSocket on the page instead of a worker and
+  applies each batch as it arrives, once per animation frame, instead of
+  replaying the server's timing or closing the connection over its own queue
+  and send limits.
 - Browser: panes apply exactly as the server sends them, without browser pane
   limits; a cached page is no longer evicted early under memory pressure.
   Pane layouts saved by Leika 0.3 (version 2) are no longer migrated, so such

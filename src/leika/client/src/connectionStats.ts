@@ -1,15 +1,14 @@
-// What the websocket worker counts, and how those counts become something a
+// What the websocket owner counts, and how those counts become something a
 // reader can act on.
 //
-// The counting happens in the worker because that is where the socket is: bytes
-// are weighed as frames arrive and leave, before decoding, pacing, or React
-// have had a chance to add their own delays to the picture. The worker keeps
-// raw running totals and nothing else -- every rate, median and verdict here is
-// derived on the main thread, so all of it is testable without a socket.
+// The socket keeps raw running totals and nothing else: bytes are weighed as
+// frames arrive and leave, before decoding or React. Every rate, median and
+// verdict here is derived from snapshots, so all of it is testable without a
+// socket.
 
-/** Running totals for one page's connection, as the worker sees it. */
+/** Running totals for one page's connection. */
 export interface ConnectionCounters {
-  /** The worker's clock when this snapshot was taken. */
+  /** The page's clock when this snapshot was taken. */
   atMs: number;
   /** When the current connection opened, or null while it is down. */
   connectedSinceMs: number | null;

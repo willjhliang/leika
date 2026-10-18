@@ -4,7 +4,6 @@ import { VideoPlaybackRegistry } from "./viewport/videoPlayback";
 import { useClientSettings } from "./ClientSettings";
 import { useGuiState } from "./ControlPanel/GuiState";
 import { useViewportState } from "./viewport/ViewportState";
-import { BoundedMessageQueue } from "./boundedMessageQueue";
 import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { FileUploadAckBroker } from "./fileUploadAckBroker";
 import { retainedDownloads } from "./retainedDownloadBudget";
@@ -15,18 +14,13 @@ import {
   warnDisconnectedSend,
 } from "./ViewerContext";
 
-/** A viewer owns one set of transport resources, shared by its producer and
- * message handler. Construct these lazily so rendering never replaces or
- * allocates a second queue, download assembler, or upload broker. */
+/** A viewer owns one set of transport resources. Construct these lazily so
+ * rendering never allocates a second download assembler or upload broker. */
 function createViewerTransport(): ViewerMutable {
   return {
     sendMessage: warnDisconnectedSend,
-    messageQueue: new BoundedMessageQueue(),
-    notifyMessageQueue: () => undefined,
     downloads: new FileDownloadAssembler(retainedDownloads),
     uploads: new FileUploadAckBroker(),
-    failConnection: (reason) =>
-      console.error("Cannot fail an inactive connection:", reason),
   };
 }
 

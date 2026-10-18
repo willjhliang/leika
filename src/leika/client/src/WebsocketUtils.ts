@@ -1,19 +1,13 @@
 import { prepareGuiRefresh } from "./prepareGuiRefresh";
 import React from "react";
 import { Message } from "./WebsocketMessages";
-import { useViewer, ViewerContextContents } from "./ViewerContext";
-import { captureSendSession, SendSession } from "./connectionSender";
+import {
+  useViewer,
+  type MessageSender,
+  type ViewerContextContents,
+} from "./ViewerContext";
 
 export const GUI_MESSAGE_THROTTLE_MS = 50;
-export const MAX_PENDING_THROTTLED_MESSAGES = 8_192;
-export const MAX_PENDING_UNCOALESCED_EVENTS = 1_024;
-export const THROTTLED_MESSAGE_OVERFLOW_REASON =
-  "The browser's outbound GUI event queue exceeded its safety limit.";
-
-type ThrottleQueueLimits = {
-  maxPendingMessages: number;
-  maxPendingEvents: number;
-};
 
 /** Easier, hook version of makeThrottledMessageSender.
  *
@@ -78,47 +72,15 @@ function coalescingKey(message: Message): string {
 export function makeThrottledMessageSender(
   viewer: ViewerContextContents,
   throttleMilliseconds: number,
-  limits: ThrottleQueueLimits = {
-    maxPendingMessages: MAX_PENDING_THROTTLED_MESSAGES,
-    maxPendingEvents: MAX_PENDING_UNCOALESCED_EVENTS,
-  },
 ) {
-  if (
-    !Number.isSafeInteger(limits.maxPendingMessages) ||
-    limits.maxPendingMessages < 1 ||
-    !Number.isSafeInteger(limits.maxPendingEvents) ||
-    limits.maxPendingEvents < 1 ||
-    limits.maxPendingEvents > limits.maxPendingMessages
-  ) {
-    throw new Error("Invalid throttled-message queue limits.");
-  }
   let readyToSend = true;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  // Each message keeps the sender of the connection it was made on, so a
+  // reconnect never delivers it to the next one.
   const pending = new Map<
     string | object,
-    { message: Message; session: SendSession }
+    { message: Message; sendMessage: MessageSender }
   >();
-  let pendingEventCount = 0;
-  let blockedSender: SendSession["sendMessage"] | null = null;
-
-  function clearPendingWindow() {
-    if (pendingTimer !== null) {
-      clearTimeout(pendingTimer);
-      pendingTimer = null;
-    }
-    readyToSend = true;
-    pending.clear();
-    pendingEventCount = 0;
-  }
-
-  /** Losing a local event would silently change application semantics. Close
-   * the affected transport instead, and refuse more work from that exact
-   * sender until connection replacement (or explicit owner cleanup). */
-  function failOverflow(session: SendSession) {
-    blockedSender = session.sendMessage;
-    clearPendingWindow();
-    viewer.mutable.current.failConnection(THROTTLED_MESSAGE_OVERFLOW_REASON);
-  }
 
   /** Send everything that waited out the window. Returns whether anything
    * went, which is what decides if a fresh window opens behind it. */
@@ -126,14 +88,8 @@ export function makeThrottledMessageSender(
     if (pending.size === 0) return false;
     const queued = [...pending.values()];
     pending.clear();
-    pendingEventCount = 0;
-    let emitted = false;
-    for (const { message, session } of queued) {
-      if (!session.isCurrent()) continue;
-      session.sendMessage(message);
-      emitted = true;
-    }
-    return emitted;
+    for (const { message, sendMessage } of queued) sendMessage(message);
+    return true;
   }
 
   function openWindow() {
@@ -146,36 +102,23 @@ export function makeThrottledMessageSender(
   }
 
   function send(message: Message, options?: { coalesce?: boolean }) {
-    const session = captureSendSession(viewer.mutable.current);
-    if (blockedSender !== null) {
-      if (session.sendMessage === blockedSender) return;
-      blockedSender = null;
-    }
+    const sendMessage = viewer.mutable.current.sendMessage;
     message = prepareGuiRefresh(viewer, message);
     if (readyToSend) {
-      session.sendMessage(message);
+      sendMessage(message);
       openWindow();
       return;
     }
-    const isEvent = options?.coalesce === false;
-    if (isEvent && pendingEventCount >= limits.maxPendingEvents) {
-      failOverflow(session);
-      return;
-    }
-    // An object key can never collide with a server-controlled string key and
-    // naturally gives every non-coalescing event its own bounded slot.
-    const key: string | object = isEvent ? {} : coalescingKey(message);
-    if (!pending.has(key) && pending.size >= limits.maxPendingMessages) {
-      failOverflow(session);
-      return;
-    }
-    pending.set(key, { message, session });
-    if (isEvent) pendingEventCount += 1;
+    // An object key gives every event its own slot.
+    const key = options?.coalesce === false ? {} : coalescingKey(message);
+    pending.set(key, { message, sendMessage });
   }
 
   function cancel() {
-    clearPendingWindow();
-    blockedSender = null;
+    if (pendingTimer !== null) clearTimeout(pendingTimer);
+    pendingTimer = null;
+    readyToSend = true;
+    pending.clear();
   }
   return { send, cancel };
 }

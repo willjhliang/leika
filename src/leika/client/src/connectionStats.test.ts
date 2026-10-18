@@ -88,7 +88,7 @@ describe("readConnection", () => {
   });
 
   it("refuses a rate from counters that went backwards", () => {
-    // A worker restarted under a page that kept its last snapshot: the totals
+    // A connection restarted under a page that kept its last snapshot: the totals
     // begin again, and the difference is negative rather than slow.
     const restarted = counters({ atMs: 3000, bytesReceived: 20 });
     expect(readConnection(restarted, first).downBytesPerSec).toBeNull();

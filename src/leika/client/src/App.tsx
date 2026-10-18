@@ -13,7 +13,6 @@ import {
   useControlPanelSession,
 } from "./ControlPanel/controlPanelLayout";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
-import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
 import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
 import { useViewer } from "./ViewerContext";
@@ -65,7 +64,6 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
       <TooltipProvider delay={500}>
         <ControlPanelContext.Provider value={controlPanel}>
           {children}
-          <MessageHandler />
           <LeikaModal />
           <FilePreviewHost />
           <CommandPalette />

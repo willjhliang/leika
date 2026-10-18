@@ -1,24 +1,33 @@
-import { prepareGuiRefresh } from "./prepareGuiRefresh";
+import { encode } from "@msgpack/msgpack";
 import React from "react";
+import { ZSTDDecoder } from "zstddec";
 
 import { connectionStats } from "./ConnectionStatsController";
+import { emptyCounters } from "./connectionStats";
 import { resetMarkdownDocumentCache } from "./components/markdownDocument";
-import { resetNotifications } from "./notifications";
-import { useViewer, warnDisconnectedSend } from "./ViewerContext";
-import WebsocketClientWorker from "./WebsocketClientWorker?worker&inline";
-import { WsWorkerIncoming, WsWorkerOutgoing } from "./WebsocketClientWorker";
-import { syncSearchParamServer } from "./SearchParamsUtils";
-import { installConnectionBoundSender } from "./connectionSender";
-import { resetConnectionOwners } from "./connectionLifecycle";
-import { resetFilePreviewState } from "./filePreview";
 import { resetFileTransferFailureToast } from "./fileDownloadHandler";
-import { retainedDownloads } from "./retainedDownloadBudget";
-import { WorkerEventGate } from "./workerFailure";
-import { connectionStateForEvent } from "./websocketClose";
+import { resetFilePreviewState } from "./filePreview";
+import { decodeHybridMessage } from "./hybridMessageDecode";
+import { handleMessages } from "./MessageHandler";
+import { resetNotifications } from "./notifications";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
-import type { PageSubscribeMessage } from "./WebsocketMessages";
+import { retainedDownloads } from "./retainedDownloadBudget";
+import { syncSearchParamServer } from "./SearchParamsUtils";
+import { useViewer, warnDisconnectedSend } from "./ViewerContext";
+import { LEIKA_PROTOCOL, type Message } from "./WebsocketMessages";
 
-/** Live binary websocket producer with visibility-aware reconnect behavior. */
+/** How often a watched connection is pinged and reported on. */
+const STATS_INTERVAL_MS = 1000;
+/** Round trips kept for the median: half a minute of them at that rate. */
+const ROUND_TRIP_WINDOW = 30;
+
+// Ready before the first socket opens, so every frame decodes synchronously
+// in arrival order.
+const zstd = new ZSTDDecoder();
+const zstdReady = zstd.init();
+
+/** Own the websocket: connect, retry while visible, decode frames, apply
+ * their messages once per animation frame, and measure the connection. */
 export function WebsocketMessageProducer() {
   const viewer = useViewer();
   const server = viewer.useGui((state) => state.server);
@@ -29,67 +38,65 @@ export function WebsocketMessageProducer() {
 
   React.useEffect(() => {
     viewer.viewportActions.setPersistenceServer(server);
-    let worker: Worker | null = null;
-    const terminateWorker = () => {
-      try {
-        worker?.terminate();
-      } catch (error) {
-        console.error("Could not terminate connection worker:", error);
-      }
-    };
     let active = true;
-    let workerEvents = new WorkerEventGate();
-    let isConnected = false;
+    let socket: WebSocket | null = null;
+    let connected = false;
     let retryAllowed = true;
+    let retryTimer: ReturnType<typeof setInterval> | null = null;
     let requestedPageId: string | null = null;
-    let pageSubscriptionGeneration = 0;
-    let retryIntervalId: ReturnType<typeof setInterval> | null = null;
-    const postToWorker = (
-      data: WsWorkerIncoming,
-      transferables: Transferable[] = [],
-    ) => {
-      if (!workerEvents.acceptsEvents || worker === null) return;
-      try {
-        worker.postMessage(data, transferables);
-      } catch (error) {
-        failWorker(
-          error instanceof Error && error.message.length > 0
-            ? "Connection worker could not receive a command: " + error.message
-            : "Connection worker could not receive a command.",
-        );
-      }
+    let pageGeneration = 0;
+
+    // Counted where the socket is, for the life of the page across
+    // reconnects; rates and verdicts are derived from snapshots.
+    const counters = emptyCounters(performance.now());
+    let connectionsOpened = 0;
+    let statsTimer: ReturnType<typeof setInterval> | null = null;
+
+    // A burst of frames applies once, on the next animation frame. Hidden
+    // tabs get no animation frames, so a timer drains them as well.
+    let queue: Message[] = [];
+    let drainFrame: number | null = null;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelDrain = () => {
+      if (drainFrame !== null) cancelAnimationFrame(drainFrame);
+      if (drainTimer !== null) clearTimeout(drainTimer);
+      drainFrame = null;
+      drainTimer = null;
+    };
+    const drain = () => {
+      cancelDrain();
+      const messages = queue;
+      queue = [];
+      handleMessages(viewer, messages);
+    };
+    const scheduleDrain = () => {
+      if (drainFrame !== null) return;
+      drainFrame = requestAnimationFrame(drain);
+      drainTimer = setTimeout(drain, 100);
     };
 
-    const retryConnection = () => {
-      if (!active) return;
-      if (workerEvents.acceptsEvents) postToWorker({ type: "retry" });
-      else startWorker();
-    };
+    /** A sender belongs to one socket, so work still holding it after a
+     * reconnect drops its sends instead of reaching the new connection. */
+    const senderFor =
+      (target: WebSocket) =>
+      (message: Message): void => {
+        if (target.readyState !== WebSocket.OPEN) {
+          counters.droppedSends += 1;
+          return;
+        }
+        const encoded = encode(message);
+        target.send(encoded);
+        counters.bytesSent += encoded.byteLength;
+        counters.messagesSent += 1;
+      };
 
-    const updateRetryInterval = () => {
-      const shouldRetry =
-        active &&
-        retryAllowed &&
-        !isConnected &&
-        document.visibilityState !== "hidden";
-      if (!isConnected) {
-        viewer.useGui.set({
-          websocketState: shouldRetry ? "reconnecting" : "inactive",
-        });
-      }
-      if (shouldRetry && retryIntervalId === null) {
-        // Own the timer before posting: postMessage can fail synchronously
-        // and re-enter this lifecycle. Failed workers wait for the next tick,
-        // so persistent faults cannot create a tight worker-restart loop.
-        retryIntervalId = setInterval(retryConnection, 1000);
-        if (workerEvents.acceptsEvents) retryConnection();
-      } else if (!shouldRetry && retryIntervalId !== null) {
-        clearInterval(retryIntervalId);
-        retryIntervalId = null;
-      }
-    };
-
-    const resetConnectionResources = (retainPanes: boolean) => {
+    const resetConnectionState = (retainPanes: boolean) => {
+      requestedPageId = null;
+      cancelDrain();
+      queue = [];
+      viewer.guiActions.resetGui();
+      if (retainPanes) viewer.viewportActions.reconnect();
+      else viewer.viewportActions.resetPanes();
       viewer.mutable.current.downloads.reset();
       viewer.mutable.current.uploads.reset(
         "The connection changed during the upload.",
@@ -102,33 +109,33 @@ export function WebsocketMessageProducer() {
       resetMarkdownDocumentCache();
       resetNotifications();
       resetFileTransferFailureToast();
-      // Retained renderers still own these leases during ordinary reconnect.
-      // Their normal unmount paths release them after replay or eviction.
-      if (!retainPanes) {
-        resetMountedRasterPixels();
+      // Retained renderers still own their pixel leases during an ordinary
+      // reconnect; their unmount releases them after replay or eviction.
+      if (!retainPanes) resetMountedRasterPixels();
+    };
+
+    const updateRetryInterval = () => {
+      const shouldRetry =
+        active &&
+        retryAllowed &&
+        !connected &&
+        document.visibilityState !== "hidden";
+      if (!connected) {
+        viewer.useGui.set({
+          websocketState: shouldRetry ? "reconnecting" : "inactive",
+        });
       }
-      viewer.mutable.current.messageQueue.reset();
+      if (shouldRetry && retryTimer === null) {
+        retryTimer = setInterval(connect, 1000);
+        connect();
+      } else if (!shouldRetry && retryTimer !== null) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+      }
     };
 
-    const resetConnectionState = (retainPanes: boolean) => {
-      requestedPageId = null;
-      resetConnectionOwners({
-        resetGui: viewer.guiActions.resetGui,
-        resetPanes: retainPanes
-          ? viewer.viewportActions.reconnect
-          : viewer.viewportActions.resetPanes,
-        resetResources: () => resetConnectionResources(retainPanes),
-      });
-    };
-
-    const markDisconnected = ({
-      retry,
-      error,
-    }: {
-      retry: boolean;
-      error: string | null;
-    }) => {
-      isConnected = false;
+    const markDisconnected = (retry: boolean, error: string | null) => {
+      connected = false;
       retryAllowed = retry;
       resetConnectionState(active && retry);
       viewer.mutable.current.sendMessage = warnDisconnectedSend;
@@ -136,49 +143,94 @@ export function WebsocketMessageProducer() {
       updateRetryInterval();
     };
 
-    const failWorker = (reason: string) => {
-      if (!active || !workerEvents.close()) return;
-      terminateWorker();
-      connectionStats.forget();
-      markDisconnected({
-        retry: true,
-        error: reason,
-      });
-    };
-    viewer.mutable.current.failConnection = failWorker;
+    /** Open a socket unless one is already connecting or open. */
+    function connect() {
+      if (socket !== null && socket.readyState <= WebSocket.OPEN) return;
+      // One subprotocol string identifies the package version and schema this
+      // bundle was built against; the server turns away anything else.
+      const ws = new WebSocket(server, [`leika-${LEIKA_PROTOCOL}`]);
+      ws.binaryType = "arraybuffer";
+      socket = ws;
+      // A tunnelled port can accept a connection that never opens.
+      const timeout = setTimeout(() => ws.close(), 5000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        if (ws !== socket) return;
+        connectionsOpened += 1;
+        counters.connectedSinceMs = performance.now();
+        // Every connection after the first is one the page lost and got back.
+        counters.reconnects = connectionsOpened - 1;
+        connected = true;
+        retryAllowed = true;
+        resetConnectionState(true);
+        viewer.useGui.set({
+          websocketState: "connected",
+          connectionError: null,
+        });
+        updateRetryInterval();
+        viewer.mutable.current.sendMessage = senderFor(ws);
+        sentRendering = null;
+        syncRendering();
+      };
+
+      ws.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        if (ws !== socket) return;
+        const receivedMs = performance.now();
+        counters.bytesReceived += event.data.byteLength;
+        const messages = decodeHybridMessage(event.data, zstd);
+        counters.messagesReceived += messages.length;
+        for (const message of messages) {
+          // Answers to the statistics pings stop here.
+          if (message.type === "ServerPongMessage") {
+            counters.roundTripsMs.push(receivedMs - message.sent_ms);
+            if (counters.roundTripsMs.length > ROUND_TRIP_WINDOW)
+              counters.roundTripsMs.shift();
+          } else queue.push(message);
+        }
+        scheduleDrain();
+      };
+
+      ws.onclose = (event) => {
+        clearTimeout(timeout);
+        if (ws !== socket) return;
+        socket = null;
+        counters.connectedSinceMs = null;
+        // The server closes with 1002 a page built from other code.
+        if (event.code === 1002) {
+          console.warn(
+            `Connection rejected: ${event.reason}. Client protocol: ${LEIKA_PROTOCOL}`,
+          );
+          markDisconnected(false, `Connection rejected: ${event.reason}`);
+        } else markDisconnected(true, viewer.useGui.get().connectionError);
+      };
+    }
 
     const syncPageSubscription = () => {
       const state = viewer.useViewport.get();
       const pageId = state.activePageId;
       if (
-        !isConnected ||
+        !connected ||
         !state.catalogReady ||
         pageId === null ||
         requestedPageId === pageId
       )
         return;
       requestedPageId = pageId;
-      pageSubscriptionGeneration =
-        pageSubscriptionGeneration >= Number.MAX_SAFE_INTEGER
-          ? 1
-          : pageSubscriptionGeneration + 1;
-      viewer.viewportActions.beginPageSubscription(
-        pageId,
-        pageSubscriptionGeneration,
-      );
-      const message: PageSubscribeMessage = {
+      pageGeneration += 1;
+      viewer.viewportActions.beginPageSubscription(pageId, pageGeneration);
+      viewer.mutable.current.sendMessage({
         type: "PageSubscribeMessage",
         page_id: pageId,
-        generation: pageSubscriptionGeneration,
-      };
-      viewer.mutable.current.sendMessage(message);
+        generation: pageGeneration,
+      });
     };
     const unsubscribePageSubscription =
       viewer.useViewport.subscribe(syncPageSubscription);
 
     let sentRendering: string | null = null;
     const syncRendering = () => {
-      if (!isConnected) return;
+      if (!connected) return;
       const { rendering, imageFit } = viewer.useSettings.get();
       const key = `${rendering}:${imageFit}`;
       if (key === sentRendering) return;
@@ -191,149 +243,57 @@ export function WebsocketMessageProducer() {
     };
     const unsubscribeRendering = viewer.useSettings.subscribe(syncRendering);
 
-    // The worker measures only while something is watching, so it is told when
-    // that changes -- and only then, since the counters it reports arrive
-    // through this same store once a second.
-    let watching = false;
-    const updateWatching = () => {
-      const wanted = connectionStats.store.get().watchers > 0;
-      if (wanted === watching) return;
-      watching = wanted;
-      postToWorker({ type: "watch_stats", watching });
+    // The connection is pinged only while something is watching it.
+    const reportStats = () => {
+      // Ping first: the reply lands before the next tick, so this reports the
+      // round trip the last tick asked for.
+      if (connected) {
+        viewer.mutable.current.sendMessage({
+          type: "ClientPingMessage",
+          sent_ms: performance.now(),
+        });
+      }
+      counters.atMs = performance.now();
+      connectionStats.record({
+        ...counters,
+        roundTripsMs: [...counters.roundTripsMs],
+      });
     };
-    const unsubscribeWatchers = connectionStats.store.subscribe(updateWatching);
-
-    const startWorker = () => {
-      workerEvents = new WorkerEventGate();
-      let nextWorker: Worker;
-      try {
-        nextWorker = new WebsocketClientWorker();
-      } catch (error) {
-        failWorker(
-          error instanceof Error
-            ? "Connection worker could not start: " + error.message
-            : "Connection worker could not start.",
-        );
+    const updateWatching = () => {
+      const watching = connectionStats.store.get().watchers > 0;
+      if (watching === (statsTimer !== null)) return;
+      if (watching) {
+        // The timer first: a report notifies this same store.
+        statsTimer = setInterval(reportStats, STATS_INTERVAL_MS);
+        reportStats();
         return;
       }
-      worker = nextWorker;
-      // A failed worker stays closed. Only a fresh worker may reconnect, and
-      // callbacks already queued by its predecessor cannot affect this one.
-      const acceptsEvents = () =>
-        active && worker === nextWorker && workerEvents.acceptsEvents;
-      nextWorker.onmessage = (event: MessageEvent<WsWorkerOutgoing>) => {
-        if (!acceptsEvents()) return;
-        const data = event.data;
-        if (data.type === "fatal") {
-          failWorker(data.reason);
-          return;
-        }
-        if (data.type === "stats") {
-          connectionStats.record(data.counters);
-          return;
-        }
-        if (data.type === "connected") {
-          const connectionState = connectionStateForEvent(
-            viewer.useGui.get().connectionError,
-            data,
-          );
-          isConnected = true;
-          retryAllowed = connectionState.retry;
-          resetConnectionState(true);
-          viewer.useGui.set({
-            websocketState: "connected",
-            connectionError: connectionState.connectionError,
-          });
-          updateRetryInterval();
-          installConnectionBoundSender(
-            viewer.mutable.current,
-            (message, transferables) => {
-              message = prepareGuiRefresh(viewer, message);
-              postToWorker({ type: "send", message }, transferables);
-            },
-          );
-          sentRendering = null;
-          syncRendering();
-          return;
-        }
-        if (data.type === "closed") {
-          const connectionState = connectionStateForEvent(
-            viewer.useGui.get().connectionError,
-            data,
-          );
-          markDisconnected({
-            retry: connectionState.retry,
-            error: connectionState.connectionError,
-          });
-          return;
-        }
-        // The worker's rate smoothing can deliver a batch after the close; a
-        // batch from a dead connection must not replay over the reset GUI.
-        if (isConnected) {
-          if (
-            !viewer.mutable.current.messageQueue.enqueue(
-              data.messages,
-              data.frameBytes,
-              data.metadataBytes,
-            )
-          ) {
-            failWorker(
-              "Connection message queue exceeded its browser safety limit",
-            );
-            return;
-          }
-          // Only now does the worker release this transferred frame from its
-          // connection-generation budget and permit the next ordered batch.
-          postToWorker({
-            type: "batch_received",
-            connectionId: data.connectionId,
-            batchId: data.batchId,
-          });
-          viewer.mutable.current.notifyMessageQueue();
-        }
-      };
-      nextWorker.onerror = (event) => {
-        event.preventDefault();
-        if (!acceptsEvents()) return;
-        failWorker(
-          event.message.length > 0
-            ? "Connection worker failed: " + event.message
-            : "Connection worker failed.",
-        );
-      };
-      nextWorker.onmessageerror = () => {
-        if (!acceptsEvents()) return;
-        failWorker("Connection worker could not decode a message.");
-      };
-
-      postToWorker({ type: "set_server", server });
-      watching = false;
-      updateWatching();
+      clearInterval(statsTimer!);
+      statsTimer = null;
+      // Round trips from the last look say nothing about the link now.
+      counters.roundTripsMs.length = 0;
     };
+    const unsubscribeWatchers = connectionStats.store.subscribe(updateWatching);
+    updateWatching();
 
-    document.addEventListener("visibilitychange", updateRetryInterval);
-    startWorker();
+    void zstdReady.then(() => {
+      if (!active) return;
+      document.addEventListener("visibilitychange", updateRetryInterval);
+      updateRetryInterval();
+    });
     return () => {
       active = false;
-      if (viewer.mutable.current.failConnection === failWorker) {
-        viewer.mutable.current.failConnection = (reason) =>
-          console.error("Cannot fail an inactive connection:", reason);
-      }
-      workerEvents.close();
-      if (worker !== null) {
-        worker.onmessage = null;
-        worker.onerror = null;
-        worker.onmessageerror = null;
-      }
-      terminateWorker();
+      document.removeEventListener("visibilitychange", updateRetryInterval);
+      if (statsTimer !== null) clearInterval(statsTimer);
       unsubscribePageSubscription();
       unsubscribeRendering();
       unsubscribeWatchers();
-      // The counters belong to the worker that is about to be replaced, so
-      // they say nothing about the connection that follows.
+      const closing = socket;
+      socket = null;
+      closing?.close();
+      // The counters belong to this connection, not the one that follows.
       connectionStats.forget();
-      document.removeEventListener("visibilitychange", updateRetryInterval);
-      markDisconnected({ retry: false, error: null });
+      markDisconnected(false, null);
     };
   }, [server, viewer]);
 

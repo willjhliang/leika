@@ -66,7 +66,7 @@ and validated against the schema before any handler sees it.
 | Application composition and stable viewer ownership | `App.tsx`, `ViewerProvider.tsx`, `ViewerContext.ts` |
 | GUI and viewport sessions with independently callable actions | `ControlPanel/GuiState.ts`, `viewport/ViewportState.ts` |
 | Store subscriptions and React selectors | `store.ts` |
-| Worker transport, ordered frame processing, and dispatch | `WebsocketClientWorker.ts`, `WebsocketInterface.tsx`, `MessageHandler.tsx` |
+| WebSocket connection, frame decoding, and dispatch | `WebsocketInterface.tsx`, `hybridMessageDecode.ts`, `MessageHandler.tsx` |
 | Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
 | Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
 | Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
@@ -75,7 +75,7 @@ and validated against the schema before any handler sees it.
 
 `createGuiState()` and `createViewportState()` construct complete sessions
 without mounting React. Their hooks own one session per mounted viewer, and
-`ViewerProvider` owns the queues and transfer brokers alongside those sessions.
+`ViewerProvider` owns the transfer brokers alongside those sessions.
 Views subscribe to state and invoke actions; the state engines can be tested
 with the same actions and persistence adapters used by the application.
 
@@ -186,9 +186,9 @@ state.
 Browser-to-server protocol messages are limited to 4 MiB, and each decoded
 message to 100,000 values, depth 64, and 4 MiB of strings and bytes. A
 server-to-browser window carries at most 128 messages and takes no more once
-its encoded messages pass 8 MiB. Browser sends also stop at 16 MiB of
-WebSocket buffered data, 8,192 throttled slots, or 1,024 uncoalesced events;
-overflow closes the connection instead of silently dropping state.
+its encoded messages pass 8 MiB. The browser opens the socket on the page's
+main thread, decodes each frame as it arrives, and applies the queued messages
+once per animation frame (or on a short timer while the tab is hidden).
 
 Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
 The server's 256 MiB combined upload budget includes transfers in progress,

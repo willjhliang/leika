@@ -1,5 +1,4 @@
 import React from "react";
-import { captureSendSession } from "../connectionSender";
 import { Card } from "../components/ui/card";
 import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
@@ -63,13 +62,13 @@ export function ViewportPaneHost({
   React.useEffect(() => {
     const element = contentRef.current;
     if (element === null || pageId === null || pane?.kind === "root") return;
-    const session = captureSendSession(viewer.mutable.current);
+    // Bound to the current connection; a later one gets its own report.
+    const sendMessage = viewer.mutable.current.sendMessage;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const report = () => {
-      if (!session.isCurrent()) return;
       const box = element.getBoundingClientRect();
       const visible = paneVisible && !document.hidden;
-      session.sendMessage({
+      sendMessage({
         type: "PaneViewportMessage",
         page_id: pageId,
         pane_id: paneId,
@@ -99,14 +98,13 @@ export function ViewportPaneHost({
       clearTimeout(timer);
       observer.disconnect();
       document.removeEventListener("visibilitychange", report);
-      if (session.isCurrent())
-        session.sendMessage({
-          type: "PaneViewportMessage",
-          page_id: pageId,
-          pane_id: paneId,
-          width: 0,
-          height: 0,
-        });
+      sendMessage({
+        type: "PaneViewportMessage",
+        page_id: pageId,
+        pane_id: paneId,
+        width: 0,
+        height: 0,
+      });
     };
   }, [viewer, pageId, paneId, paneVisible, pane?.kind, interactionEpoch]);
   if (pane === undefined) return null;
