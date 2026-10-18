@@ -70,6 +70,8 @@ versioning.
   to start beside a particular pane, use `add_row(relative_to=...)` (to its
   right) or `add_column(relative_to=...)` (below it), which now raise
   `ValueError` at creation for an unknown or hidden pane.
+- Viser: an embedded Viser 0.2 client loads its font through its pane's route
+  instead of requesting it from Leika's root.
 - Plotly: GUI plots now follow the viewer's light or dark theme like Plotly
   panes, through one shared serializer. Plotly's browser runtime is sent once
   to every browser after the first figure, including browsers viewing pages

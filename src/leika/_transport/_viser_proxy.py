@@ -25,13 +25,16 @@ from websockets.legacy.server import WebSocketServerProtocol
 from ._http_security import _canonical_hostname, _is_loopback_host
 
 VISER_PROXY_PREFIX = "/_leika/viser/"
-_ROOT_ASSET_URL = re.compile(rb"""(["'])(/(?:assets/|logo\.svg|manifest\.json))""")
+# The root slash of a quoted bundle URL or of any root-absolute CSS url().
+_ROOT_ASSET_URL = re.compile(
+    rb"""(?<=["'])/(?=assets/|logo\.svg|manifest\.json)|(?<=url\()/(?!/)"""
+)
 
 
 def _rebase_assets(payload: bytes, prefix: str) -> bytes:
-    """Scope Viser's older Vite bundles to their pane, including worker URLs."""
+    """Scope Viser's older Vite bundles to their pane, including worker and font URLs."""
     replacement = prefix.encode("ascii")
-    return _ROOT_ASSET_URL.sub(lambda m: m[1] + replacement + m[2][1:], payload)
+    return _ROOT_ASSET_URL.sub(lambda _: replacement, payload)
 
 
 class _LoopbackConnect(connect):
@@ -132,7 +135,7 @@ class ViserProxy:
         # representations so neither compressed data nor partial ranges are
         # accidentally treated as editable source.
         asset_path = path.partition("?")[0]
-        rebase = asset_path == "/" or asset_path.endswith((".html", ".js"))
+        rebase = asset_path == "/" or asset_path.endswith((".html", ".js", ".css"))
         forwarded = (
             ("Accept",) if rebase else ("Accept", "Accept-Encoding", "If-None-Match", "Range")
         )
@@ -172,6 +175,7 @@ class ViserProxy:
                 content_type = outgoing.get("Content-Type", "").partition(";")[0]
                 if rebase and content_type in (
                     "text/html",
+                    "text/css",
                     "application/javascript",
                     "text/javascript",
                 ):
