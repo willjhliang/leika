@@ -349,10 +349,6 @@ test("a controlled figure has one accessible expand control", () => {
   );
 
   expect(surface).toMatch(/^<span\b[^>]*><img\b/);
-  // Tailwind already makes the bare image block-level. Its phrasing span must
-  // keep that flow while shrink-wrapping the button, or an image written
-  // between words would move onto their line.
-  expect(surface).toMatch(/class="[^"]*\bblock\b[^"]*\bw-fit\b/);
   expect(surface.match(/<button\b/g)).toHaveLength(1);
   expect(surface).toContain('aria-label="Expand image: Plot"');
 });

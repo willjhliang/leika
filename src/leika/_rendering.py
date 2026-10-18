@@ -51,7 +51,7 @@ def render_image(
             return data
     elif size == (0, 0):
         return data
-    with Image.open(BytesIO(data)) as source:
+    with Image.open(BytesIO(data), formats=("JPEG", "PNG")) as source:
         width, height = source.size
         if mode == "performance":
             target = size if size is not None else source.size

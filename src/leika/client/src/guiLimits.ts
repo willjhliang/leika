@@ -242,6 +242,13 @@ export function guiConfigWithinEntityLimits(
 ): boolean {
   if (!commonRendererStringsWithinLimits(config)) return false;
   switch (config.type) {
+    case "GuiPlaybackMessage":
+      return (
+        config.props.time >= 0 &&
+        config.props.time <= config.props.duration &&
+        config.props.speed > 0 &&
+        (config.props.fps === null || config.props.fps > 0)
+      );
     case "GuiVideoControlsMessage":
       return isBoundedLayoutId(config.props.sync_group);
     case "GuiHtmlMessage":

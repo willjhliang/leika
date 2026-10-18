@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from websockets import Headers
-from websockets.http11 import Request, Response
+from websockets.http11 import Request
 
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -267,17 +267,20 @@ def _request_address(
     return _RequestAddress(effective, secure=effective[0] == "https")
 
 
-def _add_security_headers(response: Response, *, allow_embedding: bool) -> Response:
+def _add_security_headers(
+    status: http.HTTPStatus, headers: Headers, *, allow_embedding: bool
+) -> None:
     # websockets serves ordinary HTTP as a rejected opening handshake and
     # closes the transport after the response. Spell that contract explicitly
     # so clients never attempt a second request against the same reservation.
-    if response.status_code != http.HTTPStatus.SWITCHING_PROTOCOLS:
-        response.headers["Connection"] = "close"
+    if status != http.HTTPStatus.SWITCHING_PROTOCOLS:
+        if "Connection" in headers:
+            del headers["Connection"]
+        headers["Connection"] = "close"
     if not allow_embedding:
-        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
     for name, value in _SECURITY_HEADERS.items():
-        response.headers.setdefault(name, value)
-    return response
+        headers.setdefault(name, value)
 
 
 class HttpRequestPolicy:
@@ -309,5 +312,5 @@ class HttpRequestPolicy:
             trusted_proxy_hosts=trusted_proxy_hosts,
         )
 
-    def secure_response(self, response: Response) -> Response:
-        return _add_security_headers(response, allow_embedding=self._allow_embedding)
+    def secure_headers(self, status: http.HTTPStatus, headers: Headers) -> None:
+        _add_security_headers(status, headers, allow_embedding=self._allow_embedding)

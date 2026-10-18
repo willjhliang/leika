@@ -725,6 +725,40 @@ def test_security_headers_cover_success_not_found_and_embedding_opt_in(
             server.stop()
 
 
+@pytest.mark.parametrize(
+    "method,invalid_headers",
+    [
+        ("POST", {}),
+        ("GET", {"Sec-WebSocket-Key": "invalid"}),
+        ("GET", {"Sec-WebSocket-Protocol": "not a token"}),
+    ],
+)
+def test_native_handshake_errors_receive_security_headers(method, invalid_headers) -> None:
+    with leika.Server(host="127.0.0.1", port=0, verbose=False) as server:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        try:
+            connection.request(
+                method,
+                "/",
+                headers={
+                    "Connection": "Upgrade",
+                    "Upgrade": "websocket",
+                    "Sec-WebSocket-Version": "13",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                    **invalid_headers,
+                },
+            )
+            response = connection.getresponse()
+            assert response.status == 400
+            assert response.headers.get_all("Connection") == ["close"]
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert response.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+            assert response.read()
+        finally:
+            connection.close()
+        assert _get(server.port, "/")[0] == 200
+
+
 def test_static_cache_observes_an_in_place_client_rebuild(tmp_path: Path) -> None:
     served = tmp_path / "served"
     served.mkdir()

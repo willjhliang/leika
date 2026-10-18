@@ -88,6 +88,56 @@ universal `uv.lock` is tracked for repeatable development and CI across every
 supported Python version; CI uses `--locked`, while a separate lowest-direct
 job checks that the broad published lower bounds remain usable.
 
+## Pinned simulator environments
+
+Leika uses the WebSockets 12 API on every supported version (12 through 17),
+and supports Pillow 11.3 through 12.x. There is one server implementation,
+imported explicitly from `websockets.legacy.server`, with native HTTP and
+subprotocol hooks. Upstream owns parsing, framing and connection shutdown;
+Leika owns request routing, response budgets and application policy. There is
+no version detection or compatibility adapter.
+
+The upstream legacy API remains available in newer releases but is deprecated
+and maintained until November 2029. See the
+[upstream migration policy](https://websockets.readthedocs.io/en/stable/howto/upgrade.html).
+Leika's dependency range covers tested releases, not unbounded future versions.
+The Viser proxy uses `httpcore[asyncio]>=1.0.9`, whose HTTP parser requires
+`h11>=0.16`. Leika does not import or require aiohttp.
+
+For Isaac Sim 5.1's Python 3.11 environment, install the source revision or its
+locally built wheel with the checked-in compatibility constraints:
+
+```bash
+python -m pip install -c tests/constraints/isaac51.txt . viser
+python -m pip check
+```
+
+This selects Viser 0.2.11, the last release before its WebSockets 13.1 minimum.
+Viser remains optional. `ViserServer(host="127.0.0.1", port=...)` and
+`server.panes.add_viser(scene, ...)` retain the same integration API. Legacy Vite
+asset URLs, including worker URLs, stay inside the pane's proxy path; rewritten
+HTML/JavaScript is fetched without compression and charged to the HTTP budget.
+Other assets retain their encoding and range handling. Keep simulator-owned pins
+in place; these constraints are test inputs, not a complete simulator lock.
+
+The old Pillow release has known vulnerabilities outside Leika's image surface.
+Leika only encodes and decodes PNG/JPEG and explicitly restricts `Image.open`
+to those formats. This follows the format restriction in Pillow's
+[FITS advisory](https://github.com/python-pillow/Pillow/security/advisories/GHSA-whj4-6x5x-4v2j)
+and excludes the PSD/EPS decoders as well. It does not secure other applications
+using Pillow. The proxy replacement preserves the reason for the former aiohttp
+floor: its older C response parser has a
+[memory safety advisory](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-cq5v-8q36-5273).
+
+CI runs the HTTP, auth, dispatch, resource/lifecycle and real-browser Viser tests
+under the simulator pins, WebSockets 13 and the latest supported WebSockets,
+alongside the locked environment. Viser's own dependency range determines which
+Viser release can be installed with each transport version. No simulator
+or GPU is required for these transport tests. The eight-scene browser test checks
+geometry delivery, Leika controls, and reconnect replay on one forwarded port.
+Viser owns reconnect policy: the tested modern version retries when its iframe
+regains focus; Viser 0.2.11 retries in the background as well.
+
 ## Documentation
 
 ```bash
@@ -182,9 +232,8 @@ python -m playwright install chromium
 
 `make test-e2e` covers GUI rendering and synchronization, fast slider release,
 multi-slider cancellation, the color picker, checklists, markdown, download and
-preview buttons, modal dismissal, notifications, icon buttons,
-settings, the connection pane, light/dark theming, multi-client updates, the
-lifecycle of every pane type, resizing and persistence, and responsive
+preview buttons, modal dismissal, notifications, settings, the connection pane,
+light/dark theming, multi-client updates, the lifecycle of every pane type, resizing and persistence, and responsive
 floating/mobile control panels.
 
 `test_control_panel.py` covers the desktop control panel's pointer gestures --

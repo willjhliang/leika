@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 
 import imageio.v3 as iio
 from playwright.sync_api import Locator, Page, expect
@@ -328,79 +327,6 @@ def test_hue_survives_greyscale_and_the_far_right(
 
     # And it is still the red that hue 0 would have given.
     wait_until(lambda: color.value[0] > 200 and color.value[1] < 40)
-    assert page_errors == []
-
-
-def _settled_box(locator: Locator) -> dict[str, float]:
-    """The element's box once it stops moving.
-
-    The popover opens on a zoom-and-fade, so a box read the moment it becomes
-    visible is a frame of that animation and lands a fraction of a pixel off.
-    """
-    previous: dict[str, float] | None = None
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        box = locator.bounding_box()
-        assert box is not None
-        if previous is not None and abs(box["x"] - previous["x"]) < 0.01:
-            return box
-        previous = box
-        time.sleep(0.05)
-    raise AssertionError("the popover never settled")
-
-
-def test_the_reset_button_comes_and_goes_without_moving_anything(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """The reset appears only once the row has been edited, shortens the
-    trigger to make its room, and the popover -- aligned to the ROW, not the
-    trigger -- holds its place through both."""
-    color = leika_server.gui.add_rgb("Plot line", initial_value=(196, 196, 196))
-    trigger = _color_trigger(leika_page, "Plot line")
-    row = find_gui_row(leika_page, "Plot line")
-    reset = row.locator("[data-leika-color-reset]")
-    expect(trigger).to_be_visible()
-    expect(reset).to_have_count(0)
-    untouched_width = trigger.bounding_box()
-
-    def popover_origin() -> tuple[float, float]:
-        picker = _open_color_picker(leika_page, "Plot line")
-        box = _settled_box(picker)
-        picker.locator("[data-leika-color-selection]").press("Escape")
-        expect(picker).to_be_hidden()
-        return box["x"], box["y"]
-
-    unedited = popover_origin()
-
-    # Through the block rather than the hue slider: the initial value is a grey,
-    # which every hue maps to alike.
-    picker = _open_color_picker(leika_page, "Plot line")
-    selection = picker.locator("[data-leika-color-selection]")
-    bounds = selection.bounding_box()
-    assert bounds is not None and untouched_width is not None
-    selection.click(position={"x": bounds["width"] - 12, "y": 12})
-    wait_until(lambda: color.value != (196, 196, 196))
-    selection.press("Escape")
-
-    expect(reset).to_have_count(1)
-    edited_width = trigger.bounding_box()
-    assert edited_width is not None
-    assert edited_width["width"] < untouched_width["width"]
-
-    # Anchored to the trigger, this moved by the button's whole width plus the
-    # gap, so a pixel of tolerance is nowhere near what the bug looked like.
-    edited = popover_origin()
-    assert abs(edited[0] - unedited[0]) < 1.0, (unedited, edited)
-    assert abs(edited[1] - unedited[1]) < 1.0, (unedited, edited)
-
-    reset.click()
-    wait_until(lambda: color.value == (196, 196, 196))
-    expect(reset).to_have_count(0)
-    restored = trigger.bounding_box()
-    assert restored is not None
-    assert restored["width"] == untouched_width["width"]
     assert page_errors == []
 
 

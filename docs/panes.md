@@ -423,7 +423,7 @@ A named group gives the videos on the displayed page one timeline in each
 browser. The dock component and fullscreen overlays control that same timeline:
 
 ```python
-server.gui.add_video_controls(sync_group="episode")
+server.gui.add_playback(sync_group="episode")
 grid = server.panes.add_grid(columns=2)
 for index in range(4):
     grid.add_video(
@@ -437,7 +437,7 @@ for index in range(4):
 Without a label, the dock component is one full-width 32px row: play/pause,
 previous/next frame, seek, elapsed time, speed and loop. Elapsed time stays
 visible; hover over it for total duration. Pass a label, for example
-`server.gui.add_video_controls("Playback", sync_group="episode")`, for a standard
+`server.gui.add_playback("Playback", sync_group="episode")`, for a standard
 24px labelled row containing only play/pause, seek, speed and loop. Both dock
 layouts and video overlays use 12px gaps between icon bounds, text and the
 timeline, with 24px button targets. The label
@@ -471,3 +471,52 @@ for loading members. In a group, a pane's hover bar fits just the fullscreen
 button at the bottom right; fullscreen also exposes the shared playback controls.
 With `sync_group=None`, the same controller drives the pane's independent hover
 controls.
+
+
+### Custom playback
+
+The same bar can control arbitrary Python content. Pass `duration` instead of
+`sync_group`; Leika does not require a video, Viser, or a simulator:
+
+```python
+playback = server.gui.add_playback(duration=10, fps=30)
+
+@playback.on_update
+async def changed(event: leika.PlaybackEvent):
+    # A stable snapshot of this browser command, even if another thread advances.
+    print(event.action, event.state.time)
+```
+
+Python owns the clock. Assign `playback.time` when content advances, or call
+`state = playback.advance(elapsed_seconds)` in an application loop and render
+`state.time`. The helper respects `playing`, `speed`, `loop`, `buffering` and
+`disabled`; it stops at the final time when looping is off. It starts no thread.
+See [the runnable example](../examples/custom_playback.py). A simulator can
+publish its actual progress instead of using the helper.
+
+Times and duration are seconds. Supply `fps` for previous/next frame buttons and
+frame-sized seeking. Seek clamps to the duration, and frame stepping pauses.
+Play at the end starts again at zero. Looping controls the clock; an application
+owns frame caching or any simulation reset needed to realize the requested time.
+
+`on_update` runs after an accepted browser command (`play`, `pause`, `seek`,
+`step`, `speed` or `loop`). Regular functions run in the callback pool and async
+functions run in the event loop. `event.state` is immutable. `event.value` retains the requested seek time, step
+direction (-1/+1), or speed; other actions carry `None`. This lets asynchronous
+applications queue relative steps even while a reset or seek is pending. Programmatic
+assignments, `update(...)`, and `advance(...)` do **not** invoke callbacks, so
+publishing progress cannot create an input feedback loop. For queued simulator
+work, consume these events on the simulator's owning thread.
+
+Publish related changes together, for example
+`playback.update(time=0, duration=5, playing=False)`. `duration=0` disables the
+transport until content is available. `buffering=True` announces preparation
+while leaving pause and seek usable; `disabled=True` prevents all interaction.
+Hiding the bar does not stop application work. Python-controlled state follows
+normal GUI scope: `server.gui` is shared across browsers; `client.gui` is private.
+Reconnect restores the published state. Video groups continue to keep independent
+browser-local clocks; no frame-by-frame Python traffic is added to videos.
+
+`add_video_controls(...)` remains available as the video-specific spelling of
+`add_playback(sync_group=...)`. Video duration, autoplay, looping and frame rate
+are still configured on video panes, not on their dock control.

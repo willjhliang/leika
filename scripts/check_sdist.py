@@ -78,7 +78,7 @@ REQUIRED = {
     "src/leika/__init__.py",
     "src/leika/_server.py",
     "src/leika/py.typed",
-    "tests/test_project_quality.py",
+    "tests/test_artifact_checks.py",
     "src/leika/client/third-party-license-overrides/hast-util-to-string-2.0.0.txt",
     "src/leika/client/third-party-license-overrides/react-remove-scroll-bar-2.3.8.txt",
     "src/leika/client/vite-plugin-third-party-notices.mts",

@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import type { VideoPlayback } from "./videoPlayback";
+import type { PlaybackController } from "./playbackController";
 
 const PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2];
 function formatTime(seconds: number): string {
@@ -32,13 +32,17 @@ function formatTime(seconds: number): string {
 }
 
 /** The dock and every fullscreen overlay subscribe to the same controller. */
-export function VideoPlaybackControls({
+export function PlaybackControls({
   playback,
   playerRef,
   label: controlLabel,
   grouped = false,
+  disabled = false,
+  statusText,
 }: {
-  playback: VideoPlayback;
+  playback: PlaybackController;
+  disabled?: boolean;
+  statusText?: string;
   playerRef?: RefObject<HTMLDivElement | null>;
   label: string | null;
   grouped?: boolean;
@@ -59,13 +63,15 @@ export function VideoPlaybackControls({
   const dock = playerRef === undefined;
   const compact = dock && controlLabel !== null;
   const label = controlLabel ?? "Playback";
-  const status = error
-    ? "Could not load a video in this group."
-    : buffering
-      ? "Waiting for video…"
-      : undefined;
+  const status =
+    statusText ??
+    (error
+      ? "Could not load content."
+      : buffering
+        ? "Preparing content…"
+        : undefined);
   const fullControls = dock || !grouped || fullscreen;
-  const canSeek = duration > 0 && !error;
+  const canSeek = duration > 0 && !error && !disabled;
   const timeline = (
     <Slider
       value={[canSeek ? Math.min(time, duration) : 0]}
@@ -194,6 +200,7 @@ export function VideoPlaybackControls({
               aria-label={`Loop ${label}`}
               aria-pressed={loop}
               title="Loop"
+              disabled={disabled}
               onClick={playback.toggleLoop}
             >
               <RepeatIcon className={loop ? "" : "opacity-40"} />

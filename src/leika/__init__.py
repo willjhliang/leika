@@ -22,6 +22,7 @@ from ._gui_handles import GuiListHandle as GuiListHandle
 from ._gui_handles import GuiModalHandle as GuiModalHandle
 from ._gui_handles import GuiMultiSliderHandle as GuiMultiSliderHandle
 from ._gui_handles import GuiNumberHandle as GuiNumberHandle
+from ._gui_handles import GuiPlaybackHandle as GuiPlaybackHandle
 from ._gui_handles import GuiPlotlyHandle as GuiPlotlyHandle
 from ._gui_handles import GuiPopupHandle as GuiPopupHandle
 from ._gui_handles import GuiPreviewButtonHandle as GuiPreviewButtonHandle
@@ -39,6 +40,8 @@ from ._gui_handles import GuiUploadButtonHandle as GuiUploadButtonHandle
 from ._gui_handles import GuiVector2Handle as GuiVector2Handle
 from ._gui_handles import GuiVector3Handle as GuiVector3Handle
 from ._gui_handles import GuiVideoControlsHandle as GuiVideoControlsHandle
+from ._gui_handles import PlaybackEvent as PlaybackEvent
+from ._gui_handles import PlaybackState as PlaybackState
 from ._gui_handles import PreviewContent as PreviewContent
 from ._gui_handles import UploadedFile as UploadedFile
 from ._icons_enum import Icon as Icon

@@ -1,17 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { randomUuid } from "./randomUuid";
 
 describe("randomUuid", () => {
-  it("uses native randomUUID when it is available", () => {
-    const randomUUID = vi.fn(() => "native-uuid");
-    const getRandomValues = vi.fn((array: Uint8Array) => array);
-
-    expect(randomUuid({ randomUUID, getRandomValues })).toBe("native-uuid");
-    expect(randomUUID).toHaveBeenCalledOnce();
-    expect(getRandomValues).not.toHaveBeenCalled();
-  });
-
   it("creates an RFC 4122 version 4 UUID from getRandomValues", () => {
     const getRandomValues = (array: Uint8Array) => {
       array.forEach((_, index) => {

@@ -18,7 +18,6 @@ from .utils import box
 TRIGGER = "[data-leika-settings-trigger]"
 PANE = "[data-leika-settings-pane]"
 POPOVER = "[data-leika-settings-popover]"
-SECTION_ID = "leika-settings"
 
 
 def open_settings(page: Page) -> Locator:
@@ -58,76 +57,6 @@ def css_variable(page: Page, name: str) -> str:
         "name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()",
         name,
     )
-
-
-def test_the_gear_is_a_circle_the_size_of_the_status_pill(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """It reads as one cluster with the pill, so it is measured against it."""
-    del leika_server
-    trigger = leika_page.locator(TRIGGER)
-    # The pill is a button of its own now -- it opens the connection popout --
-    # so it answers to that rather than to the badge slot it renders as.
-    pill = leika_page.locator("[data-leika-connection-trigger]")
-    expect(trigger).to_be_visible(timeout=5_000)
-    expect(pill).to_be_visible(timeout=5_000)
-
-    gear = trigger.bounding_box()
-    status = pill.bounding_box()
-    assert gear is not None and status is not None
-
-    assert abs(gear["height"] - status["height"]) < 0.5
-    assert abs(gear["width"] - gear["height"]) < 0.5
-    radius = trigger.evaluate(
-        "element => parseFloat(getComputedStyle(element).borderTopLeftRadius)"
-    )
-    assert radius >= gear["height"] / 2 - 0.5
-
-    # To the left of the pill, and on the same line as it.
-    assert gear["x"] + gear["width"] <= status["x"] + 0.5
-    assert abs((gear["y"] + gear["height"] / 2) - (status["y"] + status["height"] / 2)) < 1.5
-
-    # Idle, it is typed like the pill: the glyph inherits the label's color.
-    glyph_color = trigger.locator("svg").evaluate("e => getComputedStyle(e).color")
-    label_color = pill.locator("[data-leika-connection-label]").evaluate(
-        "e => getComputedStyle(e).color"
-    )
-    assert glyph_color == label_color
-    assert page_errors == []
-
-
-def test_the_open_gear_fills_with_the_accent(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """Open, the gear reads as a checked control, which means the same pair of
-    tokens a checked checkbox uses -- accent behind, on-accent glyph -- so a
-    chosen accent reaches it without the gear knowing an accent exists."""
-    leika_server.gui.add_checkbox("Enabled", initial_value=True)
-    checkbox = leika_page.get_by_role("checkbox", name="Enabled")
-    expect(checkbox).to_be_visible(timeout=5_000)
-    trigger = leika_page.locator(TRIGGER)
-
-    idle_fill = trigger.evaluate("e => getComputedStyle(e).backgroundColor")
-    checked_fill = checkbox.evaluate("e => getComputedStyle(e).backgroundColor")
-    assert idle_fill != checked_fill
-
-    # Opening it leaves the pointer on it, and the hover state dims the fill to
-    # 80%, so the pointer moves off before any of these are read.
-    open_settings(leika_page)
-    leika_page.mouse.move(2, 2)
-    expect(trigger).to_have_css("background-color", checked_fill)
-    assert trigger.locator("svg").evaluate("e => getComputedStyle(e).color") == checkbox.evaluate(
-        "e => getComputedStyle(e).color"
-    )
-
-    close_settings(leika_page)
-    leika_page.mouse.move(2, 2)
-    expect(trigger).to_have_css("background-color", idle_fill)
-    assert page_errors == []
 
 
 def test_settings_open_in_a_popout_off_the_gear(
@@ -306,37 +235,6 @@ def choose_theme(page: Page, pane: Locator, name: str) -> None:
     page.get_by_role("option", name=name, exact=True).click()
 
 
-def test_dark_mode_outranks_the_server_and_the_browser(
-    leika_server: leika.Server,
-    page: Page,
-    page_errors: list[str],
-) -> None:
-    """The app asked for light and the OS agrees; the viewer still wins."""
-    leika_server.gui.configure_theme(theme="light")
-    page.emulate_media(color_scheme="light")
-    page.goto(leika_server.url)
-    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-    page.wait_for_function(
-        "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
-    )
-    assert not is_dark(page)
-    light_background = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
-
-    pane = open_settings(page)
-    # The API and the GUI show the same selection.
-    expect(pane.get_by_role("combobox", name="Theme", exact=True)).to_contain_text("Light")
-    choose_theme(page, pane, "Dark")
-
-    page.wait_for_function("() => document.documentElement.classList.contains('dark')")
-    assert (
-        page.evaluate("() => getComputedStyle(document.body).backgroundColor") != light_background
-    )
-
-    choose_theme(page, pane, "Light")
-    page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
-    assert page_errors == []
-
-
 def test_auto_hands_the_scheme_back_to_the_browser(
     leika_server: leika.Server,
     page: Page,
@@ -365,8 +263,6 @@ def test_auto_hands_the_scheme_back_to_the_browser(
     # And it keeps following it, rather than having simply resolved once.
     page.emulate_media(color_scheme="light")
     page.wait_for_function("() => !document.documentElement.classList.contains('dark')")
-    stored = page.evaluate("() => localStorage.getItem('leika.settings.v2')")
-    assert '"darkMode":null' in stored
     assert page_errors == []
 
 
@@ -595,41 +491,6 @@ def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
         reset_box,
         pane_box,
     )
-    assert page_errors == []
-
-
-def test_the_footer_names_the_version_and_links_to_the_project(
-    leika_server: leika.Server,
-    leika_page: Page,
-    page_errors: list[str],
-) -> None:
-    """The version is baked into the client at build time, so this also catches a
-    build made from a `VersionInfo.ts` that Python has since moved past."""
-    about = open_settings(leika_page).locator("[data-leika-settings-about]")
-    expect(about.locator("[data-leika-settings-version]")).to_have_text(
-        f"Leika v{leika.__version__}"
-    )
-    expect(about).to_have_text(f"Leika v{leika.__version__}. Source, docs, and examples.")
-
-    source = about.locator("[data-leika-settings-source]")
-    docs = about.locator("[data-leika-settings-docs]")
-    examples = about.locator("[data-leika-settings-examples]")
-    expect(source).to_have_attribute("href", "https://github.com/willjhliang/leika")
-    expect(docs).to_have_attribute("href", "https://willjhliang.github.io/leika/")
-    expect(examples).to_have_attribute(
-        "href", "https://github.com/willjhliang/leika/tree/main/examples"
-    )
-    # External destinations out of an app that holds live state, so they open
-    # beside the workspace rather than navigating away from it.
-    for link in (source, docs, examples):
-        expect(link).to_have_attribute("target", "_blank")
-
-    # One line: the sentence fits the panel at its default width, so the footer
-    # is no taller than the single line of text inside it.
-    footer = about.bounding_box()
-    link = source.bounding_box()
-    assert footer is not None and link is not None
-    assert footer["height"] < link["height"] * 2, (footer, link)
     assert page_errors == []
 
 

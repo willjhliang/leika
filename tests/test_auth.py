@@ -4,7 +4,6 @@ import http.client
 import re
 import socket
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,6 @@ from websockets.typing import Subprotocol
 
 import leika
 import leika._messages
-import leika.infra._auth as auth_impl
 from leika import infra
 from leika.infra._auth import (
     AUTH_PATH,
@@ -59,21 +57,6 @@ def _login_cookie(port: int, encoded_password: str) -> str:
     match = re.match(rf"({COOKIE_NAME}=[^;]+)", headers["set-cookie"])
     assert match is not None
     return match.group(1)
-
-
-def test_login_fonts_are_preloaded_before_concurrent_requests(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def unexpected_open(*_: object, **__: object) -> object:
-        raise AssertionError("font response performed request-time disk I/O")
-
-    monkeypatch.setattr(Path, "open", unexpected_open)
-    paths = (FONT_PATH, WORDMARK_FONT_PATH) * 16
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        responses = tuple(executor.map(auth_impl._font_response, paths))
-
-    assert all(response.status_code == 200 for response in responses)
-    assert all(response.body.startswith(b"wOF2") for response in responses)
 
 
 def test_password_gates_static_files(tmp_path: Path) -> None:

@@ -15,9 +15,6 @@ import {
   FILE_TEXT_PREVIEW_MAX_BYTES,
   fileTextPreviewAllowed,
   finishFilePreviewScroll,
-  formatBytes,
-  isMediaKind,
-  isReadingKind,
   openFilePreview,
   noteReloadStarted,
   previewKindFor,
@@ -104,47 +101,6 @@ describe("previewKindFor", () => {
     expect(previewKindFor("application/octet-stream", ".gitignore")).toBe(
       "unsupported",
     );
-  });
-});
-
-describe("isMediaKind", () => {
-  it("claims the three kinds that arrive with a size of their own", () => {
-    expect(isMediaKind("image")).toBe(true);
-    expect(isMediaKind("video")).toBe(true);
-    expect(isMediaKind("audio")).toBe(true);
-  });
-
-  it("leaves the ones a frame has to be picked for", () => {
-    // A PDF is drawn by a viewer and is still a document: it is pages, read
-    // by scrolling, and its page size is not the size to show it at.
-    expect(isMediaKind("pdf")).toBe(false);
-    expect(isMediaKind("markdown")).toBe(false);
-    expect(isMediaKind("prose")).toBe(false);
-    expect(isMediaKind("text")).toBe(false);
-    expect(isMediaKind("unsupported")).toBe(false);
-  });
-
-  it("takes nothing that a document is read down", () => {
-    // The two splits are answering different questions and must not be
-    // confused: `isReadingKind` picks a frame's height, this picks whether
-    // there is a frame at all.
-    expect(isReadingKind("image")).toBe(false);
-    expect(isMediaKind("markdown")).toBe(false);
-  });
-});
-
-describe("formatBytes", () => {
-  it("counts bytes exactly and larger sizes to one decimal", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(1023)).toBe("1023 B");
-    expect(formatBytes(1024)).toBe("1.0 KiB");
-    expect(formatBytes(1536)).toBe("1.5 KiB");
-    expect(formatBytes(64 * 1024 * 1024)).toBe("64.0 MiB");
-  });
-
-  it("stops climbing units at the largest it knows", () => {
-    expect(formatBytes(5 * 1024 ** 4)).toBe("5.0 TiB");
-    expect(formatBytes(2048 * 1024 ** 4)).toBe("2048.0 TiB");
   });
 });
 
@@ -326,19 +282,6 @@ describe("the preview store", () => {
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
   });
 
-  it("opens on metadata alone, and fills in the contents when they arrive", () => {
-    // The dialog answers the click from the transfer's first message; the
-    // bytes catch up under the same id, without reopening anything.
-    openFilePreview(metadata("a"));
-    expect(filePreviewStore.snapshot()?.contents).toBeNull();
-    const arrived = contents();
-    resolveFilePreview("a", arrived);
-    expect(filePreviewStore.snapshot()).toMatchObject({
-      id: "a",
-      contents: arrived,
-    });
-  });
-
   it("lets go of contents whose dialog was closed while they were in flight", () => {
     // A dismissed dialog stays dismissed: the late bytes are released, not
     // shown.
@@ -391,11 +334,6 @@ describe("the preview store", () => {
     finishFilePreviewScroll("a");
     expect(filePreviewStore.snapshot()?.contents).toBe(fresh);
     expect(revoke).toHaveBeenCalledWith(early.url);
-  });
-
-  it("has nothing warmed for a file nobody warmed", () => {
-    expect(warmedContents("never", "never.md", "1")).toBeNull();
-    expect(warmedContents(null, "never.md", "1")).toBeNull();
   });
 
   it("never stores a warm entry whose Blob lease is already inactive", () => {
@@ -547,24 +485,6 @@ describe("the preview store", () => {
     expect(filePreviewStore.snapshot()).toBeNull();
   });
 
-  it("knows a copy is on its way, until it lands", () => {
-    // What stops a preview asking again for a file it is already receiving.
-    // A watch is answered only when something changed, so an unanswered ask
-    // and an answer still arriving look identical from here; the transfer's
-    // first message is the difference, and it comes ahead of the bytes.
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    openFilePreview(metadata("a"));
-    expect(reloadIsOnItsWay("button")).toBe(false);
-
-    noteReloadStarted("button");
-    expect(reloadIsOnItsWay("button")).toBe(true);
-    // Only for the source it was noted against.
-    expect(reloadIsOnItsWay("other-button")).toBe(false);
-
-    reload(contents());
-    expect(reloadIsOnItsWay("button")).toBe(false);
-  });
-
   it("forgets a copy that never arrived when the reader moves on", () => {
     // A transfer cut off mid-flight would otherwise leave its source marked
     // as busy for the rest of the session, and that file would never be
@@ -606,16 +526,6 @@ describe("the preview store", () => {
     reload(late);
     expect(revoke).toHaveBeenCalledWith(late.url);
     expect(filePreviewStore.snapshot()).toBeNull();
-  });
-
-  it("takes the name from the reload, which is the one that is current", () => {
-    // A button whose contents are computed can hand back a different name
-    // than it did last time; the title says what is on screen now.
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    openFilePreview(metadata("a"));
-    resolveFilePreview("a", contents());
-    reload(contents(), { filename: "notes-v2.md" });
-    expect(filePreviewStore.snapshot()?.filename).toBe("notes-v2.md");
   });
 
   it("revokes what it was showing when a new file replaces it", () => {

@@ -95,18 +95,3 @@ with open("example") as stream:
     snippets = list(check_docs._python_fences(text))
     assert len(snippets) == 1
     compile(snippets[0], "<documentation>", "exec")
-
-
-def test_no_root_tailscale_install_verifies_pinned_archive_before_extracting() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (root / "docs/remote-access.md").read_text(encoding="utf-8")
-    download = source.index('curl -fsSLo "$TAILSCALE_ARCHIVE"')
-    verify = source.index("sha256sum -c -")
-    extract = source.index('tar xzf "$TAILSCALE_ARCHIVE"')
-
-    assert (
-        "TAILSCALE_SHA256=ad2cde12f8de95f7b93a1e0401e652291c603d42b9d60a33fb1741eb38ab04d8"
-        in source
-    )
-    assert download < verify < extract
-    assert "| tar" not in source

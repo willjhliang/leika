@@ -470,6 +470,45 @@ class GuiHtmlMessage(_CreateGuiComponentMessage):
     props: GuiHtmlProps
 
 
+PlaybackAction = Literal["play", "pause", "seek", "step", "speed", "loop"]
+
+
+@dataclasses.dataclass
+class GuiPlaybackProps:
+    order: float
+    label: str | None
+    visible: bool
+    disabled: bool
+    time: float
+    """Current time in seconds, published by the application."""
+    duration: float
+    """Timeline extent in seconds; zero disables transport controls."""
+    playing: bool
+    speed: float
+    loop: bool
+    fps: float | None
+    """Optional frame rate for frame-sized seeking and stepping."""
+    buffering: bool
+    """Application is preparing content; controls remain responsive."""
+
+
+@dataclasses.dataclass
+class GuiPlaybackMessage(_CreateGuiComponentMessage):
+    container_uuid: str
+    props: GuiPlaybackProps
+
+
+@dataclasses.dataclass
+class GuiPlaybackCommandMessage(Message):
+    uuid: str
+    action: PlaybackAction
+    value: float
+
+    @override
+    def redundancy_key(self) -> None:
+        return None
+
+
 @dataclasses.dataclass
 class GuiVideoControlsProps:
     order: float

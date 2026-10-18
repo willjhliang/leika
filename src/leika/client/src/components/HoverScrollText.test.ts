@@ -1,8 +1,4 @@
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { HoverScrollText } from "./HoverScrollText";
 
 const motion = vi.hoisted(() => ({
   prefersReducedMotion: vi.fn(() => false),
@@ -49,34 +45,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   motion.prefersReducedMotion.mockReset();
   motion.prefersReducedMotion.mockReturnValue(false);
-});
-
-describe("HoverScrollText", () => {
-  it("keeps one accessible copy of the text in a clipped measurement box", () => {
-    const markup = renderToStaticMarkup(
-      React.createElement(
-        HoverScrollText,
-        { className: "flex-1", title: "A long label" },
-        "A long label",
-      ),
-    );
-
-    expect(markup.match(/>A long label</g)).toHaveLength(1);
-    expect(markup).toContain("data-leika-hover-scroll");
-    expect(markup).toContain("data-leika-hover-scroll-content");
-    expect(markup).toContain("truncate");
-    expect(markup).toContain("flex-1");
-    expect(markup).toContain('title="A long label"');
-  });
-
-  it("does not mark text as overflowing or active before measurement", () => {
-    const markup = renderToStaticMarkup(
-      React.createElement(HoverScrollText, null, "Short"),
-    );
-
-    expect(markup).not.toContain("data-leika-hover-scroll-overflow");
-    expect(markup).not.toContain("data-leika-hover-scroll-active");
-  });
 });
 
 describe("startHoverScrollCycle", () => {

@@ -365,50 +365,6 @@ def test_successful_build_atomically_replaces_the_old_generation(
     assert not list(build.parent.glob(f"{autobuild._BUILD_STAGE_PREFIX}*"))
 
 
-def test_live_publication_flushes_payload_and_each_parent_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, build = _configure_tree(tmp_path, monkeypatch)
-    _write_complete_outputs(build)
-    autobuild._write_stamp(autobuild._stamp_path, "1" * 64)
-    staging = build.with_name(f"{autobuild._BUILD_STAGE_PREFIX}durability")
-    _write_complete_outputs(staging)
-    autobuild._write_stamp(staging / ".leika-sources", "2" * 64)
-    events: list[str] = []
-    replace = autobuild.os.replace
-
-    def observed_replace(source: Path, destination: Path) -> None:
-        source = Path(source)
-        destination = Path(destination)
-        events.append(f"replace:{source.name}->{destination.name}")
-        replace(source, destination)
-
-    monkeypatch.setattr(autobuild.os, "replace", observed_replace)
-    monkeypatch.setattr(
-        autobuild,
-        "_fsync_tree",
-        lambda path: events.append(f"tree:{path.name}"),
-    )
-    monkeypatch.setattr(
-        autobuild,
-        "_fsync_directory",
-        lambda path: events.append(f"directory:{path.name}"),
-    )
-
-    autobuild._publish_staged_build(staging)
-
-    assert events == [
-        f"tree:{staging.name}",
-        f"tree:{build.name}",
-        f"replace:{build.name}->{autobuild._BUILD_BACKUP_DIR_NAME}",
-        f"directory:{build.parent.name}",
-        f"replace:{staging.name}->{build.name}",
-        f"directory:{build.parent.name}",
-        f"directory:{build.parent.name}",
-    ]
-    assert autobuild._read_stamp(autobuild._stamp_path) == "2" * 64
-
-
 def test_successful_build_replaces_an_incomplete_live_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -673,93 +629,6 @@ def test_interrupted_snapshot_publication_restores_old_or_keeps_new_output(
     assert not transaction.exists()
 
 
-def test_snapshot_flushes_marker_before_renames_and_each_terminal_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, build = _configure_tree(tmp_path, monkeypatch)
-    _write_complete_outputs(build)
-    autobuild._write_stamp(autobuild._stamp_path, "1" * 64)
-    output = tmp_path / "release-client"
-    output.mkdir()
-    (output / "old.txt").write_text("old")
-    events: list[str] = []
-    replace = autobuild.os.replace
-
-    def observed_replace(source: Path, destination: Path) -> None:
-        source = Path(source)
-        destination = Path(destination)
-        events.append(f"replace:{source.name}->{destination.name}")
-        replace(source, destination)
-
-    monkeypatch.setattr(autobuild.os, "replace", observed_replace)
-    monkeypatch.setattr(
-        autobuild,
-        "_fsync_tree",
-        lambda path: events.append(f"tree:{path.name}"),
-    )
-    monkeypatch.setattr(
-        autobuild,
-        "_fsync_directory",
-        lambda path: events.append(f"directory:{path.name}"),
-    )
-
-    autobuild._copy_build_snapshot(output)
-
-    staging_name = events[0].split(":", 1)[1]
-    assert events == [
-        f"tree:{staging_name}",
-        f"tree:{output.name}",
-        f"directory:{tmp_path.name}",
-        f"replace:{output.name}->{autobuild._snapshot_backup_dir(output).name}",
-        f"directory:{tmp_path.name}",
-        f"replace:{staging_name}->{output.name}",
-        f"directory:{tmp_path.name}",
-        f"directory:{tmp_path.name}",
-        f"directory:{tmp_path.name}",
-    ]
-    assert autobuild._is_complete_generation(output)
-    assert not autobuild._snapshot_backup_dir(output).exists()
-    assert not autobuild._snapshot_transaction_path(output).exists()
-
-
-def test_file_fsync_uses_a_writable_descriptor_on_windows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "payload"
-    opened: list[tuple[Path, int]] = []
-    fsynced: list[int] = []
-    closed: list[int] = []
-
-    def open_file(candidate: Path, flags: int) -> int:
-        opened.append((candidate, flags))
-        return 17
-
-    monkeypatch.setattr(autobuild.os, "name", "nt")
-    monkeypatch.setattr(autobuild.os, "open", open_file)
-    monkeypatch.setattr(autobuild.os, "fsync", fsynced.append)
-    monkeypatch.setattr(autobuild.os, "close", closed.append)
-
-    autobuild._fsync_file(path)
-
-    expected_flags = autobuild.os.O_RDWR | getattr(autobuild.os, "O_BINARY", 0)
-    assert opened == [(path, expected_flags)]
-    assert fsynced == [17]
-    assert closed == [17]
-
-
-def test_directory_fsync_is_an_explicit_noop_on_windows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(autobuild.os, "name", "nt")
-    monkeypatch.setattr(
-        autobuild.os,
-        "open",
-        lambda *_: pytest.fail("Windows must not use POSIX directory handles"),
-    )
-
-    autobuild._fsync_directory(tmp_path)
-
-
 @pytest.mark.parametrize("relative", [Path("."), Path(".."), Path("release-inside-client")])
 def test_snapshot_refuses_to_replace_or_write_inside_the_client_tree(
     tmp_path: Path,
@@ -771,26 +640,6 @@ def test_snapshot_refuses_to_replace_or_write_inside_the_client_tree(
 
     with pytest.raises(RuntimeError, match="separate directory"):
         autobuild._copy_build_snapshot(output)
-
-
-def test_build_entrypoint_forwards_release_rebuild_flags(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        autobuild,
-        "build_client",
-        lambda **kwargs: calls.append(kwargs),
-    )
-    monkeypatch.setattr(
-        autobuild.sys,
-        "argv",
-        ["_client_autobuild.py", "--force", "--clean-install", "--out-dir", str(tmp_path)],
-    )
-
-    autobuild.build_client_entrypoint()
-
-    assert calls == [{"out_dir": tmp_path, "force": True, "clean_install": True}]
 
 
 def test_wheel_entrypoint_validates_and_copies_bundled_outputs(

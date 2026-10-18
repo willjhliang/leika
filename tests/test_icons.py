@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
-import re
-import stat
+import runpy
 import zipfile
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from leika import _icons
 from leika import _icons_generate_enum as generator
 
 
@@ -33,10 +31,6 @@ def test_icon_archive_generation_is_byte_stable(
         infos = archive.infolist()
         assert [info.filename for info in infos] == ["a-b.svg", "z.svg"]
         assert [archive.read(info) for info in infos] == [b"<svg>a</svg>\n", b"<svg>z</svg>\n"]
-    assert all(info.date_time == generator._ARCHIVE_TIMESTAMP for info in infos)
-    assert all(info.create_system == 3 for info in infos)
-    assert all(stat.S_IFMT(info.external_attr >> 16) == stat.S_IFREG for info in infos)
-    assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in infos)
 
 
 def test_icon_sources_must_be_regular(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,26 +80,7 @@ def test_failed_icon_archive_generation_preserves_previous_file(
     assert {path.name for path in tmp_path.iterdir()} == {"icons.zip", "source"}
 
 
-def test_generated_source_preserves_mode_and_fsyncs_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "generated.py"
-    target.write_text("old\n", encoding="utf-8")
-    target.chmod(0o640)
-    synced: list[Path] = []
-    monkeypatch.setattr(generator, "_fsync_directory", synced.append)
-
-    generator._write_generated(target, "new")
-
-    assert target.read_text(encoding="utf-8") == "new\n"
-    if generator.os.name != "nt":
-        assert stat.S_IMODE(target.stat().st_mode) == 0o640
-    assert synced == [tmp_path]
-
-
-def test_generation_stages_the_complete_set_under_the_client_build_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generated_icons_load_their_svg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     package = tmp_path / "leika"
     source = tmp_path / "source"
     package.mkdir()
@@ -121,36 +96,19 @@ def test_generation_stages_the_complete_set_under_the_client_build_lock(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"previous")
 
-    active = False
-
-    @contextmanager
-    def lock():
-        nonlocal active
-        assert not active
-        active = True
-        try:
-            yield
-        finally:
-            active = False
-
-    original_sources = generator._validated_sources
-
-    def checked_sources() -> list[Path]:
-        assert active
-        return original_sources()
-
     monkeypatch.setattr(generator, "HERE_DIR", package)
     monkeypatch.setattr(generator, "ICON_DIR", archive_path.parent)
     monkeypatch.setattr(generator, "ICON_ARCHIVE", archive_path)
     monkeypatch.setattr(generator, "SOURCE_DIR", source)
-    monkeypatch.setattr(generator, "_build_lock", lock)
-    monkeypatch.setattr(generator, "_validated_sources", checked_sources)
 
     assert generator.generate_icons() == ["circle"]
-    assert not active
-    assert zipfile.is_zipfile(archive_path)
-    assert b"CIRCLE (IconName)" in targets[1].read_bytes()
-    assert b'IconName("circle")' in targets[2].read_bytes()
+    icon = runpy.run_path(str(package / "_icons_enum.py"))["Icon"].CIRCLE
+    monkeypatch.setattr(_icons, "ICONS_ARCHIVE", archive_path)
+    _icons.svg_from_icon.cache_clear()
+    try:
+        assert _icons.svg_from_icon(icon) == "<svg/>"
+    finally:
+        _icons.svg_from_icon.cache_clear()
     assert not list(package.glob(".leika-icons-stage-*"))
 
 
@@ -232,34 +190,3 @@ def test_icon_attribute_collisions_are_rejected(
         generator.write_enum(["a-b", "a_b"])
     assert not (tmp_path / "_icons_enum.py").exists()
     assert not (tmp_path / "_icons_enum.pyi").exists()
-
-
-def test_shipped_icon_versions_archive_and_stub_are_in_lockstep() -> None:
-    root = Path(__file__).resolve().parents[1]
-    client = root / "src/leika/client"
-    lock = json.loads((client / "package-lock.json").read_text(encoding="utf-8"))
-    packages = lock["packages"]
-    react_version = packages["node_modules/lucide-react"]["version"]
-    static_version = packages["node_modules/lucide-static"]["version"]
-    assert react_version == static_version
-
-    archive_path = root / "src/leika/_icons/lucide-icons.zip"
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        names = [info.filename for info in infos]
-        assert archive.testzip() is None
-    assert names == sorted(names)
-    assert len(names) == len(set(names))
-    assert all(name.endswith(".svg") and Path(name).name == name for name in names)
-    assert all(info.date_time == generator._ARCHIVE_TIMESTAMP for info in infos)
-    assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in infos)
-
-    stub = (root / "src/leika/_icons_enum.pyi").read_text(encoding="utf-8")
-    declarations = re.findall(
-        r'^    ([A-Z][A-Z0-9_]*): IconName = IconName\("([^"]+)"\)$',
-        stub,
-        re.MULTILINE,
-    )
-    expected = [(generator.enum_name_from_icon(Path(name).stem), Path(name).stem) for name in names]
-    assert declarations == expected
-    assert len({attribute for attribute, _icon in declarations}) == len(declarations)

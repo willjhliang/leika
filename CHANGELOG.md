@@ -14,6 +14,13 @@ versioning.
   `workspace_id`; `control_layout` places the panel until the viewer moves it.
   Saved panel layouts reset once.
 
+- Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
+  One WebSockets server implementation uses the API available from version 12
+  through 17, with no version dispatch or compatibility adapter.
+  Native Viser panes support Viser 0.2.11 through the same authenticated port,
+  including its worker assets. The proxy now uses HTTPcore instead of aiohttp;
+  image decoding is restricted to Leika's PNG/JPEG formats.
+
 - Settings **Rendering** offers persistent Auto, Performance, and Quality presets
   for native image panes. Auto adapts to measured connection throughput, independently
   of display size, preserving JPEG quality and at least 70% of source dimensions.

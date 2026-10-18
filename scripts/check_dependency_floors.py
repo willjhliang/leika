@@ -6,13 +6,14 @@ import argparse
 from importlib.metadata import version
 
 EXPECTED = {
+    "httpcore": "1.0.9",
     "msgspec": "0.18.6",
     "numpy": "1.21.3",
-    "pillow": "12.3.0",
+    "pillow": "11.3.0",
     "pygments": "2.20.0",
     "rich": "13.3.3",
     "typing-extensions": "4.4.0",
-    "websockets": "13.1",
+    "websockets": "12.0",
     "zstandard": "0.20.0",
 }
 

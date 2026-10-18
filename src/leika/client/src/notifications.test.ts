@@ -22,88 +22,40 @@ const props = (
   ...overrides,
 });
 
-describe("toastOptionsFor", () => {
-  it("maps title and body onto the toast's title and description", () => {
-    const options = toastOptionsFor(props());
-    expect(options.title).toBe("Export finished");
-    expect(options.description).toBe("Wrote 12 files.");
-  });
-
-  it("omits the description for an empty body", () => {
-    // Passing "" would render an empty line under the title.
-    expect(toastOptionsFor(props({ body: "" })).description).toBeUndefined();
-  });
-
-  it("marks a loading notification so it renders the spinner", () => {
-    expect(toastOptionsFor(props({ loading: true })).type).toBe("loading");
-    expect(toastOptionsFor(props({ loading: false })).type).toBeUndefined();
-  });
-
-  describe("auto-close", () => {
-    it("converts seconds to milliseconds", () => {
-      expect(toastOptionsFor(props({ auto_close_seconds: 5 })).timeout).toBe(
-        5000,
-      );
-      expect(toastOptionsFor(props({ auto_close_seconds: 0.5 })).timeout).toBe(
-        500,
-      );
-    });
-
-    it("treats null as stay-until-dismissed", () => {
-      // 0 is the toast manager's spelling of "never auto-dismiss".
-      expect(toastOptionsFor(props({ auto_close_seconds: null })).timeout).toBe(
-        0,
-      );
-    });
-
-    it("treats zero seconds as stay-until-dismissed too", () => {
-      expect(toastOptionsFor(props({ auto_close_seconds: 0 })).timeout).toBe(0);
-    });
-
-    it("preserves the exact browser timer boundary without overflow", () => {
-      expect(
-        toastOptionsFor({
-          ...props(),
-          auto_close_seconds: MAX_NOTIFICATION_AUTO_CLOSE_SECONDS,
-        }).timeout,
-      ).toBe(MAX_NOTIFICATION_AUTO_CLOSE_MILLISECONDS);
-    });
-  });
-
-  it("carries the close-button choice through to the toast data", () => {
-    expect(toastOptionsFor(props({ with_close_button: true })).data).toEqual({
-      closeButton: true,
-    });
-    expect(toastOptionsFor(props({ with_close_button: false })).data).toEqual({
-      closeButton: false,
-    });
+it("renders a timed notification from its server properties", () => {
+  expect(toastOptionsFor(props())).toEqual({
+    title: "Export finished",
+    description: "Wrote 12 files.",
+    type: undefined,
+    timeout: 5000,
+    data: { closeButton: true },
   });
 });
 
-describe("fileDownloadToastOptions", () => {
-  const options = () => fileDownloadToastOptions("signal.csv", "blob:abc123");
-
-  it("titles the toast with the filename", () => {
-    expect(options().title).toBe("signal.csv");
+it("keeps a loading notification open without an empty description", () => {
+  expect(
+    toastOptionsFor(
+      props({
+        body: "",
+        loading: true,
+        auto_close_seconds: null,
+        with_close_button: false,
+      }),
+    ),
+  ).toMatchObject({
+    description: undefined,
+    type: "loading",
+    timeout: 0,
+    data: { closeButton: false },
   });
+});
 
-  it("points the link at the blob and names the saved file", () => {
-    // The download attribute is what makes right click -> "Save as..." offer
-    // the server's filename rather than the opaque blob uuid.
-    expect(options().link).toEqual({
-      href: "blob:abc123",
-      download: "signal.csv",
-    });
-  });
-
-  it("never auto-closes, so the link outlives the default toast timeout", () => {
-    // The object URL is revoked on removal; auto-closing would break the link
-    // before the user had a chance to click it.
-    expect(options().timeout).toBe(0);
-  });
-
-  it("always offers a close button, since nothing else dismisses it", () => {
-    expect(options().data).toEqual({ closeButton: true });
+it("keeps a named download link available until dismissed", () => {
+  expect(fileDownloadToastOptions("signal.csv", "blob:abc123")).toEqual({
+    title: "signal.csv",
+    link: { href: "blob:abc123", download: "signal.csv" },
+    timeout: 0,
+    data: { closeButton: true },
   });
 });
 
@@ -204,6 +156,9 @@ describe("ServerNotificationRegistry", () => {
       ),
     ).toBe(true);
     expect(runtime.add).toHaveBeenCalledOnce();
+    expect(runtime.add.mock.calls[0][0].timeout).toBe(
+      MAX_NOTIFICATION_AUTO_CLOSE_MILLISECONDS,
+    );
   });
 
   it("reserves aggregate text deltas and releases them on remove/reset", () => {

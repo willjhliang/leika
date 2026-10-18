@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import http.client
 import threading
 from types import SimpleNamespace
@@ -14,16 +15,18 @@ from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 import leika
-from leika.infra._viser_proxy import VISER_PROXY_PREFIX
+from leika.infra._viser_proxy import VISER_PROXY_PREFIX, _rebase_assets
 
 
 @contextlib.contextmanager
-def backend():
+def backend(response=None):
     requests = []
     messages = []
 
     def process_request(connection, request):
         requests.append(request)
+        if response is not None:
+            return response
         if request.headers.get("Upgrade", "").lower() == "websocket":
             return None
         return Response(
@@ -114,6 +117,7 @@ def test_password_protects_proxy_assets_and_both_websocket_routes(protected):
         assert headers["Cache-Control"] == "no-store"
         assert headers["CDN-Cache-Control"] == "no-store"
         assert "Set-Cookie" not in headers
+        assert get(protected, pane.url + "assets/second.js", cookie)[0] == 200
         with connect(
             websocket_url(protected, pane), additional_headers=cookie, subprotocols=["viser-vtest"]
         ) as ws:
@@ -206,3 +210,79 @@ def test_proxy_response_size_is_bounded(protected, monkeypatch):
     with backend() as (target, _, _):
         pane = protected.panes.add_viser(target)
         assert get(protected, pane.url, login(protected))[0] == 503
+
+
+def test_legacy_asset_urls_stay_with_their_pane_and_charge_expansion(monkeypatch):
+    source = b'''<script src="/assets/app.js"></script> new Worker('/assets/worker.js')
+        new URL("/assets/sort.wasm", import.meta.url); "/logo.svg"; "/manifest.json";
+        "https://example.org/assets/remote.js"; "./assets/relative.js"'''
+    reservations = []
+    first = VISER_PROXY_PREFIX + "first/"
+    second = VISER_PROXY_PREFIX + "second/"
+    rewritten = _rebase_assets(source, first, lambda size: reservations.append(size) or True)
+    assert rewritten.count(first.encode()) == 5
+    assert b'"https://example.org/assets/remote.js"' in rewritten
+    assert b'"./assets/relative.js"' in rewritten
+    assert reservations == [len(source) + 2 * len(rewritten)]
+    assert first.encode() not in _rebase_assets(source, second, lambda _: True)
+    assert _rebase_assets(source, first, lambda _: False) is None
+    monkeypatch.setattr("leika.infra._viser_proxy._MAX_HTTP_BYTES", len(source))
+    assert _rebase_assets(source, first, lambda _: True) is None
+
+
+def test_proxy_preserves_encoded_binary_representations_and_ranges(protected):
+    payload = gzip.compress(b"binary scene asset")
+    response = Response(
+        206,
+        "Partial Content",
+        Headers({"Content-Encoding": "gzip", "Content-Range": "bytes 0-3/10", "ETag": '"asset"'}),
+        payload,
+    )
+    with backend(response) as (target, requests, _):
+        pane = protected.panes.add_viser(target)
+        status, headers, body = get(
+            protected,
+            pane.url + "asset.bin",
+            dict(login(protected), **{"Range": "bytes=0-3", "Accept-Encoding": "gzip"}),
+        )
+        assert status == 206 and body == payload
+        assert headers["Content-Encoding"] == "gzip"
+        assert headers["Content-Range"] == "bytes 0-3/10"
+        assert headers["ETag"] == '"asset"'
+        assert requests[0].headers["Range"] == "bytes=0-3"
+        assert requests[0].headers["Accept-Encoding"] == "gzip"
+
+
+def test_proxy_never_follows_http_or_websocket_redirects(protected):
+    with backend() as (destination, reached, _):
+        response = Response(
+            302, "Found", Headers({"Location": f"http://127.0.0.1:{destination.get_port()}/"})
+        )
+        with backend(response) as (target, _, _):
+            pane = protected.panes.add_viser(target)
+            cookie = login(protected)
+            status, headers, _ = get(protected, pane.url, cookie)
+            assert status == 302
+            assert "Location" not in headers
+            with connect(websocket_url(protected, pane), additional_headers=cookie) as ws:
+                with pytest.raises(ConnectionClosed) as error:
+                    ws.recv(timeout=5)
+                assert error.value.rcvd.code == 1011
+        assert reached == []
+
+
+def test_shutdown_closes_proxy_sockets_and_http_pool(protected):
+    with backend() as (target, _, _):
+        pane = protected.panes.add_viser(target)
+        cookie = login(protected)
+        assert get(protected, pane.url, cookie)[0] == 200
+        proxy = protected._websock_server._viser_proxy
+        assert proxy._session is not None
+        with connect(websocket_url(protected, pane), additional_headers=cookie) as ws:
+            ws.send(msgspec.msgpack.encode({"type": "Camera"}))
+            ws.recv(timeout=5)
+            protected.stop()
+            with pytest.raises(ConnectionClosed):
+                ws.recv(timeout=5)
+        assert proxy._session is None
+        assert all(not endpoint.connections for endpoint in proxy._endpoints.values())

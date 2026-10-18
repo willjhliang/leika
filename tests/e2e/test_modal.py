@@ -15,7 +15,7 @@ from playwright.sync_api import Browser, Locator, Page, expect
 
 import leika
 
-from .utils import assert_stable_viewer
+from .utils import assert_dialog_on_top
 
 
 def dialog(page: Page) -> Locator:
@@ -107,7 +107,7 @@ def test_a_preview_opened_from_a_modal_owns_the_top_layer(
 
     viewer = leika_page.locator('[data-slot="dialog-content"][data-dialog-presentation="viewer"]')
     expect(viewer).to_be_visible(timeout=5_000)
-    assert_stable_viewer(viewer)
+    assert_dialog_on_top(viewer)
     expect(viewer).to_be_focused(timeout=5_000)
 
     # Escape closes only the topmost viewer and returns to the modal beneath.

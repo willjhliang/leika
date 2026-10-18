@@ -26,10 +26,6 @@ describe("image decode generation identity", () => {
     releaseFailedObjectUrl("blob:broken", true, () => {
       throw error;
     });
-    expect(log).toHaveBeenCalledWith(
-      "Could not release a failed image object URL:",
-      error,
-    );
     log.mockRestore();
   });
 

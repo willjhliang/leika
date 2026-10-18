@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { useViewer } from "../ViewerContext";
-import { VideoPlaybackControls } from "./VideoPlaybackControls";
+import { PlaybackControls } from "./PlaybackControls";
 import { videoPlaybackKey } from "./videoPlayback";
 import type { ViewportVideoPane } from "./ViewportState";
 
@@ -51,7 +51,7 @@ const Video = memo(function Video({ pane }: { pane: ViewportVideoPane }) {
         }}
       />
       {options.controls && (
-        <VideoPlaybackControls
+        <PlaybackControls
           playback={playback}
           playerRef={playerRef}
           label={options.title}

@@ -28,7 +28,6 @@ def test_general_pane_replaces_content_and_replay_without_changing_identity(serv
     assert server.panes._handle_from_pane_id["slot-0"] is pane
     assert pane.title == "Slot 0"
     pane.clear(loading="Waiting")
-    assert isinstance(pane._impl, _panes._EmptyPaneHandleState)
     assert pane.loading == "Waiting"
     messages = retained(server)
     declarations = [m for m in messages if isinstance(m, _messages.ViewportPaneMessage)]
@@ -84,7 +83,6 @@ def test_clear_rejects_inflight_image_work(server, monkeypatch, operation):
             release.set()
         with pytest.raises(RuntimeError, match="removed|changed"):
             result.result(timeout=5)
-    assert isinstance(pane._impl, _panes._EmptyPaneHandleState)
     assert server.panes._resource_total.decoded_pixels == 0
     assert not any(isinstance(m, _messages.ViewportImageMessage) for m in retained(server))
 
@@ -117,7 +115,6 @@ def test_replace_at_pane_limit_and_viser_limit(server, monkeypatch):
     first.set_viser("https://example.com/second")
     with pytest.raises(RuntimeError, match="viser panes"):
         second.set_viser("https://example.com/third")
-    assert isinstance(second._impl, _panes._EmptyPaneHandleState)
     first.clear()
     second.set_viser("https://example.com/third")
     assert server.panes._aggregate.live_panes == 2
@@ -169,13 +166,13 @@ def test_matplotlib_and_plotly_can_share_one_pane(server):
     pane = server.panes.add_pane()
     figure = Figure()
     pane.set_matplotlib(figure)
-    assert isinstance(pane._impl, _panes._MatplotlibPaneHandleState)
+    assert any(isinstance(m, _messages.ViewportMatplotlibMessage) for m in retained(server))
     old = pane._content
     pane.clear()
     assert old._impl.figure_ref is None
     go = pytest.importorskip("plotly.graph_objects")
     pane.set_plotly(go.Figure(), config={"displayModeBar": False})
-    assert isinstance(pane._impl, _panes._PlotlyPaneHandleState)
+    assert any(isinstance(m, _messages.ViewportPlotlyMessage) for m in retained(server))
     pane.clear()
     pane.set_image(np.zeros((2, 3, 3), np.uint8))
 

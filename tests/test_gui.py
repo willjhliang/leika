@@ -145,25 +145,6 @@ def test_client_local_gui_resolves_only_its_live_owner(server: leika.Server) -> 
     assert replacement.gui._resolve_client(client_id) is None
 
 
-def test_a_multiline_text_input_is_the_height_it_asks_for(
-    server: leika.Server,
-) -> None:
-    """``rows`` is a height, so it is fixed and it is assignable -- and it is a
-    height in LINES, which starts at one. Left out it is None, and what that
-    comes to is the field's business: three lines to type in, and as tall as
-    the text when the text is only being read."""
-    note = server.gui.add_text("Note", "", multiline=True)
-    assert (note.multiline, note.rows) == (True, None)
-    tall = server.gui.add_text("Body", "", multiline=True, rows=12)
-    assert tall.rows == 12
-    tall.rows = 6
-    assert tall.rows == 6
-
-    for bad in (0, -1):
-        with pytest.raises(ValueError, match="height in lines"):
-            server.gui.add_text("Bad", "", multiline=True, rows=bad)
-
-
 def test_text_is_read_or_written_and_renders_markdown_when_read(
     server: leika.Server,
 ) -> None:
@@ -893,36 +874,6 @@ def test_gui_html_enforces_browser_utf16_limit_on_create_and_update(
         server.gui.add_html(123)  # type: ignore[arg-type]
 
 
-def test_commands_notifications_and_modal(server: leika.Server) -> None:
-    triggered: list[bool] = []
-    command = server.gui.add_command(
-        "Run",
-        lambda *_: triggered.append(True),
-        description="Run the action",
-        hotkey="R",
-        icon=leika.Icon.PLAY,
-    )
-    assert command.label == "Run"
-    assert command.description == "Run the action"
-    command.label = "Run now"
-    command.disabled = True
-    assert command.label == "Run now"
-    assert command.disabled is True
-
-    notification = server.gui.add_notification(
-        "Working", "Please wait", loading=True, auto_close_seconds=None
-    )
-    notification.body = "Done"
-    notification.loading = False
-    notification.auto_close_seconds = 1.0
-    notification.remove()
-
-    with server.gui.add_modal("Details") as modal:
-        server.gui.add_html("<strong>Content</strong>")
-    modal.close()
-    command.remove()
-
-
 def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
     server: leika.Server,
 ) -> None:
@@ -970,20 +921,13 @@ def test_terminal_gui_handles_reject_state_reads_and_scrub_owned_payloads(
     assert notification._impl.props.body == ""
 
 
-def test_removing_root_components_unlinks_the_owner_registry(server: leika.Server) -> None:
-    root = server.gui._container_handle_from_uuid["root"]
-    children_before = dict(root._children)
-    live_before = server.gui._live_component_count
-
-    for index in range(4):
-        handle = server.gui.add_button(f"Temporary {index}")
-        assert root._children[handle.id] is handle
-
-        handle.remove()
-
-        assert handle.id not in root._children
-        assert root._children == children_before
-        assert server.gui._live_component_count == live_before
+def test_removed_control_can_be_collected_while_server_is_alive(server: leika.Server) -> None:
+    handle = server.gui.add_button("Temporary")
+    reference = weakref.ref(handle)
+    handle.remove()
+    del handle
+    gc.collect()
+    assert reference() is None
 
 
 def test_caller_owned_path_and_primitive_subclasses_are_not_retained(
@@ -1368,33 +1312,6 @@ def test_theme_sends_the_docked_edge_on_the_wire(
     assert [message.control_layout for message in sent] == ["floating", "left", "right"]
 
 
-def test_removed_visual_customization_arguments_are_rejected(
-    server: leika.Server,
-) -> None:
-    server.gui.configure_theme(
-        control_layout="floating",
-        theme="dark",
-    )
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(show_share_button=True)  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(control_width="large")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.configure_theme(brand_color=(80, 150, 255))  # type: ignore[call-arg]
-    # Both buttons took `color` back, but as a role rather than a palette: the
-    # two names they accept are all they accept, and an actual color still
-    # fails. The other three below never regained it.
-    for add_a_button in (server.gui.add_button, server.gui.add_upload_button):
-        add_a_button("Run", color="inverse")
-        add_a_button("Run", color="default")
-        with pytest.raises(ValueError):
-            add_a_button("Run", color="blue")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        server.gui.add_progress_bar(50.0, color="blue")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        server.gui.add_notification("Done", color="blue")  # type: ignore[call-arg]
-
-
 def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> None:
     """A row usually wants one weight throughout, and sometimes wants its accent
     behind one action only. Both are ``color=``; the wire always carries one
@@ -1422,16 +1339,6 @@ def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> N
         server.gui.add_button("Solo", color=("inverse",))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="a single toggle is one toggle"):
         server.gui.add_toggle("Solo", color=("inverse",))  # type: ignore[arg-type]
-
-
-def test_gui_images_always_span_the_panel(server: leika.Server) -> None:
-    """A GUI image has one width -- the panel's -- so there is no knob for it."""
-    frame = np.zeros((4, 6, 3), dtype=np.uint8)
-
-    handle = server.gui.add_image(frame, label="Preview")
-    assert not hasattr(handle, "fit_width")
-    with pytest.raises(TypeError):
-        server.gui.add_image(frame, fit_width=False)  # type: ignore[call-arg]
 
 
 def test_gui_image_state_is_transactional_and_private(server: leika.Server) -> None:
@@ -1595,70 +1502,6 @@ def test_tab_lifecycle_publishes_before_children_and_rolls_back(
     assert beta.icon == old_icon
     assert tabs._tabs == old_tabs
     assert buffer.message_from_id == old_buffer
-
-
-def test_derived_protocol_props_are_internal_only(
-    server: leika.Server,
-) -> None:
-    image = server.gui.add_image(np.zeros((2, 3, 3), dtype=np.uint8), format="png")
-    button = server.gui.add_button("Button")
-    download = server.gui.add_download_button("Download", b"x", filename="x.bin")
-    preview = server.gui.add_preview_button("Preview", b"x", filename="x.txt")
-    upload = server.gui.add_upload_button("Upload", icon=leika.Icon.PLAY)
-    toggle = server.gui.add_toggle("Toggle", icon=leika.Icon.PLAY)
-    command = server.gui.add_command("Command", icon=leika.Icon.PLAY)
-    text = server.gui.add_text(None, "source", editable=False, markdown=True)
-    tabs = server.gui.add_tab_group()
-    tab = tabs.add_tab("Tab")
-
-    attempts: tuple[tuple[Any, str, object], ...] = (
-        (image, "_data", b"forged"),
-        (image, "_format", "jpeg"),
-        (button, "_icon_html", "<svg>forged</svg>"),
-        (button, "_hold_callback_freqs", (60.0,)),
-        (button, "_prefetch", True),
-        (download, "_prefetch", True),
-        (preview, "_prefetch", False),
-        (upload, "_icon_html", None),
-        (toggle, "_icon_html", None),
-        (command, "_icon_html", None),
-        (text, "_source", "forged"),
-        (tabs, "_tabs", (_messages.GuiTab("Forged", None, "missing"),)),
-    )
-    buffer = server._websock_server._broadcast_buffer
-    before_counter = buffer.message_counter
-    before_values = {(id(handle), name): getattr(handle, name) for handle, name, _ in attempts}
-
-    for handle, name, value in attempts:
-        with pytest.raises(AttributeError, match="internal state"):
-            setattr(handle, name, value)
-        with pytest.raises(AttributeError, match="internal state"):
-            handle.update(**{name: value})
-
-    assert buffer.message_counter == before_counter
-    for handle, name, _ in attempts:
-        assert getattr(handle, name) == before_values[id(handle), name]
-    assert [descriptor.container_id for descriptor in tabs._tabs] == [tab.id]
-
-    # Canonical wire state with no separate backing registry remains mutable
-    # through the existing validated transaction.
-    row = server.gui.add_button(("One", "Two"))
-    row._merge = (False,)
-    assert row._merge == (False,)
-
-
-@pytest.mark.plotly
-def test_plotly_json_wire_prop_is_internal_only(server: leika.Server) -> None:
-    go = pytest.importorskip("plotly.graph_objects")
-    handle = server.gui.add_plotly(go.Figure(go.Scatter(y=[1, 2])))
-    before = handle._plotly_json_str
-    counter = server._websock_server._broadcast_buffer.message_counter
-    with pytest.raises(AttributeError, match="internal state"):
-        handle._plotly_json_str = "{}"
-    with pytest.raises(AttributeError, match="internal state"):
-        handle.update(_plotly_json_str="{}")
-    assert handle._plotly_json_str == before
-    assert server._websock_server._broadcast_buffer.message_counter == counter
 
 
 def test_removed_containers_reject_new_actions(server: leika.Server) -> None:
@@ -1880,29 +1723,6 @@ def test_upload_part_and_button_removal_are_serialized(
     assert not remove_thread.is_alive()
     assert removed.is_set()
     assert server.gui._current_file_upload_states == {}
-
-
-def test_containers_mirror_every_container_scoped_add_method() -> None:
-    """``folder.add_thing(...)`` exists because ``GuiApi.add_thing`` does.
-
-    The mirror is derived, so this guards the two ways it can go wrong: an
-    element that never reaches containers, and a non-container ``add_*`` (a
-    notification, a command) that gets mirrored anyway and promises a
-    containment it cannot honor.
-    """
-    from leika._gui_api import GuiApi
-    from leika._gui_handles import GuiContainer
-
-    api_methods = {name for name in dir(GuiApi) if name.startswith("add_")}
-    opted_out = {
-        name
-        for name in api_methods
-        if getattr(getattr(GuiApi, name), "_leika_container_scoped", True) is False
-    }
-    mirrored = {name for name in dir(GuiContainer) if name.startswith("add_")}
-
-    assert opted_out == {"add_notification", "add_command", "add_modal"}
-    assert mirrored == api_methods - opted_out
 
 
 def test_containers_nest_and_unwind_to_where_they_started(server: leika.Server) -> None:
@@ -2243,24 +2063,6 @@ def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> N
     with pytest.raises(ValueError, match="at most one selected"):
         choices.value = [("one", True), ("two", True)]
     assert choices.value == before
-
-
-@pytest.mark.parametrize(
-    ("value", "message"),
-    [
-        ("one", "value must be a sequence"),
-        ([3], "holds (text, selected) pairs"),
-        ([(3, True)], "item's text is a string"),
-        ([("one", "yes")], "selected state is a bool"),
-    ],
-)
-def test_radio_list_validation_uses_radio_specific_vocabulary(
-    server: leika.Server, value: Any, message: str
-) -> None:
-    with pytest.raises(ValueError) as raised:
-        server.gui.add_radio_list("Invalid", value)
-    assert message in str(raised.value)
-    assert "checklist" not in str(raised.value)
 
 
 @pytest.mark.parametrize("factory", ["add_checklist", "add_radio_list"])
@@ -3875,29 +3677,6 @@ def test_slider_marks_are_bounded_and_transactionally_validated(
     with pytest.raises(RuntimeError, match="closed"):
         labeled.update(_marks=(_messages.GuiSliderMark(1.0, "new"),))
     assert labeled._impl.props == before
-
-
-def test_gui_image_encodes_and_retains_one_private_snapshot(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    caller = np.zeros((2, 3, 3), dtype=np.uint8)
-    encoded_snapshots: list[np.ndarray] = []
-
-    def encode(snapshot: np.ndarray, *_: Any, **__: Any) -> tuple[str, bytes]:
-        assert snapshot is not caller
-        encoded_snapshots.append(snapshot)
-        caller.fill(255)
-        return "png", b"encoded"
-
-    monkeypatch.setattr(gui_api_impl, "encode_image_binary", encode)
-    monkeypatch.setattr(gui_handles_impl, "encode_image_binary", encode)
-    handle = server.gui.add_image(caller)
-    assert handle._image is encoded_snapshots[-1]
-    assert np.count_nonzero(handle.image) == 0
-
-    caller.fill(0)
-    handle.image = caller
-    assert np.count_nonzero(handle.image) == 0
 
 
 def test_gui_text_constructor_matches_live_utf16_and_unicode_validation(

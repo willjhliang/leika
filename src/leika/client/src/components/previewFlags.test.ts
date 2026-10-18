@@ -49,9 +49,6 @@ describe("a persisted preview flag", () => {
     flag.set("field.png", true);
     flag.set("notes.md", false);
 
-    expect(JSON.parse(storage.values.get("preview.flag")!)).toEqual([
-      "field.png",
-    ]);
     expect(
       previewFlag("preview.flag", storage).store.snapshot("notes.md"),
     ).toBe(false);

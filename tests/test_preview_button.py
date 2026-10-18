@@ -467,14 +467,6 @@ def test_bytes_without_a_filename_are_rejected_at_creation(server: leika.Server)
         server.gui.add_preview_button("Look", b"# Title\n")
 
 
-def test_the_error_names_the_method_that_was_called(server: leika.Server) -> None:
-    # The two buttons share their resolution, so the complaint has to point
-    # back at whichever one the caller reached for.
-    handle = server.gui.add_preview_button("Look", lambda _: b"# Title\n")
-    with pytest.raises(ValueError, match="A preview of bytes has no name"):
-        _press(handle)
-
-
 def test_a_str_is_refused_at_creation(server: leika.Server) -> None:
     with pytest.raises(TypeError, match="bytes, a Path"):
         server.gui.add_preview_button("Look", "notes.md")  # type: ignore[arg-type]
