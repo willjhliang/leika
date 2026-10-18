@@ -153,28 +153,32 @@ def test_high_level_stop_is_safe_from_the_server_event_loop() -> None:
         server.stop()
 
 
-def test_stop_on_the_event_loop_still_runs_disconnect_callbacks() -> None:
+def test_stop_on_the_event_loop_keeps_the_callback_pool_for_teardown(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     connected = threading.Event()
-    disconnected = threading.Event()
     server.on_client_connect(lambda _: connected.set())
-    server.on_client_disconnect(lambda _: disconnected.set())
+    server.on_client_disconnect(lambda _: None)
 
     async def stop_inside_event_loop() -> None:
         server.stop()
 
-    try:
-        with connect(
-            f"ws://127.0.0.1:{server.port}",
-            subprotocols=[PROTOCOL],
-            open_timeout=2,
-        ):
-            assert connected.wait(2.0)
-            asyncio.run_coroutine_threadsafe(stop_inside_event_loop(), server._event_loop).result(2)
-            assert disconnected.wait(2.0)
-    finally:
-        server.stop()
+    with connect(
+        f"ws://127.0.0.1:{server.port}",
+        subprotocols=[PROTOCOL],
+        open_timeout=2,
+    ):
+        assert connected.wait(2.0)
+        asyncio.run_coroutine_threadsafe(stop_inside_event_loop(), server._event_loop).result(2)
+        deadline = time.monotonic() + 3.0
+        while not server._thread_executor._shutdown and time.monotonic() < deadline:
+            time.sleep(0.01)
+    server_thread = server._websock_server._server_thread
+    assert server_thread is not None and not server_thread.is_alive()
     assert server._thread_executor._shutdown
+    # Disconnect teardown submitted its callbacks before the pool shut down.
+    assert "cannot schedule new futures" not in capsys.readouterr().err
 
 
 def test_high_level_stop_from_sync_connection_callback_returns_promptly() -> None:
