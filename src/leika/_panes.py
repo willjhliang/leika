@@ -1366,6 +1366,12 @@ class Panes(_PaneAdder):
                 return pane_id
         return None
 
+    def _ack_refresh(self, gui_uuid: str, request_id: str, client_id: int) -> None:
+        """Settle a browser's refresh edit on every pane bound to that input."""
+        with self._lock:
+            for handle in tuple(self._handle_from_pane_id.values()):
+                handle._ack_refresh(gui_uuid, request_id, client_id)
+
     def _snapshot_message(
         self, pane_ids: tuple[str, ...] | None = None
     ) -> _messages.ViewportPaneSnapshotMessage:

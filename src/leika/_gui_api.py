@@ -446,10 +446,7 @@ class GuiApi:
             # A no-op or rejected value must also settle local invalidation.
             # The barrier and snapshot share the broadcast producer's ordering.
             for page in self._server.pages:
-                with page.panes._lock:
-                    handles = tuple(page.panes._handle_from_pane_id.values())
-                for handle in handles:
-                    handle._ack_refresh(message.uuid, message.request_id, client_id)
+                page.panes._ack_refresh(message.uuid, message.request_id, client_id)
 
     async def _handle_gui_updates(
         self,
