@@ -103,22 +103,25 @@ Each outcome is reviewed, validated and committed with its tests and docs.
    the docking library is one control panel; development uses one pip
    environment, `make` targets, `scripts/generate.py` and the minimal release
    flow.
-2. **Wave 2a, running.** Python server, panes and shared content helpers
-   (ledgers and budgets out, one image preparation, one pane adder and content
-   layer, one Plotly serializer and runtime delivery, server file sends through
-   the client path). In parallel, the browser client (budgets and
-   re-validation out, one receive path without pacing, one image component,
-   one Plotly loader, batched GUI actions only, one dark-mode source, dead
-   code).
-3. **Wave 2b.** The Python GUI layer (ledger out, one validation per
-   component, one update, lifecycle and callback implementation, upload
-   pipeline, dead code). In parallel, rendering presets end to end
-   (Python, messages, Settings, pane-size reporting, `delivery_backpressure`,
-   the resize re-broadcast, Viser `_port`).
-4. **Wave 3.** Merge overlapping controls end to end, with the aliases, and
-   roll the API out to Babble, do_anything and lwm.
-5. **Wave 4.** Make the docs describe current behavior, then run full
-   validation (unit, browser, docs, package) and a final review.
+2. **Wave 2a (merged at `0a0edf9`).** Python server, panes and content helpers
+   without ledgers (one image preparation, one pane adder and content handle,
+   one Plotly serializer with a replayed runtime, file sends through each
+   client); the browser client without budgets or re-validation (WebSocket on
+   the main thread, one image component, one Plotly loader, one dark-mode
+   hook, one `addPane`). 657 Python, 357 client, 209 browser tests pass.
+3. **Wave 2b, running.** One agent: the Python GUI layer (ledger out, one
+   update/validation/lifecycle path) plus merging overlapping controls end to
+   end with the aliases. Beside it: rendering presets end to end (also
+   pane-size reporting, `delivery_backpressure`, Viser `_port`, the frame
+   `timestampSec`, and the root-pane sentinel if modest).
+4. **Wave 4.** Make the docs describe current behavior, run full validation and
+   a final review, then roll out to the consumers.
+
+Open review notes for the final pass: rows, columns and grids accept then
+reject `placement`/`relative_to` (shared adder signature);
+`PlotlyComponent` still reports malformed server JSON and invalid aspects
+(client re-validation); Viser 0.2.11 requests a font at the server root (a
+cosmetic 404 outside the proxy path).
 
 Local work uses the `leika` conda environment (Python 3.13 and Node 24 from
 conda-forge, Leika installed editable with
@@ -147,8 +150,7 @@ change.
 
 ## Next actions
 
-Wave 2a is running: Python server and panes, and the browser client. Review
-and merge both, then start wave 2b.
+Wave 2b is running in two worktrees. Review and merge both, then wave 4.
 
 Roll out to all three consumers after the final merge of this series.
 
