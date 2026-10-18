@@ -265,10 +265,9 @@ export function normalizeViewportLayout(value: unknown): ViewportLayout {
 export function reconcileViewportLayout(
   value: unknown,
   visiblePaneIds: readonly string[],
-  rootPaneId = VIEWPORT_ROOT_PANE_ID,
   rootVisible = true,
 ): ViewportLayout {
-  if (!isBoundedLayoutId(rootPaneId)) rootPaneId = VIEWPORT_ROOT_PANE_ID;
+  const rootPaneId = VIEWPORT_ROOT_PANE_ID;
   const contentPaneIds: string[] = [];
   const uniquePaneIds = new Set<string>();
   for (const paneId of visiblePaneIds) {

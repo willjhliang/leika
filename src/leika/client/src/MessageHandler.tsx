@@ -23,7 +23,6 @@ import {
   type GuiStateMessage,
 } from "./ControlPanel/GuiState";
 import { useViewer } from "./ViewerContext";
-import { filterPageStreamMessages } from "./pageStreamProjection";
 import {
   FileTransferAbort,
   FileTransferPart,
@@ -124,22 +123,12 @@ function useMessageHandler(): (messages: readonly Message[]) => void {
           return;
         case "ViewportPaneMessage":
         case "ViewportEmptyMessage":
-          viewer.viewportActions.addEmptyPane(message);
-          return;
         case "ViewportImageMessage":
-          viewer.viewportActions.addImagePane(message);
-          return;
         case "ViewportMatplotlibMessage":
-          viewer.viewportActions.addMatplotlibPane(message);
-          return;
         case "ViewportPlotlyMessage":
-          viewer.viewportActions.addPlotlyPane(message);
-          return;
         case "ViewportVideoMessage":
-          viewer.viewportActions.addVideoPane(message);
-          return;
         case "ViewportViserMessage":
-          viewer.viewportActions.addViserPane(message);
+          viewer.viewportActions.addPane(message);
           return;
         case "ViewportPaneUpdateMessage":
           viewer.viewportActions.updatePane(
@@ -220,19 +209,7 @@ export function MessageHandler() {
     const processQueue = () => {
       const queue = viewer.mutable.current.messageQueue;
       if (queue.messageCount === 0) return;
-      return processMessageQueueSlice(queue, (rawBatch) => {
-        const batch = filterPageStreamMessages(
-          rawBatch,
-          viewer.useViewport.get(),
-        );
-        if (batch.length === 0) return true;
-        const failure =
-          viewer.viewportActions.preflightMessageBatch(batch) ??
-          viewer.viewportActions.prepareMessageBatch(batch);
-        if (failure !== null) {
-          viewer.mutable.current.failConnection(failure);
-          return false;
-        }
+      return processMessageQueueSlice(queue, (batch) => {
         handleMessages(batch);
         return true;
       });

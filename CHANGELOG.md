@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Browser: panes apply exactly as the server sends them, without browser pane
+  limits; a cached page is no longer evicted early under memory pressure.
+  Pane layouts saved by Leika 0.3 (version 2) are no longer migrated, so such
+  a default page starts once from its creation-time placement.
 - Browser: GUI controls, modals, commands and notifications apply exactly as
   the server sends them. The client no longer enforces its own count and size
   limits on them or drops the connection over them, and a notification shown

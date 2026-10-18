@@ -98,7 +98,8 @@ runtime orchestration; see [Development](development.md) for their entry points.
    and keeps an independent pane layout for every page.
 4. Changing pages sends an internal, generation-tagged subscription. The
    server replays retained state for that page, then streams its live updates;
-   stale frames from a rapid switch are rejected before browser preflight.
+   the browser applies pane messages only to the stream it subscribed to, so
+   stale frames from a rapid switch are ignored.
 5. GUI input changes update local state optimistically before the event is sent
    to Python.
 6. Python updates the authoritative handle and broadcasts it to the other
@@ -106,12 +107,11 @@ runtime orchestration; see [Development](development.md) for their entry points.
    slider from flickering through an older round-trip value.
 
 On a retryable connection loss, the viewport retains its displayed page in the
-existing bounded transition slot while a fresh catalog and page stream replay.
+existing transition slot while a fresh catalog and page stream replay.
 Matching pane IDs and renderer sources keep their mounted browser elements,
 including local video playback state and Viser's iframe. Replayed state remains
 authoritative: removed panes disappear, changed sources update, and a different
-server or workspace clears the retained page. Memory admission can evict the
-snapshot under pressure. Transfers and GUI controls still reset per connection;
+server or workspace clears the retained page. Transfers and GUI controls still reset per connection;
 retained renderers keep their resource leases until replaced or unmounted.
 
 Named pages partition the viewport state, not the whole application. The GUI
@@ -119,13 +119,11 @@ tree and control panel are workspace-global and stay mounted as the viewer
 switches pages. Inactive-page pane state remains retained on the server, but its
 payload is not serialized or sent to that browser until the page is selected.
 The browser preserves every page's layout and may retain one inactive page's
-detached source model as a bounded warm cache. That hidden cache has no renderer
-DOM or Viser connection. During a switch exactly one stale model -- the cached
-target, or the outgoing page on a cold miss -- may remain visibly mounted but
-inert while the authoritative target replays into separate staging state.
-Matching `Ready`
-atomically promotes that state; resource pressure may evict the stale model and
-temporarily expose the loading surface.
+detached source model as a warm cache. That hidden cache has no renderer DOM or
+Viser connection. During a switch exactly one stale model -- the cached target,
+or the outgoing page on a cold miss -- may remain visibly mounted but inert
+while the authoritative target replays into separate staging state. Matching
+`Ready` atomically promotes that state.
 
 `server.atomic()` is a queue-emission barrier: no message queued inside it is
 emitted until the outermost context exits, and message order is preserved.
@@ -294,11 +292,6 @@ panel follows `configure_theme(control_layout=...)`. These namespaces avoid
 collisions between servers and pages. Stable `page_id` and `pane_id` values let
 saved state recognize a page and its panes after a Python restart; display names
 and pane titles may change without changing layout identity.
-
-The default page provides the compatibility bridge from the former one-page
-model. If it has no version-3 layout, the client reads the version-2 layout for
-the same server URL and `workspace_id`, normalizes it, and saves it under the
-default page's version-3 key. Other pages never consume the old layout.
 
 Public `workspace_id`, explicit `page_id`, and explicit `pane_id` values are
 nonempty valid Unicode, at most 1,024 UTF-16 code units, and cannot be the

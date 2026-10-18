@@ -24,10 +24,6 @@ export function ViewportPaneHost({
   motionEnabled,
   hideChrome,
   onHeaderPointerDown,
-  onHeaderPointerMove,
-  onHeaderPointerUp,
-  onHeaderPointerCancel,
-  onHeaderLostPointerCapture,
   onHeaderKeyDown,
 }: {
   pageId: string | null;
@@ -42,10 +38,6 @@ export function ViewportPaneHost({
     event: React.PointerEvent<HTMLElement>,
     paneId: string,
   ) => void;
-  onHeaderPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
-  onHeaderLostPointerCapture: (event: React.PointerEvent<HTMLElement>) => void;
   onHeaderKeyDown: (
     event: React.KeyboardEvent<HTMLElement>,
     paneId: string,
@@ -211,10 +203,6 @@ export function ViewportPaneHost({
           // hidden, only a pointer over the strip the bar occupies reveals it.
           onPointerEnter={() => setIsHovered(true)}
           onPointerLeave={() => setIsHovered(false)}
-          onPointerMove={onHeaderPointerMove}
-          onPointerUp={onHeaderPointerUp}
-          onPointerCancel={onHeaderPointerCancel}
-          onLostPointerCapture={onHeaderLostPointerCapture}
           // Dock chrome on a pane: the dock's card surface, square corners
           // (every corner of the bar sits on a pane seam), and the muted
           // field-label type the dock's rows use. Focus is border-only, like

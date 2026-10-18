@@ -15,16 +15,8 @@ import {
   removeViewportPane,
   sameViewportLayout,
 } from "./layoutModel";
-import {
-  isBoundedLayoutId,
-  parseBoundedPersistedJson,
-} from "../persistenceLimits";
-import { commonRendererStringWithinLimit } from "../guiLimits";
+import { parseBoundedPersistedJson } from "../persistenceLimits";
 import type { Message } from "../WebsocketMessages";
-import {
-  MAX_LIVE_VIEWPORT_CONTENT_PANES,
-  viewportPanesWithinAggregateLimits,
-} from "./viewportLimits";
 
 export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
@@ -189,59 +181,20 @@ export function isViewportPageReady(state: ViewportState): boolean {
   );
 }
 
-export interface ViewportEmptyDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportEmptyProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
-export interface ViewportImageDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportImageProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
-export interface ViewportMatplotlibDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportMatplotlibProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
-export interface ViewportPlotlyDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportPlotlyProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
-export interface ViewportVideoDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportVideoProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
-
-export interface ViewportViserDeclaration {
-  page_id: string;
-  pane_id: string;
-  props: ViewportViserProps;
-  placement: ViewportPanePlacement;
-  relative_to: string;
-  equalize_group: readonly string[];
-}
+/** The wire messages that declare a pane or replace its content. */
+export type ViewportPaneCreateMessage = Extract<
+  Message,
+  {
+    type:
+      | "ViewportPaneMessage"
+      | "ViewportEmptyMessage"
+      | "ViewportImageMessage"
+      | "ViewportMatplotlibMessage"
+      | "ViewportPlotlyMessage"
+      | "ViewportVideoMessage"
+      | "ViewportViserMessage";
+  }
+>;
 
 // A union of Partials rather than a Partial of an intersection, so that
 // same-named props with different types never collapse across pane kinds.
@@ -254,8 +207,6 @@ export type ViewportPaneUpdates =
   | Partial<ViewportVideoProps>;
 
 export interface ViewportActions {
-  /** Clear all temporal pane state, including layout (used by file playback). */
-  reset: () => void;
   /** Clear pane contents for a new connection while retaining browser layout. */
   resetPanes: () => void;
   /** Retain the displayed page while a connection replays its catalog. */
@@ -271,12 +222,7 @@ export interface ViewportActions {
   beginPageSubscription: (pageId: string, generation: number) => void;
   beginPageStream: (pageId: string, generation: number) => void;
   finishPageStream: (pageId: string, generation: number) => void;
-  addEmptyPane: (message: ViewportEmptyDeclaration) => void;
-  addImagePane: (message: ViewportImageDeclaration) => void;
-  addMatplotlibPane: (message: ViewportMatplotlibDeclaration) => void;
-  addPlotlyPane: (message: ViewportPlotlyDeclaration) => void;
-  addVideoPane: (message: ViewportVideoDeclaration) => void;
-  addViserPane: (message: ViewportViserDeclaration) => void;
+  addPane: (message: ViewportPaneCreateMessage) => void;
   updatePane: (
     pageId: string,
     paneId: string,
@@ -286,10 +232,6 @@ export interface ViewportActions {
   removePane: (pageId: string, paneId: string) => void;
   setPaneSnapshot: (pageId: string, paneIds: readonly string[]) => void;
   commitUserLayout: (layout: ViewportLayout) => void;
-  /** Pure admission for viewport state owned by one original wire frame. */
-  preflightMessageBatch: (messages: readonly Message[]) => string | null;
-  /** Admit a wire frame, evicting inactive warm pages only under pressure. */
-  prepareMessageBatch: (messages: readonly Message[]) => string | null;
 }
 
 export interface ViewportLayoutStorage {
@@ -298,10 +240,7 @@ export interface ViewportLayoutStorage {
 }
 
 const STORAGE_KEY_PREFIX = "leika.viewport.layout.v3:";
-const LEGACY_STORAGE_KEY_PREFIX = "leika.viewport.layout.v2:";
 const ACTIVE_PAGE_STORAGE_KEY_PREFIX = "leika.viewport.active-page.v1:";
-
-export const MAX_VIEWPORT_PAGES = 128;
 
 export function viewportLayoutStorageKey(
   serverUrl: string,
@@ -309,13 +248,6 @@ export function viewportLayoutStorageKey(
   pageId = "default",
 ): string {
   return STORAGE_KEY_PREFIX + JSON.stringify([serverUrl, workspaceId, pageId]);
-}
-
-export function legacyViewportLayoutStorageKey(
-  serverUrl: string,
-  workspaceId: string,
-): string {
-  return LEGACY_STORAGE_KEY_PREFIX + serverUrl + ":" + workspaceId;
 }
 
 export function activeViewportPageStorageKey(
@@ -376,7 +308,9 @@ function copyPaneRecord(
   );
 }
 
-function contentPaneFromMessage(message: Message): ViewportContentPane | null {
+function contentPaneFromMessage(
+  message: ViewportPaneCreateMessage,
+): ViewportContentPane {
   switch (message.type) {
     case "ViewportPaneMessage":
     case "ViewportEmptyMessage":
@@ -395,93 +329,7 @@ function contentPaneFromMessage(message: Message): ViewportContentPane | null {
       return { kind: "video", paneId: message.pane_id, props: message.props };
     case "ViewportViserMessage":
       return { kind: "viser", paneId: message.pane_id, props: message.props };
-    default:
-      return null;
   }
-}
-
-function panePropsHaveValidShape(pane: ViewportContentPane): boolean {
-  if (
-    typeof pane.props.title !== "string" ||
-    typeof pane.props.visible !== "boolean" ||
-    (typeof pane.props.loading !== "boolean" &&
-      typeof pane.props.loading !== "string")
-  )
-    return false;
-  const bindings = pane.props._refresh_controls;
-  const revision = pane.props._refresh_revision;
-  const requests = pane.props._refresh_requests;
-  if (
-    requests !== undefined &&
-    (!Array.isArray(requests) ||
-      requests.length > 128 ||
-      requests.some(
-        (id) => typeof id !== "string" || id.length < 1 || id.length > 128,
-      ))
-  )
-    return false;
-  if (
-    bindings !== undefined &&
-    (!Array.isArray(bindings) ||
-      bindings.length > 4096 ||
-      bindings.some((id) => !isBoundedLayoutId(id)) ||
-      new Set(bindings).size !== bindings.length)
-  )
-    return false;
-  if (
-    revision !== undefined &&
-    (!Number.isSafeInteger(revision) || revision < 0)
-  )
-    return false;
-  const propCount =
-    Object.keys(pane.props).length -
-    Number(bindings !== undefined) -
-    Number(revision !== undefined) -
-    Number(requests !== undefined);
-  if (pane.kind === "empty") return propCount === 3;
-  if (pane.kind === "image") {
-    const props = pane.props;
-    return (
-      propCount === 6 &&
-      (props._data === null || props._data instanceof Uint8Array) &&
-      (props._format === "jpeg" || props._format === "png") &&
-      (props.fit === null ||
-        props.fit === "fit" ||
-        props.fit === "fill" ||
-        props.fit === "stretch")
-    );
-  }
-  if (pane.kind === "matplotlib") {
-    const props = pane.props;
-    return propCount === 4 && typeof props._svg === "string";
-  }
-  if (pane.kind === "plotly") {
-    const props = pane.props;
-    return (
-      propCount === 5 &&
-      typeof props._plotly_json_str === "string" &&
-      typeof props._theme_templates === "string"
-    );
-  }
-  if (pane.kind === "video") {
-    const props = pane.props;
-    return (
-      propCount === 10 &&
-      (props.sync_group === null || typeof props.sync_group === "string") &&
-      (props.fps === null || typeof props.fps === "number") &&
-      typeof props._url === "string" &&
-      [props.autoplay, props.loop, props.muted, props.controls].every(
-        (v) => typeof v === "boolean",
-      )
-    );
-  }
-  const props = pane.props;
-  return (
-    propCount === 5 &&
-    (props._url === null || typeof props._url === "string") &&
-    (props._port === null || Number.isSafeInteger(props._port)) &&
-    (props._url === null) !== (props._port === null)
-  );
 }
 
 function detachViewportPaneBinary(
@@ -497,26 +345,6 @@ function detachViewportPaneBinary(
     ...pane,
     props: { ...pane.props, _data: pane.props._data.slice() },
   };
-}
-
-function equalizeGroupIsValid(
-  paneId: string,
-  group: readonly string[],
-): boolean {
-  if (group.length > MAX_LIVE_VIEWPORT_CONTENT_PANES) return false;
-  const unique = new Set<string>();
-  for (const id of group) {
-    if (
-      !isBoundedLayoutId(id) ||
-      id === VIEWPORT_ROOT_PANE_ID ||
-      id === paneId ||
-      unique.has(id)
-    ) {
-      return false;
-    }
-    unique.add(id);
-  }
-  return true;
 }
 
 function paneIsVisible(pane: ViewportPane | undefined): boolean {
@@ -555,27 +383,7 @@ function reconcilePaneLayout(
   const paneIds = retainedPaneIds(layout, panes, authoritativePaneIds).filter(
     (paneId) => paneId !== omittedPaneId,
   );
-  return reconcileViewportLayout(
-    layout,
-    paneIds,
-    VIEWPORT_ROOT_PANE_ID,
-    rootPaneIsVisible(panes),
-  );
-}
-
-type PageProjection = {
-  panes: Map<string, ViewportContentPane>;
-  authoritativePaneIds: Set<string> | null;
-  isDefault: boolean;
-  name: string;
-};
-
-function pageNameIsValid(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    commonRendererStringWithinLimit(value)
-  );
+  return reconcileViewportLayout(layout, paneIds, rootPaneIsVisible(panes));
 }
 
 /** Per-viewer page catalog, pane registries, and browser-owned layout store. */
@@ -590,7 +398,6 @@ export function createViewportState(
   let persistenceWorkspace: string | null = null;
   let preferredActivePageId: string | null = null;
   const authoritativePanesByPage = new Map<string, Set<string> | null>();
-  let contentPaneCount = 0;
 
   const layoutKey = (pageId: string): string | null => {
     const server = persistenceServer;
@@ -610,33 +417,17 @@ export function createViewportState(
     }
   };
 
-  const readLayout = (pageId: string, isDefault: boolean): ViewportLayout => {
+  const readLayout = (pageId: string): ViewportLayout => {
     const key = layoutKey(pageId);
     if (storage === null || key === null) return initialViewportLayout();
-    let serialized: string | null = null;
-    let layout: ViewportLayout;
     try {
-      serialized = storage.getItem(key);
-      if (serialized === null && isDefault) {
-        const server = persistenceServer;
-        const workspace = persistenceWorkspace;
-        if (server !== null && workspace !== null) {
-          serialized = storage.getItem(
-            legacyViewportLayoutStorageKey(server, workspace),
-          );
-        }
-      }
-      if (serialized === null) return initialViewportLayout();
-      layout = normalizeViewportLayout(parseBoundedPersistedJson(serialized));
+      const serialized = storage.getItem(key);
+      return serialized === null
+        ? initialViewportLayout()
+        : normalizeViewportLayout(parseBoundedPersistedJson(serialized));
     } catch {
       return initialViewportLayout();
     }
-    try {
-      storage.setItem(key, JSON.stringify(layout));
-    } catch {
-      // A read-only/full store must not discard a layout already read.
-    }
-    return layout;
   };
 
   const persistActivePage = (pageId: string): void => {
@@ -650,15 +441,6 @@ export function createViewportState(
     }
   };
 
-  const contentPanesFromPage = (
-    page: ViewportPageState | null,
-  ): ViewportContentPane[] =>
-    page === null
-      ? []
-      : Object.values(page.panes).filter(
-          (pane): pane is ViewportContentPane => pane.kind !== "root",
-        );
-
   const clearCatalogPageModels = (
     pages: Record<string, ViewportPageState>,
   ): Record<string, ViewportPageState> => {
@@ -668,24 +450,6 @@ export function createViewportState(
       cleared[pageId] = { ...page, panes: initialViewportPanes() };
     }
     return cleared;
-  };
-
-  const recountContentPanes = (
-    pages: Record<string, ViewportPageState>,
-    warmPage: ViewportPageState | null,
-    transitionPage: ViewportPageState | null,
-  ): void => {
-    const models = [
-      ...Object.values(pages),
-      ...(warmPage === null ? [] : [warmPage]),
-      ...(transitionPage === null ? [] : [transitionPage]),
-    ];
-    const seen = new Set<ViewportPageState>();
-    contentPaneCount = models.reduce((count, page) => {
-      if (seen.has(page)) return count;
-      seen.add(page);
-      return count + contentPanesFromPage(page).length;
-    }, 0);
   };
 
   const replacePage = (page: ViewportPageState): void => {
@@ -705,50 +469,31 @@ export function createViewportState(
     return true;
   };
 
-  const addContentPane = (
-    message: {
-      page_id: string;
-      pane_id: string;
-      placement: ViewportPanePlacement;
-      relative_to: string;
-      equalize_group: readonly string[];
-    },
-    pane: ViewportContentPane,
-  ): void => {
-    const state = store.get();
-    const page = state.pages[message.page_id];
+  /** Pane messages apply only to the page stream this browser subscribed to,
+   * so frames from a superseded page or generation are ignored. */
+  const streamedPage = (pageId: string): ViewportPageState | undefined => {
+    const { pageStream, pages } = store.get();
+    return pageStream?.accepting && pageStream.pageId === pageId
+      ? pages[pageId]
+      : undefined;
+  };
+
+  const addPane = (message: ViewportPaneCreateMessage): void => {
+    const page = streamedPage(message.page_id);
+    if (page === undefined) return;
     const paneId = message.pane_id;
-    if (
-      page === undefined ||
-      paneId === VIEWPORT_ROOT_PANE_ID ||
-      paneId.length === 0
-    )
-      return;
-    const alreadyDeclared = Object.hasOwn(page.panes, paneId);
+    const pane = contentPaneFromMessage(message);
     const authoritativePaneIds =
       authoritativePanesByPage.get(page.pageId) ?? null;
-    if (
-      (!alreadyDeclared &&
-        contentPaneCount >= MAX_LIVE_VIEWPORT_CONTENT_PANES) ||
-      (authoritativePaneIds !== null &&
-        !authoritativePaneIds.has(paneId) &&
-        [...authoritativePanesByPage.values()].reduce(
-          (count, ids) => count + (ids?.size ?? 0),
-          0,
-        ) >= MAX_LIVE_VIEWPORT_CONTENT_PANES)
-    )
-      return;
-
     authoritativePaneIds?.add(paneId);
     const panes = copyPaneRecord(page.panes);
     panes[paneId] = detachViewportPaneBinary(pane, page.panes[paneId]);
-    if (!alreadyDeclared) contentPaneCount += 1;
 
     let layout = page.layout;
     if (!pane.props.visible) {
       layout = removeViewportPane(layout, paneId);
     } else if (!hasViewportPane(layout, paneId)) {
-      const savedLayout = readLayout(page.pageId, page.isDefault);
+      const savedLayout = readLayout(page.pageId);
       if (hasViewportPane(savedLayout, paneId)) {
         // A page declaration and its initial empty snapshot can reach an
         // already-connected browser before Python declares that page's
@@ -779,339 +524,18 @@ export function createViewportState(
     replacePage({ ...page, panes, layout });
   };
 
-  const projectMessageBatch = (
-    messages: readonly Message[],
-    includeWarmPage: boolean,
-    includeTransitionPage: boolean,
-  ): string | null => {
-    // Control updates and file transfers leave page ownership unchanged.
-    // Skip copying the complete retained page/pane projection for them.
-    if (
-      !messages.some(
-        (message) =>
-          message.type.startsWith("Viewport") ||
-          message.type.startsWith("Page") ||
-          message.type === "WorkspaceConfigurationMessage",
-      )
-    )
-      return null;
-    const current = store.get();
-    const retainedPages = [
-      ...(includeWarmPage && current.warmPage !== null
-        ? [current.warmPage]
-        : []),
-      ...(includeTransitionPage && current.transitionPage !== null
-        ? [current.transitionPage]
-        : []),
-    ];
-    const retainedPageRefs = new Set<ViewportPageState>();
-    const retainedPanes = retainedPages.flatMap((page) => {
-      if (retainedPageRefs.has(page)) return [];
-      retainedPageRefs.add(page);
-      return contentPanesFromPage(page);
-    });
-    const pages = new Map<string, PageProjection>();
-    for (const pageId of current.pageOrder) {
-      const page = current.pages[pageId];
-      const panes = new Map<string, ViewportContentPane>();
-      for (const pane of Object.values(page.panes)) {
-        if (pane.kind !== "root") panes.set(pane.paneId, pane);
-      }
-      const authoritative = authoritativePanesByPage.get(pageId);
-      pages.set(pageId, {
-        panes,
-        authoritativePaneIds:
-          authoritative === undefined
-            ? null
-            : authoritative === null
-              ? null
-              : new Set(authoritative),
-        isDefault: page.isDefault,
-        name: page.name,
-      });
-    }
-    const reject = (detail: string) =>
-      "Connection frame violates viewport safety limits: " + detail;
-    const allPanes = (): ViewportContentPane[] => [
-      ...retainedPanes,
-      ...[...pages.values()].flatMap((page) => [...page.panes.values()]),
-    ];
-    const authoritativeCount = (): number =>
-      [...pages.values()].reduce(
-        (count, page) => count + (page.authoritativePaneIds?.size ?? 0),
-        0,
-      );
-
-    for (const message of messages) {
-      if (message.type === "PageCreateMessage") {
-        if (
-          !isBoundedLayoutId(message.page_id) ||
-          !pageNameIsValid(message.name) ||
-          typeof message.is_default !== "boolean" ||
-          pages.has(message.page_id) ||
-          pages.size >= MAX_VIEWPORT_PAGES ||
-          (message.is_default &&
-            [...pages.values()].some((page) => page.isDefault))
-        )
-          return reject("page declaration is invalid");
-        pages.set(message.page_id, {
-          panes: new Map(),
-          authoritativePaneIds: null,
-          isDefault: message.is_default,
-          name: message.name,
-        });
-        continue;
-      }
-      if (message.type === "PageUpdateMessage") {
-        const page = pages.get(message.page_id);
-        if (page === undefined || !pageNameIsValid(message.name))
-          return reject("page update is invalid");
-        page.name = message.name;
-        continue;
-      }
-      if (message.type === "PageCatalogMessage") {
-        if (
-          message.page_ids.length !== pages.size ||
-          message.page_ids.some(
-            (pageId, index) => [...pages.keys()][index] !== pageId,
-          )
-        )
-          return reject("page catalog does not match its declarations");
-        continue;
-      }
-
-      const declaration = contentPaneFromMessage(message);
-      if (declaration !== null) {
-        if (
-          message.type !== "ViewportPaneMessage" &&
-          message.type !== "ViewportEmptyMessage" &&
-          message.type !== "ViewportImageMessage" &&
-          message.type !== "ViewportMatplotlibMessage" &&
-          message.type !== "ViewportPlotlyMessage" &&
-          message.type !== "ViewportVideoMessage" &&
-          message.type !== "ViewportViserMessage"
-        )
-          return reject("pane declaration type is invalid");
-        const page = pages.get(message.page_id);
-        if (
-          page === undefined ||
-          !isBoundedLayoutId(message.relative_to) ||
-          !equalizeGroupIsValid(message.pane_id, message.equalize_group)
-        )
-          return reject("pane page or placement identifiers are invalid");
-        if (
-          !isBoundedLayoutId(declaration.paneId) ||
-          declaration.paneId === VIEWPORT_ROOT_PANE_ID ||
-          !panePropsHaveValidShape(declaration)
-        )
-          return reject("pane declaration is invalid");
-        if (
-          !page.panes.has(declaration.paneId) &&
-          allPanes().length >= MAX_LIVE_VIEWPORT_CONTENT_PANES
-        )
-          return reject("live pane owner limit exceeded");
-        if (
-          page.authoritativePaneIds !== null &&
-          !page.authoritativePaneIds.has(declaration.paneId) &&
-          authoritativeCount() >= MAX_LIVE_VIEWPORT_CONTENT_PANES
-        )
-          return reject("authoritative pane owner limit exceeded");
-        page.panes.set(declaration.paneId, declaration);
-        page.authoritativePaneIds?.add(declaration.paneId);
-        if (!viewportPanesWithinAggregateLimits(allPanes()))
-          return reject("pane source, renderer, or iframe budget exceeded");
-        continue;
-      }
-
-      if (
-        message.type === "ViewportPaneUpdateMessage" ||
-        message.type === "ViewportPaneRemoveMessage" ||
-        message.type === "ViewportPaneSnapshotMessage"
-      ) {
-        const page = pages.get(message.page_id);
-        if (page === undefined)
-          return reject("pane lifecycle references an unknown page");
-        if (message.type === "ViewportPaneUpdateMessage") {
-          if (!isBoundedLayoutId(message.pane_id))
-            return reject("pane update identifier is invalid");
-          const previous = page.panes.get(message.pane_id);
-          if (previous === undefined) continue;
-          const candidate = {
-            ...previous,
-            props: { ...previous.props, ...message.updates },
-          } as ViewportContentPane;
-          page.panes.set(message.pane_id, candidate);
-          if (
-            !panePropsHaveValidShape(candidate) ||
-            !viewportPanesWithinAggregateLimits(allPanes())
-          )
-            return reject("pane update violates its schema or budget");
-        } else if (message.type === "ViewportPaneRemoveMessage") {
-          if (!isBoundedLayoutId(message.pane_id))
-            return reject("pane removal identifier is invalid");
-          page.panes.delete(message.pane_id);
-          page.authoritativePaneIds?.delete(message.pane_id);
-        } else {
-          if (message.pane_ids.length > MAX_LIVE_VIEWPORT_CONTENT_PANES)
-            return reject("pane snapshot owner limit exceeded");
-          const ids = new Set<string>();
-          for (const paneId of message.pane_ids) {
-            if (
-              !isBoundedLayoutId(paneId) ||
-              paneId === VIEWPORT_ROOT_PANE_ID ||
-              ids.has(paneId)
-            )
-              return reject("pane snapshot identifiers are invalid");
-            ids.add(paneId);
-          }
-          page.authoritativePaneIds = ids;
-          for (const paneId of page.panes.keys()) {
-            if (!ids.has(paneId)) page.panes.delete(paneId);
-          }
-          if (authoritativeCount() > MAX_LIVE_VIEWPORT_CONTENT_PANES)
-            return reject("aggregate pane snapshot owner limit exceeded");
-        }
-      } else if (
-        message.type === "WorkspaceConfigurationMessage" &&
-        !isBoundedLayoutId(message.workspace_id)
-      ) {
-        return reject("workspace identifier is invalid");
-      }
-    }
-    return null;
-  };
-
-  type CacheAdmission = {
-    failure: string | null;
-    evictWarmPage: boolean;
-    evictTransitionPage: boolean;
-  };
-
-  const cacheAdmission = (messages: readonly Message[]): CacheAdmission => {
-    const current = store.get();
-    const failure = projectMessageBatch(messages, true, true);
-    if (failure === null)
-      return {
-        failure: null,
-        evictWarmPage: false,
-        evictTransitionPage: false,
-      };
-    if (
-      current.warmPage !== null &&
-      projectMessageBatch(messages, false, true) === null
-    )
-      return {
-        failure: null,
-        evictWarmPage: true,
-        evictTransitionPage: false,
-      };
-    if (
-      current.transitionPage !== null &&
-      projectMessageBatch(messages, true, false) === null
-    )
-      return {
-        failure: null,
-        evictWarmPage: false,
-        evictTransitionPage: true,
-      };
-    if (
-      current.warmPage !== null &&
-      current.transitionPage !== null &&
-      projectMessageBatch(messages, false, false) === null
-    )
-      return {
-        failure: null,
-        evictWarmPage: true,
-        evictTransitionPage: true,
-      };
-    return {
-      failure,
-      evictWarmPage: false,
-      evictTransitionPage: false,
-    };
-  };
-
-  let pendingAdmissionMessages: readonly Message[] | null = null;
-  let pendingAdmissionState: ViewportState | null = null;
-  let pendingAdmission: CacheAdmission | null = null;
-
-  const preflightMessageBatch = (
-    messages: readonly Message[],
-  ): string | null => {
-    pendingAdmissionMessages = messages;
-    pendingAdmissionState = store.get();
-    pendingAdmission = cacheAdmission(messages);
-    return pendingAdmission.failure;
-  };
-
-  const prepareMessageBatch = (messages: readonly Message[]): string | null => {
-    const admission =
-      pendingAdmissionMessages === messages &&
-      pendingAdmissionState === store.get() &&
-      pendingAdmission !== null
-        ? pendingAdmission
-        : cacheAdmission(messages);
-    pendingAdmissionMessages = null;
-    pendingAdmissionState = null;
-    pendingAdmission = null;
-    if (admission.failure !== null) return admission.failure;
-    if (!admission.evictWarmPage && !admission.evictTransitionPage) return null;
-
-    const current = store.get();
-    let warmPage = admission.evictWarmPage ? null : current.warmPage;
-    let transitionPage = admission.evictTransitionPage
-      ? null
-      : current.transitionPage;
-    if (
-      transitionPage === null &&
-      current.transitionPage !== null &&
-      warmPage !== null
-    ) {
-      transitionPage = warmPage;
-      warmPage = null;
-    }
-    const displayPageId =
-      transitionPage?.pageId ??
-      (current.pageStream?.ready === true &&
-      current.pageStream.pageId === current.activePageId
-        ? current.activePageId
-        : null);
-    recountContentPanes(current.pages, warmPage, transitionPage);
-    store.set({
-      warmPage,
-      transitionPage,
-      displayPageId,
-      interactionEpoch:
-        displayPageId === current.displayPageId
-          ? current.interactionEpoch
-          : current.interactionEpoch + 1,
-    });
-    return null;
-  };
-
-  const directMessage = (type: Message["type"], value: object): Message =>
-    ({ type, ...value }) as Message;
-  const admitDirect = (message: Message): boolean => {
-    const failure = prepareMessageBatch([message]);
-    if (failure === null) return true;
-    console.error(failure);
-    return false;
-  };
   const clearPages = (): void => {
     authoritativePanesByPage.clear();
-    contentPaneCount = 0;
     store.set(initialState(store.get().interactionEpoch + 1));
   };
 
   const actions: ViewportActions = {
-    reset: clearPages,
     resetPanes: clearPages,
 
     reconnect: () => {
       const state = store.get();
-      // Reuse the page-transition owner: one bounded snapshot stays mounted
-      // until a complete stream replaces it. New workspace/server identities
-      // still clear it, and normal admission can evict it under pressure.
+      // Reuse the page-transition owner: one snapshot stays mounted until a
+      // complete stream replaces it. New workspace/server identities clear it.
       const transitionPage =
         state.transitionPage ??
         (state.displayPageId !== null && state.pageStream?.ready
@@ -1125,7 +549,6 @@ export function createViewportState(
         displayPageId: transitionPage?.pageId ?? null,
         transitionPage,
       };
-      recountContentPanes(next.pages, null, transitionPage);
       store.set(next);
     },
 
@@ -1139,18 +562,14 @@ export function createViewportState(
 
     setPersistenceWorkspace: (workspaceId) => {
       const serverUrl = persistenceServer;
-      if (serverUrl === null || !isBoundedLayoutId(workspaceId)) return;
-      if (persistenceWorkspace === workspaceId) return;
+      if (serverUrl === null || persistenceWorkspace === workspaceId) return;
       persistenceWorkspace = workspaceId;
       preferredActivePageId = null;
       if (storage !== null) {
         try {
-          const pageId = storage.getItem(
+          preferredActivePageId = storage.getItem(
             activeViewportPageStorageKey(serverUrl, workspaceId),
           );
-          if (pageId !== null && isBoundedLayoutId(pageId)) {
-            preferredActivePageId = pageId;
-          }
         } catch {
           // Inaccessible storage simply starts on the default page.
         }
@@ -1159,23 +578,13 @@ export function createViewportState(
     },
 
     addPage: (pageId, name, isDefault) => {
-      if (
-        !admitDirect(
-          directMessage("PageCreateMessage", {
-            page_id: pageId,
-            name,
-            is_default: isDefault,
-          }),
-        )
-      )
-        return;
       const state = store.get();
       const page: ViewportPageState = {
         pageId,
         name,
         isDefault,
         panes: initialViewportPanes(),
-        layout: readLayout(pageId, isDefault),
+        layout: readLayout(pageId),
       };
       authoritativePanesByPage.set(pageId, null);
       store.set({
@@ -1186,12 +595,6 @@ export function createViewportState(
     },
 
     updatePage: (pageId, name) => {
-      if (
-        !admitDirect(
-          directMessage("PageUpdateMessage", { page_id: pageId, name }),
-        )
-      )
-        return;
       const state = store.get();
       const page = state.pages[pageId];
       const pages =
@@ -1215,10 +618,6 @@ export function createViewportState(
     },
 
     finishPageCatalog: (pageIds) => {
-      if (
-        !admitDirect(directMessage("PageCatalogMessage", { page_ids: pageIds }))
-      )
-        return;
       const state = store.get();
       const preferred = preferredActivePageId;
       const defaultPageId = state.pageOrder.find(
@@ -1236,7 +635,6 @@ export function createViewportState(
         : state.pages;
       const warmPage = activeChanged ? null : state.warmPage;
       const transitionPage = activeChanged ? null : state.transitionPage;
-      if (activeChanged) recountContentPanes(pages, warmPage, transitionPage);
       store.set({
         pages,
         activePageId,
@@ -1256,8 +654,6 @@ export function createViewportState(
       if (
         state.activePageId !== pageId ||
         state.pages[pageId] === undefined ||
-        !Number.isSafeInteger(generation) ||
-        generation < 0 ||
         (state.pageStream?.pageId === pageId &&
           state.pageStream.generation === generation)
       )
@@ -1276,7 +672,6 @@ export function createViewportState(
       }
       const pages = clearCatalogPageModels(state.pages);
       const displayPageId = transitionPage?.pageId ?? null;
-      recountContentPanes(pages, warmPage, transitionPage);
       store.set({
         pages,
         displayPageId,
@@ -1324,7 +719,6 @@ export function createViewportState(
       )
         warmPage = state.transitionPage;
       if (warmPage?.pageId === pageId) warmPage = null;
-      recountContentPanes(state.pages, warmPage, null);
       store.set({
         displayPageId: pageId,
         warmPage,
@@ -1384,7 +778,6 @@ export function createViewportState(
 
       const pages = clearCatalogPageModels(state.pages);
       const displayPageId = transitionPage?.pageId ?? null;
-      recountContentPanes(pages, warmPage, transitionPage);
       preferredActivePageId = pageId;
       persistActivePage(pageId);
       store.set({
@@ -1398,55 +791,7 @@ export function createViewportState(
       });
     },
 
-    addEmptyPane: (message) => {
-      if (!admitDirect(directMessage("ViewportEmptyMessage", message))) return;
-      addContentPane(message, {
-        kind: "empty",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
-    addImagePane: (message) => {
-      if (!admitDirect(directMessage("ViewportImageMessage", message))) return;
-      addContentPane(message, {
-        kind: "image",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
-    addMatplotlibPane: (message) => {
-      if (!admitDirect(directMessage("ViewportMatplotlibMessage", message)))
-        return;
-      addContentPane(message, {
-        kind: "matplotlib",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
-    addPlotlyPane: (message) => {
-      if (!admitDirect(directMessage("ViewportPlotlyMessage", message))) return;
-      addContentPane(message, {
-        kind: "plotly",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
-    addVideoPane: (message) => {
-      if (!admitDirect(directMessage("ViewportVideoMessage", message))) return;
-      addContentPane(message, {
-        kind: "video",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
-    addViserPane: (message) => {
-      if (!admitDirect(directMessage("ViewportViserMessage", message))) return;
-      addContentPane(message, {
-        kind: "viser",
-        paneId: message.pane_id,
-        props: message.props,
-      });
-    },
+    addPane,
 
     invalidateForInput: (uuid, requestId) => {
       const state = store.get();
@@ -1477,17 +822,7 @@ export function createViewportState(
     },
 
     updatePane: (pageId, paneId, updates) => {
-      if (
-        !admitDirect(
-          directMessage("ViewportPaneUpdateMessage", {
-            page_id: pageId,
-            pane_id: paneId,
-            updates,
-          }),
-        )
-      )
-        return;
-      const page = store.get().pages[pageId];
+      const page = streamedPage(pageId);
       const pane = page?.panes[paneId];
       if (page === undefined || pane === undefined || pane.kind === "root")
         return;
@@ -1527,7 +862,7 @@ export function createViewportState(
       let layout = page.layout;
       if (updatedPane.props.visible !== pane.props.visible) {
         if (updatedPane.props.visible) {
-          const savedLayout = readLayout(page.pageId, page.isDefault);
+          const savedLayout = readLayout(page.pageId);
           if (hasViewportPane(savedLayout, paneId)) {
             layout = savedLayout;
           } else {
@@ -1555,20 +890,9 @@ export function createViewportState(
     },
 
     removePane: (pageId, paneId) => {
-      if (
-        paneId === VIEWPORT_ROOT_PANE_ID ||
-        !admitDirect(
-          directMessage("ViewportPaneRemoveMessage", {
-            page_id: pageId,
-            pane_id: paneId,
-          }),
-        )
-      )
-        return;
-      const page = store.get().pages[pageId];
+      const page = streamedPage(pageId);
       if (page === undefined) return;
       const panes = copyPaneRecord(page.panes);
-      if (Object.hasOwn(panes, paneId)) contentPaneCount -= 1;
       delete panes[paneId];
       authoritativePanesByPage.get(pageId)?.delete(paneId);
       const layout = reconcilePaneLayout(
@@ -1581,26 +905,15 @@ export function createViewportState(
     },
 
     setPaneSnapshot: (pageId, paneIds) => {
-      if (
-        !admitDirect(
-          directMessage("ViewportPaneSnapshotMessage", {
-            page_id: pageId,
-            pane_ids: paneIds,
-          }),
-        )
-      )
-        return;
-      const page = store.get().pages[pageId];
+      const page = streamedPage(pageId);
       if (page === undefined) return;
       const firstSnapshot = authoritativePanesByPage.get(pageId) === null;
       const ids = new Set(paneIds);
       authoritativePanesByPage.set(pageId, ids);
       const panes = copyPaneRecord(page.panes);
       for (const paneId of Object.keys(panes)) {
-        if (paneId !== VIEWPORT_ROOT_PANE_ID && !ids.has(paneId)) {
+        if (paneId !== VIEWPORT_ROOT_PANE_ID && !ids.has(paneId))
           delete panes[paneId];
-          contentPaneCount -= 1;
-        }
       }
       const layout = reconcilePaneLayout(page.layout, panes, ids);
       // The first empty snapshot only establishes a newly declared page's
@@ -1625,8 +938,6 @@ export function createViewportState(
       if (commitPageLayout(page, layout, true))
         replacePage({ ...page, layout });
     },
-    preflightMessageBatch,
-    prepareMessageBatch,
   };
 
   return { store, actions };
