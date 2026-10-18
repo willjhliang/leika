@@ -6,7 +6,6 @@ import tailwindcss from "@tailwindcss/vite";
 
 import browserslistToEsbuild from "browserslist-to-esbuild";
 import { viteSingleFile } from "vite-plugin-singlefile";
-import { compressHtml } from "./vite-plugin-compress-html.mts";
 import { createThirdPartyNotices } from "./vite-plugin-third-party-notices.mts";
 
 export default defineConfig(({ command }) => {
@@ -17,8 +16,7 @@ export default defineConfig(({ command }) => {
     plugins: [
       tailwindcss(),
       react(),
-      ...(!isDev ? [viteSingleFile(), compressHtml()] : []),
-      ...(!isDev ? [notices.plugin] : []),
+      ...(!isDev ? [viteSingleFile(), notices.plugin] : []),
     ],
     resolve: {
       alias: {

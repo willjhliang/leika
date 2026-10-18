@@ -1,7 +1,6 @@
 name: Playwright
 
 on:
-  workflow_call:
   push:
     branches: [main]
   pull_request:
@@ -30,16 +29,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/build-client
-      - uses: ./.github/actions/setup-e2e
+      - uses: ./.github/actions/setup
         with:
-          browser: ${{ matrix.browser }}
           python-version: ${{ matrix.python-version }}
-      - name: Browser tests
+      - run: python -m playwright install "$PLAYWRIGHT_BROWSER" --with-deps
         env:
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
-          LEIKA_PYTHON_VERSION: ${{ matrix.python-version }}
-        run: uv run --locked --extra dev --python "$LEIKA_PYTHON_VERSION" pytest tests/e2e -n auto --browser "$PLAYWRIGHT_BROWSER"
+      - run: make build-client test-e2e E2E_WORKERS=auto
+        env:
+          PYTEST_ADDOPTS: --browser ${{ matrix.browser }}
       - name: Failure artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -52,9 +52,9 @@ def test_the_fingerprint_changes_with_the_package_version(monkeypatch: pytest.Mo
 
 def test_generated_protocol_compiles_and_types_real_messages(tmp_path: Path) -> None:
     client = Path(__file__).resolve().parents[1] / "src/leika/client"
-    node = shutil.which("node") or str(client / ".nodeenv/bin/node")
+    node = shutil.which("node")
     compiler = client / "node_modules/typescript/bin/tsc"
-    if not Path(node).is_file() or not compiler.is_file():
+    if node is None or not compiler.is_file():
         pytest.skip("requires the frontend Node and TypeScript toolchain")
 
     checkbox = {

@@ -48,20 +48,15 @@ Issues = "https://github.com/willjhliang/leika/issues"
 [project.optional-dependencies]
 examples = ["matplotlib>=3.6", "plotly>=5.21,<7", "viser>=0.2.11,<2"]
 dev = [
+  "leika[docs,examples]",
+  "build>=1",
   "imageio>=2.16.1,<3.0.0",
-  "matplotlib>=3.6",
-  "plotly>=5.21,<7",
-  "viser>=0.2.11,<2",
-  "nodeenv>=1.9.1,<2.0.0",
-  "packaging>=24,<27",
   "playwright>=1.40.0",
-  "psutil>=5.9.5,<8.0.0",
   "pyright>=1.1.390",
   "pytest>=8",
   "pytest-playwright>=0.4.0",
   "pytest-xdist>=3.0.0",
   "ruff>=0.9.3",
-  "tomli>=2; python_version < '3.11'",
   "twine>=6,<7",
 ]
 docs = [
@@ -72,15 +67,6 @@ docs = [
   "sphinx-copybutton>=0.5.2",
 ]
 
-[dependency-groups]
-audit = ["pip-audit==2.10.1"]
-
-[project.scripts]
-leika-build-client = "leika._client_autobuild:build_client_entrypoint"
-
-[tool.uv]
-required-version = "==0.12.3"
-
 [tool.hatch.version]
 path = "src/leika/__init__.py"
 
@@ -88,78 +74,21 @@ path = "src/leika/__init__.py"
 path = "hatch_build.py"
 
 [tool.hatch.build]
-ignore-vcs = true
-reproducible = true
-exclude = [
-  "**/__pycache__/**",
-  "/core",
-  "/core.*",
-  "**/.leika-build-backup",
-  "**/.leika-build-backup/**",
-  "**/.leika-build-stage-*",
-  "**/.leika-build-stage-*/**",
-  "**/.*.leika-backup",
-  "**/.*.leika-backup/**",
-  "**/.*.leika-stage-*",
-  "**/.*.leika-stage-*/**",
-  "**/.*.leika-transaction",
-  "src/leika/.leika-icons-stage-*",
-  "src/leika/.leika-icons-stage-*/**",
-  "docs/_build/**",
-  "src/leika/client/.leika-build.lock",
-  "src/leika/client/.nodeenv/**",
-  "src/leika/client/build/.leika-sources",
-  "src/leika/client/node_modules/**",
+# Both distributions carry the built client, never its sources.
+exclude = ["/src/leika/client"]
+artifacts = [
+  "/src/leika/client/build/index.html",
+  "/src/leika/client/build/THIRD_PARTY_NOTICES.txt",
 ]
 
+# Twine 6 rejects the core metadata 2.5 that newer Hatchling writes by default.
 [tool.hatch.build.targets.sdist]
-include = [
-  "/src/leika",
-  "/examples",
-  "/tests",
-  "/scripts",
-  "/docs",
-  "/CONTRIBUTING.md",
-  "/CHANGELOG.md",
-  "/LICENSE",
-  "/build-constraints.txt",
-  "/build-constraints.in",
-  "/hatch_build.py",
-  "/Makefile",
-  "/README.md",
-  "/pyproject.toml",
-  "/sync_client_server.py",
-  "/uv.lock",
-]
+include = ["/src/leika", "/tests", "/scripts", "/examples", "/hatch_build.py", "/CHANGELOG.md"]
+core-metadata-version = "2.4"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/leika"]
-artifacts = [
-  "src/leika/client/build/index.html",
-  "src/leika/client/build/THIRD_PARTY_NOTICES.txt",
-]
-exclude = [
-  "src/leika/client/.nodeenv/**",
-  "src/leika/client/node_modules/**",
-  "src/leika/client/src/**",
-  "src/leika/client/.nvmrc",
-  "src/leika/client/.gitignore",
-  "src/leika/client/.prettierignore",
-  "src/leika/_icons_generate_enum.py",
-  "src/leika/client/components.json",
-  "src/leika/client/dock_test.html",
-  "src/leika/client/eslint.config.mjs",
-  "src/leika/client/index.html",
-  "src/leika/client/package.json",
-  "src/leika/client/package-lock.json",
-  "src/leika/client/popup_test.html",
-  "src/leika/client/tsconfig.json",
-  "src/leika/client/third-party-license-overrides/**",
-  "src/leika/client/vite-plugin-third-party-notices.mts",
-  "src/leika/client/vite-plugin-compress-html.mts",
-  "src/leika/client/vite.config.mts",
-  "src/leika/client/vitest.config.ts",
-]
+core-metadata-version = "2.4"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -173,7 +102,6 @@ markers = [
 include = ["src", "examples"]
 exclude = [
   "docs",
-  "src/leika/client/.nodeenv",
   "src/leika/client/node_modules",
   "src/leika/client/build",
 ]
@@ -182,7 +110,7 @@ pythonVersion = "3.10"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = [".nodeenv", "node_modules", "src/leika/client/build"]
+exclude = ["node_modules", "src/leika/client/build"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "PLC", "PLE", "PLR", "PLW"]

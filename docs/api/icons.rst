@@ -18,7 +18,7 @@ Two caveats when picking a name off the website:
 
 * Leika's icons come from ``lucide-static`` 1.26.0, pinned in the browser
   client. Icons added to Lucide after that release are not available until the
-  pin moves and ``_icons_generate_enum.py`` is rerun.
+  pin moves and ``make generate`` is rerun.
 * Attribute access is not validated. ``leika.Icon`` resolves any name through
   ``__getattr__``, so a misspelled or unavailable icon yields the converted
   string rather than raising there. Passing that string to an ``icon=``

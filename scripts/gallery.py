@@ -7,20 +7,14 @@ Run ``make gallery`` after visual client changes.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import os
 import shutil
-import stat
 import tempfile
 import textwrap
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image
-
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUT = ROOT / "docs" / "_static" / "gallery"
+OUT = ROOT / "docs" / "_static" / "gallery"
 
 VIEWPORT = {"width": 960, "height": 700}
 # Padding of page around the captured element, in CSS pixels.
@@ -386,198 +380,6 @@ ENTRIES = [
 ]
 
 
-def _fsync_directory(directory: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    """Replace a generated page only after its complete contents are durable."""
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        raise RuntimeError(f"refusing to replace non-regular gallery page: {path}")
-    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(mode)
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _expected_asset_names() -> frozenset[str]:
-    slugs = [entry.slug for _, entries in ENTRIES for entry in entries]
-    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
-    if duplicates:
-        raise RuntimeError(f"duplicate gallery slugs: {', '.join(duplicates)}")
-    return frozenset(f"{slug}-{scheme}.png" for slug in slugs for scheme in ("light", "dark"))
-
-
-def _is_owned_asset_name(name: str) -> bool:
-    return any(
-        name.endswith(suffix) and len(name) > len(suffix) for suffix in ("-light.png", "-dark.png")
-    )
-
-
-def _gallery_asset_names(directory: Path, *, label: str) -> frozenset[str]:
-    """Return the files in a gallery-owned directory, rejecting unsafe contents."""
-    if directory.is_symlink() or not directory.is_dir():
-        raise RuntimeError(f"{label} is not a regular directory: {directory}")
-
-    names: set[str] = set()
-    for path in directory.iterdir():
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError(f"{label} contains a non-regular entry: {path}")
-        if not _is_owned_asset_name(path.name):
-            raise RuntimeError(
-                f"{label} contains a file not owned by the gallery generator: {path}"
-            )
-        names.add(path.name)
-    return frozenset(names)
-
-
-def _validate_png(path: Path) -> None:
-    try:
-        with Image.open(path) as image:
-            image_format = image.format
-            width, height = image.size
-            image.verify()
-    except (OSError, SyntaxError) as error:
-        raise RuntimeError(f"gallery capture is not a valid image: {path}") from error
-    if image_format != "PNG":
-        raise RuntimeError(f"gallery capture is not a PNG: {path}")
-    if width <= 0 or height <= 0:
-        raise RuntimeError(f"gallery capture has invalid dimensions: {path}")
-
-
-def _validate_gallery_generation(directory: Path) -> None:
-    expected = _expected_asset_names()
-    actual = _gallery_asset_names(directory, label="staged gallery generation")
-    if actual != expected:
-        details = []
-        if missing := sorted(expected - actual):
-            details.append(f"missing {', '.join(missing)}")
-        if unexpected := sorted(actual - expected):
-            details.append(f"unexpected {', '.join(unexpected)}")
-        raise RuntimeError(f"staged gallery asset set is incomplete: {'; '.join(details)}")
-    for name in sorted(expected):
-        _validate_png(directory / name)
-
-
-def _sync_gallery_generation(directory: Path) -> None:
-    if os.name == "nt":
-        return
-    for path in directory.iterdir():
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    _fsync_directory(directory)
-
-
-def _backup_path(target: Path) -> Path:
-    return target.with_name(f".{target.name}.leika-backup")
-
-
-def _prepare_gallery_target(target: Path) -> None:
-    """Validate the output location and restore a pre-swap interrupted run."""
-    if target == target.parent:
-        raise RuntimeError(f"refusing to use a filesystem root as gallery output: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.parent.is_symlink() or not target.parent.is_dir():
-        raise RuntimeError(f"gallery output parent is not a regular directory: {target.parent}")
-
-    backup = _backup_path(target)
-    target_present = target.exists() or target.is_symlink()
-    backup_present = backup.exists() or backup.is_symlink()
-    if target_present and backup_present:
-        raise RuntimeError(
-            "an interrupted gallery publication left both the output and its backup; "
-            f"inspect {target} and {backup} before retrying"
-        )
-    if backup_present:
-        _gallery_asset_names(backup, label="gallery publication backup")
-        backup.replace(target)
-        _fsync_directory(target.parent)
-        print(f"restored interrupted gallery publication from {display_path(backup)}")
-
-    if target.exists() or target.is_symlink():
-        _gallery_asset_names(target, label="existing gallery output")
-
-
-@contextlib.contextmanager
-def _staged_gallery_directory(target: Path) -> Iterator[Path]:
-    """Yield a sibling directory and discard it unless publication consumes it."""
-    _prepare_gallery_target(target)
-    directory_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o755
-    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.leika-stage-", dir=target.parent))
-    try:
-        staging.chmod(directory_mode)
-        yield staging
-    finally:
-        if staging.is_symlink():
-            raise RuntimeError(f"refusing to clean up replaced gallery staging path: {staging}")
-        if staging.exists():
-            shutil.rmtree(staging)
-            _fsync_directory(target.parent)
-
-
-@contextlib.contextmanager
-def _published_gallery_directory(staging: Path, target: Path) -> Iterator[None]:
-    """Publish one complete generation, restoring the previous one on failure."""
-    _validate_gallery_generation(staging)
-    _sync_gallery_generation(staging)
-    _prepare_gallery_target(target)
-
-    backup = _backup_path(target)
-    had_previous = target.exists()
-    previous_moved = False
-    generation_moved = False
-    try:
-        if had_previous:
-            target.replace(backup)
-            previous_moved = True
-            _fsync_directory(target.parent)
-        staging.replace(target)
-        generation_moved = True
-        _fsync_directory(target.parent)
-        _validate_gallery_generation(target)
-        yield
-        _validate_gallery_generation(target)
-    except BaseException:
-        try:
-            if generation_moved and target.exists():
-                target.replace(staging)
-                generation_moved = False
-                _fsync_directory(target.parent)
-            if previous_moved and backup.exists():
-                backup.replace(target)
-                previous_moved = False
-                _fsync_directory(target.parent)
-        except BaseException as rollback_error:
-            raise RuntimeError(
-                "gallery publication failed and automatic rollback also failed; "
-                f"recoverable files remain under {target.parent}"
-            ) from rollback_error
-        raise
-    else:
-        if previous_moved:
-            shutil.rmtree(backup)
-            _fsync_directory(target.parent)
-
-
 def wait_for_scheme(page, scheme: str) -> None:
     page.emulate_media(color_scheme=scheme)
     page.wait_for_function(
@@ -733,14 +535,6 @@ def snippet(entry: Entry) -> str:
     return textwrap.dedent(entry.code)
 
 
-def display_path(path: Path) -> str:
-    """Show repository paths relatively and external paths as given."""
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
-
 def _page_content() -> str:
     """Render the gallery page with exactly one final newline."""
     lines = [
@@ -782,94 +576,87 @@ def _page_content() -> str:
 def write_page() -> None:
     """Write the raw-HTML gallery grid to ``docs/gallery.md``."""
     doc = ROOT / "docs" / "gallery.md"
-    _atomic_write_text(doc, _page_content())
-    print(f"wrote {display_path(doc)}")
+    doc.write_text(_page_content(), encoding="utf-8", newline="\n")
+    print(f"wrote {doc.relative_to(ROOT)}")
+
+
+def capture_all(captures: Path) -> None:
+    """Capture every registry entry in both color schemes into ``captures``."""
+    import numpy as np
+    from playwright.sync_api import sync_playwright
+
+    import leika
+
+    server = leika.Server(host="127.0.0.1", port=0, workspace_id="gallery", verbose=False)
+    gui = server.gui
+    exec_ns = {"gui": gui, "leika": leika, "np": np}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                context = browser.new_context(
+                    viewport=VIEWPORT,
+                    device_scale_factor=SCALE,
+                    reduced_motion="reduce",
+                )
+                page = context.new_page()
+                page.emulate_media(color_scheme="light")
+                page.goto(server.url)
+                page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
+                page.wait_for_function(
+                    "() => !document.body.innerText.includes('Connecting...')",
+                    timeout=15_000,
+                )
+                # Hide panel chrome that borders the captured component.
+                page.add_style_tag(
+                    content="[data-leika-panel-header] { visibility: hidden !important; }"
+                )
+
+                for _, entries in ENTRIES:
+                    for entry in entries:
+                        gui.reset()
+                        wait_for_scheme(page, "light")
+                        exec(snippet(entry), dict(exec_ns))  # noqa: S102 -- own registry
+                        page.wait_for_timeout(int(entry.settle * 1000))
+                        # Repaint one target in both Leika themes before dismissal.
+                        capture_target = locate_target(page, entry)
+                        for scheme in ("light", "dark"):
+                            wait_for_scheme(page, scheme)
+                            wait_for_capture_ready(page, capture_target, entry)
+                            capture(
+                                page,
+                                capture_target,
+                                captures / f"{entry.slug}-{scheme}.png",
+                            )
+                        release_target(page, entry)
+                        print(f"captured {entry.slug}")
+            finally:
+                browser.close()
+    finally:
+        server.stop()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=DEFAULT_OUT,
-        help="dedicated directory replaced with the complete captured screenshot set",
-    )
     parser.add_argument(
         "--page-only",
         action="store_true",
         help="rewrite docs/gallery.md from the registry without recapturing",
     )
     args = parser.parse_args()
-    if args.page_only:
-        write_page()
-        return 0
-
-    output = args.out.absolute()
-    documentation_output = output.resolve() == DEFAULT_OUT.resolve()
-
-    with _staged_gallery_directory(output) as staging:
-        import numpy as np
-        from playwright.sync_api import sync_playwright
-
-        import leika
-
-        server = leika.Server(host="127.0.0.1", port=0, workspace_id="gallery", verbose=False)
-        gui = server.gui
-        exec_ns = {"gui": gui, "leika": leika, "np": np}
-
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                try:
-                    context = browser.new_context(
-                        viewport=VIEWPORT,
-                        device_scale_factor=SCALE,
-                        reduced_motion="reduce",
-                    )
-                    page = context.new_page()
-                    page.emulate_media(color_scheme="light")
-                    page.goto(server.url)
-                    page.wait_for_selector("[data-viewport-workspace]", timeout=15_000)
-                    page.wait_for_function(
-                        "() => !document.body.innerText.includes('Connecting...')",
-                        timeout=15_000,
-                    )
-                    # Hide panel chrome that borders the captured component.
-                    page.add_style_tag(
-                        content="[data-leika-panel-header] { visibility: hidden !important; }"
-                    )
-
-                    for _, entries in ENTRIES:
-                        for entry in entries:
-                            gui.reset()
-                            wait_for_scheme(page, "light")
-                            exec(snippet(entry), dict(exec_ns))  # noqa: S102 -- own registry
-                            page.wait_for_timeout(int(entry.settle * 1000))
-                            # Repaint one target in both Leika themes before dismissal.
-                            capture_target = locate_target(page, entry)
-                            for scheme in ("light", "dark"):
-                                wait_for_scheme(page, scheme)
-                                wait_for_capture_ready(page, capture_target, entry)
-                                capture(
-                                    page,
-                                    capture_target,
-                                    staging / f"{entry.slug}-{scheme}.png",
-                                )
-                            release_target(page, entry)
-                            print(f"captured {entry.slug}")
-                finally:
-                    browser.close()
-        finally:
-            server.stop()
-
-        with _published_gallery_directory(staging, output):
-            if documentation_output:
-                write_page()
-
-    if not documentation_output:
-        print("skipped docs/gallery.md because --out is not the documentation gallery")
-    total = sum(len(entries) for _, entries in ENTRIES)
-    print(f"captured {total} components into {display_path(output)}")
+    if not args.page_only:
+        with tempfile.TemporaryDirectory() as directory:
+            captures = Path(directory)
+            capture_all(captures)
+            # Replace the whole set, so removed components lose their screenshots.
+            for old in OUT.glob("*.png"):
+                old.unlink()
+            for new in captures.iterdir():
+                shutil.move(new, OUT / new.name)
+        total = sum(len(entries) for _, entries in ENTRIES)
+        print(f"captured {total} components into {OUT.relative_to(ROOT)}")
+    write_page()
     return 0
 
 
