@@ -84,13 +84,12 @@ def _video_url(panes: Panes, source: Path | str) -> str:
     return source
 
 
-def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
-    """Normalize a viser target into ``(url, port)``, exactly one set.
+def _viser_embed_target(target: str | Any) -> str | tuple[str, int]:
+    """Normalize a viser target into an embed URL or a ``(host, port)`` address.
 
     Accepts an absolute http(s) URL, used near-verbatim, or a viser
     ``ViserServer``-like object, duck-typed on callable ``get_port()`` and
-    ``get_host()``. Only the port is returned for server objects; Leika
-    proxies them through its own origin.
+    ``get_host()``, whose address Leika proxies through its own origin.
     """
 
     if isinstance(target, str):
@@ -121,7 +120,7 @@ def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
         authority = host if port is None else f"{host}:{port}"
         return urllib.parse.urlunsplit(
             (parts.scheme.lower(), authority, parts.path, parts.query, "")
-        ), None
+        )
 
     get_port = getattr(target, "get_port", None)
     get_host = getattr(target, "get_host", None)
@@ -138,7 +137,7 @@ def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
             )
         if not 1 <= port <= 65535:
             raise ValueError(f"Viser server reported an invalid port: {port!r}.")
-        return None, port
+        return get_host(), port
 
     raise TypeError(
         "target must be a viser ViserServer (an object with get_port() and "
@@ -817,7 +816,7 @@ class ViserPaneHandle(PaneHandle):
     _kind = "viser"
     _props_type = _messages.ViewportViserProps
     _message_type = _messages.ViewportViserMessage
-    _update_fields = ("_url", "_port")
+    _update_fields = ("_url",)
 
     @staticmethod
     def _validate(minimize_gui: object) -> dict[str, Any]:
@@ -829,16 +828,15 @@ class ViserPaneHandle(PaneHandle):
     def _prepare(
         panes: Panes, value: Any, settings: dict[str, Any], previous: Any
     ) -> tuple[dict[str, Any], Any]:
-        url, port = _viser_embed_target(value)
-        if port is None:
-            return {"_url": url, "_port": None}, None
-        address = (value.get_host(), port)
+        address = _viser_embed_target(value)
+        if isinstance(address, str):
+            return {"_url": address}, None
         if isinstance(previous, _ViserRoute) and previous.address == address:
             # The same server keeps its route, so the embedded client stays loaded.
             route = previous
         else:
             route = _ViserRoute(panes._websock_interface._viser_proxy.register(*address), address)
-        return {"_url": route.path, "_port": None}, route
+        return {"_url": route.path}, route
 
     @staticmethod
     def _published(value: Any, settings: dict[str, Any]) -> None:
@@ -846,7 +844,7 @@ class ViserPaneHandle(PaneHandle):
             _minimize_viser_gui(value)
 
     @property
-    def url(self) -> str | None:
+    def url(self) -> str:
         """Embed URL shown in the pane; a same-origin path for local servers,
         or the explicit URL supplied by the caller."""
         with self._panes._lock:

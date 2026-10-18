@@ -84,11 +84,8 @@ export interface ViewportVideoProps extends RefreshableProps {
 }
 
 export interface ViewportViserProps extends RefreshableProps {
-  /** Absolute embed URL, rendered near-verbatim; null for port-based targets. */
-  _url: string | null;
-  /** Viser server port; the host is derived from the page's hostname. Null
-   * for URL-based targets. Exactly one of _url/_port is set. */
-  _port: number | null;
+  /** Same-origin proxy path or absolute embed URL, rendered near-verbatim. */
+  _url: string;
   title: string;
   visible: boolean;
   loading: boolean | string;
@@ -835,13 +832,9 @@ export function createViewportState(
           (pending?.minimumRevision ?? pane.props._refresh_revision ?? 0)
       )
         return;
-      const hasContent = [
-        "_data",
-        "_svg",
-        "_plotly_json_str",
-        "_url",
-        "_port",
-      ].some((key) => Object.hasOwn(updates, key));
+      const hasContent = ["_data", "_svg", "_plotly_json_str", "_url"].some(
+        (key) => Object.hasOwn(updates, key),
+      );
       if (
         pending === undefined &&
         Object.entries(updates).every(([key, value]) =>

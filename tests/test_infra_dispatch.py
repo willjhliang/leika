@@ -76,9 +76,7 @@ def _decode_frame(frame: bytes | str) -> list[dict[str, Any]]:
     size = int.from_bytes(frame[:8], "little")
     payload = zstandard.ZstdDecompressor().decompress(frame[8:], max_output_size=size)
     assert len(payload) == size
-    envelope = msgspec.msgpack.decode(payload)
-    assert isinstance(envelope["timestampSec"], float)
-    return envelope["messages"]
+    return msgspec.msgpack.decode(payload)
 
 
 def _close_code(websocket: ClientConnection) -> tuple[int, str]:

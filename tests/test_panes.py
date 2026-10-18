@@ -386,19 +386,15 @@ def test_matplotlib_pane_does_not_retain_the_caller_figure(
 
 
 def test_viser_target_normalization() -> None:
-    assert _viser_embed_target("http://viser.example.com:8080") == (
-        "http://viser.example.com:8080",
-        None,
-    )
-    assert _viser_embed_target("https://tunnel.example.com/scene") == (
-        "https://tunnel.example.com/scene",
-        None,
+    assert _viser_embed_target("http://viser.example.com:8080") == "http://viser.example.com:8080"
+    assert (
+        _viser_embed_target("https://tunnel.example.com/scene")
+        == "https://tunnel.example.com/scene"
     )
 
-    # ViserServer duck type: only the port is kept, since viser binds 0.0.0.0
-    # and the browser derives the host from the page's own hostname.
+    # ViserServer duck type: its address, which Leika proxies.
     fake = SimpleNamespace(get_port=lambda: 8080, get_host=lambda: "0.0.0.0")
-    assert _viser_embed_target(fake) == (None, 8080)
+    assert _viser_embed_target(fake) == ("0.0.0.0", 8080)
 
     with pytest.raises(ValueError, match="absolute http"):
         _viser_embed_target("localhost:8080")

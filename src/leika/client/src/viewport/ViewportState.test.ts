@@ -135,8 +135,7 @@ function viserDeclaration(
     page_id: DEFAULT_PAGE_ID,
     pane_id: paneId,
     props: {
-      _url: null,
-      _port: 8080,
+      _url: "/_leika/viser/1/",
       title: paneId,
       visible: true,
       loading: false,
@@ -249,16 +248,15 @@ describe("createViewportState hidden root lifecycle", () => {
     expect(replaced.props._data[0]).toBe(99);
   });
 
-  it("re-points a viser pane between port and URL targets", () => {
+  it("re-points a viser pane between proxied and URL targets", () => {
     const { actions, getState } = createViewportHarness();
     actions.addPane(viserDeclaration("viser"));
     expect(collectViewportPaneIds(getState().layout)).toEqual(["viser"]);
     const layout = getState().layout;
     const url = "http://viser.example.com:9000";
-    actions.updatePane("viser", { _url: url, _port: null });
+    actions.updatePane("viser", { _url: url });
     const pane = getState().panes.viser;
     expect(pane?.kind === "viser" ? pane.props._url : undefined).toBe(url);
-    expect(pane?.kind === "viser" ? pane.props._port : undefined).toBeNull();
     expect(getState().layout).toBe(layout);
   });
 });

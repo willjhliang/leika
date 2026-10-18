@@ -11,7 +11,6 @@ import http
 import itertools
 import logging
 import threading
-import time
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Sequence
 from concurrent.futures import Future
 from pathlib import Path
@@ -515,14 +514,9 @@ def _frame(compressor: zstandard.ZstdCompressor, encoded: Iterable[bytes]) -> by
     """Frame already-encoded messages without decoding or re-encoding them.
 
     Layout: the decompressed size as a little-endian uint64, then a zstd
-    frame of the MessagePack envelope ``{messages, timestampSec}``.
+    frame of the MessagePack array of messages.
     """
-    payload = msgspec.msgpack.encode(
-        {
-            "messages": [msgspec.Raw(data) for data in encoded],
-            "timestampSec": time.perf_counter(),
-        }
-    )
+    payload = msgspec.msgpack.encode([msgspec.Raw(data) for data in encoded])
     return len(payload).to_bytes(8, "little") + compressor.compress(payload)
 
 

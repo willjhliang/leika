@@ -916,8 +916,7 @@ export interface ViewportViserMessage {
   relative_to: string;
   equalize_group: string[];
   props: {
-    _url: string | null;
-    _port: number | null;
+    _url: string;
     title: string;
     visible: boolean;
     loading: boolean | string;
@@ -1359,4 +1358,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "e857ac6e124e";
+export const LEIKA_PROTOCOL = "951d41231bed";

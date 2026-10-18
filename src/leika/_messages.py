@@ -1517,11 +1517,9 @@ class ViewportVideoMessage(_ViewportPaneCreateMessage):
 class ViewportViserProps:
     """Properties for an embedded viser pane."""
 
-    _url: Optional[str]
-    """Absolute embed URL, rendered near-verbatim. None for port-based targets."""
-    _port: Optional[int]
-    """Viser server port; the client derives the host from the page's hostname.
-    None for URL-based targets. Exactly one of _url/_port is set."""
+    _url: str
+    """Embed URL: Leika's same-origin proxy path for a local Viser server, or
+    the caller's absolute URL, rendered near-verbatim."""
     title: str
     visible: bool
     loading: bool | str
