@@ -5,12 +5,10 @@ import { ZSTDDecoder } from "zstddec";
 import { connectionStats } from "./ConnectionStatsController";
 import { emptyCounters } from "./connectionStats";
 import { resetMarkdownDocumentCache } from "./components/markdownDocument";
-import { resetFileTransferFailureToast } from "./fileDownloadHandler";
 import { resetFilePreviewState } from "./filePreview";
 import { decodeHybridMessage } from "./hybridMessageDecode";
 import { handleMessages } from "./MessageHandler";
 import { resetNotifications } from "./notifications";
-import { retainedDownloads } from "./retainedDownloadBudget";
 import { useViewer, warnDisconnectedSend } from "./ViewerContext";
 import { LEIKA_PROTOCOL, type Message } from "./WebsocketMessages";
 
@@ -96,13 +94,8 @@ export function WebsocketMessageProducer() {
         "The connection changed during the upload.",
       );
       resetFilePreviewState();
-      // Preview/warm owners release themselves above. This also closes file
-      // link toasts from the old server; protected save navigations alone stay
-      // alive until their one-second cross-browser grace timer completes.
-      retainedDownloads.evictAll();
       resetMarkdownDocumentCache();
       resetNotifications();
-      resetFileTransferFailureToast();
     };
 
     const updateRetryInterval = () => {

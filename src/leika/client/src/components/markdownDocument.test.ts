@@ -160,7 +160,7 @@ test("reset drops rendered source and invalidates pending warm parsing", async (
       }),
   );
   const blob = { size: 32, text } as unknown as Blob;
-  warmMarkdownBlob(blob, () => true);
+  warmMarkdownBlob(blob);
   resetMarkdownDocumentCache();
   resolveText("![plot](/leika-assets/a.png?w=1&h=1)");
   await Promise.resolve();
@@ -180,14 +180,11 @@ test("warm Blob parsing is size-bounded and single-flight", async () => {
     () => new Promise<string>((resolve) => (resolveFirst = resolve)),
   );
   const secondText = vi.fn(() => Promise.resolve("# second"));
-  warmMarkdownBlob(
-    { size: MARKDOWN_WARM_MAX_BYTES, text: firstText } as unknown as Blob,
-    () => true,
-  );
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
+  warmMarkdownBlob({
+    size: MARKDOWN_WARM_MAX_BYTES,
+    text: firstText,
+  } as unknown as Blob);
+  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
   expect(firstText).toHaveBeenCalledOnce();
   expect(secondText).not.toHaveBeenCalled();
   resolveFirst("# discarded");
@@ -195,57 +192,21 @@ test("warm Blob parsing is size-bounded and single-flight", async () => {
   await Promise.resolve();
   // Decoding remains single-flight until the scheduled parse has actually
   // run; otherwise each hidden-tab idle closure could retain another source.
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
+  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
   expect(secondText).not.toHaveBeenCalled();
   await vi.runAllTimersAsync();
-  warmMarkdownBlob(
-    { size: 1, text: secondText } as unknown as Blob,
-    () => true,
-  );
+  warmMarkdownBlob({ size: 1, text: secondText } as unknown as Blob);
   expect(secondText).toHaveBeenCalledOnce();
   await Promise.resolve();
   await Promise.resolve();
   await vi.runAllTimersAsync();
 
   const tooLargeText = vi.fn(() => Promise.resolve("# too large"));
-  warmMarkdownBlob(
-    {
-      size: MARKDOWN_WARM_MAX_BYTES + 1,
-      text: tooLargeText,
-    } as unknown as Blob,
-    () => true,
-  );
+  warmMarkdownBlob({
+    size: MARKDOWN_WARM_MAX_BYTES + 1,
+    text: tooLargeText,
+  } as unknown as Blob);
   expect(tooLargeText).not.toHaveBeenCalled();
-
-  const evictedText = vi.fn(() => Promise.resolve("# evicted"));
-  warmMarkdownBlob(
-    { size: 1, text: evictedText } as unknown as Blob,
-    () => false,
-  );
-  expect(evictedText).not.toHaveBeenCalled();
-});
-
-test("an evicted owner cancels warm work already queued for idle", async () => {
-  vi.useFakeTimers();
-  const fetch = vi.fn(() => Promise.resolve(new Response()));
-  vi.stubGlobal("fetch", fetch);
-  let active = true;
-  warmMarkdownBlob(
-    {
-      size: 48,
-      text: () => Promise.resolve("![plot](/leika-assets/late.png?w=1&h=1)"),
-    } as unknown as Blob,
-    () => active,
-  );
-  await Promise.resolve();
-  await Promise.resolve();
-  active = false;
-  vi.runAllTimers();
-
-  expect(fetch).not.toHaveBeenCalled();
 });
 
 test("markdown warming deduplicates and caps asset prefetches", async () => {

@@ -1,5 +1,3 @@
-import { toast } from "./components/ui/toast";
-import { DeferredObjectUrlReleaser } from "./deferredObjectUrlReleaser";
 import { handleFileDownloadMessage } from "./fileDownloadHandler";
 import {
   cancelPendingFilePreview,
@@ -18,12 +16,7 @@ import {
   type GuiStateMessage,
 } from "./ControlPanel/GuiState";
 import type { ViewerContextContents } from "./ViewerContext";
-import {
-  FileTransferAbort,
-  FileTransferPart,
-  FileTransferStartDownload,
-  Message,
-} from "./WebsocketMessages";
+import type { Message } from "./WebsocketMessages";
 
 /** Apply server messages in order. GUI messages commit as one transaction,
  * in order among themselves; no other message reads GUI state. */
@@ -150,19 +143,19 @@ function handleMessage(viewer: ViewerContextContents, message: Message): void {
       return;
     case "FileTransferStartDownload":
     case "FileTransferPart":
-      handleDownload(viewer, message);
+      handleFileDownloadMessage(message, viewer.mutable.current.downloads);
       return;
     case "FileTransferAbort":
       // Abort is bidirectional. An active upload gets first claim on its
       // client-generated transfer ID; otherwise this belongs to a download.
-      if (viewer.mutable.current.uploads.acceptAbort(message).matched) return;
-      handleDownload(viewer, message);
+      if (viewer.mutable.current.uploads.acceptAbort(message)) return;
+      handleFileDownloadMessage(message, viewer.mutable.current.downloads);
       return;
     case "FileTransferPartAck": {
-      const acceptance = viewer.mutable.current.uploads.acceptAck(message);
-      if (acceptance.matched && acceptance.accepted) {
+      const componentId = viewer.mutable.current.uploads.acceptAck(message);
+      if (componentId !== null) {
         viewer.guiActions.updateUploadState({
-          componentId: acceptance.componentUuid,
+          componentId,
           transferUuid: message.transfer_uuid,
           uploadedBytes: message.transferred_bytes,
           totalBytes: message.total_bytes,
@@ -174,23 +167,4 @@ function handleMessage(viewer: ViewerContextContents, message: Message): void {
       console.warn("Ignored unsupported Leika message:", message);
       return;
   }
-}
-
-const savedUrlReleaser = new DeferredObjectUrlReleaser();
-
-function handleDownload(
-  viewer: ViewerContextContents,
-  message: FileTransferStartDownload | FileTransferPart | FileTransferAbort,
-): void {
-  handleFileDownloadMessage(message, {
-    downloads: viewer.mutable.current.downloads,
-    savedUrlReleaser,
-    sendMessage: (abort) => viewer.mutable.current.sendMessage(abort),
-    createBlob: (parts, mimeType) => new Blob(parts, { type: mimeType }),
-    createObjectURL: (blob) => URL.createObjectURL(blob),
-    revokeObjectURL: (url) => URL.revokeObjectURL(url),
-    addToast: (options) => toast.add(options),
-    closeToast: (id) => toast.close(id),
-    document,
-  });
 }

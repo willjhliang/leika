@@ -5,6 +5,9 @@ versioning.
 
 ## Unreleased
 
+- Browser: downloads and uploads no longer meet browser-side size, part or
+  count limits or filename and MIME re-checks; the server's own limits apply.
+  A file link toast now stays usable across a reconnect until it is closed.
 - Browser: every image is decoded by the browser itself. Images are no longer
   header-checked or held to a page-wide pixel limit; one the browser cannot
   decode (including formats such as TIFF in a file preview) shows its ordinary

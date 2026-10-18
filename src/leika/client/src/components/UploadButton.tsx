@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useViewer, ViewerContextContents } from "../ViewerContext";
 import { GuiUploadButtonMessage } from "../WebsocketMessages";
-import { captureSendSession } from "../connectionSender";
 import { sendFileUpload } from "../fileUpload";
 import { FileUploadError } from "../fileUploadAckBroker";
 import { randomUuid } from "../utils/randomUuid";
@@ -109,7 +108,9 @@ function useFileUpload({
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
-    const sendSession = captureSendSession(viewer.mutable.current);
+    // A send after the connection has changed is dropped by the sender, and
+    // the change itself fails the upload through `uploads.reset()`.
+    const sendMessage = viewer.mutable.current.sendMessage;
     const transferUuid = randomUuid();
     setError(null);
     updateUploadState({
@@ -124,7 +125,7 @@ function useFileUpload({
         file,
         componentUuid,
         transferUuid,
-        sendSession,
+        sendMessage,
         viewer.mutable.current.uploads,
         { signal: abort.signal },
       );

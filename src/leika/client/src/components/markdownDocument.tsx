@@ -174,10 +174,7 @@ export function resetMarkdownDocumentCache(): void {
  * the address the document will ask for: fetching the bare path would warm a
  * cache entry under a key no `<img>` on the page is going to use.
  */
-export function warmMarkdownDocument(
-  source: string,
-  ownerIsActive: () => boolean = () => true,
-): Promise<void> {
+export function warmMarkdownDocument(source: string): Promise<void> {
   if (
     warmDocumentInFlight ||
     markdownSourceBytesAtMost(source, MARKDOWN_WARM_MAX_BYTES) === null
@@ -199,7 +196,7 @@ export function warmMarkdownDocument(
     const work = () => {
       if (settled) return;
       try {
-        if (generation !== warmGeneration || !ownerIsActive()) return;
+        if (generation !== warmGeneration) return;
         // Idle callbacks still block the UI once started. Only preparse a
         // bounded small document here; file previews parse larger ones in a worker.
         if (source.length <= 8192) renderMarkdown(source);
@@ -251,18 +248,9 @@ export function warmMarkdownDocument(
   });
 }
 
-/** Decode at most one small warm Blob at a time. Evicted warm owners cannot
- * populate the markdown cache after their byte reservation has gone away. */
-export function warmMarkdownBlob(
-  blob: Blob,
-  ownerIsActive: () => boolean,
-): void {
-  if (
-    blob.size > MARKDOWN_WARM_MAX_BYTES ||
-    warmBlobInFlight ||
-    !ownerIsActive()
-  )
-    return;
+/** Decode at most one small warm Blob at a time. */
+export function warmMarkdownBlob(blob: Blob): void {
+  if (blob.size > MARKDOWN_WARM_MAX_BYTES || warmBlobInFlight) return;
   const generation = warmGeneration;
   warmBlobInFlight = true;
   let decoded: Promise<string>;
@@ -275,9 +263,7 @@ export function warmMarkdownBlob(
   void decoded
     .then(
       (source) => {
-        if (generation === warmGeneration && ownerIsActive()) {
-          return warmMarkdownDocument(source, ownerIsActive);
-        }
+        if (generation === warmGeneration) return warmMarkdownDocument(source);
       },
       () => undefined,
     )

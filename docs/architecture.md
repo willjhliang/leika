@@ -192,8 +192,7 @@ Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
 The server's 256 MiB combined upload budget includes transfers in progress,
 transient conversion headroom, and retained `UploadedFile` values; explicit
 cancellation releases a transfer's reservation. The server admits at most 128
-active uploads per server instance; each browser document independently admits
-at most 128.
+active uploads per server instance.
 
 Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
 share 128 MiB, beyond which the oldest registrations are evicted and their URLs
@@ -201,16 +200,9 @@ answer 404.
 
 Downloads are stream-flow-controlled to an 8 MiB queued budget per server
 client, but browser save and link flows still assemble the complete file as a
-Blob. The browser accepts at most 256 MiB and 65,536 parts per download, with
-at most 128 active assemblies. One document-wide 512 MiB budget covers both
-the declared bytes of active assemblies and completed Blobs retained by save
-navigation, links, current or deferred previews, and the warm cache. Completion
-transfers the reservation atomically to its Blob owner; under pressure,
-lower-priority cache and link owners are evicted before a new transfer is
-rejected. The same document admits at most 512 active or retained owners and
-65,536 received part records in aggregate, including zero-byte and highly
-fragmented transfers. These limits bound browser memory commitments; callers
-should use a dedicated streaming endpoint for larger files.
+Blob in memory; use a dedicated streaming endpoint for very large files. Each
+owner of a completed file -- a save, a link toast, a preview, or the warm cache
+-- revokes its own object URL when it closes.
 
 A path-backed download is a live descriptor stream: atomically replacing the
 path leaves an already-open transfer stable, while modifying the same file in

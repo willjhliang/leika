@@ -6,7 +6,6 @@ import { useGuiState } from "./ControlPanel/GuiState";
 import { useViewportState } from "./viewport/ViewportState";
 import { FileDownloadAssembler } from "./fileDownloadAssembler";
 import { FileUploadAckBroker } from "./fileUploadAckBroker";
-import { retainedDownloads } from "./retainedDownloadBudget";
 import {
   ViewerContext,
   type ViewerContextContents,
@@ -19,7 +18,7 @@ import {
 function createViewerTransport(): ViewerMutable {
   return {
     sendMessage: warnDisconnectedSend,
-    downloads: new FileDownloadAssembler(retainedDownloads),
+    downloads: new FileDownloadAssembler(),
     uploads: new FileUploadAckBroker(),
   };
 }
