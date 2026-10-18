@@ -57,7 +57,7 @@ dev = [
   "pytest-playwright>=0.4.0",
   "pytest-xdist>=3.0.0",
   "ruff>=0.9.3",
-  "twine>=6,<7",
+  "twine>=6,<8",
 ]
 docs = [
   "furo>=2025.12.19",
