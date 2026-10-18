@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS,
-  parsePlotlyFigure,
-  parsePlotlyThemeTemplates,
-} from "./plotlyPayload";
-
-function exactSizeObject(size: number): string {
-  const envelope = '{"value":""}';
-  return `{"value":"${"x".repeat(size - envelope.length)}"}`;
-}
+import { parsePlotlyFigure, parsePlotlyThemeTemplates } from "./plotlyPayload";
 
 describe("parsePlotlyFigure", () => {
   it("treats an empty payload as no figure", () => {
@@ -48,21 +39,6 @@ describe("parsePlotlyFigure", () => {
       },
     });
   });
-
-  it("accepts the exact parse ceiling and rejects one character beyond it", () => {
-    expect(
-      parsePlotlyFigure(exactSizeObject(PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS))
-        .ok,
-    ).toBe(true);
-    expect(
-      parsePlotlyFigure(
-        exactSizeObject(PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS + 1),
-      ),
-    ).toEqual({
-      ok: false,
-      error: "Plotly data exceeds the browser parse limit.",
-    });
-  });
 });
 
 describe("parsePlotlyThemeTemplates", () => {
@@ -81,22 +57,6 @@ describe("parsePlotlyThemeTemplates", () => {
     expect(parsePlotlyThemeTemplates("null")).toEqual({
       ok: false,
       error: "Plotly theme templates must be a JSON object.",
-    });
-  });
-
-  it("uses the same exact serialized-input ceiling as figures", () => {
-    expect(
-      parsePlotlyThemeTemplates(
-        exactSizeObject(PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS),
-      ).ok,
-    ).toBe(true);
-    expect(
-      parsePlotlyThemeTemplates(
-        exactSizeObject(PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS + 1),
-      ),
-    ).toEqual({
-      ok: false,
-      error: "Plotly data exceeds the browser parse limit.",
     });
   });
 });

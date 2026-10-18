@@ -1,7 +1,6 @@
 import { isBoundedLayoutId } from "../persistenceLimits";
 import { commonRendererStringWithinLimit, utf8ByteLength } from "../guiLimits";
 import { matplotlibSvgSourceError } from "../rendererSourceLimits";
-import { PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS } from "./plotlyPayload";
 import type { ViewportContentPane } from "./ViewportState";
 
 /** Retained pane roots stay mounted even while hidden/minimized. */
@@ -65,14 +64,6 @@ export function viewportPaneWithinEntityLimits(
   }
   if (pane.kind === "matplotlib") {
     return matplotlibSvgSourceError(pane.props._svg) === null;
-  }
-  if (pane.kind === "plotly") {
-    return (
-      pane.props._plotly_json_str.length <=
-        PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS &&
-      pane.props._theme_templates.length <=
-        PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS
-    );
   }
   if (pane.kind === "viser" && pane.props._url !== null) {
     return pane.props._url.length <= MAX_VIEWPORT_URL_CODE_UNITS;

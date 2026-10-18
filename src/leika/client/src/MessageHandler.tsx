@@ -15,7 +15,7 @@ import {
   showNotification,
   updateNotification,
 } from "./notifications";
-import { plotlyBootstrap } from "./plotlyBootstrap";
+import { runPlotlyBootstrap } from "./plotlyReady";
 import { makeMessageQueueScheduler } from "./messageQueueScheduler";
 import { processMessageQueueSlice } from "./messageQueueProcessor";
 import {
@@ -85,7 +85,7 @@ function useMessageHandler(): (messages: readonly Message[]) => void {
           );
           return;
         case "RunJavascriptMessage":
-          // Executed once before this frame dispatches, after pure preflight.
+          runPlotlyBootstrap(message.source);
           return;
         case "NotificationShowMessage":
           showNotification(message.uuid, message.props);
@@ -228,9 +228,7 @@ export function MessageHandler() {
         if (batch.length === 0) return true;
         const failure =
           viewer.viewportActions.preflightMessageBatch(batch) ??
-          plotlyBootstrap.preflight(batch) ??
-          viewer.viewportActions.prepareMessageBatch(batch) ??
-          plotlyBootstrap.execute(batch);
+          viewer.viewportActions.prepareMessageBatch(batch);
         if (failure !== null) {
           viewer.mutable.current.failConnection(failure);
           return false;

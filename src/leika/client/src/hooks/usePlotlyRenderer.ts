@@ -1,11 +1,6 @@
 import * as React from "react";
 
-import {
-  getPlotly,
-  subscribePlotlyReady,
-  type PlotlyGlobal,
-} from "../plotlyReady";
-import { PlotlyRenderQueue } from "../plotlyRenderQueue";
+import { plotlyRuntime, type PlotlyGlobal } from "../plotlyReady";
 import type { ParsedPlotlyFigure } from "../viewport/plotlyPayload";
 
 export interface PlotlyRenderRequest {
@@ -18,28 +13,90 @@ type PlotlyFailure = {
   message: string;
 };
 
-/** Leave a Plotly host clean even if the optional server-sent runtime is
- * missing or its own cleanup rejects the node it was handed. */
-function purgePlotlyNode(node: HTMLDivElement): void {
-  const plotly = getPlotly();
-  if (plotly !== undefined) {
-    try {
-      plotly.purge(node);
-    } catch (error) {
-      console.error("Plotly cleanup failed:", error);
-    }
+/** The child node Plotly renders into. It is created only once the runtime
+ * has loaded, so it keeps the runtime that must purge it. */
+interface PlotlyHost {
+  node: HTMLDivElement;
+  plotly: PlotlyGlobal;
+  /** A `react()` call on `node` has not settled yet. */
+  pending: boolean;
+}
+
+/** Leave a Plotly node clean even if Plotly's own cleanup rejects it. */
+function purgePlotlyHost({ node, plotly }: PlotlyHost): void {
+  try {
+    plotly.purge(node);
+  } catch (error) {
+    console.error("Plotly cleanup failed:", error);
   }
   node.replaceChildren();
   // Plotly decorates the host itself. `purge()` does not consistently remove
-  // that marker in every supported browser, so invalid input could otherwise
+  // that marker in every supported browser, so a failed render could otherwise
   // look like a live plot after all of its children were gone.
   node.classList.remove("js-plotly-plot");
 }
 
-function freshPlotlyNode(root: HTMLDivElement): HTMLDivElement {
-  const node = document.createElement("div");
-  root.replaceChildren(node);
-  return node;
+function releasePlotlyHost(host: { current: PlotlyHost | null }): void {
+  if (host.current !== null) purgePlotlyHost(host.current);
+  host.current = null;
+}
+
+/** Render `request` into the root's Plotly child once the runtime has loaded.
+ * Returns the effect cleanup, after which this render can no longer report a
+ * failure or claim the visible node. */
+export function renderPlotly(
+  root: HTMLDivElement,
+  host: { current: PlotlyHost | null },
+  request: PlotlyRenderRequest,
+  setFailure: (failure: PlotlyFailure | null) => void,
+): () => void {
+  let current = true;
+  const loadTimeout = setTimeout(
+    () => setFailure({ request, message: "Plotly failed to load." }),
+    10_000,
+  );
+  void plotlyRuntime.then((plotly) => {
+    clearTimeout(loadTimeout);
+    if (!current) return;
+    setFailure(null);
+    // Plotly has no cancellation API. Move a still-pending render off screen
+    // before starting this one, so its eventual mutations land only on a
+    // detached node and cannot block or overwrite current data.
+    if (host.current === null || host.current.pending) {
+      releasePlotlyHost(host);
+      const node = document.createElement("div");
+      root.replaceChildren(node);
+      host.current = { node, plotly, pending: false };
+    }
+    const target = host.current;
+    target.pending = true;
+    // The executor turns a synchronous throw into a rejection.
+    void new Promise((resolve) =>
+      resolve(
+        plotly.react(
+          target.node,
+          request.figure.data,
+          request.layout,
+          request.figure.config,
+        ),
+      ),
+    )
+      .catch((error: unknown) => {
+        purgePlotlyHost(target);
+        if (!current) return;
+        console.error("Plotly render failed:", error);
+        setFailure({ request, message: "Plotly failed to render." });
+      })
+      .finally(() => {
+        target.pending = false;
+        // A superseded render may mutate its detached node until it settles.
+        if (host.current !== target) purgePlotlyHost(target);
+      });
+  });
+  return () => {
+    current = false;
+    clearTimeout(loadTimeout);
+  };
 }
 
 /** Own one imperative Plotly host.
@@ -65,111 +122,24 @@ export function usePlotlyRenderer({
   // boundary lets a superseded pending render be detached without asking
   // React to reconcile DOM Plotly may still mutate.
   const plotRef = React.useRef<HTMLDivElement>(null);
-  const activeNode = React.useRef<HTMLDivElement | null>(null);
+  const host = React.useRef<PlotlyHost | null>(null);
   const [failure, setFailure] = React.useState<PlotlyFailure | null>(null);
-  const queue = React.useRef(new PlotlyRenderQueue<HTMLDivElement>()).current;
 
   React.useEffect(() => {
     const root = plotRef.current;
     if (root === null) return;
-    const generation = queue.begin();
     if (inputError !== null || request === null) {
       setFailure(null);
-      const node = activeNode.current;
-      activeNode.current = null;
       root.replaceChildren();
-      if (node !== null) {
-        queue.release(node);
-        purgePlotlyNode(node);
-      }
-      return () => queue.invalidate(generation);
+      releasePlotlyHost(host);
+      return;
     }
-    if (!ready) {
-      const node = activeNode.current;
-      if (node !== null && queue.isPending(node)) {
-        activeNode.current = null;
-        root.replaceChildren();
-        queue.release(node);
-        purgePlotlyNode(node);
-      }
-      return () => queue.invalidate(generation);
-    }
+    // Keep the last plot while the host has no size to give Plotly.
+    if (!ready) return;
+    return renderPlotly(root, host, request, setFailure);
+  }, [request, inputError, ready]);
 
-    const render = (plotly: PlotlyGlobal) => {
-      if (!queue.isCurrent(generation)) return;
-      setFailure(null);
-
-      let node = activeNode.current;
-      // Plotly has no cancellation API. Move a still-pending generation off
-      // screen before starting the next one, so its eventual mutations land
-      // only on a detached node and cannot block or overwrite current data.
-      if (node === null) {
-        node = freshPlotlyNode(root);
-        activeNode.current = node;
-      } else if (queue.isPending(node)) {
-        const staleNode = node;
-        node = freshPlotlyNode(root);
-        activeNode.current = node;
-        queue.release(staleNode);
-        purgePlotlyNode(staleNode);
-      }
-
-      const nodeRef = new WeakRef(node);
-      const purgeReleasedNode = () => {
-        const releasedNode = nodeRef.deref();
-        if (releasedNode !== undefined) purgePlotlyNode(releasedNode);
-      };
-      void queue.run(
-        generation,
-        node,
-        () =>
-          plotly.react(
-            node,
-            request.figure.data,
-            request.layout,
-            request.figure.config,
-          ),
-        purgeReleasedNode,
-        (error: unknown) => {
-          console.error("Plotly render failed:", error);
-          purgeReleasedNode();
-          setFailure({ request, message: "Plotly failed to render." });
-        },
-      );
-    };
-
-    const plotly = getPlotly();
-    let fallback: number | null = null;
-    let unsubscribeReady: (() => void) | null = null;
-    if (plotly === undefined) {
-      unsubscribeReady = subscribePlotlyReady(render);
-      fallback = window.setTimeout(() => {
-        if (queue.isCurrent(generation) && getPlotly() === undefined) {
-          setFailure({ request, message: "Plotly failed to load." });
-        }
-      }, 10_000);
-    } else {
-      render(plotly);
-    }
-
-    return () => {
-      queue.invalidate(generation);
-      unsubscribeReady?.();
-      if (fallback !== null) clearTimeout(fallback);
-    };
-  }, [request, inputError, ready, queue]);
-
-  React.useEffect(() => {
-    const root = plotRef.current;
-    return () => {
-      queue.dispose(() => {
-        const node = activeNode.current;
-        activeNode.current = null;
-        if (root !== null) root.replaceChildren();
-        if (node !== null) purgePlotlyNode(node);
-      });
-    };
-  }, [queue]);
+  React.useEffect(() => () => releasePlotlyHost(host), []);
 
   return {
     plotRef,

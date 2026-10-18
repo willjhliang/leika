@@ -235,8 +235,8 @@ mounting before resolving its target. Image decoding remains viewport-bound.
 
 Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
 code units (16 Mi-characters). Public creation, update, and assignment preflight
-that bound and raise `ValueError` before publication. The bundled client repeats
-the check and shows a visible status if a payload bypasses the Python boundary.
+that bound and raise `ValueError` before publication. The browser waits for
+the Plotly runtime the server sends and renders each figure as it arrives.
 
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
 Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update

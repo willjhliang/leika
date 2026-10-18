@@ -15,7 +15,6 @@ import { resetFileTransferFailureToast } from "./fileDownloadHandler";
 import { retainedDownloads } from "./retainedDownloadBudget";
 import { WorkerEventGate } from "./workerFailure";
 import { connectionStateForEvent } from "./websocketClose";
-import { plotlyBootstrap } from "./plotlyBootstrap";
 import { resetMountedRasterPixels } from "./rasterPixelBudget";
 import type { PageSubscribeMessage } from "./WebsocketMessages";
 
@@ -106,7 +105,6 @@ export function WebsocketMessageProducer() {
       // Retained renderers still own these leases during ordinary reconnect.
       // Their normal unmount paths release them after replay or eviction.
       if (!retainPanes) {
-        plotlyBootstrap.reset();
         resetMountedRasterPixels();
       }
       viewer.mutable.current.messageQueue.reset();
