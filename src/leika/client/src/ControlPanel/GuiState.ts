@@ -1,43 +1,23 @@
 import React from "react";
 import { createStore, createKeyedStore } from "../store";
-import { cloneRecord, emptyRecord } from "../recordUtils";
-import {
-  MAX_BROWSER_LIVE_GUI_COMMANDS,
-  MAX_BROWSER_LIVE_GUI_COMPONENTS,
-  MAX_BROWSER_LIVE_GUI_MODALS,
-  addGuiConfigCosts,
-  guiConfigCost,
-  guiConfigCostWithinBrowserLimits,
-  guiConfigWithinEntityLimits,
-  guiCommandWithinEntityLimits,
-  guiCommandCost,
-  guiModalWithinEntityLimits,
-  guiModalCost,
-  subtractGuiConfigCosts,
-  type GuiConfigCost,
-} from "../guiLimits";
 
 import {
+  CommandUpdateMessage,
+  GuiCloseModalMessage,
   GuiComponentMessage,
+  GuiFormSubmitMessage,
   GuiModalMessage,
+  GuiRemoveMessage,
   GuiTabMessage,
   GuiTabUpdateMessage,
+  GuiUpdateMessage,
   Message,
   RegisterCommandMessage,
+  RemoveCommandMessage,
   ThemeConfigurationMessage,
   isGuiComponentMessage,
 } from "../WebsocketMessages";
 import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
-import { isBoundedLayoutId } from "../persistenceLimits";
-import {
-  createGuiProjection,
-  effectiveGuiCreate,
-  guiContainerGraphIsValid,
-  projectGuiRemoval,
-  projectGuiTabLifecycle,
-  setProjectedGuiConfig,
-  type GuiTabLifecycleMessage,
-} from "./guiLifecycleProjection";
 
 export interface GuiState {
   theme: ThemeConfigurationMessage;
@@ -45,9 +25,8 @@ export interface GuiState {
   /** Server-provided namespace for browser-owned workspace state. */
   workspaceId: string | null;
   websocketState: "connected" | "reconnecting" | "inactive";
-  /** A terminal connection error or a retryable local-safety diagnostic,
-   * shown in place of the connection status. Routine socket losses do not set
-   * one; a successful connection clears any diagnostic left by a retry. */
+  /** A terminal connection error, shown in place of the connection status.
+   * Routine socket losses do not set one. */
   connectionError: string | null;
   guiUuidSetFromContainerUuid: {
     [containerUuid: string]: { [uuid: string]: true } | undefined;
@@ -71,40 +50,46 @@ export interface GuiState {
   commands: { [uuid: string]: RegisterCommandMessage };
 }
 
+/** Server messages that change the GUI tree, modals or commands. */
+export type GuiStateMessage =
+  | GuiComponentMessage
+  | GuiModalMessage
+  | GuiCloseModalMessage
+  | GuiRemoveMessage
+  | GuiUpdateMessage
+  | GuiTabMessage
+  | GuiTabUpdateMessage
+  | GuiFormSubmitMessage
+  | RegisterCommandMessage
+  | CommandUpdateMessage
+  | RemoveCommandMessage;
+
+export function isGuiStateMessage(
+  message: Message,
+): message is GuiStateMessage {
+  switch (message.type) {
+    case "GuiModalMessage":
+    case "GuiCloseModalMessage":
+    case "GuiRemoveMessage":
+    case "GuiUpdateMessage":
+    case "GuiTabMessage":
+    case "GuiTabUpdateMessage":
+    case "GuiFormSubmitMessage":
+    case "RegisterCommandMessage":
+    case "CommandUpdateMessage":
+    case "RemoveCommandMessage":
+      return true;
+    default:
+      return isGuiComponentMessage(message);
+  }
+}
+
 export interface GuiActions {
   setTheme: (theme: ThemeConfigurationMessage) => void;
-  addGui: (config: GuiComponentMessage) => void;
-  addGuiBatch: (configs: readonly GuiComponentMessage[]) => void;
-  addModal: (config: GuiModalMessage) => void;
-  addModalBatch: (configs: readonly GuiModalMessage[]) => void;
-  applyTabLifecycleBatch: (messages: readonly GuiTabLifecycleMessage[]) => void;
-  declareTab: (message: GuiTabMessage) => void;
-  updateTab: (message: GuiTabUpdateMessage) => void;
-  removeModal: (
-    id: string,
-    removedUuids?: readonly string[],
-    removedTabUuids?: readonly string[],
-  ) => void;
+  /** Apply server GUI messages in order as one state transaction. */
+  applyMessages: (messages: readonly GuiStateMessage[]) => void;
+  /** Apply a local edit, ahead of the message that reports it to Python. */
   updateGuiProps: (id: string, updates: Record<string, unknown>) => void;
-  updateGuiPropsBatch: (
-    updates: ReadonlyMap<string, Record<string, unknown>>,
-  ) => void;
-  /** Record that a form was submitted, whoever submitted it. */
-  noteFormSubmit: (uuid: string) => void;
-  /** Move components within their containers.
-   *
-   * Ordering lives in a map of its own -- containers sort on it, while the
-   * per-component configs sit in a separate store so that one component's
-   * update re-renders one component. An `order` that arrives after the
-   * component was created therefore has to be written HERE as well, or the
-   * element keeps the place it was created in: this is how a form's submit
-   * button reaches the bottom of the form it was created at the top of. */
-  reorderGui: (orderFromUuid: { [uuid: string]: number }) => void;
-  removeGui: (
-    id: string,
-    removedUuids?: readonly string[],
-    removedTabUuids?: readonly string[],
-  ) => void;
   resetGui: () => void;
   updateUploadState: (
     state: (
@@ -115,16 +100,7 @@ export interface GuiActions {
   /** Remove only the transfer that is finishing. A late completion from a
    * cancelled upload must not erase a newer upload on the same control. */
   clearUploadState: (componentId: string, transferUuid: string) => void;
-  addCommand: (command: RegisterCommandMessage) => void;
-  addCommandBatch: (commands: readonly RegisterCommandMessage[]) => void;
-  /** Pure trust-boundary admission for one original websocket frame. */
-  preflightMessageBatch: (messages: readonly Message[]) => string | null;
-  updateCommand: (uuid: string, updates: Record<string, unknown>) => void;
-  removeCommand: (uuid: string) => void;
 }
-
-const rootGuiContainers = emptyRecord<{ [uuid: string]: true } | undefined>();
-rootGuiContainers[ROOT_GUI_CONTAINER_ID] = emptyRecord<true>();
 
 const cleanGuiState: GuiState = {
   theme: {
@@ -138,153 +114,51 @@ const cleanGuiState: GuiState = {
   workspaceId: null,
   websocketState: "inactive",
   connectionError: null,
-  guiUuidSetFromContainerUuid: rootGuiContainers,
+  guiUuidSetFromContainerUuid: { [ROOT_GUI_CONTAINER_ID]: {} },
   modals: [],
-  guiOrderFromUuid: emptyRecord<number>(),
+  guiOrderFromUuid: {},
   lastFormSubmit: null,
-  uploadsInProgress: emptyRecord(),
-  commands: emptyRecord(),
+  uploadsInProgress: {},
+  commands: {},
 };
 
-/**
- * Apply property updates to a GUI component.
- * Returns a new config with the updates applied, or the same config
- * reference if nothing actually changed.
- */
-function buildGuiConfigUpdate(
-  config: GuiComponentMessage,
-  updates: Record<string, unknown>,
-): GuiComponentMessage {
-  let propsChanged = false;
-  let valueChanged = false;
-
-  for (const [key, value] of Object.entries(updates)) {
-    if (key === "value") {
-      const current = "value" in config ? config.value : undefined;
-      if (!Object.is(current, value)) valueChanged = true;
-    } else if (!Object.hasOwn(config.props, key)) {
-      console.error(
-        `Tried to update nonexistent property '${key}' of GUI element!`,
-      );
-    } else {
-      if (!Object.is((config.props as Record<string, unknown>)[key], value))
-        propsChanged = true;
-    }
-  }
-
-  if (!propsChanged && !valueChanged) return config;
-
-  let newConfig = config;
-  if (valueChanged) {
-    newConfig = { ...newConfig, value: updates.value } as GuiComponentMessage;
-  }
-  if (propsChanged) {
-    const newProps = { ...config.props } as Record<string, unknown>;
-    for (const [key, value] of Object.entries(updates)) {
-      if (key !== "value" && Object.hasOwn(config.props, key)) {
-        Object.defineProperty(newProps, key, {
-          configurable: true,
-          enumerable: true,
-          value,
-          writable: true,
-        });
-      }
-    }
-    newConfig = { ...newConfig, props: newProps } as GuiComponentMessage;
-  }
-
-  return newConfig;
-}
-
-function validUpdatedGuiConfig(
-  config: GuiComponentMessage,
-  updates: Record<string, unknown>,
-): GuiComponentMessage | null {
-  if (config.type === "GuiTabGroupMessage" && Object.hasOwn(updates, "_tabs")) {
-    return null;
-  }
-  const candidate = buildGuiConfigUpdate(config, updates);
-  return guiConfigWithinEntityLimits(candidate) ? candidate : null;
-}
-
+/** Apply property and value updates to a GUI component, returning the same
+ * config when nothing changed so its subscribers do not re-render. */
 export function applyGuiConfigUpdate(
   config: GuiComponentMessage,
   updates: Record<string, unknown>,
 ): GuiComponentMessage {
-  const newConfig = validUpdatedGuiConfig(config, updates);
-  if (newConfig === null) {
-    console.error("Rejected GUI update that exceeds browser safety limits.");
-    return config;
-  }
-  return newConfig;
-}
-
-function removalDescendants(message: Message): readonly string[] {
-  return message.type === "GuiRemoveMessage" ||
-    message.type === "GuiCloseModalMessage"
-    ? message.removed_uuids
-    : [];
-}
-
-function removalTabs(message: Message): readonly string[] {
-  return message.type === "GuiRemoveMessage" ||
-    message.type === "GuiCloseModalMessage"
-    ? message.removed_tab_uuids
-    : [];
-}
-
-const MAX_GUI_CONTAINER_DEPTH = 64;
-const MAX_GUI_REMOVAL_TOMBSTONES = 4_096;
-const MAX_GUI_TAB_REMOVAL_TOMBSTONES = 16_384;
-
-function removalTombstonesAreValid(message: Message): boolean {
-  const descendants = removalDescendants(message);
-  const tabs = removalTabs(message);
+  const { value, ...propUpdates } = updates;
+  const props = config.props as Record<string, unknown>;
+  let next = config;
   if (
-    descendants.length > MAX_GUI_REMOVAL_TOMBSTONES ||
-    tabs.length > MAX_GUI_TAB_REMOVAL_TOMBSTONES
-  ) {
-    return false;
-  }
-  const primary =
-    "uuid" in message && typeof message.uuid === "string" ? message.uuid : null;
-  if (primary === null || !isBoundedLayoutId(primary)) return false;
-  const componentUuids = new Set<string>();
-  for (const uuid of descendants) {
-    if (
-      !isBoundedLayoutId(uuid) ||
-      uuid === primary ||
-      componentUuids.has(uuid)
-    ) {
-      return false;
-    }
-    componentUuids.add(uuid);
-  }
-  const tabUuids = new Set<string>();
-  for (const uuid of tabs) {
-    if (
-      !isBoundedLayoutId(uuid) ||
-      uuid === primary ||
-      componentUuids.has(uuid) ||
-      tabUuids.has(uuid)
-    ) {
-      return false;
-    }
-    tabUuids.add(uuid);
-  }
-  return true;
+    "value" in updates &&
+    !Object.is((config as { value?: unknown }).value, value)
+  )
+    next = { ...next, value } as GuiComponentMessage;
+  if (
+    Object.entries(propUpdates).some(
+      ([key, prop]) => !Object.is(props[key], prop),
+    )
+  )
+    next = {
+      ...next,
+      props: { ...props, ...propUpdates },
+    } as GuiComponentMessage;
+  return next;
 }
 
-function detachGuiConfigBinary(
+/** Image bytes arrive as views into their whole websocket frame; a retained
+ * control keeps only its own bytes. Unchanged bytes keep their identity so the
+ * image is not decoded again. */
+function ownImageBytes(
   config: GuiComponentMessage,
-  previous?: GuiComponentMessage,
+  previous: GuiComponentMessage | undefined,
 ): GuiComponentMessage {
-  if (config.type !== "GuiImageMessage") return config;
-  // Property-only updates already hold an exact, independently owned copy.
-  // Keep its identity so image hooks do not recreate URLs and decode it again.
   if (
-    previous?.type === "GuiImageMessage" &&
-    config.props._data === previous.props._data
+    config.type !== "GuiImageMessage" ||
+    (previous?.type === "GuiImageMessage" &&
+      config.props._data === previous.props._data)
   )
     return config;
   return {
@@ -300,662 +174,190 @@ export function createGuiState(initialServer: string) {
     server: initialServer,
   });
 
-  // Per-component config store, keyed by UUID. Tab lifecycle owners are
-  // retained separately; each group's derived tab array is the sole
-  // rendering snapshot and participates in the aggregate resource ledger.
+  // Per-component config store, keyed by UUID, so one component's update
+  // re-renders one component. Tab groups own their tab descriptors, which the
+  // flat tab lifecycle maintains through this index from tab to group.
   const configStore = createKeyedStore<GuiComponentMessage>();
   const tabOwnerFromUuid = new Map<string, string>();
-  let aggregateGuiCost: GuiConfigCost = {
-    collectionItems: 0,
-    retainedBytes: 0,
-    textCodeUnits: 0,
-  };
 
-  const addGuiBatch = (guiConfigs: readonly GuiComponentMessage[]) => {
-    if (guiConfigs.length === 0) return;
-    const failure = preflightMessageBatch(guiConfigs);
-    if (failure !== null) {
-      console.error(failure);
-      return;
-    }
-    const state = store.get();
-    const containerMap = cloneRecord(state.guiUuidSetFromContainerUuid);
-    const mutableContainers = new Set<string>();
-    const touchedContainers = new Set<string>();
-    const guiOrderFromUuid = cloneRecord(state.guiOrderFromUuid);
-    const configUpdates = emptyRecord<GuiComponentMessage | undefined>();
-    let nextCost = aggregateGuiCost;
-    let liveCount = configStore.size();
-
-    const membersForWrite = (containerUuid: string) => {
-      if (!mutableContainers.has(containerUuid)) {
-        containerMap[containerUuid] = cloneRecord(
-          containerMap[containerUuid] ?? emptyRecord<true>(),
-        );
-        mutableContainers.add(containerUuid);
-      }
-      touchedContainers.add(containerUuid);
-      return containerMap[containerUuid]!;
-    };
-
-    for (const incoming of guiConfigs) {
-      const previous = Object.hasOwn(configUpdates, incoming.uuid)
-        ? configUpdates[incoming.uuid]
-        : configStore.get(incoming.uuid);
-      const guiConfig = effectiveGuiCreate(incoming, previous);
-      if (guiConfig === null) {
-        throw new Error("GUI create preflight/commit invariant failed");
-      }
-      const previousCost =
-        previous === undefined
-          ? { collectionItems: 0, retainedBytes: 0, textCodeUnits: 0 }
-          : guiConfigCost(previous);
-      const candidateCost = addGuiConfigCosts(
-        subtractGuiConfigCosts(nextCost, previousCost),
-        guiConfigCost(guiConfig),
-      );
-      if (
-        !guiConfigWithinEntityLimits(guiConfig) ||
-        (previous === undefined &&
-          liveCount >= MAX_BROWSER_LIVE_GUI_COMPONENTS) ||
-        !guiConfigCostWithinBrowserLimits(candidateCost)
-      ) {
-        throw new Error("GUI preflight/commit invariant failed");
-      }
-      if (previous === undefined) liveCount += 1;
-      if (
-        previous !== undefined &&
-        previous.container_uuid !== guiConfig.container_uuid
-      ) {
-        delete membersForWrite(previous.container_uuid)[guiConfig.uuid];
-      }
-      membersForWrite(guiConfig.container_uuid)[guiConfig.uuid] = true;
-      guiOrderFromUuid[guiConfig.uuid] = guiConfig.props.order;
-      configUpdates[guiConfig.uuid] = detachGuiConfigBinary(
-        guiConfig,
-        previous,
-      );
-      nextCost = candidateCost;
-    }
-    for (const containerUuid of touchedContainers) {
-      if (Object.keys(containerMap[containerUuid]!).length === 0) {
-        delete containerMap[containerUuid];
-      }
-    }
-    configStore.set(configUpdates);
-    aggregateGuiCost = nextCost;
-    store.set({
-      guiOrderFromUuid,
-      guiUuidSetFromContainerUuid: containerMap,
-    });
-  };
-
-  const addModalBatch = (modalConfigs: readonly GuiModalMessage[]) => {
-    if (modalConfigs.length === 0) return;
-    const failure = preflightMessageBatch(modalConfigs);
-    if (failure !== null) {
-      console.error(failure);
-      return;
-    }
-    const current = new Map(
-      store.get().modals.map((modalConfig) => [modalConfig.uuid, modalConfig]),
-    );
-    let nextCost = aggregateGuiCost;
-    for (const modalConfig of modalConfigs) {
-      if (
-        !guiModalWithinEntityLimits(modalConfig) ||
-        (!current.has(modalConfig.uuid) &&
-          current.size >= MAX_BROWSER_LIVE_GUI_MODALS)
-      ) {
-        throw new Error("modal preflight/commit invariant failed");
-      }
-      const previous = current.get(modalConfig.uuid);
-      nextCost = addGuiConfigCosts(
-        previous === undefined
-          ? nextCost
-          : subtractGuiConfigCosts(nextCost, guiModalCost(previous)),
-        guiModalCost(modalConfig),
-      );
-      current.set(modalConfig.uuid, modalConfig);
-    }
-    aggregateGuiCost = nextCost;
-    store.set({
-      modals: [...current.values()].sort(
-        (left, right) => left.order - right.order,
-      ),
-    });
-  };
-
-  const addCommandBatch = (
-    commandConfigs: readonly RegisterCommandMessage[],
-  ) => {
-    if (commandConfigs.length === 0) return;
-    const failure = preflightMessageBatch(commandConfigs);
-    if (failure !== null) {
-      console.error(failure);
-      return;
-    }
-    const commands = cloneRecord(store.get().commands);
-    let liveCount = Object.keys(commands).length;
-    let changed = false;
-    let nextCost = aggregateGuiCost;
-    for (const command of commandConfigs) {
-      const exists = Object.hasOwn(commands, command.uuid);
-      if (
-        !guiCommandWithinEntityLimits(command) ||
-        (!exists && liveCount >= MAX_BROWSER_LIVE_GUI_COMMANDS)
-      ) {
-        throw new Error("command preflight/commit invariant failed");
-      }
-      if (Object.is(commands[command.uuid], command)) continue;
-      const previous = commands[command.uuid];
-      nextCost = addGuiConfigCosts(
-        previous === undefined
-          ? nextCost
-          : subtractGuiConfigCosts(nextCost, guiCommandCost(previous)),
-        guiCommandCost(command),
-      );
-      if (!exists) liveCount += 1;
-      commands[command.uuid] = command;
-      changed = true;
-    }
-    if (changed) {
-      aggregateGuiCost = nextCost;
-      store.set({ commands });
-    }
-  };
-
-  const applyTabLifecycleBatch = (
-    messages: readonly GuiTabLifecycleMessage[],
-  ) => {
+  const applyMessages = (messages: readonly GuiStateMessage[]) => {
     if (messages.length === 0) return;
-    const failure = preflightMessageBatch(messages);
-    if (failure !== null) {
-      console.error(failure);
-      return;
-    }
-    const currentConfigs = new Map(
-      configStore.values().map((config) => [config.uuid, config]),
-    );
-    const projection = createGuiProjection(
-      currentConfigs,
-      tabOwnerFromUuid,
-      aggregateGuiCost,
-    );
-    const modals = new Map(
-      store.get().modals.map((modalConfig) => [modalConfig.uuid, modalConfig]),
-    );
-    for (const message of messages) {
-      const detail = projectGuiTabLifecycle(projection, modals, message);
-      if (detail !== null) {
-        throw new Error("tab lifecycle preflight/commit invariant failed");
-      }
-    }
-    const configUpdates = emptyRecord<GuiComponentMessage | undefined>();
-    for (const [uuid, config] of projection.configs) {
-      if (!Object.is(currentConfigs.get(uuid), config)) {
-        configUpdates[uuid] = config;
-      }
-    }
-    if (Object.keys(configUpdates).length > 0) {
-      configStore.set(configUpdates);
-    }
-    replaceTabOwners(projection.tabOwnerFromUuid);
-    aggregateGuiCost = projection.cost;
-  };
-
-  const replaceTabOwners = (owners: ReadonlyMap<string, string>) => {
-    tabOwnerFromUuid.clear();
-    for (const [tabUuid, groupUuid] of owners) {
-      tabOwnerFromUuid.set(tabUuid, groupUuid);
-    }
-  };
-
-  const purgeGui = (
-    initialComponents: readonly string[],
-    initialContainers: readonly string[],
-    initialTabs: readonly string[],
-    modalUuid?: string,
-  ) => {
     const state = store.get();
-    const currentConfigs = new Map(
-      configStore.values().map((config) => [config.uuid, config]),
-    );
-    const projection = createGuiProjection(
-      currentConfigs,
-      tabOwnerFromUuid,
-      aggregateGuiCost,
-    );
-    const { removedComponents, removedContainers } = projectGuiRemoval(
-      projection,
-      initialComponents,
-      initialContainers,
-      initialTabs,
-    );
-
-    const configUpdates = emptyRecord<GuiComponentMessage | undefined>();
-    for (const [uuid, config] of currentConfigs) {
-      const projected = projection.configs.get(uuid);
-      if (projected === undefined) configUpdates[uuid] = undefined;
-      else if (!Object.is(projected, config)) configUpdates[uuid] = projected;
-    }
-    if (Object.keys(configUpdates).length > 0) {
-      configStore.set(configUpdates);
-    }
-    replaceTabOwners(projection.tabOwnerFromUuid);
-    aggregateGuiCost = projection.cost;
-
-    const guiOrderFromUuid = cloneRecord(state.guiOrderFromUuid);
-    const uploadsInProgress = cloneRecord(state.uploadsInProgress);
-    for (const uuid of removedComponents) {
-      delete guiOrderFromUuid[uuid];
-      delete uploadsInProgress[uuid];
-    }
-
-    const containerMap = cloneRecord(state.guiUuidSetFromContainerUuid);
-    for (const [containerUuid, members] of Object.entries(containerMap)) {
-      if (members === undefined) continue;
-      if (removedContainers.has(containerUuid)) {
-        delete containerMap[containerUuid];
-        continue;
+    const configUpdates: Record<string, GuiComponentMessage | undefined> = {};
+    const config = (uuid: string) =>
+      Object.hasOwn(configUpdates, uuid)
+        ? configUpdates[uuid]
+        : configStore.get(uuid);
+    // Copy each record only once it changes, so a frame of value updates
+    // leaves the tree, order and modal snapshots (and their selectors) alone.
+    const draft: Partial<GuiState> = {};
+    const edit = <K extends EditableField>(key: K): GuiState[K] =>
+      (draft[key] ??= { ...state[key] }) as GuiState[K];
+    const copiedContainers = new Set<string>();
+    const members = (containerUuid: string) => {
+      const containers = edit("guiUuidSetFromContainerUuid");
+      if (!copiedContainers.has(containerUuid)) {
+        containers[containerUuid] = { ...containers[containerUuid] };
+        copiedContainers.add(containerUuid);
       }
-      let nextMembers: Record<string, true> | null = null;
-      for (const uuid of Object.keys(members)) {
-        if (!removedComponents.has(uuid)) continue;
-        nextMembers ??= cloneRecord(members);
-        delete nextMembers[uuid];
-      }
-      if (nextMembers === null) continue;
-      if (Object.keys(nextMembers).length === 0) {
-        delete containerMap[containerUuid];
-      } else {
-        containerMap[containerUuid] = nextMembers;
-      }
-    }
-    if (!Object.hasOwn(containerMap, ROOT_GUI_CONTAINER_ID)) {
-      containerMap[ROOT_GUI_CONTAINER_ID] = emptyRecord<true>();
-    }
-
-    if (modalUuid !== undefined) {
-      const removedModal = state.modals.find(
-        (modal) => modal.uuid === modalUuid,
-      );
-      if (removedModal !== undefined) {
-        aggregateGuiCost = subtractGuiConfigCosts(
-          aggregateGuiCost,
-          guiModalCost(removedModal),
-        );
-      }
-    }
-    store.set({
-      guiOrderFromUuid,
-      guiUuidSetFromContainerUuid: containerMap,
-      modals:
-        modalUuid === undefined
-          ? state.modals
-          : state.modals.filter((modal) => modal.uuid !== modalUuid),
-      uploadsInProgress,
-    });
-  };
-
-  const updateGuiPropsBatch = (
-    updatesFromUuid: ReadonlyMap<string, Record<string, unknown>>,
-  ) => {
-    if (updatesFromUuid.size === 0) return;
-    const messages: Message[] = [];
-    for (const [uuid, updates] of updatesFromUuid) {
-      messages.push({ type: "GuiUpdateMessage", uuid, updates });
-    }
-    const failure = preflightMessageBatch(messages);
-    if (failure !== null) {
-      console.error(failure);
-      return;
-    }
-    const configUpdates = emptyRecord<GuiComponentMessage | undefined>();
-    const orderUpdates = emptyRecord<number>();
-    let nextCost = aggregateGuiCost;
-    for (const [uuid, updates] of updatesFromUuid) {
-      const current = configStore.get(uuid);
-      if (current === undefined) continue;
-      const updated = applyGuiConfigUpdate(current, updates);
-      if (updated === current) continue;
-      const candidateCost = addGuiConfigCosts(
-        subtractGuiConfigCosts(nextCost, guiConfigCost(current)),
-        guiConfigCost(updated),
-      );
-      if (!guiConfigCostWithinBrowserLimits(candidateCost)) {
-        throw new Error("GUI update preflight/commit invariant failed");
-      }
-      configUpdates[uuid] = detachGuiConfigBinary(updated, current);
-      if (typeof updates.order === "number") {
-        orderUpdates[uuid] = updates.order;
-      }
-      nextCost = candidateCost;
-    }
-    if (Object.keys(configUpdates).length > 0) {
-      configStore.set(configUpdates);
-      aggregateGuiCost = nextCost;
-    }
-    if (Object.keys(orderUpdates).length > 0) {
-      const state = store.get();
-      const guiOrderFromUuid = cloneRecord(state.guiOrderFromUuid);
-      for (const [uuid, order] of Object.entries(orderUpdates)) {
-        guiOrderFromUuid[uuid] = order;
-      }
-      store.set({ guiOrderFromUuid });
-    }
-  };
-
-  const preflightMessageBatch = (
-    messages: readonly Message[],
-  ): string | null => {
-    // Image streams, downloads and connection bookkeeping do not change GUI
-    // owners. Avoid cloning and walking every control for those frames.
-    if (
-      !messages.some(
-        (message) =>
-          message.type.startsWith("Gui") ||
-          message.type === "RegisterCommandMessage" ||
-          message.type === "CommandUpdateMessage" ||
-          message.type === "RemoveCommandMessage",
-      )
-    )
-      return null;
-    const projection = createGuiProjection(
-      configStore.values().map((config) => [config.uuid, config] as const),
-      tabOwnerFromUuid,
-      aggregateGuiCost,
-    );
-    const modals = new Map(
-      store.get().modals.map((modalConfig) => [modalConfig.uuid, modalConfig]),
-    );
-    const commands = new Map(Object.entries(store.get().commands));
-    const reject = (detail: string) =>
-      "Connection frame violates browser GUI safety limits: " + detail;
-    // Property/value updates cannot change container edges. Once validated,
-    // reuse the result until a lifecycle message changes graph ownership.
-    let graphDirty = true;
-    const graphIsValid = () => {
-      if (!graphDirty) return true;
-      const valid = guiContainerGraphIsValid(
-        projection.configs,
-        modals,
-        projection.tabOwnerFromUuid,
-        MAX_GUI_CONTAINER_DEPTH,
-      );
-      if (valid) graphDirty = false;
-      return valid;
+      return containers[containerUuid]!;
     };
-    type BatchKind = "gui" | "modal" | "command" | "tab";
-    const batchKind = (message: Message): BatchKind | null => {
-      if (isGuiComponentMessage(message)) return "gui";
-      if (message.type === "GuiModalMessage") return "modal";
-      if (message.type === "RegisterCommandMessage") return "command";
-      if (
-        message.type === "GuiTabMessage" ||
-        message.type === "GuiTabUpdateMessage"
-      ) {
-        return "tab";
-      }
-      return null;
+    let modals: Map<string, GuiModalMessage> | undefined;
+    const editModals = () =>
+      (modals ??= new Map(state.modals.map((modal) => [modal.uuid, modal])));
+
+    const setTabs = (
+      groupUuid: string,
+      update: (tabs: GuiTabGroupTabs) => GuiTabGroupTabs,
+    ) => {
+      const group = config(groupUuid);
+      if (group?.type !== "GuiTabGroupMessage") return;
+      configUpdates[groupUuid] = {
+        ...group,
+        props: { ...group.props, _tabs: update(group.props._tabs) },
+      };
     };
-    let pendingBatchKind: BatchKind | null = null;
+
+    // Python lists every removed descendant, so removal needs no local walk.
+    const remove = (components: readonly string[], tabs: readonly string[]) => {
+      for (const uuid of components) {
+        const previous = config(uuid);
+        if (previous !== undefined)
+          delete members(previous.container_uuid)[uuid];
+        configUpdates[uuid] = undefined;
+        delete edit("guiOrderFromUuid")[uuid];
+        delete edit("uploadsInProgress")[uuid];
+      }
+      for (const tabUuid of tabs) {
+        const groupUuid = tabOwnerFromUuid.get(tabUuid);
+        tabOwnerFromUuid.delete(tabUuid);
+        if (groupUuid !== undefined)
+          setTabs(groupUuid, (current) =>
+            current.filter((tab) => tab.container_id !== tabUuid),
+          );
+      }
+    };
 
     for (const message of messages) {
-      const nextBatchKind = batchKind(message);
-      if (
-        pendingBatchKind !== null &&
-        pendingBatchKind !== nextBatchKind &&
-        !graphIsValid()
-      ) {
-        return reject(
-          "GUI container graph has an invalid dispatch-batch prefix",
-        );
-      }
-      pendingBatchKind = nextBatchKind;
-      if (
-        nextBatchKind === "gui" ||
-        nextBatchKind === "modal" ||
-        nextBatchKind === "tab" ||
-        message.type === "GuiRemoveMessage" ||
-        message.type === "GuiCloseModalMessage"
-      )
-        graphDirty = true;
       if (isGuiComponentMessage(message)) {
-        const previous = projection.configs.get(message.uuid);
-        if (
-          projection.tabOwnerFromUuid.has(message.uuid) ||
-          modals.has(message.uuid) ||
-          message.uuid === ROOT_GUI_CONTAINER_ID
-        ) {
-          return reject("GUI component collides with another GUI owner");
+        const previous = config(message.uuid);
+        // Tab descriptors come only from the tab lifecycle; a redeclared
+        // group keeps the ones it already has.
+        const next =
+          message.type === "GuiTabGroupMessage" &&
+          previous?.type === "GuiTabGroupMessage"
+            ? {
+                ...message,
+                props: { ...message.props, _tabs: previous.props._tabs },
+              }
+            : message;
+        if (previous?.container_uuid !== next.container_uuid) {
+          if (previous !== undefined)
+            delete members(previous.container_uuid)[next.uuid];
+          members(next.container_uuid)[next.uuid] = true;
         }
-        const candidate = effectiveGuiCreate(message, previous);
-        if (candidate === null || !guiConfigWithinEntityLimits(candidate)) {
-          return reject("GUI component snapshot or entity limit is invalid");
-        }
-        if (
-          previous === undefined &&
-          projection.configs.size >= MAX_BROWSER_LIVE_GUI_COMPONENTS
-        ) {
-          return reject("GUI component owner limit exceeded");
-        }
-        setProjectedGuiConfig(projection, candidate);
-        if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-          return reject("GUI component aggregate budget exceeded");
-        }
+        edit("guiOrderFromUuid")[next.uuid] = next.props.order;
+        configUpdates[next.uuid] = ownImageBytes(next, previous);
         continue;
       }
       switch (message.type) {
-        case "GuiTabMessage":
-        case "GuiTabUpdateMessage": {
-          const detail = projectGuiTabLifecycle(projection, modals, message);
-          if (detail !== null) return reject(detail);
-          break;
-        }
         case "GuiUpdateMessage": {
-          if (
-            projection.tabOwnerFromUuid.has(message.uuid) ||
-            Object.hasOwn(message.updates, "_tabs")
-          ) {
-            return reject(
-              "tab metadata may only change through tab lifecycle messages",
-            );
-          }
-          const previous = projection.configs.get(message.uuid);
-          if (previous === undefined) break;
-          const candidate = validUpdatedGuiConfig(previous, message.updates);
-          if (candidate === null) {
-            return reject("GUI update violates its schema or entity limit");
-          }
-          setProjectedGuiConfig(projection, candidate);
-          if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-            return reject("GUI update exceeds the aggregate budget");
-          }
+          const current = config(message.uuid);
+          if (current === undefined) break;
+          configUpdates[message.uuid] = ownImageBytes(
+            applyGuiConfigUpdate(current, message.updates),
+            current,
+          );
+          if (typeof message.updates.order === "number")
+            edit("guiOrderFromUuid")[message.uuid] = message.updates.order;
           break;
         }
         case "GuiRemoveMessage":
-          if (!removalTombstonesAreValid(message)) {
-            return reject("GUI removal tombstones are invalid");
-          }
-          if (
-            message.uuid === ROOT_GUI_CONTAINER_ID ||
-            modals.has(message.uuid) ||
-            removalDescendants(message).some(
-              (uuid) =>
-                uuid === ROOT_GUI_CONTAINER_ID ||
-                modals.has(uuid) ||
-                projection.tabOwnerFromUuid.has(uuid),
-            ) ||
-            removalTabs(message).some(
-              (uuid) =>
-                projection.configs.has(uuid) ||
-                modals.has(uuid) ||
-                uuid === ROOT_GUI_CONTAINER_ID,
-            )
-          ) {
-            return reject("GUI removal tombstones cross owner namespaces");
-          }
-          projectGuiRemoval(
-            projection,
-            [message.uuid, ...removalDescendants(message)],
-            [message.uuid],
-            removalTabs(message),
-          );
-          break;
-        case "GuiModalMessage":
-          if (
-            projection.configs.has(message.uuid) ||
-            projection.tabOwnerFromUuid.has(message.uuid) ||
-            message.uuid === ROOT_GUI_CONTAINER_ID ||
-            !guiModalWithinEntityLimits(message) ||
-            (!modals.has(message.uuid) &&
-              modals.size >= MAX_BROWSER_LIVE_GUI_MODALS)
-          ) {
-            return reject("modal owner or string limit exceeded");
-          }
-          projection.cost = addGuiConfigCosts(
-            modals.has(message.uuid)
-              ? subtractGuiConfigCosts(
-                  projection.cost,
-                  guiModalCost(modals.get(message.uuid)!),
-                )
-              : projection.cost,
-            guiModalCost(message),
-          );
-          if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-            return reject("modal exceeds the aggregate UI text budget");
-          }
-          modals.set(message.uuid, message);
-          break;
-        case "GuiCloseModalMessage": {
-          if (!removalTombstonesAreValid(message)) {
-            return reject("modal removal tombstones are invalid");
-          }
-          if (
-            message.uuid === ROOT_GUI_CONTAINER_ID ||
-            projection.configs.has(message.uuid) ||
-            projection.tabOwnerFromUuid.has(message.uuid) ||
-            removalDescendants(message).some(
-              (uuid) =>
-                uuid === ROOT_GUI_CONTAINER_ID ||
-                modals.has(uuid) ||
-                projection.tabOwnerFromUuid.has(uuid),
-            ) ||
-            removalTabs(message).some(
-              (uuid) =>
-                projection.configs.has(uuid) ||
-                modals.has(uuid) ||
-                uuid === ROOT_GUI_CONTAINER_ID,
-            )
-          ) {
-            return reject("modal removal tombstones cross owner namespaces");
-          }
-          const previous = modals.get(message.uuid);
-          if (previous !== undefined) {
-            projection.cost = subtractGuiConfigCosts(
-              projection.cost,
-              guiModalCost(previous),
+          if (tabOwnerFromUuid.has(message.uuid))
+            remove(message.removed_uuids, [
+              ...message.removed_tab_uuids,
+              message.uuid,
+            ]);
+          else
+            remove(
+              [...message.removed_uuids, message.uuid],
+              message.removed_tab_uuids,
             );
-          }
-          modals.delete(message.uuid);
-          projectGuiRemoval(
-            projection,
-            removalDescendants(message),
-            [message.uuid],
-            removalTabs(message),
+          break;
+        case "GuiTabMessage":
+        case "GuiTabUpdateMessage": {
+          const descriptor = {
+            label: message.label,
+            icon_html: message.icon_html,
+            container_id: message.uuid,
+          };
+          tabOwnerFromUuid.set(message.uuid, message.group_uuid);
+          setTabs(message.group_uuid, (current) =>
+            current.some((tab) => tab.container_id === message.uuid)
+              ? current.map((tab) =>
+                  tab.container_id === message.uuid ? descriptor : tab,
+                )
+              : [...current, descriptor],
           );
+          break;
+        }
+        case "GuiModalMessage":
+          editModals().set(message.uuid, message);
+          break;
+        case "GuiCloseModalMessage":
+          editModals().delete(message.uuid);
+          remove(message.removed_uuids, message.removed_tab_uuids);
+          break;
+        case "GuiFormSubmitMessage": {
+          const previous = draft.lastFormSubmit ?? state.lastFormSubmit;
+          draft.lastFormSubmit = {
+            uuid: message.uuid,
+            count: (previous?.count ?? 0) + 1,
+          };
           break;
         }
         case "RegisterCommandMessage":
-          if (
-            !guiCommandWithinEntityLimits(message) ||
-            (!commands.has(message.uuid) &&
-              commands.size >= MAX_BROWSER_LIVE_GUI_COMMANDS)
-          ) {
-            return reject("command owner or string limit exceeded");
-          }
-          projection.cost = addGuiConfigCosts(
-            commands.has(message.uuid)
-              ? subtractGuiConfigCosts(
-                  projection.cost,
-                  guiCommandCost(commands.get(message.uuid)!),
-                )
-              : projection.cost,
-            guiCommandCost(message),
-          );
-          if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-            return reject("command exceeds the aggregate UI text budget");
-          }
-          commands.set(message.uuid, message);
+          edit("commands")[message.uuid] = message;
           break;
         case "CommandUpdateMessage": {
-          const previous = commands.get(message.uuid);
-          if (previous === undefined) break;
-          const accepted = emptyRecord<unknown>();
-          for (const [key, value] of Object.entries(message.updates)) {
-            if (Object.hasOwn(previous.props, key)) accepted[key] = value;
-          }
-          const candidate: RegisterCommandMessage = {
-            ...previous,
-            props: { ...previous.props, ...accepted },
+          const command = edit("commands")[message.uuid];
+          if (command === undefined) break;
+          edit("commands")[message.uuid] = {
+            ...command,
+            props: { ...command.props, ...message.updates },
           };
-          if (!guiCommandWithinEntityLimits(candidate)) {
-            return reject("command update exceeds its string limit");
-          }
-          projection.cost = addGuiConfigCosts(
-            subtractGuiConfigCosts(projection.cost, guiCommandCost(previous)),
-            guiCommandCost(candidate),
-          );
-          if (!guiConfigCostWithinBrowserLimits(projection.cost)) {
-            return reject(
-              "command update exceeds the aggregate UI text budget",
-            );
-          }
-          commands.set(message.uuid, candidate);
           break;
         }
-        case "RemoveCommandMessage": {
-          const previous = commands.get(message.uuid);
-          if (previous !== undefined) {
-            projection.cost = subtractGuiConfigCosts(
-              projection.cost,
-              guiCommandCost(previous),
-            );
-          }
-          commands.delete(message.uuid);
+        case "RemoveCommandMessage":
+          delete edit("commands")[message.uuid];
           break;
-        }
-      }
-      if (nextBatchKind === null && !graphIsValid()) {
-        return reject(
-          "GUI container graph has an invalid dispatch-batch prefix",
-        );
       }
     }
 
-    if (!graphIsValid()) {
-      return reject("GUI container graph is cyclic or deeper than 64");
+    for (const containerUuid of copiedContainers) {
+      const containers = draft.guiUuidSetFromContainerUuid!;
+      if (
+        containerUuid !== ROOT_GUI_CONTAINER_ID &&
+        Object.keys(containers[containerUuid]!).length === 0
+      )
+        delete containers[containerUuid];
     }
-    return null;
+    if (modals !== undefined)
+      draft.modals = [...modals.values()].sort(
+        (left, right) => left.order - right.order,
+      );
+    configStore.set(configUpdates);
+    store.set(draft);
   };
 
   const actions: GuiActions = {
     setTheme: (theme) => store.set({ theme }),
-    addGui: (guiConfig) => addGuiBatch([guiConfig]),
-    addGuiBatch,
-    addModal: (modalConfig) => addModalBatch([modalConfig]),
-    addModalBatch,
-    applyTabLifecycleBatch,
-    declareTab: (message) => applyTabLifecycleBatch([message]),
-    updateTab: (message) => applyTabLifecycleBatch([message]),
-    removeModal: (id, removedUuids = [], removedTabUuids = []) =>
-      purgeGui(removedUuids, [id], removedTabUuids, id),
-    removeGui: (id, removedUuids = [], removedTabUuids = []) =>
-      purgeGui([id, ...removedUuids], [id], removedTabUuids),
+    applyMessages,
+    updateGuiProps: (uuid, updates) =>
+      applyMessages([{ type: "GuiUpdateMessage", uuid, updates }]),
     resetGui: () => {
-      // Keep the theme to avoid a visual flash. Branding and every retained
-      // GUI owner belong to the connection and must not cross reconnects.
+      // Keep the theme to avoid a visual flash. Every GUI owner belongs to the
+      // connection and must not cross reconnects.
       store.set({
         // The persistence namespace belongs to this connection. Clear it
         // until the next WorkspaceConfigurationMessage arrives so a new
@@ -968,11 +370,6 @@ export function createGuiState(initialServer: string) {
         uploadsInProgress: cleanGuiState.uploadsInProgress,
         commands: cleanGuiState.commands,
       });
-      aggregateGuiCost = {
-        collectionItems: 0,
-        retainedBytes: 0,
-        textCodeUnits: 0,
-      };
       tabOwnerFromUuid.clear();
       configStore.setAll({}, true);
     },
@@ -984,117 +381,55 @@ export function createGuiState(initialServer: string) {
       // contrast, an ACK from a superseded transfer cannot recreate or
       // overwrite the progress belonging to the current selection.
       if (uploadState.filename !== undefined) {
-        const uploadsInProgress = cloneRecord(state.uploadsInProgress);
-        uploadsInProgress[componentId] = {
-          transferUuid,
-          uploadedBytes: uploadState.uploadedBytes,
-          totalBytes: uploadState.totalBytes,
-          filename: uploadState.filename,
-        };
         store.set({
-          uploadsInProgress,
+          uploadsInProgress: {
+            ...state.uploadsInProgress,
+            [componentId]: {
+              transferUuid,
+              uploadedBytes: uploadState.uploadedBytes,
+              totalBytes: uploadState.totalBytes,
+              filename: uploadState.filename,
+            },
+          },
         });
         return;
       }
       if (current === undefined || current.transferUuid !== transferUuid)
         return;
-      const uploadsInProgress = cloneRecord(state.uploadsInProgress);
-      uploadsInProgress[componentId] = {
-        ...current,
-        uploadedBytes: uploadState.uploadedBytes,
-        totalBytes: uploadState.totalBytes,
-      };
-      store.set({ uploadsInProgress });
+      store.set({
+        uploadsInProgress: {
+          ...state.uploadsInProgress,
+          [componentId]: {
+            ...current,
+            uploadedBytes: uploadState.uploadedBytes,
+            totalBytes: uploadState.totalBytes,
+          },
+        },
+      });
     },
     clearUploadState: (componentId, transferUuid) => {
       const state = store.get();
       if (state.uploadsInProgress[componentId]?.transferUuid !== transferUuid)
         return;
-      const uploadsInProgress = cloneRecord(state.uploadsInProgress);
+      const uploadsInProgress = { ...state.uploadsInProgress };
       delete uploadsInProgress[componentId];
       store.set({ uploadsInProgress });
-    },
-    addCommand: (command) => addCommandBatch([command]),
-    addCommandBatch,
-    updateCommand: (uuid, updates) => {
-      const state = store.get();
-      if (!Object.hasOwn(state.commands, uuid)) return;
-      const failure = preflightMessageBatch([
-        { type: "CommandUpdateMessage", uuid, updates },
-      ]);
-      if (failure !== null) {
-        console.error(failure);
-        return;
-      }
-      const existing = state.commands[uuid];
-      const existingProps = existing.props as Record<string, unknown>;
-      const acceptedUpdates = emptyRecord<unknown>();
-      let changed = false;
-      for (const [key, value] of Object.entries(updates)) {
-        if (!Object.hasOwn(existing.props, key)) continue;
-        acceptedUpdates[key] = value;
-        if (!Object.is(existingProps[key], value)) changed = true;
-      }
-      if (!changed) return;
-      const merged: RegisterCommandMessage = {
-        ...existing,
-        props: { ...existing.props, ...acceptedUpdates },
-      };
-      aggregateGuiCost = addGuiConfigCosts(
-        subtractGuiConfigCosts(aggregateGuiCost, guiCommandCost(existing)),
-        guiCommandCost(merged),
-      );
-      const commands = cloneRecord(state.commands);
-      commands[uuid] = merged;
-      store.set({ commands });
-    },
-    removeCommand: (uuid) => {
-      const state = store.get();
-      if (!Object.hasOwn(state.commands, uuid)) return;
-      aggregateGuiCost = subtractGuiConfigCosts(
-        aggregateGuiCost,
-        guiCommandCost(state.commands[uuid]),
-      );
-      const next = cloneRecord(state.commands);
-      delete next[uuid];
-      store.set({ commands: next });
-    },
-    updateGuiProps: (id, updates) => {
-      const config = configStore.get(id);
-      if (config === undefined) {
-        console.error(
-          `Tried to update non-existent component '${id}' with`,
-          updates,
-        );
-        return;
-      }
-      updateGuiPropsBatch(new Map([[id, updates]]));
-    },
-    updateGuiPropsBatch,
-    preflightMessageBatch,
-    noteFormSubmit: (uuid) => {
-      store.set((state) => ({
-        lastFormSubmit: {
-          uuid,
-          count: (state.lastFormSubmit?.count ?? 0) + 1,
-        },
-      }));
-    },
-    reorderGui: (orderFromUuid) => {
-      store.set((state) => {
-        const changed = Object.entries(orderFromUuid).filter(
-          ([uuid, order]) => state.guiOrderFromUuid[uuid] !== order,
-        );
-        if (changed.length === 0) return state;
-        const guiOrderFromUuid = cloneRecord(state.guiOrderFromUuid);
-        for (const [uuid, order] of changed) guiOrderFromUuid[uuid] = order;
-        return { guiOrderFromUuid };
-      });
     },
   };
 
   return { store, configStore, actions };
 }
+
+type EditableField =
+  | "guiUuidSetFromContainerUuid"
+  | "guiOrderFromUuid"
+  | "uploadsInProgress"
+  | "commands";
+
+type GuiTabGroupTabs = Extract<
+  GuiComponentMessage,
+  { type: "GuiTabGroupMessage" }
+>["props"]["_tabs"];
 
 /** Own one GUI session for the lifetime of the mounted viewer. */
 export function useGuiState(initialServer: string): GuiSession {

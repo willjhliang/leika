@@ -66,7 +66,7 @@ and validated against the schema before any handler sees it.
 | Application composition and stable viewer ownership | `App.tsx`, `ViewerProvider.tsx`, `ViewerContext.ts` |
 | GUI and viewport sessions with independently callable actions | `ControlPanel/GuiState.ts`, `viewport/ViewportState.ts` |
 | Store subscriptions and React selectors | `store.ts` |
-| Worker transport, ordered frame processing, and dispatch | `WebsocketClientWorker.ts`, `WebsocketInterface.tsx`, `MessageHandler.tsx`, `messageBatch.ts` |
+| Worker transport, ordered frame processing, and dispatch | `WebsocketClientWorker.ts`, `WebsocketInterface.tsx`, `MessageHandler.tsx` |
 | Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
 | Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
 | Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
@@ -162,11 +162,9 @@ The scope-wide budgets are 16 Mi UTF-16 code units, 128 MiB of retained text
 and binary payload, and 64 Mi-pixels. Notifications additionally share a
 separate 2 Mi UTF-16 text ledger.
 
-One connected browser document combines `server.gui` with its own `client.gui`,
-and therefore admits at most 8,192 components, 2,048 commands, 64 modals, 256
-notifications, 32,768 tabs and collection entries, 32 Mi UTF-16 code units, and
-256 MiB of retained GUI payload. Notifications have a separate 4 Mi UTF-16
-document ledger. Each handle retains at most 256 callbacks. Programmatic GUI
+The browser applies GUI, modal, command, and notification messages as they
+arrive, without limits of its own; it removes exactly the descendants a removal
+lists. Each handle retains at most 256 callbacks. Programmatic GUI
 callbacks queue at most 1,024 snapshots and 128 MiB before later callbacks are
 reported and declined.
 

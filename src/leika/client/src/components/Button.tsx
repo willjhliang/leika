@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GUI_MESSAGE_THROTTLE_MS } from "../WebsocketUtils";
 import { GuiButtonMessage } from "../WebsocketMessages";
-import { boundedHoldCallbackFrequencies } from "../guiLimits";
 import { requestFilePreview } from "../filePreview";
 import { ButtonLabel, GuiButtonRow, IconHtml } from "./common";
 import { startPreviewWarmObservation } from "./previewWarmObserver";
@@ -18,7 +17,7 @@ export default function ButtonComponent({
     hint,
     color,
     _icon_html: iconHtml,
-    _hold_callback_freqs: holdCallbackFreqs,
+    _hold_callback_freqs: holdFrequencies,
     _prefetch: prefetch,
   },
 }: GuiButtonMessage) {
@@ -44,10 +43,6 @@ export default function ButtonComponent({
     );
   }, [disabled, prefetch, uuid, messageSender]);
   const holdIntervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
-  const holdFrequencies = React.useMemo(
-    () => boundedHoldCallbackFrequencies(holdCallbackFreqs),
-    [holdCallbackFreqs],
-  );
 
   const stopHoldTimers = useCallback(() => {
     holdIntervalsRef.current.forEach(clearInterval);

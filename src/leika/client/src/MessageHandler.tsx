@@ -12,7 +12,6 @@ import {
 } from "./filePreview";
 import {
   dismissNotification,
-  preflightNotificationBatch,
   showNotification,
   updateNotification,
 } from "./notifications";
@@ -20,21 +19,21 @@ import { plotlyBootstrap } from "./plotlyBootstrap";
 import { makeMessageQueueScheduler } from "./messageQueueScheduler";
 import { processMessageQueueSlice } from "./messageQueueProcessor";
 import {
-  dispatchMessageBatch,
-  processPreflightedMessageBatches,
-  type GuiUpdate,
-} from "./messageBatch";
+  isGuiStateMessage,
+  type GuiStateMessage,
+} from "./ControlPanel/GuiState";
 import { useViewer } from "./ViewerContext";
-import { dispatchGuiLifecycleMessage } from "./guiLifecycleDispatch";
 import { filterPageStreamMessages } from "./pageStreamProjection";
 import {
   FileTransferAbort,
   FileTransferPart,
   FileTransferStartDownload,
   Message,
-  isGuiComponentMessage,
 } from "./WebsocketMessages";
-function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
+
+/** Apply one run of server messages. GUI messages commit as one transaction,
+ * in order among themselves; no other message reads GUI state. */
+function useMessageHandler(): (messages: readonly Message[]) => void {
   const viewer = useViewer();
   const sendFileTransferMessage = React.useCallback(
     (message: FileTransferAbort) => viewer.mutable.current.sendMessage(message),
@@ -45,15 +44,8 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
     sendFileTransferMessage,
   );
 
-  return React.useCallback(
+  const handleMessage = React.useCallback(
     (message: Message) => {
-      if (isGuiComponentMessage(message)) {
-        viewer.guiActions.addGui(message);
-        return;
-      }
-
-      if (dispatchGuiLifecycleMessage(message, viewer.guiActions)) return;
-
       switch (message.type) {
         case "WorkspaceConfigurationMessage":
           viewer.useGui.set({ workspaceId: message.workspace_id });
@@ -104,9 +96,6 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
         case "RemoveNotificationMessage":
           dismissNotification(message.uuid);
           return;
-        case "GuiModalMessage":
-          viewer.guiActions.addModal(message);
-          return;
         case "GuiPreviewReadyMessage":
           receiveFilePreviewReady(message);
           return;
@@ -132,20 +121,6 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
           return;
         case "GuiPreviewCancelMessage":
           cancelPendingFilePreview(message.uuid);
-          return;
-        case "GuiUpdateMessage":
-          return { uuid: message.uuid, updates: message.updates };
-        case "GuiFormSubmitMessage":
-          viewer.guiActions.noteFormSubmit(message.uuid);
-          return;
-        case "RegisterCommandMessage":
-          viewer.guiActions.addCommand(message);
-          return;
-        case "CommandUpdateMessage":
-          viewer.guiActions.updateCommand(message.uuid, message.updates);
-          return;
-        case "RemoveCommandMessage":
-          viewer.guiActions.removeCommand(message.uuid);
           return;
         case "ViewportPaneMessage":
         case "ViewportEmptyMessage":
@@ -212,12 +187,34 @@ function useMessageHandler(): (message: Message) => GuiUpdate | undefined {
     },
     [fileDownloadHandler, viewer],
   );
+
+  return React.useCallback(
+    (messages: readonly Message[]) => {
+      const guiMessages: GuiStateMessage[] = [];
+      for (const message of messages) {
+        if (isGuiStateMessage(message)) {
+          guiMessages.push(message);
+          continue;
+        }
+        try {
+          handleMessage(message);
+        } catch (error) {
+          console.error(
+            `Failed to process Leika message '${message.type}':`,
+            error,
+          );
+        }
+      }
+      viewer.guiActions.applyMessages(guiMessages);
+    },
+    [handleMessage, viewer],
+  );
 }
 
 /** Process queued websocket batches before paint. */
 export function MessageHandler() {
   const viewer = useViewer();
-  const handleMessage = useMessageHandler();
+  const handleMessages = useMessageHandler();
 
   React.useEffect(() => {
     const processQueue = () => {
@@ -229,30 +226,17 @@ export function MessageHandler() {
           viewer.useViewport.get(),
         );
         if (batch.length === 0) return true;
-        return processPreflightedMessageBatches(
-          [batch],
-          (batch) =>
-            viewer.guiActions.preflightMessageBatch(batch) ??
-            viewer.viewportActions.preflightMessageBatch(batch) ??
-            preflightNotificationBatch(batch) ??
-            plotlyBootstrap.preflight(batch),
-          (batch) => {
-            const viewportFailure =
-              viewer.viewportActions.prepareMessageBatch(batch);
-            if (viewportFailure !== null) return viewportFailure;
-            const bootstrapFailure = plotlyBootstrap.execute(batch);
-            if (bootstrapFailure !== null) return bootstrapFailure;
-            dispatchMessageBatch(batch, handleMessage, undefined, {
-              guiComponents: viewer.guiActions.addGuiBatch,
-              modals: viewer.guiActions.addModalBatch,
-              commands: viewer.guiActions.addCommandBatch,
-              tabs: viewer.guiActions.applyTabLifecycleBatch,
-              guiUpdates: viewer.guiActions.updateGuiPropsBatch,
-            });
-            return null;
-          },
-          viewer.mutable.current.failConnection,
-        );
+        const failure =
+          viewer.viewportActions.preflightMessageBatch(batch) ??
+          plotlyBootstrap.preflight(batch) ??
+          viewer.viewportActions.prepareMessageBatch(batch) ??
+          plotlyBootstrap.execute(batch);
+        if (failure !== null) {
+          viewer.mutable.current.failConnection(failure);
+          return false;
+        }
+        handleMessages(batch);
+        return true;
       });
     };
 
@@ -277,7 +261,7 @@ export function MessageHandler() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       scheduler.stop();
     };
-  }, [handleMessage, viewer]);
+  }, [handleMessages, viewer]);
 
   return null;
 }

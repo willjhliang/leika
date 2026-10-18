@@ -32,7 +32,9 @@ describe("viewer state ownership", () => {
   it("creates independent sessions without mounting React", () => {
     const firstGui = createGuiState("ws://first.test");
     const secondGui = createGuiState("ws://second.test");
-    firstGui.actions.noteFormSubmit("form");
+    firstGui.actions.applyMessages([
+      { type: "GuiFormSubmitMessage", uuid: "form" },
+    ]);
     expect(secondGui.store.get().lastFormSubmit).toBeNull();
     expect(secondGui.store.get().server).toBe("ws://second.test");
 

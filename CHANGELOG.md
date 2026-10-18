@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Browser: GUI controls, modals, commands and notifications apply exactly as
+  the server sends them. The client no longer enforces its own count and size
+  limits on them or drops the connection over them, and a notification shown
+  again updates its toast in place.
 - Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP
   server is now private, with one message base; use `leika.Server`. Custom
   message roots and low-level servers are no longer supported.
