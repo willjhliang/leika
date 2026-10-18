@@ -11,6 +11,17 @@ from .utils import find_gui_input, wait_until
 
 LABEL = "[data-leika-connection-label]"
 READY = '[data-viewport-workspace][aria-busy="false"]'
+# Record every socket the page opens, so a test can close one directly.
+RECORD_SOCKETS = """(() => {
+    const BrowserWebSocket = window.WebSocket;
+    window.connectionTestSockets = [];
+    window.WebSocket = class extends BrowserWebSocket {
+        constructor(...args) {
+            super(...args);
+            window.connectionTestSockets.push(this);
+        }
+    };
+})();"""
 
 
 def set_visibility(page: Page, visibility: str) -> None:
@@ -66,18 +77,7 @@ def test_server_restart_reconnects_when_visible_without_window_focus(
 def test_a_replaced_socket_cannot_disturb_its_successor(
     leika_server: leika.Server, page: Page, page_errors: list[str]
 ) -> None:
-    page.add_init_script(
-        """(() => {
-            const BrowserWebSocket = window.WebSocket;
-            window.connectionTestSockets = [];
-            window.WebSocket = class extends BrowserWebSocket {
-                constructor(...args) {
-                    super(...args);
-                    window.connectionTestSockets.push(this);
-                }
-            };
-        })();"""
-    )
+    page.add_init_script(RECORD_SOCKETS)
     slider = leika_server.gui.add_slider("Recovered gain", 0.5, min=0.0, max=1.0, step=0.1)
     page.goto(leika_server.url)
     expect(page.locator(READY)).to_be_visible(timeout=15_000)
@@ -136,6 +136,7 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
     removed = leika_server.panes.add_video(CLIP, pane_id="removed", sync_group=group, fps=10)
     scene = leika_server.panes.add_viser(leika_server.url + "/missing-scene", pane_id="scene")
     slider = leika_server.gui.add_slider("Gain", 0.5, min=0.0, max=1.0, step=0.1)
+    page.add_init_script(RECORD_SOCKETS)
     page.goto(leika_server.url)
     expect(page.locator(READY)).to_be_visible(timeout=15_000)
     video = page.locator('[data-viewport-pane="video"] video')
@@ -150,17 +151,12 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
     frame = page.locator("iframe").element_handle().content_frame()
     frame.evaluate("window.reconnectMarker = 'kept'")
     old_clients = set(leika_server.clients)
-    # Catch the next real send, then close the real socket. Visibility sync
-    # sends even while hidden; transport retries wait until the tab returns.
-    page.evaluate("""() => {
-        const send = WebSocket.prototype.send;
-        WebSocket.prototype.send = function(...args) {
-            WebSocket.prototype.send = send;
-            send.apply(this, args);
-            setTimeout(() => this.close(1000, 'Test socket interruption'), 50);
-        };
-    }""")
+    # Close the real socket while hidden; transport retries wait until the
+    # tab returns.
     set_visibility(page, "hidden")
+    page.evaluate(
+        "() => window.connectionTestSockets.at(-1).close(1000, 'Test socket interruption')"
+    )
     expect(page.locator(LABEL)).to_have_text("Inactive", timeout=10_000)
     assert video.evaluate("v => v === window.keptVideo")
     assert page.evaluate("window.keptFrame === document.querySelector('iframe')")
@@ -189,9 +185,8 @@ def test_reconnect_preserves_renderers_and_reconciles_content(
     wait_until(
         lambda: len(leika_server.clients) == 1 and not old_clients & set(leika_server.clients)
     )
-    client = next(iter(leika_server.clients.values()))
-    # The preserved host must report dimensions using the new connection.
-    wait_until(lambda: client.pane_size(video_pane) is not None)
+    # The preserved page subscribes again on the new connection.
+    wait_until(lambda: video_pane.has_viewers)
     control = find_gui_input(page, "Gain")
     control.fill("0.8")
     control.press("Enter")

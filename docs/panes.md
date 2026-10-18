@@ -251,11 +251,9 @@ time and waits for its receipt before the next, so queued updates coalesce to
 the newest frame: a slow connection receives fewer current frames, and one
 viewer's connection never slows another's.
 
-Applications can check `pane.has_viewers` before expensive routine rendering.
-Unknown browser dimensions count as visible; hidden panes and inactive pages do
-not. Explicit selection and loading updates should still publish their new
-content. `client.pane_size(pane)` remains available for custom layout work: physical
-pixels, `(0, 0)` when hidden or on another page, and `None` until a size is known.
+Applications can check `pane.has_viewers` before expensive routine rendering:
+it is true while the pane is visible and some connected browser shows its page.
+Explicit selection and loading updates should still publish their new content.
 
 Updates apply whether or not the pane's page is currently selected. Switching
 back shows the handle's latest retained content without creating another pane.

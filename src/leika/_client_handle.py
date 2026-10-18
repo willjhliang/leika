@@ -39,22 +39,8 @@ class ClientHandle:
         """Handle for interacting with the GUI."""
         self.client_id: int = conn.client_id
         """Unique ID for this client."""
-        self._pane_size_lock = threading.Lock()
-        self._pane_sizes: dict[tuple[str, str], tuple[int, int]] = {}
         self._transfer_lock = threading.Lock()
         self._transfer_cancel_from_uuid: dict[str, threading.Event] = {}
-
-    def pane_size(self, pane) -> tuple[int, int] | None:
-        """Latest browser content size in physical pixels, or None if unknown.
-
-        A hidden pane reports (0, 0). A pane on another subscribed page also
-        returns (0, 0). Applications may use this hint to size streamed images.
-        """
-        page_id = pane._panes._page_id
-        if self._websock_connection.delivery_scope() != page_id:
-            return (0, 0)
-        with self._pane_size_lock:
-            return self._pane_sizes.get((page_id, str(pane.pane_id)))
 
     def _cancel_outgoing_file_transfer(self, transfer_uuid: str) -> None:
         """Honor a browser abort without echoing another abort back to it."""

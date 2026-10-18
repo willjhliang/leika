@@ -129,6 +129,23 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
         server.panes.add_image(original, pane_id=cast(Any, 4))
 
 
+def test_has_viewers_follows_visibility_and_page_subscriptions(server: leika.Server) -> None:
+    pane = server.panes.add_image(np.zeros((2, 2, 3), dtype=np.uint8))
+    scope: list[str | None] = [None]
+    connection = SimpleNamespace(delivery_scope=lambda: scope[0])
+    server._connected_clients[1] = cast(Any, SimpleNamespace(_websock_connection=connection))
+    try:
+        assert not pane.has_viewers
+        scope[0] = "another-page"
+        assert not pane.has_viewers
+        scope[0] = pane._panes._page_id
+        assert pane.has_viewers
+        pane.visible = False
+        assert not pane.has_viewers
+    finally:
+        del server._connected_clients[1]
+
+
 def test_row_column_and_grid_helpers(server: leika.Server) -> None:
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     row = server.panes.add_row()

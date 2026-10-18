@@ -424,14 +424,15 @@ class PaneHandle:
 
     @property
     def has_viewers(self) -> bool:
-        """Whether a connected browser may be displaying this pane.
+        """Whether this pane is visible and a connected browser shows its page.
 
-        Unknown dimensions count as visible until the browser reports them.
         Applications can skip expensive routine work when False; explicit
         selection/loading updates should still publish their new content.
         """
+        page_id = self._panes._page_id
         return self.visible and any(
-            client.pane_size(self) != (0, 0) for client in self._panes._owner.clients.values()
+            client._websock_connection.delivery_scope() == page_id
+            for client in self._panes._owner.clients.values()
         )
 
     def invalidate_on(self, *controls: Any) -> None:

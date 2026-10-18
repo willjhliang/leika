@@ -3763,29 +3763,6 @@ def test_refresh_binding_rejects_removed_or_private_control_and_prunes_old(serve
         pane.invalidate_on(object())
 
 
-def test_pane_size_feedback_ignores_invalid_dimensions_and_other_pages(server):
-    pane = server.panes.add_image(np.zeros((8, 8, 3), np.uint8))
-    page_id = pane._panes._page_id
-    connection = _client_connection_stub(server, ClientId(12))
-    connection.delivery_scope = lambda: page_id
-    client = ClientHandle(connection, server)
-    server._connected_clients[12] = client
-    assert client.pane_size(pane) is None
-    server._handle_pane_viewport(
-        ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, 640, 480)
-    )
-    assert client.pane_size(pane) == (640, 480)
-    server._handle_pane_viewport(
-        ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, -1, 480)
-    )
-    server._handle_pane_viewport(
-        ClientId(12), _messages.PaneViewportMessage("other", pane.pane_id, 320, 240)
-    )
-    assert client.pane_size(pane) == (640, 480)
-    connection.delivery_scope = lambda: "other"
-    assert client.pane_size(pane) == (0, 0)
-
-
 def test_per_frame_jpeg_quality_changes_only_display_encoding(server):
     image = np.random.default_rng(2).integers(0, 255, (240, 320, 3), dtype=np.uint8)
     pane = server.panes.add_image(image, format="jpeg", jpeg_quality=90)

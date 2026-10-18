@@ -1087,17 +1087,6 @@ export interface FileTransferPartAck {
   transferred_bytes: number;
   total_bytes: number;
 }
-/** Browser pane content dimensions in physical pixels; zero when hidden.
- *
- * (automatically generated)
- */
-export interface PaneViewportMessage {
-  type: "PaneViewportMessage";
-  page_id: string;
-  pane_id: string;
-  width: number;
-  height: number;
-}
 /** Message from client->server asking to be answered as soon as possible.
  *
  * The client is timing the round trip, so the server's only job is to hand
@@ -1294,7 +1283,6 @@ export type Message =
   | FileTransferPart
   | FileTransferAbort
   | FileTransferPartAck
-  | PaneViewportMessage
   | ClientPingMessage
   | ServerPongMessage
   | RegisterCommandMessage
@@ -1371,4 +1359,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "5e5f7e2341c1";
+export const LEIKA_PROTOCOL = "e857ac6e124e";

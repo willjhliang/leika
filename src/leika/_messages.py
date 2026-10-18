@@ -1728,16 +1728,6 @@ class FileTransferPartAck(Message):
 
 
 @dataclasses.dataclass
-class PaneViewportMessage(Message):
-    """Browser pane content dimensions in physical pixels; zero when hidden."""
-
-    page_id: str
-    pane_id: str
-    width: int
-    height: int
-
-
-@dataclasses.dataclass
 class ClientPingMessage(Message):
     """Message from client->server asking to be answered as soon as possible.
 
