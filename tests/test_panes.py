@@ -220,6 +220,24 @@ def test_grid_wrap_falls_back_when_top_column_anchor_is_not_visible(
 
 
 @pytest.mark.plotly
+def test_gui_plots_and_panes_share_theme_template_handling(server: leika.Server) -> None:
+    go = pytest.importorskip("plotly.graph_objects")
+    themed = go.Figure(go.Scatter(y=[1, 2]))
+    explicit = go.Figure(go.Scatter(y=[1, 2]), layout={"template": "plotly_dark"})
+    gui_themed = server.gui.add_plotly(themed)._impl.props
+    gui_explicit = server.gui.add_plotly(explicit)._impl.props
+    pane_themed = server.panes.add_plotly(themed)._props
+    pane_explicit = server.panes.add_plotly(explicit)._props
+
+    for props in (gui_themed, pane_themed):
+        assert "template" not in json.loads(props._plotly_json_str)["layout"]
+        assert set(json.loads(props._theme_templates)) == {"light", "dark"}
+    for props in (gui_explicit, pane_explicit):
+        assert "template" in json.loads(props._plotly_json_str)["layout"]
+    assert gui_themed._plotly_json_str == pane_themed._plotly_json_str
+
+
+@pytest.mark.plotly
 def test_plotly_lifecycle(server: leika.Server) -> None:
     go = pytest.importorskip("plotly.graph_objects")
     figure = go.Figure(go.Scatter(y=[1, 2, 1]))
