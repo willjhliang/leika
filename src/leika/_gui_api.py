@@ -8,7 +8,6 @@ import inspect
 import os
 import threading
 import time
-import warnings
 from asyncio import AbstractEventLoop
 from collections import deque
 from collections.abc import Coroutine, Mapping
@@ -37,7 +36,6 @@ from typing_extensions import (
 )
 
 from . import _messages
-from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._async_errors import (
     print_async_errors,
     print_async_exception,
@@ -126,14 +124,14 @@ from ._gui_handles import (
 from ._gui_resources import _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
-from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import (
     NotificationHandle,
     _NotificationHandleState,
     validate_auto_close_seconds,
 )
-from ._plotly import _plotly_json_and_config
+from ._plotly import plotly_config, plotly_json, plotly_theme_templates
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -473,7 +471,6 @@ class GuiApi(GuiContainer):
         self._event_loop = event_loop
         server = owner if isinstance(owner, Server) else owner._server
         self._server = server
-        self._plotly_connection = None if isinstance(owner, Server) else owner._websock_connection
         self._next_order = server._next_gui_order
 
         self._websock_interface = (
@@ -1718,10 +1715,10 @@ class GuiApi(GuiContainer):
         Args:
             label: Default-page name. ``None`` and ``""`` become ``"Main"``.
         """
-        from ._pages import _normalize_legacy_page_label
+        from ._pages import _page_name_from_label
         from ._server import Server
 
-        name = _normalize_legacy_page_label(label)
+        name = _page_name_from_label(label)
         if isinstance(self._owner, Server):
             self._owner.pages.default.name = name
             return
@@ -2525,54 +2522,33 @@ class GuiApi(GuiContainer):
         if order is not None:
             _validate_number(order, "order")
         _validate_image_encoding_options(format, jpeg_quality)
-        if type(image) is not np.ndarray:
-            raise TypeError("image must be a base numpy.ndarray")
-        image_array = image
-        spec = _ndarray_snapshot_spec(image_array)
-        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
-        container_uuid = self._get_container_uuid()
-        resolved_order = self._apply_default_order(order)
-        with self._server._reserve_image_preparation(spec.nbytes):
-            image_array = _private_ndarray_snapshot(image_array, spec)
-            if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
-                warnings.warn(
-                    "Encoding an RGBA image as JPEG discards its alpha channel.",
-                    stacklevel=2,
-                )
-            resolved_format, data = encode_image_binary(
-                image_array, format, jpeg_quality=jpeg_quality
-            )
-            message = _messages.GuiImageMessage(
-                uuid=_make_uuid(),
-                container_uuid=container_uuid,
-                props=_messages.GuiImageProps(
-                    _data=data,
-                    label=label,
-                    _format=resolved_format,
-                    order=resolved_order,
-                    visible=visible,
-                ),
-            )
-            return GuiImageHandle(
-                _GuiHandleState(
-                    message.uuid,
-                    self,
-                    None,
-                    props=message.props,
-                    parent_container_id=message.container_uuid,
-                    create_message=message,
-                    decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
-                    retained_extra_bytes=int(image_array.nbytes),
-                ),
-                _image=image_array,
-                _jpeg_quality=jpeg_quality,
-                _user_format=format,
-            )
-
-    def _ensure_plotly_js_sent(self) -> None:
-        """Ensure every recipient of this API can render Plotly figures."""
-        self._server._ensure_plotly_js_sent(self._plotly_connection)
+        image_array, resolved_format, data = prepare_image(image, format, jpeg_quality)
+        message = _messages.GuiImageMessage(
+            uuid=_make_uuid(),
+            container_uuid=self._get_container_uuid(),
+            props=_messages.GuiImageProps(
+                _data=data,
+                label=label,
+                _format=resolved_format,
+                order=self._apply_default_order(order),
+                visible=visible,
+            ),
+        )
+        return GuiImageHandle(
+            _GuiHandleState(
+                message.uuid,
+                self,
+                None,
+                props=message.props,
+                parent_container_id=message.container_uuid,
+                create_message=message,
+                decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
+                retained_extra_bytes=int(image_array.nbytes),
+            ),
+            _image=image_array,
+            _jpeg_quality=jpeg_quality,
+            _user_format=format,
+        )
 
     def add_plotly(
         self,
@@ -2589,8 +2565,9 @@ class GuiApi(GuiContainer):
         Args:
             figure: Plotly figure to snapshot and display. The handle does
                 not retain this mutable object; its ``figure`` getter rebuilds
-                an independent copy from bounded JSON. The final JSON must fit
-                the bundled browser's 16,777,216 UTF-16-code-unit render limit.
+                an independent copy from the serialized JSON. A figure without
+                a template, or with Plotly's stock default, follows the
+                viewer's light or dark theme.
             config: Plotly config dict merged into the figure JSON. Controls
                 display options like ``{"displayModeBar": False}``. Values
                 must be JSON-serializable. See
@@ -2609,18 +2586,17 @@ class GuiApi(GuiContainer):
             raise TypeError("visible must be a bool")
         if order is not None:
             _validate_number(order, "order")
-        with self._server._reserve_renderer_preparation():
-            plotly_json, _ = _plotly_json_and_config(figure, config)
-
-        # Plotly must be available before the valid figure creation message.
-        self._ensure_plotly_js_sent()
+        config = plotly_config(config)
+        json_str = plotly_json(figure, config)
+        self._server._ensure_plotly_runtime()
 
         message = _messages.GuiPlotlyMessage(
             uuid=_make_uuid(),
             container_uuid=self._get_container_uuid(),
             props=_messages.GuiPlotlyProps(
                 order=self._apply_default_order(order),
-                _plotly_json_str=plotly_json,
+                _plotly_json_str=json_str,
+                _theme_templates=plotly_theme_templates(),
                 aspect=aspect,
                 visible=visible,
             ),
@@ -2633,7 +2609,8 @@ class GuiApi(GuiContainer):
                 props=message.props,
                 parent_container_id=message.container_uuid,
                 create_message=message,
-            )
+            ),
+            _config=config,
         )
 
     @overload

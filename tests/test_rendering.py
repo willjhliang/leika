@@ -10,7 +10,7 @@ from PIL import Image
 
 from leika import _messages
 from leika._client_handle import ClientHandle
-from leika._image_encoding import encode_image_binary
+from leika._image_encoding import prepare_image
 from leika._rendering import render_image, render_message
 from leika._transport._websocket import ClientId
 
@@ -19,7 +19,7 @@ def source_image(format="jpeg"):
     pixels = np.random.default_rng(3).integers(
         0, 256, (480, 640, 4 if format == "png" else 3), dtype=np.uint8
     )
-    return encode_image_binary(pixels, format, 85)[1]
+    return prepare_image(pixels, format, 85)[2]
 
 
 def test_rendering_never_dispatches_to_other_pillow_decoders(server):
@@ -49,7 +49,6 @@ def test_auto_uses_connection_speed_and_preserves_jpeg_quality(server, size, fit
         assert decoded.size == (453, 339)
         assert decoded.quantization == original.quantization
     assert len(resized) < len(data)
-    assert server._image_preparation_bytes == 0
     # A fast or recovered connection receives the original, even in a tiny pane.
     assert render_image(data, "auto", size, fit, server, delivery_rate=10 * len(data)) is data
 
@@ -117,7 +116,7 @@ def test_create_messages_and_png_remain_independent(server):
 
 def test_settings_and_size_refresh_use_ordered_content_and_preserve_source(server):
     pane = server.panes.add_image(np.zeros((480, 640, 3), np.uint8), format="jpeg")
-    page_id = pane._impl.api._page_id
+    page_id = pane._panes._page_id
     connection = SimpleNamespace(
         client_id=ClientId(12),
         _state=SimpleNamespace(),
@@ -135,7 +134,7 @@ def test_settings_and_size_refresh_use_ordered_content_and_preserve_source(serve
     )
     assert client._rendering == "performance"
     assert connection._state.rendering_backpressure
-    assert updates[-1]["_data"] is pane._impl.props._data
+    assert updates[-1]["_data"] is pane._props._data
     server._handle_pane_viewport(
         ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, 320, 240)
     )

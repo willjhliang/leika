@@ -103,10 +103,11 @@ export function WebsocketMessageProducer() {
       resetMarkdownDocumentCache();
       resetNotifications();
       resetFileTransferFailureToast();
+      // Every connection replays the Plotly runtime once.
+      plotlyBootstrap.reset();
       // Retained renderers still own these leases during ordinary reconnect.
       // Their normal unmount paths release them after replay or eviction.
       if (!retainPanes) {
-        plotlyBootstrap.reset();
         resetMountedRasterPixels();
       }
       viewer.mutable.current.messageQueue.reset();

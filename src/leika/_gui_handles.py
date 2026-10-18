@@ -33,22 +33,17 @@ from typing import (
 import numpy as np
 from typing_extensions import Protocol, Self, override
 
-from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._assignable_props_api import AssignablePropsBase
 from ._async_errors import (
     callback_result_is_awaitable,
     print_async_exception,
 )
 from ._file_preview import iter_preview_text
-from ._file_transfer import (
-    open_regular_file,
-    validate_file_display_name,
-    validate_unchanged_file_snapshot,
-)
+from ._file_transfer import validate_file_display_name
 from ._gui_resources import _GUI_CONTAINER_DEPTH_MAX, _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
-from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._markdown import _link_markdown_assets
 from ._messages import (
     ButtonColor,
@@ -102,11 +97,7 @@ from ._messages import (
     RemoveCommandMessage,
     _normalize_key_modifier,
 )
-from ._plotly import (
-    _plotly_figure_from_json,
-    _plotly_json_with_config,
-    _plotly_payload_from_json,
-)
+from ._plotly import plotly_figure, plotly_json
 from ._transport._websocket import ClientId
 from ._validation import utf16_code_unit_length_exceeds, validate_layout_id
 from ._validation import validate_finite_number as _finite_number
@@ -503,7 +494,7 @@ def _ancestor_form_locked(handle: Any) -> GuiFormHandle | None:
 
 def _validate_gui_props_candidate(handle: Any, props: Any) -> None:
     """Enforce constructor invariants for one prospective live-props state."""
-    specialized_strings = {"content", "_source", "_plotly_json_str"}
+    specialized_strings = {"content", "_source", "_plotly_json_str", "_theme_templates"}
     for field in dataclasses.fields(props):
         item = getattr(props, field.name)
         if field.name not in specialized_strings and isinstance(item, str):
@@ -1423,7 +1414,7 @@ def _gui_text_source(
         source = _link_markdown_assets(
             value,
             image_root,
-            lambda path, metadata: server._register_http_image(path, _expected_metadata=metadata),
+            server._register_http_image,
         )
     if len(source.encode("utf-8")) > _GUI_MARKDOWN_MAX_SOURCE_BYTES:
         raise ValueError("Markdown source exceeds the 1 MiB browser render limit.")
@@ -1810,6 +1801,7 @@ _DERIVED_PROTOCOL_PROP_NAMES = frozenset(
         "_prefetch",
         "_source",
         "_tabs",
+        "_theme_templates",
     }
 )
 """Wire-only fields whose public mutation would desynchronize owned state."""
@@ -2108,20 +2100,10 @@ class GuiUploadButtonHandle(_GuiInputHandle[UploadedFile], GuiUploadButtonProps)
 
 
 def _read_preview_markdown(path: Path, max_bytes: int) -> bytes | None:
-    """Read stable regular Markdown, or leave an oversized file to the sender."""
-    with open_regular_file(path) as file:
-        before = os.fstat(file.fileno())
-        size = before.st_size
-        if size > max_bytes:
-            return None
+    """Read Markdown, or leave an oversized file to the sender."""
+    with open(path, "rb") as file:
         payload = file.read(max_bytes + 1)
-        after = os.fstat(file.fileno())
-    if len(payload) > max_bytes:
-        return None
-    validate_unchanged_file_snapshot(path, before, after)
-    if len(payload) != size:
-        raise OSError(f"{path} changed size while it was being read")
-    return payload
+    return payload if len(payload) <= max_bytes else None
 
 
 FileContent = Union[bytes, Path, Callable[["GuiEvent[Any]"], Union[bytes, Path]]]
@@ -2228,7 +2210,7 @@ class _GuiFileButtonHandle(GuiButtonHandle):
         if self._filename is not None:
             return self._filename, content
         if isinstance(content, Path):
-            return content.name, content
+            return validate_file_display_name(content.name), content
         # Bytes name nothing, so there is nothing to fall back to. Raised here
         # rather than at creation because a callable's return type is only
         # known once it has run.
@@ -2415,9 +2397,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             linked = _link_markdown_assets(
                 source,
                 content.parent,
-                lambda path, metadata: client._server._register_http_image(
-                    path, _expected_metadata=metadata
-                ),
+                client._server._register_http_image,
                 image_ready if stream_uuid is not None else None,
             ).encode("utf-8")
             return linked if len(linked) <= _GUI_MARKDOWN_MAX_SOURCE_BYTES else content
@@ -2555,8 +2535,12 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         path = self._watched_path()
         if path is None:
             return
-        filename = self._filename if self._filename is not None else path.name
         try:
+            filename = (
+                self._filename
+                if self._filename is not None
+                else validate_file_display_name(path.name)
+            )
             # Checked here as well as in the send, because the send says so
             # in a notification: a file that has grown past the limit while
             # being watched would raise one every tick, and the reader never
@@ -2565,7 +2549,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             if path.stat().st_size > self._max_bytes:
                 return
             self._show(client, filename, path, "reload")
-        except OSError:
+        except (OSError, ValueError):
             # Read out from under us between the stat and the send. The file
             # is still moving; the next watch will find it.
             return
@@ -2588,12 +2572,12 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         # the same (source UUID, None) identity until the fresh send completes.
         if callable(content) or isinstance(content, bytes):
             return
-        filename = self._filename
-        if filename is None:
-            filename = content.name if isinstance(content, Path) else None
-        if filename is None:
-            return
         try:
+            filename = (
+                self._filename
+                if self._filename is not None
+                else validate_file_display_name(content.name)
+            )
             version = self._version()
             stream_uuid = self._send_text_stream(client, filename, content, version)
             prepared = self._prepared(client, filename, content, stream_uuid)
@@ -3770,7 +3754,14 @@ class GuiDividerHandle(_GuiHandle[None], GuiDividerProps):
 
 
 class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
-    """Handle backed only by bounded JSON, never by the caller's mutable Figure."""
+    """Handle backed only by serialized JSON, never by the caller's mutable Figure."""
+
+    _config: dict[str, Any] | None
+    """The private Plotly config every serialization of this plot carries."""
+
+    def __init__(self, _impl: _GuiHandleState, _config: dict[str, Any] | None) -> None:
+        object.__setattr__(self, "_config", _config)
+        super().__init__(impl=_impl)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "aspect":
@@ -3785,31 +3776,18 @@ class GuiPlotlyHandle(_GuiHandle[None], GuiPlotlyProps):
             if self._impl.removed:
                 raise RuntimeError("Cannot read figure from a removed GuiPlotlyHandle.")
             source = cast(GuiPlotlyProps, self._impl.props)._plotly_json_str
-        with gui_api._server._reserve_renderer_preparation():
-            figure = _plotly_figure_from_json(source)
-        with gui_api._lock:
-            if self._impl.removed:
-                raise RuntimeError("Cannot read figure from a removed GuiPlotlyHandle.")
-        return figure
+        return plotly_figure(source)
 
     @figure.setter
     def figure(self, figure: go.Figure) -> None:
         gui_api = self._impl.gui_api
-        with gui_api._lock:
-            if self._impl.removed:
-                raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
-            source = cast(GuiPlotlyProps, self._impl.props)._plotly_json_str
-        # Plotly can copy and encode a large graph. Never wait for renderer
-        # preparation while holding the GUI registry/resource lock.
-        with gui_api._server._reserve_renderer_preparation():
-            _, config = _plotly_payload_from_json(source)
-            json_str = _plotly_json_with_config(figure, config)
+        if self._impl.removed:
+            raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
+        json_str = plotly_json(figure, self._config)
         with gui_api._lock:
             if self._impl.removed:
                 raise RuntimeError("Cannot update a removed GuiPlotlyHandle.")
             props = cast(GuiPlotlyProps, self._impl.props)
-            if props._plotly_json_str != source:
-                raise RuntimeError("Plotly figure changed during serialization")
             old_json = props._plotly_json_str
             props._plotly_json_str = json_str
             try:
@@ -3854,26 +3832,19 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
-        spec = _ndarray_snapshot_spec(image)
-        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
         gui_api = self._impl.gui_api
         with gui_api._lock:
             if self._impl.removed:
                 raise RuntimeError("Cannot update a removed GuiImageHandle.")
             user_format = self._user_format
             jpeg_quality = self._jpeg_quality
-        with gui_api._server._reserve_image_preparation(spec.nbytes):
-            snapshot = _private_ndarray_snapshot(image, spec)
-            resolved_format, data = encode_image_binary(
-                snapshot, user_format, jpeg_quality=jpeg_quality
-            )
-            with gui_api._lock:
-                if self._impl.removed:
-                    raise RuntimeError("Cannot update a removed GuiImageHandle.")
-                if self._user_format != user_format or self._jpeg_quality != jpeg_quality:
-                    raise RuntimeError("Image encoding settings changed during preparation.")
-                self._commit_image_snapshot(snapshot, resolved_format, data)
+        snapshot, resolved_format, data = prepare_image(image, user_format, jpeg_quality)
+        with gui_api._lock:
+            if self._impl.removed:
+                raise RuntimeError("Cannot update a removed GuiImageHandle.")
+            if self._user_format != user_format or self._jpeg_quality != jpeg_quality:
+                raise RuntimeError("Image encoding settings changed during preparation.")
+            self._commit_image_snapshot(snapshot, resolved_format, data)
 
     def _commit_image_snapshot(
         self,
@@ -3931,14 +3902,8 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
                 return
             image = self._image
             jpeg_quality = self._jpeg_quality
-            source_bytes = int(image.nbytes)
-            has_alpha = image.shape[2] == 4
 
-        # Encoding may allocate an image-sized working buffer. Admission must
-        # happen outside the GUI lock so it cannot deadlock with another image
-        # preparation that later needs the GUI lock to publish.
-        with gui_api._server._reserve_image_preparation(source_bytes):
-            resolved_format, data = encode_image_binary(image, value, jpeg_quality=jpeg_quality)
+        _, resolved_format, data = prepare_image(image, value, jpeg_quality)
 
         with gui_api._lock:
             if self._impl.removed:
@@ -3949,11 +3914,6 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
                 or self._jpeg_quality != jpeg_quality
             ):
                 raise RuntimeError("Image changed during format preparation.")
-            if value == "jpeg" and has_alpha:
-                warnings.warn(
-                    "Converting RGBA image to JPEG will discard the alpha channel.",
-                    stacklevel=2,
-                )
             props = cast(GuiImageProps, self._impl.props)
             old_format = props._format
             old_data = props._data

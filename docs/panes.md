@@ -14,8 +14,8 @@ split.
 
 Every server begins with a default page. It is named `Main` unless
 `Server(label=...)` supplies another name; the server itself has no separate
-visualization-wide title. The existing one-page API remains exact shorthand:
-`server.panes` is `server.pages.default.panes`.
+visualization-wide title. `server.panes` is the default page's pane API, the
+same object as `server.pages.default.panes`.
 
 Add more pages through `server.pages` and place panes through the returned
 page's `panes` API:
@@ -120,15 +120,10 @@ server.panes.add_image(frame, pane_id="camera", title="Live image", fit="fill")
 `frame` is an RGB or RGBA array of shape `(height, width, 3|4)`. RGB is sent as
 JPEG and RGBA as PNG unless you pass `format=` yourself.
 
-Image admission takes a synchronous private snapshot. Do not mutate the ndarray
-concurrently with `add_image()`, `update()`, or an `image` assignment; after
-the call succeeds, later caller mutations cannot change the stored pane.
-Preparation charges four times the source buffer against a server-wide 512 MiB
-envelope, so one ndarray source is effectively capped at 128 MiB. Convert
-high-byte-depth arrays to `uint8` when necessary.
-
-Direct pane and GUI ndarray calls validate dimensions before encoding and raise
-`ValueError` above 16,384 pixels per side or 33,554,432 decoded pixels.
+Floating-point arrays are read as 0 to 1 and integer arrays as 0 to 255.
+`add_image()`, `update()`, and an `image` assignment copy the array, so later
+changes to it do not reach the pane; do not mutate it from another thread while
+the call runs.
 
 Received file-preview, Markdown, and registered-asset images reach the browser
 decoder only after verification as a static PNG, JPEG, GIF, or WebP. Animated,
@@ -150,10 +145,6 @@ the axes do not reflow to the pane's shape. Reach for `add_plotly` when the
 viewer needs to interact, or rasterize into `add_image` when a figure holds so
 many marks that one SVG element per mark gets expensive.
 
-Matplotlib SVG source is limited to 16,777,216 UTF-16 code units
-(16 Mi-characters). Creation or update raises `ValueError` before publishing a
-larger figure; simplify or rasterize it before sending.
-
 Leika keeps only a weak reference to the source figure. Retain the figure
 yourself while you need to read or update it through the handle; if it is
 collected, the rendered SVG remains visible but the handle cannot reconstruct
@@ -166,29 +157,21 @@ server.panes.add_plotly(figure, config={"displayModeBar": False})
 ```
 
 A figure that never had a template assigned picks up one matched to the
-viewer's light or dark theme; an explicit template is left alone. For large
-scatters, Plotly's own `scattergl` traces render on the GPU.
-
-Serialized Plotly source is limited to 16,777,216 UTF-16 code units
-(16 Mi-characters), including the figure and theme template. Creation or update
-raises `ValueError` before publishing a larger figure; downsample or simplify it
-before sending.
+viewer's light or dark theme; an explicit template is left alone. GUI plots
+from `server.gui.add_plotly` follow the same rule. For large scatters, Plotly's
+own `scattergl` traces render on the GPU.
 
 Plotly figures and configuration are trusted server-authored input to Plotly
 itself. They can intentionally refer to external maps or images through
 Plotly's schemas; Leika's direct-image URL and raster checks do not sanitize
 those third-party renderer fields.
 
-The server loads Plotly's runtime source from a stable regular-file snapshot,
-requires valid UTF-8, and caps that source at 32 MiB before sending it to a
-client.
+The first Plotly figure queues Plotly's browser runtime once; browsers that
+connect later receive it with the rest of the workspace.
 
-Adding or assigning a figure synchronously preflights at most 500,000 values and
-4,096 configuration items, then stores bounded, detached JSON. Do not mutate an
-exact Plotly figure concurrently while that snapshot is taken. A successful
-call is independent of later caller mutation and of later changes to Plotly's
-global default template; the handle's `figure` getter reconstructs a fresh,
-independent figure on each read.
+Adding or assigning a figure stores its serialized JSON, so later changes to
+the figure reach the pane only when you assign it again. The handle's `figure`
+getter rebuilds a fresh, independent figure on each read.
 
 ### viser scenes
 
@@ -214,14 +197,6 @@ The iframe is intentionally unsandboxed because the Viser client requires
 scripts, workers, and storage, and it uses a no-referrer policy. Cross-origin
 same-origin-policy isolation helps, but a same-origin target has the Leika
 page's authority. Embed only trusted Viser clients and absolute URLs.
-
-## Workspace limits
-
-One workspace retains at most 128 named pages and, across all of them, at most
-128 content panes, including hidden and minimized ones, and at most 16 Viser
-panes. All page pane sources share 32 Mi UTF-16 code units, 256 MiB of retained
-payload, and 64 Mi-pixels. These are Leika-owned state budgets rather than a
-bound on the memory retained by caller objects or by trusted renderer code.
 
 ## Updating a pane
 
@@ -300,8 +275,8 @@ Each browser receives its own encoding after queued updates coalesce. A viewer's
 choice or slow connection does not lower another viewer's quality or cadence.
 Switching presets or resizing a pane refreshes its current image even when the
 application is paused. Application arrays and retained source images are unchanged.
-Per-client resizing/encoding runs off the network event loop under the existing
-server image-preparation budget. It adds CPU work when a variant is needed.
+Per-client resizing/encoding runs off the network event loop. It adds CPU work
+when a variant is needed.
 
 Browser rendering preferences automatically enable transport receipt backpressure.
 `Server(delivery_backpressure=True)` remains available for non-browser clients.
@@ -332,16 +307,16 @@ Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the
 same as calling `update()`.
 
-Removal is terminal and scrubs retained payloads. The stable `pane_id` remains
-readable, but other synchronized reads, updates, and assignments raise
-`RuntimeError`; repeating `remove()` emits a warning and is otherwise a
-harmless no-op.
+Removal is terminal. The stable `pane_id` remains readable, but other reads,
+updates, and assignments raise `RuntimeError`; repeating `remove()` emits a
+warning and is otherwise a harmless no-op.
 
 ## Layout
 
 By default each new pane splits off the last visible one. `placement` and
 `relative_to` steer that, and the row, column, and grid helpers divide space
-equally instead:
+equally instead. Their `add_*` methods are the same as `server.panes`, except
+that they place panes themselves and reject `placement` and `relative_to`:
 
 ```python
 grid = server.panes.add_grid(columns=2)

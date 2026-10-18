@@ -27,29 +27,31 @@ transition has a clear home.
 | --- | --- |
 | Workspace composition, client lifecycle, shared budgets, and broadcast operations | `_server.py` |
 | One browser's GUI, rendering preferences, outgoing transfers, and transfer cancellation | `_client_handle.py` |
-| Download limits, validation, and descriptor-backed chunk sources | `_downloads.py` |
-| Bounded background jobs and captured-payload admission | `_executor.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
-| Renderer preparation shared by GUI controls and panes | `_array_snapshot.py`, `_plotly.py`, `_markdown.py`, `_image_encoding.py` |
+| Renderer preparation shared by GUI controls and panes | `_image_encoding.py`, `_plotly.py`, `_markdown.py` |
 | Per-browser raster variants after transport coalescing | `_rendering.py` |
-| Retained GUI/pane resource measurement | `_gui_resources.py` |
+| Retained GUI resource measurement | `_gui_resources.py` |
 | Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
 | WebSocket lifecycle, dispatch, replay, and flow control | `_transport/_websocket.py`, `_transport/_message_buffer.py` |
 | HTTP request policy, password gate, routing, assets, and the Viser proxy | `_transport/_http_security.py`, `_transport/_auth.py`, `_transport/_http.py`, `_transport/_http_assets.py`, `_transport/_viser_proxy.py` |
-| Regular-file snapshots and display-name validation | `_file_transfer.py` |
+| File-send argument checks and chunked file sources | `_file_transfer.py` |
 
 `Server` composes the public APIs and shared resources. `ClientHandle` depends
 on the server only for its instance's services and type annotations; the server
 creates and retires clients. Renderer preparation and resource measurement do
 not depend on GUI handles or pane registries. Both kinds of surface call those
-shared helpers directly. Pane property setters use one transaction that
-reserves the prospective resource cost, queues the update, and commits the
-handle; a failed admission or queue restores the previous state and cost.
+shared helpers directly. A pane change queues its message before it commits the
+handle's state, so a failed queue leaves the handle unchanged.
 
 `leika._transport` is private. `Server` alone owns connect and disconnect
 callbacks and shutdown; the transport runs one worker thread whose teardown
-closes every message buffer, the Viser proxy, and the handler registry. Request
+closes every message buffer, the Viser proxy, and the handler registry. The
+server queues its GUI, workspace, and default page before it starts listening,
+so no browser sees a partial workspace. Synchronous callbacks and deferred
+file transfers share one 32-thread pool. `stop()` waits for the worker (from a
+helper thread when called on the worker itself), then cancels queued callbacks
+and lets running ones finish. Request
 policy owns accepted host and proxy rules, and the HTTP handler serves the
 single-file client from memory with a precomputed gzip copy, rereading it when
 the file changes.
@@ -170,19 +172,13 @@ document ledger. Each handle retains at most 256 callbacks. Programmatic GUI
 callbacks queue at most 1,024 snapshots and 128 MiB before later callbacks are
 reported and declined.
 
-The workspace owns at most 128 named pages and, across all pages, at most 128
-content panes, including hidden and minimized ones, and at most 16 Viser panes.
-Pane sources share 32 Mi UTF-16 code units, 256 MiB of retained payload, and 64
-Mi-pixels. Across all GUI scopes on one server, retained GUI state is capped at
-256 MiB and GUI rasters at 128 Mi-pixels; `server.gui` and all workspace panes
-additionally share a 64 Mi-pixel workspace-global raster ledger. The browser
+Across all GUI scopes on one server, retained GUI state is capped at 256 MiB
+and GUI rasters at 128 Mi-pixels, and `server.gui` rasters at 64 Mi-pixels.
+Pages, panes, and their content have no Leika-imposed limits. The browser
 counts every mounted copy of a direct raster against its own 128 Mi-pixel
 document budget.
 
-Image preparation has a separate 512 MiB server-wide envelope and charges four
-times the source buffer, making 128 MiB the effective per-call ndarray source
-ceiling. High-byte-depth arrays may need caller-side conversion to `uint8`.
-These are ownership limits for Leika's GUI, pane, wire, and rendered state, not
+These are ownership limits for Leika's GUI, wire, and rendered state, not
 a bound on total Python-process memory. Registered callbacks and lazy file
 providers remain trusted caller-owned callables and may close over arbitrary
 state.
@@ -205,9 +201,9 @@ Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
 share 128 MiB, beyond which the oldest registrations are evicted and their URLs
 answer 404.
 
-Downloads are stream-flow-controlled to an 8 MiB queued budget per server
-client, but browser save and link flows still assemble the complete file as a
-Blob. The browser accepts at most 256 MiB and 65,536 parts per download, with
+Downloads are flow-controlled to 8 MiB of queued payload per client, but
+browser save and link flows still assemble the complete file as a Blob. The
+browser accepts at most 256 MiB and 65,536 parts per download, with
 at most 128 active assemblies. One document-wide 512 MiB budget covers both
 the declared bytes of active assemblies and completed Blobs retained by save
 navigation, links, current or deferred previews, and the warm cache. Completion
@@ -235,20 +231,12 @@ The final transfer remains the complete downloadable document. Reopened cached
 documents mount in batches of 96 blocks; following an internal link completes
 mounting before resolving its target. Image decoding remains viewport-bound.
 
-Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
-code units (16 Mi-characters). Public creation, update, and assignment preflight
-that bound and raise `ValueError` before publication. The bundled client repeats
-the check and shows a visible status if a payload bypasses the Python boundary.
-
-GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
-Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update
-raise `ValueError` before publishing a larger source. The bundled client also
+GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character).
+Public creation and update raise `ValueError` before publishing a larger source. The bundled client also
 declines an oversized payload before DOM, Blob, or image parsing and shows a
 status in the affected control or pane.
 
-Direct GUI and pane ndarray APIs limit each side to 16,384 pixels and the image
-to 33,554,432 decoded pixels, raising before encoding an oversized source. A
-received file-preview, Markdown, or registered-asset image reaches the decoder
+A received file-preview, Markdown, or registered-asset image reaches the decoder
 only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
 animated, oversized, and unsupported files remain available through an explicit
 link or download fallback. Local Markdown image paths resolve from the document
@@ -259,16 +247,15 @@ Markdown does not fetch external images; only a
 bounded data image or the exact hash-and-dimensions URL Leika emits for a
 registered picture can render inline.
 
-Plotly figures are preflighted through 500,000 values, configurations through
-4,096 items, and the combined detached JSON snapshot through the size ceiling
-above. A successful synchronous add or assignment stores its own snapshot, and
-the public getter reconstructs an independent figure without consulting later
-global-template changes. Exact Plotly figures and ndarray sources must not be
-mutated concurrently while that snapshot is being taken.
+GUI plots and Plotly panes share one serializer. Adding or assigning a figure
+stores its JSON with a private copy of the config, and the getter rebuilds an
+independent figure from it. A figure without a template, or with Plotly's stock
+default, is sent without one and follows the viewer's light or dark theme. The
+first figure queues Plotly's browser runtime once, as a retained message that
+later browsers receive on connect.
 
-The Plotly bounds do not sanitize renderer semantics: figures and configuration
-remain trusted, server-authored input to a third-party renderer and may
-intentionally reference external maps or images. Likewise, `GuiApi.add_html`
+Plotly figures and configuration remain trusted, server-authored input to a
+third-party renderer and may intentionally reference external maps or images. Likewise, `GuiApi.add_html`
 injects trusted raw HTML without sanitization; callers must sanitize untrusted
 content first.
 
@@ -310,10 +297,10 @@ Internally, an invisible root sentinel gives the pane layout a valid anchor
 before any data pane exists. It is not a public pane and occupies no workspace
 once visible panes are present.
 
-Pane handles own stable identity and one replaceable content worker. Content
-preparation runs before an atomic registry commit, which checks the captured
-worker, admits the replacement resource cost, and then retires the old worker.
-Placement declarations have their own replay lifecycle, preserving initial
+A pane handle keeps its identity while its renderer changes. Content is
+prepared outside the registry lock; the commit then checks that no other
+replacement happened meanwhile, queues the new renderer, and releases the old
+renderer's state, such as a Viser proxy route. Placement declarations have their own replay lifecycle, preserving initial
 layout order while renderer declarations replace their previous payloads and
 updates. Empty content uses that same path and allocates no renderer.
 
@@ -323,7 +310,7 @@ Leika is a simple data workspace. The client carries GUI, control panel, layout,
 image, SVG, and Plotly renderers, and CI checks that the shipped wheel and its
 browser dependencies stay within that surface. Those renderers back the four pane
 types in [Panes](panes.md). Matplotlib sources are held weakly, while ndarray
-and Plotly assignments detach bounded snapshots as described above.
+and Plotly assignments store their own copies as described above.
 
 External Viser pages embed as intentionally unsandboxed iframes because their
 clients require scripts, workers, and storage. They use a no-referrer policy,

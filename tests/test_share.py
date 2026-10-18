@@ -141,33 +141,6 @@ def test_share_requires_and_generates_a_password(monkeypatch: pytest.MonkeyPatch
     assert server.share_url is None
 
 
-def test_share_start_failure_is_not_masked_by_tunnel_close_failure(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    class FailingTunnel:
-        url = None
-
-        def __init__(self, local_port: int) -> None:
-            del local_port
-
-        def start(self) -> str:
-            raise ShareTunnelError("primary tunnel start failure")
-
-        def close(self) -> None:
-            raise OSError("secondary tunnel close failure")
-
-    monkeypatch.setattr(leika._server, "CloudflaredTunnel", FailingTunnel)
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
-    server = leika.Server(host="127.0.0.1", port=0, verbose=False, share=True)
-    try:
-        assert server.share_url is None
-        output = capsys.readouterr().out
-        assert "primary tunnel start failure" in output
-        assert "secondary tunnel close failure" in output
-    finally:
-        server.stop()
-
-
 def test_constructor_failure_after_tunnel_start_closes_the_tunnel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

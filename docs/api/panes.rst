@@ -12,6 +12,7 @@ Pane API
 
 .. autoclass:: Panes
    :members:
+   :inherited-members:
 
 Handles
 -------
@@ -44,9 +45,11 @@ Layout
 
 .. autoclass:: PaneGroup
    :members:
+   :inherited-members:
 
 .. autoclass:: PaneGrid
    :members:
+   :inherited-members:
 
 Types
 -----

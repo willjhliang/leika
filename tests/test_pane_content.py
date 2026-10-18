@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -20,11 +22,9 @@ def test_general_pane_replaces_content_and_replay_without_changing_identity(serv
     panes = [grid.add_pane(pane_id=f"slot-{i}", title=f"Slot {i}") for i in range(4)]
     pane = panes[0]
     pane.set_image(np.zeros((8, 12, 3), np.uint8))
-    old = pane._content
-    assert server.panes._resource_total.decoded_pixels == 96
+    assert pane._source.shape == (8, 12, 3)
     pane.set_video("/camera.mp4", sync_group="episode", fps=10)
-    assert old._impl.removed and old._impl.image.size == 0
-    assert server.panes._resource_total.decoded_pixels == 0
+    assert pane._source is None and pane._renderer is _panes.VideoPaneHandle
     assert server.panes._handle_from_pane_id["slot-0"] is pane
     assert pane.title == "Slot 0"
     pane.clear(loading="Waiting")
@@ -37,7 +37,6 @@ def test_general_pane_replaces_content_and_replay_without_changing_identity(serv
         isinstance(m, (_messages.ViewportImageMessage, _messages.ViewportVideoMessage))
         for m in messages
     )
-    assert server.panes._aggregate.live_panes == 4
     pane.remove()
     assert not any(getattr(m, "pane_id", None) == pane.pane_id for m in retained(server))
 
@@ -49,31 +48,33 @@ def test_typed_update_restores_video_settings_after_clear(server):
     pane.clear()
     pane.update("/b.mp4", loading=False)
     assert pane.sync_group == "episode" and pane.fps == 30
-    assert pane._impl.props._url == "/b.mp4"
-    assert not pane._impl.props.loop and not pane._impl.props.autoplay
+    assert pane._props._url == "/b.mp4"
+    assert not pane._props.loop and not pane._props.autoplay
     pane.set_image(np.zeros((2, 3, 3), np.uint8))
     with pytest.raises(RuntimeError, match="different"):
         pane.update("/c.mp4")
+    with pytest.raises(RuntimeError, match="different"):
+        _ = pane.sync_group
     pane.clear()
     with pytest.raises(RuntimeError, match="different"):
         pane.update("/c.mp4")
     pane.set_video("/d.mp4")
     pane.update("/e.mp4")
-    assert pane._impl.props._url == "/e.mp4"
+    assert pane._props._url == "/e.mp4"
 
 
 @pytest.mark.parametrize("operation", ["update", "set_image"])
 def test_clear_rejects_inflight_image_work(server, monkeypatch, operation):
     pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8))
     started, release = threading.Event(), threading.Event()
-    encode = _panes.encode_image_binary
+    prepare = _panes.prepare_image
 
-    def blocked(*args, **kwargs):
+    def blocked(*args):
         started.set()
         assert release.wait(5)
-        return encode(*args, **kwargs)
+        return prepare(*args)
 
-    monkeypatch.setattr(_panes, "encode_image_binary", blocked)
+    monkeypatch.setattr(_panes, "prepare_image", blocked)
     with ThreadPoolExecutor(max_workers=1) as pool:
         result = pool.submit(getattr(pane, operation), np.ones((2, 3, 3), np.uint8))
         assert started.wait(5)
@@ -81,17 +82,38 @@ def test_clear_rejects_inflight_image_work(server, monkeypatch, operation):
             pane.clear()
         finally:
             release.set()
-        with pytest.raises(RuntimeError, match="removed|changed"):
+        with pytest.raises(RuntimeError, match="changed"):
             result.result(timeout=5)
-    assert server.panes._resource_total.decoded_pixels == 0
+    assert pane._source is None
     assert not any(isinstance(m, _messages.ViewportImageMessage) for m in retained(server))
 
 
+def test_inflight_update_keeps_a_setting_changed_meanwhile(server, monkeypatch):
+    pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8), fit="fit")
+    started, release = threading.Event(), threading.Event()
+    prepare = _panes.prepare_image
+
+    def blocked(*args):
+        started.set()
+        assert release.wait(5)
+        return prepare(*args)
+
+    monkeypatch.setattr(_panes, "prepare_image", blocked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(pane.update, np.ones((2, 3, 3), np.uint8))
+        assert started.wait(5)
+        pane.fit = "fill"
+        release.set()
+        result.result(timeout=5)
+    assert pane.fit == "fill" and pane._settings["fit"] == "fill"
+    updates = [m for m in retained(server) if isinstance(m, _messages.ViewportPaneUpdateMessage)]
+    assert updates[-1].updates["fit"] == "fill"
+
+
 @pytest.mark.parametrize("clear", [False, True])
-def test_failed_replacement_restores_content_resources_and_replay(server, monkeypatch, clear):
+def test_failed_replacement_preserves_content_and_replay(server, monkeypatch, clear):
     pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8), title="Original")
-    old = pane._content
-    cost, messages = server.panes._resource_total, retained(server)
+    renderer, source, messages = pane._renderer, pane._source, retained(server)
 
     def reject(*args):
         raise RuntimeError("publication failed")
@@ -99,57 +121,41 @@ def test_failed_replacement_restores_content_resources_and_replay(server, monkey
     monkeypatch.setattr(server.panes._websock_interface, "queue_messages_or_raise", reject)
     with pytest.raises(RuntimeError, match="publication failed"):
         pane.clear() if clear else pane.set_viser("https://example.com/scene")
-    assert pane._content is old and not old._impl.removed
+    assert pane._renderer is renderer and pane._source is source
     assert pane.title == "Original"
-    assert server.panes._resource_total == cost
-    assert server.panes._aggregate.resource_total == cost
-    assert server.panes._aggregate.live_viser_panes == 0
     assert retained(server) == messages
 
 
-def test_replace_at_pane_limit_and_viser_limit(server, monkeypatch):
-    monkeypatch.setattr(_panes, "_PANE_MAX", 2)
-    monkeypatch.setattr(_panes, "_VISER_PANE_MAX", 1)
-    first, second = server.panes.add_pane(), server.panes.add_pane()
-    first.set_viser("https://example.com/first")
-    first.set_viser("https://example.com/second")
-    with pytest.raises(RuntimeError, match="viser panes"):
-        second.set_viser("https://example.com/third")
-    first.clear()
-    second.set_viser("https://example.com/third")
-    assert server.panes._aggregate.live_panes == 2
-    assert server.panes._aggregate.live_viser_panes == 1
-    second.remove()
-    assert server.panes._aggregate.live_viser_panes == 0
-
-
 def test_clear_unregisters_viser_proxy(server):
-    from types import SimpleNamespace
-
     target = SimpleNamespace(get_host=lambda: "127.0.0.1", get_port=lambda: 9876)
     pane = server.panes.add_viser(target, minimize_gui=False)
-    old = pane._content
-    assert old._impl.proxy_path is not None
+    proxy = server._websock_server._viser_proxy
+    route = pane._source.path
+    assert route in proxy._endpoints
+    pane.update(target)
+    assert pane._source.path == route
     pane.clear()
-    assert old._impl.proxy_path is None and old._impl.proxy_address is None
+    assert route not in proxy._endpoints
     pane.update(target)
     assert pane.port == 9876
-    assert not pane._impl.minimize_gui
+    assert pane._settings == {"minimize_gui": False}
+    pane.remove()
+    assert proxy._endpoints == {}
 
 
 def test_replacement_preserves_refresh_bindings_and_latest_metadata(server, monkeypatch):
     control = server.gui.add_checkbox("Selection", initial_value=False)
     pane = server.panes.add_pane(title="Original")
     pane.invalidate_on(control)
-    prepare = _panes._prepare_video
+    video_url = _panes._video_url
 
     def rename_during_preparation(*args):
         pane.title = "Latest"
         pane.visible = False
         pane.loading = "Preparing"
-        return prepare(*args)
+        return video_url(*args)
 
-    monkeypatch.setattr(_panes, "_prepare_video", rename_during_preparation)
+    monkeypatch.setattr(_panes, "_video_url", rename_during_preparation)
     pane.set_video("/movie.mp4")
     assert (pane.title, pane.visible, pane.loading) == ("Latest", False, "Preparing")
     updates = [m for m in retained(server) if isinstance(m, _messages.ViewportPaneUpdateMessage)]
@@ -167,14 +173,12 @@ def test_matplotlib_and_plotly_can_share_one_pane(server):
     figure = Figure()
     pane.set_matplotlib(figure)
     assert any(isinstance(m, _messages.ViewportMatplotlibMessage) for m in retained(server))
-    old = pane._content
-    pane.clear()
-    assert old._impl.figure_ref is None
     go = pytest.importorskip("plotly.graph_objects")
-    pane.set_plotly(go.Figure(), config={"displayModeBar": False})
-    assert any(isinstance(m, _messages.ViewportPlotlyMessage) for m in retained(server))
-    pane.clear()
-    pane.set_image(np.zeros((2, 3, 3), np.uint8))
+    pane.set_plotly(go.Figure(data=[go.Scatter(y=[1, 2])]), config={"displayModeBar": False})
+    messages = retained(server)
+    assert any(isinstance(m, _messages.ViewportPlotlyMessage) for m in messages)
+    assert not any(isinstance(m, _messages.ViewportMatplotlibMessage) for m in messages)
+    assert pane._source is None
 
 
 def test_cleared_image_keeps_default_quality_after_one_frame_override(server, monkeypatch):
@@ -183,29 +187,26 @@ def test_cleared_image_keeps_default_quality_after_one_frame_override(server, mo
     )
     pane.clear()
     qualities = []
-    encode = _panes.encode_image_binary
+    prepare = _panes.prepare_image
 
-    def record(*args, **kwargs):
-        qualities.append(kwargs["jpeg_quality"])
-        return encode(*args, **kwargs)
+    def record(image, format, jpeg_quality):
+        qualities.append(jpeg_quality)
+        return prepare(image, format, jpeg_quality)
 
-    monkeypatch.setattr(_panes, "encode_image_binary", record)
+    monkeypatch.setattr(_panes, "prepare_image", record)
     pane.update(np.ones((2, 3, 3), np.uint8), jpeg_quality=20)
     pane.update(np.zeros((2, 3, 3), np.uint8))
     assert qualities == [20, 70]
     assert pane.format == "jpeg" and pane.fit == "fill"
 
 
-def test_cleared_plotly_restores_bounded_config_without_retaining_figure(server):
+def test_cleared_plotly_restores_config_without_retaining_figure(server):
     go = pytest.importorskip("plotly.graph_objects")
     pane = server.panes.add_plotly(
         go.Figure(data=[go.Scatter(y=[1, 2])]), config={"displayModeBar": False}
     )
-    old = pane._content
     pane.clear()
-    assert old._impl.props._plotly_json_str == ""
-    assert pane._impl.resume_options == {"config": {"displayModeBar": False}}
+    assert pane._props == _messages.ViewportEmptyProps(title="Plotly", visible=True, loading=False)
     pane.update(go.Figure(data=[go.Scatter(y=[3, 4])]))
-    _, config = _panes._plotly_payload_from_json(pane._impl.props._plotly_json_str)
-    assert config == {"displayModeBar": False}
+    assert json.loads(pane._props._plotly_json_str)["config"] == {"displayModeBar": False}
     assert list(pane.figure.data[0].y) == [3, 4]

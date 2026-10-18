@@ -36,6 +36,11 @@ export class PlotlyBootstrapGate {
       (candidate) => candidate.type === "RunJavascriptMessage",
     );
     if (message?.type !== "RunJavascriptMessage") return null;
+    if (this.ready()) {
+      // A reconnect replays the runtime; the installed one stays in place.
+      this.loaded = true;
+      return null;
+    }
     try {
       this.evaluate(message.source);
       if (!this.ready()) {

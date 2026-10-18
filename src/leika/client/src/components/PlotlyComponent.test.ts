@@ -12,6 +12,7 @@ const message = (serialized: string, aspect = 1): GuiPlotlyMessage => ({
   props: {
     order: 0,
     _plotly_json_str: serialized,
+    _theme_templates: "",
     aspect,
     visible: true,
   },

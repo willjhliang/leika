@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import threading
 from pathlib import Path
 from typing import NamedTuple
 
-from .._file_transfer import read_regular_file_snapshot
 from ._image_headers import image_pixel_size
 
 _HTTP_ASSET_URL_PREFIX = "/leika-assets/"
@@ -57,20 +55,17 @@ class HttpAssetRegistry:
         with self._lock:
             return self._snapshots.get(name)
 
-    def register(
-        self, path: Path, *, _expected_metadata: os.stat_result | None = None
-    ) -> HttpAsset:
+    def register(self, path: Path) -> HttpAsset:
         """Snapshot a file under a URL named by its content hash.
 
         A changed file registers under a different URL, so responses can be
-        cached forever. ``_expected_metadata`` pins the file a caller already
-        resolved. Raises ``OSError`` if the file cannot be read.
+        cached forever. Raises ``OSError`` if the file cannot be read.
         """
         if not isinstance(path, Path):
             raise TypeError("path must be a pathlib.Path")
-        content = read_regular_file_snapshot(
-            path, _HTTP_ASSET_MAX_BYTES, expected_metadata=_expected_metadata
-        )
+        if path.stat().st_size > _HTTP_ASSET_MAX_BYTES:
+            raise ValueError(f"{path} is larger than the {_HTTP_ASSET_MAX_BYTES} byte limit")
+        content = path.read_bytes()
         suffix = path.suffix.lower()
         if _HTTP_ASSET_SUFFIX_PATTERN.fullmatch(suffix) is None:
             suffix = ""

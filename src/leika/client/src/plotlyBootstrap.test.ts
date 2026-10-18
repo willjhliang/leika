@@ -24,8 +24,10 @@ describe("PlotlyBootstrapGate", () => {
   });
 
   it("executes once, requires Plotly, and permits a new connection reset", () => {
-    const evaluate = vi.fn();
-    let ready = true;
+    let ready = false;
+    const evaluate = vi.fn(() => {
+      ready = true;
+    });
     const onReady = vi.fn();
     const gate = new PlotlyBootstrapGate(evaluate, () => ready, onReady);
     const message = bootstrap("runtime");
@@ -35,9 +37,15 @@ describe("PlotlyBootstrapGate", () => {
     expect(onReady).toHaveBeenCalledOnce();
     expect(gate.preflight([message])).toContain("only once");
 
+    // A reconnect replays the runtime without evaluating it again.
+    gate.reset();
+    expect(gate.preflight([message])).toBeNull();
+    expect(gate.execute([message])).toBeNull();
+    expect(evaluate).toHaveBeenCalledOnce();
+
     gate.reset();
     ready = false;
-    expect(gate.preflight([message])).toBeNull();
+    evaluate.mockImplementation(() => {});
     expect(gate.execute([message])).toContain("did not install");
   });
 

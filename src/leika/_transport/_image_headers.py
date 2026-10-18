@@ -15,7 +15,7 @@ expected to carry on without it.
 from __future__ import annotations
 
 import struct
-from typing import Literal, Optional, Tuple
+from typing import Optional, Tuple
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _GIF_SIGNATURES = (b"GIF87a", b"GIF89a")
@@ -32,35 +32,6 @@ _JPEG_STANDALONE_MARKERS = frozenset({0x01, 0xD8, 0xD9}) | frozenset(range(0xD0,
 # Start of scan, after which the file is entropy-coded data rather than
 # segments. A frame always precedes it, so reaching it means there was none.
 _JPEG_START_OF_SCAN = 0xDA
-
-_MAX_IMAGE_DIMENSION = 16_384
-_MAX_IMAGE_PIXELS = 32 * 1024 * 1024
-"""Bundled-browser decoded raster limits (about 128 MiB at RGBA)."""
-
-
-def validate_image_pixel_size(width: int, height: int) -> tuple[int, int]:
-    """Return a browser-safe raster size or raise a stable boundary error."""
-    if width <= 0 or height <= 0:
-        raise ValueError("image width and height must be positive")
-    if width > _MAX_IMAGE_DIMENSION or height > _MAX_IMAGE_DIMENSION:
-        raise ValueError(f"image dimensions must not exceed {_MAX_IMAGE_DIMENSION} pixels per side")
-    if width * height > _MAX_IMAGE_PIXELS:
-        raise ValueError(f"image must not exceed {_MAX_IMAGE_PIXELS} decoded pixels")
-    return width, height
-
-
-def image_info(data: bytes) -> tuple[Literal["png", "jpeg", "gif", "webp"], tuple[int, int]]:
-    """The format and pixel size of an encoded raster, or ``ValueError``."""
-    size = image_pixel_size(data)
-    if size is not None:
-        if data[:8] == _PNG_SIGNATURE:
-            return "png", size
-        if data[:6] in _GIF_SIGNATURES:
-            return "gif", size
-        if data[:4] == b"RIFF":
-            return "webp", size
-        return "jpeg", size
-    raise ValueError("image must have a recognized raster header")
 
 
 def _webp_payload_size(chunk_type: bytes, payload: bytes) -> Optional[Tuple[int, int]]:

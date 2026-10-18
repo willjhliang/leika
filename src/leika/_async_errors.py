@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
-import threading
 import traceback
-from collections.abc import Awaitable
 from concurrent.futures import Executor, Future
 from typing import Any, Callable
 
@@ -25,40 +23,6 @@ def print_async_errors(future: Future[Any] | asyncio.Future[Any]) -> None:
     exc = future.exception()
     if exc is not None:
         print_async_exception(exc)
-
-
-async def await_async_errors(awaitable: Awaitable[Any]) -> None:
-    """Await one user callback, reporting its failure without aborting peers.
-
-    ``CancelledError`` deliberately remains outside the ``Exception`` catch:
-    connection and server teardown must still be able to cancel a callback
-    that is in flight.
-    """
-    try:
-        await awaitable
-    except Exception as exc:
-        print_async_exception(exc)
-
-
-_user_callback_context = threading.local()
-
-
-def in_sync_user_callback() -> bool:
-    """Whether this thread is executing Leika-owned synchronous user code."""
-    return bool(getattr(_user_callback_context, "depth", 0))
-
-
-def _invoke_sync_user_callback(callback: Callable[..., Any], args: tuple[Any, ...]) -> Any:
-    """Invoke one callback while marking its executor thread as server-owned."""
-    depth = getattr(_user_callback_context, "depth", 0)
-    _user_callback_context.depth = depth + 1
-    try:
-        return callback(*args)
-    finally:
-        if depth:
-            _user_callback_context.depth = depth
-        else:
-            del _user_callback_context.depth
 
 
 def callback_result_is_awaitable(result: object) -> bool:
@@ -87,9 +51,7 @@ async def await_user_callback(executor: Executor, callback: Callable[..., Any], 
         if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(call):
             result = callback(*args)
         else:
-            result = await asyncio.wrap_future(
-                executor.submit(_invoke_sync_user_callback, callback, args)
-            )
+            result = await asyncio.wrap_future(executor.submit(callback, *args))
 
         await await_callback_result(result)
     except Exception as exc:

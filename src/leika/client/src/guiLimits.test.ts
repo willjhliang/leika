@@ -266,6 +266,7 @@ describe("specialized GUI source admission", () => {
       props: {
         order: 0,
         _plotly_json_str: "x".repeat(PLOTLY_JSON_MAX_SERIALIZED_CHARACTERS),
+        _theme_templates: "",
         aspect: 1,
         visible: true,
       },

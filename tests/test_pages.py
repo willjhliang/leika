@@ -8,11 +8,6 @@ import pytest
 
 import leika
 from leika import _messages
-from leika import _pages as pages_impl
-from leika import _panes as panes_impl
-from leika import _server as server_impl
-from leika._transport import _message_buffer as buffer_impl
-from leika._transport import _websocket as websocket_impl
 from leika._transport._websocket import ClientId
 
 
@@ -102,7 +97,7 @@ def test_pages_scope_pane_ids_placement_updates_and_removal(
     )
 
 
-def test_page_names_are_stable_identity_updates_and_legacy_labels(
+def test_page_names_are_stable_identity_updates_and_labels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
@@ -194,8 +189,6 @@ def test_page_add_queue_failure_rolls_back_without_a_ghost(
     assert len(server.pages) == 1
     assert "rejected" not in server.pages._page_from_page_id
     assert _retained(server) == before_messages
-    assert server.pages._aggregate.live_panes == 0
-    assert server.pages._aggregate.resource_total == panes_impl._PaneResourceCost()
 
 
 def test_page_names_are_unique_and_failed_changes_are_transactional(
@@ -211,149 +204,3 @@ def test_page_names_are_unique_and_failed_changes_are_transactional(
 
     assert tuple(page.name for page in server.pages) == ("Main", "Analysis")
     assert _retained(server) == before_messages
-
-
-def test_pane_and_page_limits_remain_aggregate_across_pages(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    frame = np.zeros((1, 1, 3), dtype=np.uint8)
-    other = server.pages.add("Other", page_id="other")
-
-    monkeypatch.setattr(panes_impl, "_PANE_MAX", 1)
-    first = server.panes.add_image(frame, pane_id="same")
-    with pytest.raises(RuntimeError, match="more than 1 panes"):
-        other.panes.add_image(frame, pane_id="same")
-    first.remove()
-    replacement = other.panes.add_image(frame, pane_id="same")
-    assert replacement.pane_id == "same"
-
-    monkeypatch.setattr(pages_impl, "_PAGE_MAX", len(server.pages))
-    with pytest.raises(RuntimeError, match="more than 2 pages"):
-        server.pages.add("Overflow", page_id="overflow")
-
-
-def test_stop_retires_every_pages_panes_and_releases_shared_ownership(
-    server: leika.Server,
-) -> None:
-    frame = np.zeros((1, 1, 3), dtype=np.uint8)
-    other = server.pages.add("Other", page_id="other")
-    first = server.panes.add_image(frame, pane_id="first")
-    second = other.panes.add_image(frame, pane_id="second")
-
-    server.stop()
-
-    assert first._impl.removed and second._impl.removed
-    assert server.pages._aggregate.live_panes == 0
-    assert server.pages._aggregate.live_viser_panes == 0
-    assert server.pages._aggregate.resource_total == panes_impl._PaneResourceCost()
-    assert server.panes._handle_from_pane_id == {}
-    assert other.panes._handle_from_pane_id == {}
-
-
-def test_plotly_runtime_follows_page_subscriptions(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A page-local chart initializes Plotly only for that page's browsers."""
-    plotly = pytest.importorskip("plotly.graph_objects")
-    bootstrap = "window.Plotly = {};"
-    load_count = 0
-
-    def load_plotly_js() -> str:
-        nonlocal load_count
-        load_count += 1
-        return bootstrap
-
-    monkeypatch.setattr("leika._server._load_plotly_js", load_plotly_js)
-    retained = server._websock_server._broadcast_buffer
-
-    def connect(
-        client_id: ClientId,
-    ) -> tuple[
-        server_impl.ClientHandle,
-        websocket_impl.WebsockClientConnection,
-        buffer_impl.AsyncMessageBuffer,
-    ]:
-        local = buffer_impl.AsyncMessageBuffer(
-            server._event_loop,
-            persistent_messages=False,
-        )
-        connection = websocket_impl.WebsockClientConnection(
-            client_id,
-            websocket_impl._ClientHandleState(local, retained),
-        )
-        retained.register_client(client_id)
-        client = server_impl.ClientHandle(connection, server)
-        with server._client_lock:
-            server._connected_clients[client_id] = client
-        return client, connection, local
-
-    def bootstraps(buffer: buffer_impl.AsyncMessageBuffer) -> list[str]:
-        return [
-            message.source
-            for message in buffer.message_from_id.values()
-            if isinstance(message, _messages.RunJavascriptMessage)
-        ]
-
-    first, first_connection, first_local = connect(ClientId(101))
-    second, second_connection, second_local = connect(ClientId(102))
-    try:
-        analysis = server.pages.add("Analysis", page_id="analysis")
-        for generation, connection in enumerate((first_connection, second_connection)):
-            server._handle_page_subscribe(
-                connection.client_id,
-                _messages.PageSubscribeMessage(
-                    page_id="default",
-                    generation=generation,
-                ),
-            )
-
-        # Declaration validates and accounts the runtime transactionally, but
-        # an inactive page does not queue it to any browser.
-        analysis.panes.add_plotly(plotly.Figure(), pane_id="inactive-plotly")
-        assert load_count == 1
-        assert bootstraps(first_local) == []
-        assert bootstraps(second_local) == []
-
-        # Activating that page initializes only the requesting browser.
-        server._handle_page_subscribe(
-            first_connection.client_id,
-            _messages.PageSubscribeMessage(page_id="analysis", generation=2),
-        )
-        assert load_count == 1
-        assert bootstraps(first_local) == [bootstrap]
-        assert bootstraps(second_local) == []
-
-        # The first chart added live to the other client's selected page uses
-        # the cached runtime once; later charts do not enqueue it again.
-        server.panes.add_plotly(plotly.Figure(), pane_id="live-plotly")
-        server.panes.add_plotly(plotly.Figure(), pane_id="second-live-plotly")
-        assert load_count == 1
-        assert bootstraps(first_local) == [bootstrap]
-        assert bootstraps(second_local) == [bootstrap]
-
-        # Later subscriptions reuse that same prepared runtime as well.
-        server._handle_page_subscribe(
-            second_connection.client_id,
-            _messages.PageSubscribeMessage(page_id="analysis", generation=3),
-        )
-        assert load_count == 1
-        assert bootstraps(first_local) == [bootstrap]
-        assert bootstraps(second_local) == [bootstrap]
-        assert not any(
-            isinstance(message, _messages.RunJavascriptMessage)
-            for message in retained.message_from_id.values()
-        )
-    finally:
-        with server._client_lock:
-            server._connected_clients.pop(first_connection.client_id, None)
-            server._connected_clients.pop(second_connection.client_id, None)
-        for client, connection, local in (
-            (first, first_connection, first_local),
-            (second, second_connection, second_local),
-        ):
-            client.gui._retire_scope_without_queue()
-            server._discard_plotly_connection(connection.client_id)
-            retained.unregister_client(connection.client_id)
-            local.set_done()

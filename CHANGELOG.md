@@ -5,6 +5,38 @@ versioning.
 
 ## Unreleased
 
+- Server: synchronous callbacks and deferred file transfers share one plain
+  32-thread pool, without the 256-job pending cap. `stop()` called from a
+  callback now waits for the server thread directly instead of handing the
+  wait to a finalizer thread, and no longer clears registered connect and
+  disconnect callbacks. The GUI and default page are queued before the server
+  starts listening.
+- File sends: `Server.send_file_download()` and `send_file_preview()` check
+  their arguments once and send through each client's own path; inside an
+  atomic block or on the event loop each client's transfer runs on the shared
+  callback pool. Python no longer caps downloads at 256 MiB, 65,536 parts, or
+  128 active transfers per client. Files, runtime HTTP assets, previews, and
+  Markdown images are read with plain `open()`, so a FIFO or device path blocks
+  as it would anywhere else, and `Path` subclasses are passed through as given.
+- Panes (breaking): pages and panes are no longer limited to 128 pages, 128
+  panes, 16 Viser panes, shared payload, text and raster budgets, or the
+  16 Mi-character Matplotlib SVG limit; `server.stop()` leaves pane handles
+  as they are instead of retiring them. `Panes`, rows, columns, and grids share
+  one set of `add_*` methods, so a row, column, or grid now raises `TypeError`
+  for `placement` or `relative_to` instead of not accepting them. `PaneHandle`
+  is no longer generic, video URLs are no longer limited to 16,384 characters,
+  and a removed pane keeps its last props.
+- Plotly: GUI plots now follow the viewer's light or dark theme like Plotly
+  panes, through one shared serializer. Plotly's browser runtime is sent once
+  to every browser after the first figure, including browsers viewing pages
+  without one; a reconnecting browser keeps the runtime it already loaded. Figures are no longer preflighted (500,000 values, 4,096 config
+  items, 16 Mi-character JSON), any `go.Figure` subclass is accepted, and Plotly
+  and Matplotlib serialization no longer take a server-wide lock.
+- Images: GUI and pane images go through one preparation path that always
+  encodes with Pillow, even when OpenCV is installed, using fast PNG
+  compression (level 1) as OpenCV did. Image calls no longer
+  enforce the 16,384-pixel side and 32 Mi-pixel limits or the 512 MiB
+  server-wide preparation budget, and accept `numpy.ndarray` subclasses.
 - Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP
   server is now private, with one message base; use `leika.Server`. Custom
   message roots and low-level servers are no longer supported.

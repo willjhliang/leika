@@ -772,6 +772,9 @@ class GuiPlotlyProps:
     """Order value for arranging GUI elements. """
     _plotly_json_str: str
     """(Private) JSON string representation of the Plotly figure."""
+    _theme_templates: str
+    """JSON string with "light" and "dark" template definitions, applied by
+    the client when the figure does not specify a template."""
     aspect: float
     """Width-to-height ratio for the plot display (width/height). 1.0 = square, >1.0 =
     wider."""

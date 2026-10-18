@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 import types
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,7 +20,6 @@ import leika._pages as pages_impl
 import leika._server as server_impl
 import leika._transport._websocket as websocket_impl
 from leika._client_handle import ClientHandle
-from leika._executor import BoundedThreadPoolExecutor
 from leika._messages import Message
 from leika._transport._message_buffer import AsyncMessageBuffer
 from leika._transport._typescript import protocol_fingerprint
@@ -145,14 +144,41 @@ def test_high_level_stop_is_safe_from_the_server_event_loop() -> None:
         assert callback_returned.wait(2.0)
         assert failures == []
 
-        # A repeat call off-thread completes the bounded join even if the
-        # asynchronous finalizer has not won the race yet.
+        # A repeat call off-thread joins the worker directly.
         server.stop()
         assert server._websock_server._server_thread is not None
         assert not server._websock_server._server_thread.is_alive()
-        assert server._executor_shutdown
+        assert server._thread_executor._shutdown
     finally:
         server.stop()
+
+
+def test_stop_on_the_event_loop_keeps_the_callback_pool_for_teardown(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
+    connected = threading.Event()
+    server.on_client_connect(lambda _: connected.set())
+    server.on_client_disconnect(lambda _: None)
+
+    async def stop_inside_event_loop() -> None:
+        server.stop()
+
+    with connect(
+        f"ws://127.0.0.1:{server.port}",
+        subprotocols=[PROTOCOL],
+        open_timeout=2,
+    ):
+        assert connected.wait(2.0)
+        asyncio.run_coroutine_threadsafe(stop_inside_event_loop(), server._event_loop).result(2)
+        deadline = time.monotonic() + 3.0
+        while not server._thread_executor._shutdown and time.monotonic() < deadline:
+            time.sleep(0.01)
+    server_thread = server._websock_server._server_thread
+    assert server_thread is not None and not server_thread.is_alive()
+    assert server._thread_executor._shutdown
+    # Disconnect teardown submitted its callbacks before the pool shut down.
+    assert "cannot schedule new futures" not in capsys.readouterr().err
 
 
 def test_high_level_stop_from_sync_connection_callback_returns_promptly() -> None:
@@ -194,166 +220,9 @@ def test_high_level_stop_from_sync_connection_callback_returns_promptly() -> Non
     assert not server_thread.is_alive()
 
 
-def test_stop_finalizer_start_failure_can_be_retried_while_callback_is_active(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
-    original_start = threading.Thread.start
-    failed = False
-
-    def fail_finalizer_once(thread: threading.Thread) -> None:
-        nonlocal failed
-        if thread.name == "leika-stop-finalizer" and not failed:
-            failed = True
-            raise RuntimeError("cannot start finalizer")
-        original_start(thread)
-
-    with server._stop_lock:
-        server._active_user_callbacks += 1
-    monkeypatch.setattr(threading.Thread, "start", fail_finalizer_once)
-    try:
-        with pytest.raises(RuntimeError, match="cannot start finalizer"):
-            server.stop()
-        assert server._stop_finalizer is None
-
-        monkeypatch.setattr(threading.Thread, "start", original_start)
-        server.stop()
-        deadline = time.monotonic() + 2.0
-        while (
-            not server._executor_shutdown or server._stop_finalizer is not None
-        ) and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert server._executor_shutdown
-        assert server._stop_finalizer is None
-    finally:
-        with server._stop_lock:
-            server._active_user_callbacks -= 1
-        server.stop()
-
-
-def test_stop_finalizer_target_failure_clears_ownership_and_allows_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
-    original_finish = server._finish_stop
-    first_failed = threading.Event()
-    attempts = 0
-
-    def fail_once() -> None:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            first_failed.set()
-            raise RuntimeError("finalizer target failed")
-        original_finish()
-
-    # The failure is intentional; this tests ownership release and retry rather
-    # than the standard thread exception hook.
-    monkeypatch.setattr(threading, "excepthook", lambda _: None)
-    monkeypatch.setattr(server, "_finish_stop", fail_once)
-    with server._stop_lock:
-        server._active_user_callbacks += 1
-    try:
-        server.stop()
-        assert first_failed.wait(1.0)
-        deadline = time.monotonic() + 1.0
-        while server._stop_finalizer is not None and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert server._stop_finalizer is None
-
-        server.stop()
-        deadline = time.monotonic() + 2.0
-        while (
-            not server._executor_shutdown or server._stop_finalizer is not None
-        ) and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert attempts == 2
-        assert server._executor_shutdown
-        assert server._stop_finalizer is None
-    finally:
-        with server._stop_lock:
-            server._active_user_callbacks -= 1
-        server.stop()
-
-
-def test_callback_executor_cancels_queued_work_and_finishes_running_work() -> None:
-    executor = BoundedThreadPoolExecutor(max_workers=1)
-    running_started = threading.Event()
-    release_running = threading.Event()
-    running_finished = threading.Event()
-    queued_ran = threading.Event()
-
-    def running_callback() -> None:
-        running_started.set()
-        release_running.wait()
-        running_finished.set()
-
-    running = executor.submit(running_callback)
-    assert running_started.wait(1.0)
-    queued = executor.submit(queued_ran.set)
-
-    try:
-        executor.shutdown_cancel_pending()
-        assert queued.cancelled()
-        assert not running.cancelled()
-        with pytest.raises(RuntimeError, match="shutdown"):
-            executor.submit(lambda: None)
-    finally:
-        release_running.set()
-
-    running.result(timeout=1.0)
-    assert running_finished.is_set()
-    assert not queued_ran.is_set()
-
-
-def test_callback_executor_bounds_pending_jobs_and_releases_admission() -> None:
-    executor = BoundedThreadPoolExecutor(max_workers=1, max_pending=2)
-    running_started = threading.Event()
-    release_running = threading.Event()
-
-    def block() -> None:
-        running_started.set()
-        release_running.wait()
-
-    running = executor.submit(block)
-    assert running_started.wait(1.0)
-    queued = executor.submit(lambda: None)
-    with pytest.raises(RuntimeError, match="pending-work limit"):
-        executor.submit(lambda: None)
-
-    release_running.set()
-    running.result(timeout=1.0)
-    queued.result(timeout=1.0)
-    executor.submit(lambda: None).result(timeout=1.0)
-    executor.shutdown_cancel_pending()
-
-
-def test_transfer_executor_bounds_and_releases_retained_payload_bytes() -> None:
-    executor = BoundedThreadPoolExecutor(max_workers=1, max_pending=4, max_retained_bytes=5)
-    running_started = threading.Event()
-    release_running = threading.Event()
-
-    def block() -> None:
-        running_started.set()
-        release_running.wait()
-
-    running = executor.submit_retained(block, retained_bytes=3)
-    assert running_started.wait(1.0)
-    with pytest.raises(RuntimeError, match="retained-payload limit"):
-        executor.submit_retained(lambda: None, retained_bytes=3)
-    accepted = executor.submit_retained(lambda: None, retained_bytes=2)
-
-    release_running.set()
-    running.result(timeout=1.0)
-    accepted.result(timeout=1.0)
-    assert executor._retained_bytes == 0
-    executor.submit_retained(lambda: None, retained_bytes=5).result(timeout=1.0)
-    executor.shutdown_cancel_pending()
-
-
-def test_client_handle_uses_the_live_connection_loop_before_server_start_returns() -> None:
+def test_client_handle_gui_uses_the_connection_loop() -> None:
     loop = asyncio.new_event_loop()
-    executor = BoundedThreadPoolExecutor(max_workers=1)
+    executor = ThreadPoolExecutor(max_workers=1)
     server = SimpleNamespace(
         _thread_executor=executor,
         _next_gui_order=lambda: 1.0,
@@ -372,12 +241,10 @@ def test_client_handle_uses_the_live_connection_loop_before_server_start_returns
     )
 
     try:
-        # The high-level server intentionally has no _event_loop yet: a browser
-        # can connect after the socket binds but before Server.__init__ returns.
         client = ClientHandle(connection, server)  # type: ignore[arg-type]
         assert client.gui._event_loop is loop
     finally:
-        executor.shutdown_cancel_pending()
+        executor.shutdown()
         loop.close()
 
 
@@ -542,115 +409,91 @@ def test_client_build_failure_occurs_before_executor_allocation(
             allocated = True
 
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", fail_build)
-    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(server_impl, "ThreadPoolExecutor", ForbiddenExecutor)
     with pytest.raises(RuntimeError, match="client build failed") as captured:
         leika.Server(host="127.0.0.1", port=0, verbose=False)
     assert captured.value is failure
     assert not allocated
 
 
-def test_late_constructor_failure_stops_server_and_executors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _record_construction(
+    monkeypatch: pytest.MonkeyPatch, server_type: type[WebsockServer] = WebsockServer
+) -> tuple[list[WebsockServer], list[ThreadPoolExecutor]]:
     servers: list[WebsockServer] = []
-    executors: list[BoundedThreadPoolExecutor] = []
-    real_server = WebsockServer
-    real_executor = server_impl.BoundedThreadPoolExecutor
+    executors: list[ThreadPoolExecutor] = []
 
-    class RecordingServer(real_server):
+    class RecordingServer(server_type):  # type: ignore[valid-type, misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             servers.append(self)
 
-    class RecordingExecutor(real_executor):
-        def __init__(self, max_workers: int, **kwargs: Any) -> None:
-            super().__init__(max_workers, **kwargs)
+    class RecordingExecutor(ThreadPoolExecutor):
+        def __init__(self, max_workers: int) -> None:
+            super().__init__(max_workers)
             executors.append(self)
 
-    def fail_panes(owner: Any, **_: Any) -> None:
-        del owner
+    monkeypatch.setattr(server_impl, "WebsockServer", RecordingServer)
+    monkeypatch.setattr(server_impl, "ThreadPoolExecutor", RecordingExecutor)
+    return servers, executors
+
+
+def _assert_released(servers: list[WebsockServer], executors: list[ThreadPoolExecutor]) -> None:
+    # The workspace is built before the server listens, so it never started.
+    assert len(servers) == 1
+    assert servers[0]._server_thread is None
+    assert servers[0]._background_event_loop is None
+    assert len(executors) == 1
+    assert executors[0]._shutdown
+
+
+def test_late_constructor_failure_releases_the_server_and_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    servers, executors = _record_construction(monkeypatch)
+
+    def fail_panes(*_: Any) -> None:
         raise RuntimeError("late pane initialization failure")
 
-    monkeypatch.setattr(server_impl, "WebsockServer", RecordingServer)
-    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
     monkeypatch.setattr(pages_impl, "Panes", fail_panes)
-
     with pytest.raises(RuntimeError, match="late pane initialization failure"):
         leika.Server(host="127.0.0.1", port=0, verbose=False)
-
-    assert len(servers) == 1
-    assert servers[0]._server_thread is not None
-    assert not servers[0]._server_thread.is_alive()
-    assert len(executors) == 2
-    assert all(executor._shutdown for executor in executors)
+    _assert_released(servers, executors)
 
 
-def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
+def test_constructor_failure_is_not_masked_by_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     primary = RuntimeError("primary pane construction failure")
-    executors: list[BoundedThreadPoolExecutor] = []
-    real_executor = server_impl.BoundedThreadPoolExecutor
 
-    class FailingCleanupExecutor(real_executor):
-        def __init__(self, max_workers: int, **kwargs: Any) -> None:
-            super().__init__(max_workers, **kwargs)
-            self.cleanup_calls = 0
-            executors.append(self)
+    class FailingStopServer(WebsockServer):
+        def stop(self) -> None:
+            super().stop()
+            raise RuntimeError("secondary cleanup failure")
 
-        def shutdown_cancel_pending(self) -> None:
-            self.cleanup_calls += 1
-            super().shutdown_cancel_pending()
-            raise RuntimeError("secondary executor cleanup failure")
+    servers, executors = _record_construction(monkeypatch, FailingStopServer)
 
-    def fail_panes(_: Any, **__: Any) -> None:
+    def fail_panes(*_: Any) -> None:
         raise primary
 
-    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", FailingCleanupExecutor)
     monkeypatch.setattr(pages_impl, "Panes", fail_panes)
-
     with pytest.raises(RuntimeError, match="primary pane construction failure") as captured:
         leika.Server(host="127.0.0.1", port=0, verbose=False)
-
     assert captured.value is primary
-    assert len(executors) == 2
-    assert [executor.cleanup_calls for executor in executors] == [1, 1]
-    assert all(executor._shutdown for executor in executors)
+    _assert_released(servers, executors)
 
 
-def test_workspace_publication_failure_rolls_back_started_server_and_executors(
+def test_workspace_publication_failure_releases_the_server_and_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    servers: list[WebsockServer] = []
-    executors: list[BoundedThreadPoolExecutor] = []
-    real_server = WebsockServer
-    real_executor = server_impl.BoundedThreadPoolExecutor
-
-    class RejectingServer(real_server):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            servers.append(self)
-
+    class RejectingServer(WebsockServer):
         def queue_message(self, message: Message) -> bool:
             del message
             return False
 
-    class RecordingExecutor(real_executor):
-        def __init__(self, max_workers: int, **kwargs: Any) -> None:
-            super().__init__(max_workers, **kwargs)
-            executors.append(self)
-
-    monkeypatch.setattr(server_impl, "WebsockServer", RejectingServer)
-    monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
-
+    servers, executors = _record_construction(monkeypatch, RejectingServer)
     with pytest.raises(RuntimeError, match="closed connection"):
         leika.Server(host="127.0.0.1", port=0, verbose=False)
-
-    assert len(servers) == 1
-    assert servers[0]._server_thread is not None
-    assert not servers[0]._server_thread.is_alive()
-    assert len(executors) == 2
-    assert all(executor._shutdown for executor in executors)
+    _assert_released(servers, executors)
 
 
 def test_quiet_low_level_server_is_one_shot(capsys: pytest.CaptureFixture[str]) -> None:
@@ -891,44 +734,10 @@ def test_tunnel_close_failure_does_not_skip_owned_shutdown_cleanup() -> None:
         server.stop()
 
     assert server._share_tunnel is None
-    assert server._client_connect_cb == []
-    assert server._client_disconnect_cb == []
-    assert server._executor_shutdown
+    assert server._thread_executor._shutdown
+    server_thread = server._websock_server._server_thread
+    assert server_thread is not None and not server_thread.is_alive()
     server.stop()
-
-
-def test_callback_stop_hands_slow_share_tunnel_to_finalizer() -> None:
-    server = leika.Server(host="127.0.0.1", port=0, verbose=False)
-    close_started = threading.Event()
-    release_close = threading.Event()
-    close_finished = threading.Event()
-
-    class SlowTunnel:
-        url = "https://example.invalid"
-
-        def close(self) -> None:
-            close_started.set()
-            assert release_close.wait(2.0)
-            close_finished.set()
-
-    server._share_tunnel = SlowTunnel()  # type: ignore[assignment]
-    with server._stop_lock:
-        server._active_user_callbacks += 1
-    started = time.monotonic()
-    try:
-        server.stop()
-        elapsed = time.monotonic() - started
-        assert elapsed < 0.5
-        assert close_started.wait(2.0)
-        assert not close_finished.is_set()
-        release_close.set()
-        assert close_finished.wait(2.0)
-    finally:
-        with server._stop_lock:
-            server._active_user_callbacks -= 1
-        release_close.set()
-        server.stop()
-    assert server._share_tunnel is None
 
 
 def test_delivery_backpressure_rejects_non_boolean_before_start() -> None:

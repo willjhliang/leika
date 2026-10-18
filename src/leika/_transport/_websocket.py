@@ -10,7 +10,6 @@ import dataclasses
 import http
 import itertools
 import logging
-import os
 import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Sequence
@@ -211,7 +210,12 @@ class WebsockServer(WebsockMessageHandler):
         self._delivery_backpressure = delivery_backpressure
         self._client_state_from_id: dict[int, _ClientHandleState] = {}
         self._client_state_lock = threading.Lock()
-        self._background_event_loop: asyncio.AbstractEventLoop | None = None
+        # The loop and the retained broadcast queue exist before the server
+        # listens, so the application can queue its initial state first.
+        self._background_event_loop: asyncio.AbstractEventLoop | None = asyncio.new_event_loop()
+        self._broadcast_buffer = AsyncMessageBuffer(
+            self._background_event_loop, persistent_messages=True
+        )
         self._stop_event: asyncio.Event | None = None
         self._stop_requested = threading.Event()
         self._server_thread: threading.Thread | None = None
@@ -263,7 +267,14 @@ class WebsockServer(WebsockMessageHandler):
         atexit.unregister(self.stop)
         self.signal_stop()
         server_thread = self._server_thread
-        if server_thread is None or threading.current_thread() is server_thread:
+        if server_thread is None:
+            # Never started: release the loop created with the server.
+            event_loop, self._background_event_loop = self._background_event_loop, None
+            if event_loop is not None:
+                self._broadcast_buffer.set_done()
+                event_loop.close()
+            return
+        if threading.current_thread() is server_thread:
             return
         server_thread.join(timeout=_SERVER_STOP_TIMEOUT_SECONDS)
         if server_thread.is_alive():
@@ -288,18 +299,14 @@ class WebsockServer(WebsockMessageHandler):
         if client_state is not None:
             client_state.message_buffer.flush()
 
-    def register_http_asset(
-        self, path: Path, *, _expected_metadata: os.stat_result | None = None
-    ) -> HttpAsset:
+    def register_http_asset(self, path: Path) -> HttpAsset:
         """Serve an immutable snapshot of one file under its content hash."""
-        return self._http_asset_registry.register(path, _expected_metadata=_expected_metadata)
+        return self._http_asset_registry.register(path)
 
     def _background_worker(self, startup: Future[None]) -> None:
-        # A new event loop keeps notebooks, which run their own, working.
-        event_loop = asyncio.new_event_loop()
+        # A loop of its own keeps notebooks, which run theirs, working.
+        event_loop = cast(asyncio.AbstractEventLoop, self._background_event_loop)
         asyncio.set_event_loop(event_loop)
-        self._broadcast_buffer = AsyncMessageBuffer(event_loop, persistent_messages=True)
-        self._background_event_loop = event_loop
         self._stop_event = asyncio.Event()
         # Checked after publishing the loop and event, so a concurrent
         # signal_stop() is never lost.

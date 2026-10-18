@@ -11,7 +11,6 @@ import pytest
 
 import leika
 import leika._messages as messages
-import leika._panes as panes_impl
 from leika._panes import _viser_embed_target
 
 
@@ -40,45 +39,11 @@ def test_image_fit_defers_to_the_viewer_until_python_names_one(
         deferred.fit = "cover"  # type: ignore[assignment]
 
 
-def test_image_fit_updates_charge_and_release_retained_text(server: leika.Server) -> None:
-    pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8))
-    before = server.panes._resource_total
-
-    pane.fit = "stretch"
-
-    assert server.panes._resource_total.text_units == before.text_units + len("stretch")
-    assert server.panes._resource_total.payload_bytes == before.payload_bytes + len("stretch")
-    assert server.panes._aggregate.resource_total == server.panes._resource_total
-
-    pane.fit = None
-
-    assert server.panes._resource_total == before
-    assert server.panes._aggregate.resource_total == before
-
-
-def test_image_fit_budget_rejection_preserves_state_and_messages(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8))
-    before = server.panes._resource_total
-    buffer = server._websock_server.get_message_buffer()
-    before_messages = dict(buffer.message_from_id)
-    monkeypatch.setattr(panes_impl, "_PANE_TEXT_MAX_UTF16_CODE_UNITS", before.text_units)
-
-    with pytest.raises(RuntimeError, match="source budget"):
-        pane.fit = "stretch"
-
-    assert pane.fit is None
-    assert server.panes._resource_total == before
-    assert server.panes._aggregate.resource_total == before
-    assert buffer.message_from_id == before_messages
-
-
 @pytest.mark.parametrize(
     ("name", "replacement"),
     [("title", "Updated title"), ("visible", False), ("loading", "Preparing"), ("fit", "stretch")],
 )
-def test_pane_property_publication_failure_restores_state_and_resources(
+def test_pane_property_publication_failure_preserves_state(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
     name: str,
@@ -86,7 +51,6 @@ def test_pane_property_publication_failure_restores_state_and_resources(
 ) -> None:
     pane = server.panes.add_image(np.zeros((2, 3, 3), dtype=np.uint8), title="Original")
     before_value = getattr(pane, name)
-    before_resources = server.panes._resource_total
 
     def reject(_: object) -> None:
         raise RuntimeError("publication failed")
@@ -96,8 +60,6 @@ def test_pane_property_publication_failure_restores_state_and_resources(
         setattr(pane, name, replacement)
 
     assert getattr(pane, name) == before_value
-    assert server.panes._resource_total == before_resources
-    assert server.panes._aggregate.resource_total == before_resources
 
 
 def test_image_lifecycle_and_validation(server: leika.Server) -> None:
@@ -145,8 +107,7 @@ def test_image_lifecycle_and_validation(server: leika.Server) -> None:
     ):
         with pytest.raises(RuntimeError, match="removed"):
             read()
-    assert pane._impl.image.size == 0
-    assert pane._impl.props._data == b""
+    assert pane._source is None
     with pytest.raises(RuntimeError, match="removed"):
         pane.update(original)
     replacement = server.panes.add_image(original, pane_id="camera")
@@ -183,6 +144,11 @@ def test_row_column_and_grid_helpers(server: leika.Server) -> None:
         "grid-a",
         "grid-b",
     ]
+
+    with pytest.raises(TypeError, match="places its own panes"):
+        row.add_image(frame, relative_to=first.pane_id)
+    with pytest.raises(TypeError, match="places its own panes"):
+        grid.add_pane(placement="left")
 
     with pytest.raises(ValueError):
         server.panes.add_grid(columns=0)
@@ -222,7 +188,6 @@ def test_coupled_image_loading_update_rolls_back_on_queue_failure(
 ) -> None:
     original = np.zeros((2, 3, 3), dtype=np.uint8)
     pane = server.panes.add_image(original, pane_id="rollback", loading="Preparing")
-    before_resources = server.panes._resource_total
 
     def fail(_: object) -> None:
         raise RuntimeError("update failed")
@@ -233,7 +198,6 @@ def test_coupled_image_loading_update_rolls_back_on_queue_failure(
 
     assert pane.loading == "Preparing"
     np.testing.assert_array_equal(pane.image, original)
-    assert server.panes._resource_total == before_resources
 
 
 @pytest.mark.parametrize("retire", ["hide", "remove"])
@@ -253,6 +217,24 @@ def test_grid_wrap_falls_back_when_top_column_anchor_is_not_visible(
     wrapped = grid.add_image(frame, pane_id=f"wrapped-{retire}")
     assert wrapped.pane_id == f"wrapped-{retire}"
     assert server.panes._handle_from_pane_id[wrapped.pane_id] is wrapped
+
+
+@pytest.mark.plotly
+def test_gui_plots_and_panes_share_theme_template_handling(server: leika.Server) -> None:
+    go = pytest.importorskip("plotly.graph_objects")
+    themed = go.Figure(go.Scatter(y=[1, 2]))
+    explicit = go.Figure(go.Scatter(y=[1, 2]), layout={"template": "plotly_dark"})
+    gui_themed = server.gui.add_plotly(themed)._impl.props
+    gui_explicit = server.gui.add_plotly(explicit)._impl.props
+    pane_themed = server.panes.add_plotly(themed)._props
+    pane_explicit = server.panes.add_plotly(explicit)._props
+
+    for props in (gui_themed, pane_themed):
+        assert "template" not in json.loads(props._plotly_json_str)["layout"]
+        assert set(json.loads(props._theme_templates)) == {"light", "dark"}
+    for props in (gui_explicit, pane_explicit):
+        assert "template" in json.loads(props._plotly_json_str)["layout"]
+    assert gui_themed._plotly_json_str == pane_themed._plotly_json_str
 
 
 @pytest.mark.plotly
@@ -285,8 +267,6 @@ def test_plotly_lifecycle(server: leika.Server) -> None:
     ):
         with pytest.raises(RuntimeError, match="removed"):
             read()
-    assert pane._impl.props._plotly_json_str == ""
-    assert pane._impl.props._theme_templates == ""
     with pytest.raises(RuntimeError, match="removed"):
         pane.figure = go.Figure()
 
@@ -302,13 +282,13 @@ def test_matplotlib_lifecycle(server: leika.Server) -> None:
         assert pane.title == "Signal"
         assert pane.figure is figure
         # Relayed as SVG source, so the pane can rescale it without a redraw.
-        assert pane._impl.props._svg.lstrip().startswith(("<?xml", "<svg"))
-        assert "<svg" in pane._impl.props._svg
+        assert pane._props._svg.lstrip().startswith(("<?xml", "<svg"))
+        assert "<svg" in pane._props._svg
 
         # matplotlib mutates figures in place, so re-passing one is normal.
         axes.set_title("Updated")
         pane.update(figure, loading="Drawing figure")
-        assert "Updated" in pane._impl.props._svg
+        assert "Updated" in pane._props._svg
         assert pane.loading == "Drawing figure"
 
         pane.visible = False
@@ -322,8 +302,7 @@ def test_matplotlib_lifecycle(server: leika.Server) -> None:
         ):
             with pytest.raises(RuntimeError, match="removed"):
                 read()
-        assert pane._impl.figure_ref is None
-        assert pane._impl.props._svg == ""
+        assert pane._source is None
         with pytest.raises(RuntimeError, match="removed"):
             pane.update(figure)
     finally:
@@ -344,12 +323,10 @@ def test_matplotlib_sources_must_support_weak_references_transactionally(
 
     buffer = server._websock_server.get_message_buffer()
     before_messages = buffer.message_from_id.copy()
-    before_resources = server.panes._resource_total
-    with pytest.raises(TypeError, match="must support weak references"):
+    with pytest.raises(TypeError, match="weak reference"):
         server.panes.add_matplotlib(NonWeakFigure(), pane_id="non-weak")
     assert "non-weak" not in server.panes._handle_from_pane_id
     assert buffer.message_from_id == before_messages
-    assert server.panes._resource_total == before_resources
 
     class Figure:
         def savefig(self, output: Any, *, format: str) -> None:
@@ -359,14 +336,12 @@ def test_matplotlib_sources_must_support_weak_references_transactionally(
     source = Figure()
     pane = server.panes.add_matplotlib(source, pane_id="weak-source")
     before_messages = buffer.message_from_id.copy()
-    before_resources = server.panes._resource_total
-    before_svg = pane._impl.props._svg
-    with pytest.raises(TypeError, match="must support weak references"):
+    before_svg = pane._props._svg
+    with pytest.raises(TypeError, match="weak reference"):
         pane.figure = NonWeakFigure()
     assert pane.figure is source
-    assert pane._impl.props._svg == before_svg
+    assert pane._props._svg == before_svg
     assert buffer.message_from_id == before_messages
-    assert server.panes._resource_total == before_resources
 
 
 def test_matplotlib_pane_does_not_retain_the_caller_figure(
@@ -381,38 +356,14 @@ def test_matplotlib_pane_does_not_retain_the_caller_figure(
     reference = weakref.ref(figure)
     pane = server.panes.add_matplotlib(figure, pane_id="weak-matplotlib")
     assert pane.figure is figure
-    assert pane._impl.props._svg
+    assert pane._props._svg
 
     del figure
     gc.collect()
     assert reference() is None
     with pytest.raises(RuntimeError, match="no longer available"):
         _ = pane.figure
-    assert pane._impl.props._svg
-
-
-def test_matplotlib_svg_enforces_browser_utf16_limit_transactionally(
-    server: leika.Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class Figure:
-        def __init__(self, source: str) -> None:
-            self.source = source
-
-        def savefig(self, output: Any, *, format: str) -> None:
-            assert format == "svg"
-            output.write(self.source.encode("utf-8"))
-
-    monkeypatch.setattr(panes_impl, "_MATPLOTLIB_SVG_MAX_UTF16_CODE_UNITS", 2)
-    pane = server.panes.add_matplotlib(Figure("😀"), pane_id="svg")
-    assert pane._impl.props._svg == "😀"
-
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        pane.figure = Figure("😀x")
-    assert pane._impl.props._svg == "😀"
-
-    with pytest.raises(ValueError, match="16 Mi-character"):
-        server.panes.add_matplotlib(Figure("😀x"), pane_id="too-large")
-    assert "too-large" not in server.panes._handle_from_pane_id
+    assert pane._props._svg
 
 
 def test_viser_target_normalization() -> None:
@@ -610,7 +561,6 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
     buffer = server._websock_server.get_message_buffer()
     before_handles = server.panes._handle_from_pane_id.copy()
     before_messages = buffer.message_from_id.copy()
-    before_resources = server.panes._resource_total
 
     with pytest.raises(ValueError, match="format must be"):
         server.panes.add_image(frame, pane_id="subclass-format", format=cast(Any, String("png")))
@@ -640,7 +590,6 @@ def test_pane_encoding_and_layout_options_reject_builtin_subclasses_transactiona
     assert anchor.fit == "fill"
     assert server.panes._handle_from_pane_id == before_handles
     assert buffer.message_from_id == before_messages
-    assert server.panes._resource_total == before_resources
 
 
 def test_viser_minimize_and_reported_port_are_strict(server: leika.Server) -> None:
@@ -679,11 +628,11 @@ def test_pane_lifecycle_batch_failure_leaves_no_ghost_or_partial_removal(
     monkeypatch.setattr(server.panes._websock_interface, "queue_messages_or_raise", fail)
     with pytest.raises(RuntimeError, match="batch failed"):
         pane.remove()
-    assert not pane._impl.removed
+    assert not pane._removed
     assert server.panes._handle_from_pane_id["live"] is pane
     np.testing.assert_array_equal(pane.image, frame)
     assert pane.title == "Image"
-    assert pane._impl.props._data
+    assert pane._props._data
 
 
 @pytest.mark.plotly
@@ -698,7 +647,7 @@ def test_failed_plotly_pane_removal_preserves_figure_and_props(
         title="Metrics",
         config={"displayModeBar": False},
     )
-    json_before = pane._impl.props._plotly_json_str
+    json_before = pane._props._plotly_json_str
 
     def reject(_: object) -> None:
         raise RuntimeError("batch failed")
@@ -710,8 +659,8 @@ def test_failed_plotly_pane_removal_preserves_figure_and_props(
     assert pane.figure is not figure
     assert tuple(pane.figure.data[0].y) == (1, 3, 2)
     assert pane.title == "Metrics"
-    assert json.loads(pane._impl.props._plotly_json_str)["config"] == {"displayModeBar": False}
-    assert pane._impl.props._plotly_json_str == json_before
+    assert json.loads(pane._props._plotly_json_str)["config"] == {"displayModeBar": False}
+    assert pane._props._plotly_json_str == json_before
 
 
 def test_failed_matplotlib_pane_removal_preserves_figure_and_svg(
@@ -728,7 +677,7 @@ def test_failed_matplotlib_pane_removal_preserves_figure_and_svg(
         pane_id="failed-matplotlib-remove",
         title="Signal",
     )
-    svg_before = pane._impl.props._svg
+    svg_before = pane._props._svg
 
     def reject(_: object) -> None:
         raise RuntimeError("batch failed")
@@ -739,18 +688,7 @@ def test_failed_matplotlib_pane_removal_preserves_figure_and_svg(
 
     assert pane.figure is figure
     assert pane.title == "Signal"
-    assert pane._impl.props._svg == svg_before
-
-
-def test_pane_image_rejects_decoded_pixel_overflow_before_encoding(
-    server: leika.Server,
-) -> None:
-    backing = np.zeros((1, 1, 3), dtype=np.uint8)
-    oversized = np.lib.stride_tricks.as_strided(
-        backing, shape=(4_096, 8_193, 3), strides=(0, 0, 1), writeable=False
-    )
-    with pytest.raises(ValueError, match="decoded pixels"):
-        server.panes.add_image(oversized)
+    assert pane._props._svg == svg_before
 
 
 def test_pane_id_obeys_browser_utf16_layout_limit(server: leika.Server) -> None:

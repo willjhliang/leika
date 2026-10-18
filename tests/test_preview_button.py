@@ -28,7 +28,6 @@ from leika import _gui_api as gui_api_impl
 from leika import _messages
 from leika._file_transfer import PREVIEW_MAX_BYTES
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
-from leika._transport import _http_assets as asset_impl
 from leika._transport._websocket import ClientId
 
 
@@ -52,9 +51,6 @@ class _Client:
 
     def flush(self) -> None:
         pass
-
-    def _cancel_all_outgoing_file_transfers(self) -> None:
-        """Production-shaped disconnect cleanup; this fake has no transfers."""
 
     @property
     def previewed(self) -> List[Tuple[str, Any, int]]:
@@ -443,14 +439,14 @@ def test_a_pictures_size_is_learned_from_the_bytes_used_for_its_digest(
     asset.write_bytes(_one_pixel_png())
 
     reads: List[Any] = []
-    original = asset_impl.read_regular_file_snapshot
+    original = Path.read_bytes
 
-    def counted(path: Path, max_bytes: int, **kwargs: object) -> bytes:
+    def counted(path: Path) -> bytes:
         if path == asset:
             reads.append(path)
-        return original(path, max_bytes, **kwargs)
+        return original(path)
 
-    with mock.patch.object(asset_impl, "read_regular_file_snapshot", counted):
+    with mock.patch.object(Path, "read_bytes", counted):
         first = server._register_http_image(asset)
         again = server._register_http_image(asset)
 
@@ -769,33 +765,6 @@ def test_disconnecting_drops_queued_preview_work(
     assert events == ["warm:start", "warm:end"]
 
 
-def test_markdown_preview_snapshot_rejects_same_size_in_place_rewrite(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import os
-
-    from leika import _gui_handles as handles_impl
-
-    source = tmp_path / "notes.md"
-    source.write_bytes(b"before")
-    real_fstat = handles_impl.os.fstat
-    calls = 0
-
-    def rewrite_between_descriptor_stats(descriptor: int) -> os.stat_result:
-        nonlocal calls
-        metadata = real_fstat(descriptor)
-        calls += 1
-        if calls == 2:
-            source.write_bytes(b"after!")
-            timestamp = metadata.st_mtime_ns + 1_000_000_000
-            os.utime(source, ns=(timestamp, timestamp))
-        return metadata if calls == 2 else real_fstat(descriptor)
-
-    monkeypatch.setattr(handles_impl.os, "fstat", rewrite_between_descriptor_stats)
-    with pytest.raises(OSError, match="changed while it was being read"):
-        handles_impl._read_preview_markdown(source, 64)
-
-
 @pytest.mark.parametrize("size_bytes", [32 * 1024, 8 * 1024 * 1024])
 def test_text_lead_reads_only_a_bounded_prefix(tmp_path: Path, size_bytes: int) -> None:
     from leika import _file_preview
@@ -804,19 +773,19 @@ def test_text_lead_reads_only_a_bounded_prefix(tmp_path: Path, size_bytes: int) 
     with path.open("wb") as stream:
         stream.write(b"# First screen\n" + b"a" * 8192)
         stream.truncate(size_bytes)
-    original_open = _file_preview.open_regular_file
+    original_open = open
     reads = []
 
     @contextlib.contextmanager
-    def tracked_open(path):
-        with original_open(path) as stream:
+    def tracked_open(path, mode):
+        with original_open(path, mode) as stream:
             tracked = mock.Mock(wraps=stream)
             try:
                 yield tracked
             finally:
                 reads.extend(tracked.read.call_args_list)
 
-    with mock.patch.object(_file_preview, "open_regular_file", tracked_open):
+    with mock.patch.object(_file_preview, "open", tracked_open, create=True):
         with contextlib.closing(
             _file_preview.iter_preview_text(path.name, path, size_bytes)
         ) as parts:
