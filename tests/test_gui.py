@@ -1107,15 +1107,10 @@ def test_failed_gui_terminal_removal_preserves_readable_payloads(
 
 
 @pytest.mark.plotly
-def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
+def test_server_stop_scrubs_all_retained_gui_owners(
     server: leika.Server,
 ) -> None:
     go = pytest.importorskip("plotly.graph_objects")
-
-    class Figure:
-        def savefig(self, output: Any, *, format: str) -> None:
-            assert format == "svg"
-            output.write(b'<svg xmlns="http://www.w3.org/2000/svg"><text>large</text></svg>')
 
     text_handle = server.gui.add_text("Text", "value" * 128)
     with server.gui.add_form(label="Form") as form:
@@ -1136,10 +1131,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
     notification = server.gui.add_notification(
         "Notification", "body" * 128, auto_close_seconds=None
     )
-
-    pane_image = server.panes.add_image(np.zeros((16, 24, 3), dtype=np.uint8), pane_id="stop-image")
-    pane_plotly = server.panes.add_plotly(go.Figure(go.Bar(y=[3, 2, 1])), pane_id="stop-plotly")
-    pane_matplotlib = server.panes.add_matplotlib(Figure(), pane_id="stop-matplotlib")
     stable_ids = (
         text_handle.id,
         form.id,
@@ -1150,9 +1141,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
         modal.id,
         command.id,
         notification.id,
-        pane_image.pane_id,
-        pane_plotly.pane_id,
-        pane_matplotlib.pane_id,
     )
 
     server.stop()
@@ -1167,9 +1155,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
         lambda: modal_text.content,
         lambda: command.label,
         lambda: notification.title,
-        lambda: pane_image.image,
-        lambda: pane_plotly.figure,
-        lambda: pane_matplotlib.figure,
     ):
         with pytest.raises(RuntimeError, match="removed"):
             read()
@@ -1183,9 +1168,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
         modal.id,
         command.id,
         notification.id,
-        pane_image.pane_id,
-        pane_plotly.pane_id,
-        pane_matplotlib.pane_id,
     ) == stable_ids
 
     assert form._impl.removed and form_field._impl.initial_value is None
@@ -1195,10 +1177,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
     assert modal.closed and modal._children == {} and modal._create_message is None
     assert command._impl.trigger_cb == [] and command._impl.icon is None
     assert notification._impl.props.title == "" and notification._impl.props.body == ""
-    assert pane_image._impl.image.size == 0 and pane_image._impl.props._data == b""
-    assert pane_plotly._impl.props._plotly_json_str == ""
-    assert pane_matplotlib._impl.figure_ref is None
-    assert pane_matplotlib._impl.props._svg == ""
 
     assert server.gui._resource_from_gui_uuid == {}
     assert server.gui._retained_extra_bytes_from_gui_uuid == {}
@@ -1207,11 +1185,6 @@ def test_server_stop_scrubs_all_retained_gui_and_pane_owners(
     assert server.gui._resource_total.text_units == 0
     assert server.gui._resource_total.payload_bytes == 0
     assert server.gui._resource_total.decoded_pixels == 0
-    assert server.panes._handle_from_pane_id == {}
-    assert server.panes._resource_from_pane_id == {}
-    assert server.panes._resource_total.text_units == 0
-    assert server.panes._resource_total.payload_bytes == 0
-    assert server.panes._resource_total.decoded_pixels == 0
     assert server._gui_retained_units_and_bytes == 0
     assert server._gui_decoded_pixels == 0
     assert server._page_global_decoded_pixels == 0
@@ -3622,8 +3595,10 @@ def test_plotly_config_snapshot_is_isolated_across_scopes(
     config["displayModeBar"] = True
     config["modeBarButtonsToRemove"].append("pan")
 
+    gui, *panes = handles
     retained_configs = [
-        json.loads(handle._impl.props._plotly_json_str).get("config") for handle in handles
+        json.loads(props._plotly_json_str).get("config")
+        for props in (gui._impl.props, *(pane._props for pane in panes))
     ]
     assert all(
         retained
@@ -3672,7 +3647,7 @@ def test_plotly_handles_retain_only_independent_json_snapshots(
     assert gui_ref() is None
     assert pane_ref() is None
     assert json.loads(gui._impl.props._plotly_json_str)["config"] == {"displayModeBar": False}
-    assert json.loads(pane._impl.props._plotly_json_str)["config"] == {"displayModeBar": False}
+    assert json.loads(pane._props._plotly_json_str)["config"] == {"displayModeBar": False}
 
 
 @pytest.mark.plotly
@@ -3686,7 +3661,7 @@ def test_plotly_snapshot_getters_ignore_mutable_global_default_template(
     gui = server.gui.add_plotly(source)
     pane = server.panes.add_plotly(source, pane_id="template-free-getter")
     assert "template" not in json.loads(gui._impl.props._plotly_json_str)["layout"]
-    assert "template" not in json.loads(pane._impl.props._plotly_json_str)["layout"]
+    assert "template" not in json.loads(pane._props._plotly_json_str)["layout"]
 
     template_name = "leika_oversized_getter_default"
     old_default = pio.templates.default
@@ -3703,7 +3678,7 @@ def test_plotly_snapshot_getters_ignore_mutable_global_default_template(
         gui.figure = gui_read
         pane.figure = pane_read
         assert "template" not in json.loads(gui._impl.props._plotly_json_str)["layout"]
-        assert "template" not in json.loads(pane._impl.props._plotly_json_str)["layout"]
+        assert "template" not in json.loads(pane._props._plotly_json_str)["layout"]
     finally:
         pio.templates.default = old_default
         del pio.templates[template_name]
@@ -3742,7 +3717,7 @@ def test_refresh_bindings_acknowledge_same_value_and_bound_client_history(server
     assert first["_refresh_controls"] == (control._impl.uuid,)
     assert first["_refresh_requests"] == ("first",)
     assert first["loading"] is True
-    assert first["_data"] == pane._impl.props._data
+    assert first["_data"] == pane._props._data
     second = request(1, "same-value")
     assert second["_refresh_revision"] > first["_refresh_revision"]
     assert second["_refresh_requests"] == ("same-value",)
@@ -3788,7 +3763,7 @@ def test_refresh_binding_rejects_removed_or_private_control_and_prunes_old(serve
 
 def test_pane_size_feedback_ignores_invalid_dimensions_and_other_pages(server):
     pane = server.panes.add_image(np.zeros((8, 8, 3), np.uint8))
-    page_id = pane._impl.api._page_id
+    page_id = pane._panes._page_id
     connection = _client_connection_stub(server, ClientId(12))
     connection.delivery_scope = lambda: page_id
     client = ClientHandle(connection, server)
@@ -3812,11 +3787,11 @@ def test_pane_size_feedback_ignores_invalid_dimensions_and_other_pages(server):
 def test_per_frame_jpeg_quality_changes_only_display_encoding(server):
     image = np.random.default_rng(2).integers(0, 255, (240, 320, 3), dtype=np.uint8)
     pane = server.panes.add_image(image, format="jpeg", jpeg_quality=90)
-    original_bytes = pane._impl.props._data
+    original_bytes = pane._props._data
     pane.update(image, jpeg_quality=30)
-    assert len(pane._impl.props._data) < len(original_bytes) / 2
+    assert len(pane._props._data) < len(original_bytes) / 2
     np.testing.assert_array_equal(pane.image, image)
     pane.update(image)
-    assert pane._impl.props._data == original_bytes
+    assert pane._props._data == original_bytes
     with pytest.raises(ValueError):
         pane.update(image, jpeg_quality=101)

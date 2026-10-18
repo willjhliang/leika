@@ -116,7 +116,7 @@ def test_create_messages_and_png_remain_independent(server):
 
 def test_settings_and_size_refresh_use_ordered_content_and_preserve_source(server):
     pane = server.panes.add_image(np.zeros((480, 640, 3), np.uint8), format="jpeg")
-    page_id = pane._impl.api._page_id
+    page_id = pane._panes._page_id
     connection = SimpleNamespace(
         client_id=ClientId(12),
         _state=SimpleNamespace(),
@@ -134,7 +134,7 @@ def test_settings_and_size_refresh_use_ordered_content_and_preserve_source(serve
     )
     assert client._rendering == "performance"
     assert connection._state.rendering_backpressure
-    assert updates[-1]["_data"] is pane._impl.props._data
+    assert updates[-1]["_data"] is pane._props._data
     server._handle_pane_viewport(
         ClientId(12), _messages.PaneViewportMessage(page_id, pane.pane_id, 320, 240)
     )

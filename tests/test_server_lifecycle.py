@@ -567,8 +567,7 @@ def test_late_constructor_failure_stops_server_and_executors(
             super().__init__(max_workers, **kwargs)
             executors.append(self)
 
-    def fail_panes(owner: Any, **_: Any) -> None:
-        del owner
+    def fail_panes(*_: Any) -> None:
         raise RuntimeError("late pane initialization failure")
 
     monkeypatch.setattr(server_impl, "WebsockServer", RecordingServer)
@@ -603,7 +602,7 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
             super().shutdown_cancel_pending()
             raise RuntimeError("secondary executor cleanup failure")
 
-    def fail_panes(_: Any, **__: Any) -> None:
+    def fail_panes(*_: Any) -> None:
         raise primary
 
     monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", FailingCleanupExecutor)

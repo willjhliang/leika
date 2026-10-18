@@ -1715,10 +1715,10 @@ class GuiApi(GuiContainer):
         Args:
             label: Default-page name. ``None`` and ``""`` become ``"Main"``.
         """
-        from ._pages import _normalize_legacy_page_label
+        from ._pages import _page_name_from_label
         from ._server import Server
 
-        name = _normalize_legacy_page_label(label)
+        name = _page_name_from_label(label)
         if isinstance(self._owner, Server):
             self._owner.pages.default.name = name
             return

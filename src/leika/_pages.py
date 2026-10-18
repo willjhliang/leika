@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, NewType, cast
 
 from . import _messages
-from ._panes import Panes, _PanesAggregate
+from ._panes import Panes
 from ._validation import validate_layout_id, validate_renderer_string
 
 if TYPE_CHECKING:
@@ -19,7 +19,6 @@ PageId = NewType("PageId", str)
 
 _DEFAULT_PAGE_ID = "default"
 _DEFAULT_PAGE_NAME = "Main"
-_PAGE_MAX = 128
 
 
 def _validate_page_name(value: object) -> str:
@@ -29,8 +28,8 @@ def _validate_page_name(value: object) -> str:
     return name
 
 
-def _normalize_legacy_page_label(value: object) -> str:
-    """Translate the former optional visualization label to a page name."""
+def _page_name_from_label(value: object) -> str:
+    """The default page's name for an optional ``label``."""
 
     if value is None or value == "":
         return _DEFAULT_PAGE_NAME
@@ -69,37 +68,15 @@ class Pages:
     """Declare the named pages in a Leika workspace.
 
     Every server starts with :attr:`default`. Use :meth:`add` for additional
-    pages. Pane IDs are local to their page, while the server keeps the
-    existing pane, Viser, payload, and raster limits aggregate across all
-    pages.
+    pages. Pane IDs are local to their page.
     """
 
-    def __init__(
-        self,
-        owner: Server,
-        default_name: str = _DEFAULT_PAGE_NAME,
-    ) -> None:
+    def __init__(self, owner: Server, default_name: str) -> None:
         self._owner = owner
         self._lock = threading.RLock()
-        self._terminal = False
         self._page_from_page_id: dict[str, Page] = {}
-        self._aggregate = _PanesAggregate(owner)
-        self.default = self._add(
-            _validate_page_name(default_name),
-            _DEFAULT_PAGE_ID,
-            is_default=True,
-        )
-        """The stable default page used by the one-page compatibility API."""
-
-    def _make_panes(self, page_id: str) -> Panes:
-        """Construct a page registry without publishing ahead of its page."""
-
-        return Panes(
-            self._owner,
-            page_id=page_id,
-            aggregate=self._aggregate,
-            queue_snapshot=False,
-        )
+        self.default = self._add(default_name, _DEFAULT_PAGE_ID, is_default=True)
+        """The default page, whose panes are also ``server.panes``."""
 
     def _check_name_available(self, name: str, *, excluding: Page | None = None) -> None:
         with self._lock:
@@ -111,33 +88,24 @@ class Pages:
 
     def _add(self, name: str, page_id: str, *, is_default: bool) -> Page:
         with self._lock:
-            if self._terminal:
-                raise RuntimeError("Pages is no longer active.")
             if page_id in self._page_from_page_id:
                 raise ValueError(f"Page ID {page_id!r} already exists.")
             self._check_name_available(name)
-            if len(self._page_from_page_id) >= _PAGE_MAX:
-                raise RuntimeError(f"A workspace cannot own more than {_PAGE_MAX} pages.")
-
-            panes = self._make_panes(page_id)
-            page = Page(self, page_id, name, panes)
-            try:
-                self._owner._websock_server.queue_messages_or_raise(
-                    (
-                        _messages.PageCreateMessage(
-                            page_id=page_id,
-                            name=name,
-                            is_default=is_default,
-                        ),
-                        panes._snapshot_message(),
-                        _messages.PageCatalogMessage(
-                            page_ids=tuple(self._page_from_page_id) + (page_id,)
-                        ),
-                    )
+            panes = Panes(self._owner, page_id)
+            self._owner._websock_server.queue_messages_or_raise(
+                (
+                    _messages.PageCreateMessage(
+                        page_id=page_id,
+                        name=name,
+                        is_default=is_default,
+                    ),
+                    panes._snapshot_message(),
+                    _messages.PageCatalogMessage(
+                        page_ids=tuple(self._page_from_page_id) + (page_id,)
+                    ),
                 )
-            except BaseException:
-                panes._retire_without_queue()
-                raise
+            )
+            page = Page(self, page_id, name, panes)
             self._page_from_page_id[page_id] = page
             return page
 
@@ -161,10 +129,6 @@ class Pages:
 
     def _rename(self, page: Page, name: str) -> None:
         with self._lock:
-            if self._terminal:
-                raise RuntimeError("Pages is no longer active.")
-            if self._page_from_page_id.get(page._page_id) is not page:
-                raise RuntimeError("Page is no longer active.")
             if page._name == name:
                 return
             self._check_name_available(name, excluding=page)
@@ -172,15 +136,6 @@ class Pages:
                 _messages.PageUpdateMessage(page_id=page._page_id, name=name)
             )
             page._name = name
-
-    def _retire_without_queue(self) -> None:
-        with self._lock:
-            if self._terminal:
-                return
-            self._terminal = True
-            pages = tuple(self._page_from_page_id.values())
-        for page in pages:
-            page.panes._retire_without_queue()
 
     def __len__(self) -> int:
         with self._lock:

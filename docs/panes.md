@@ -14,8 +14,8 @@ split.
 
 Every server begins with a default page. It is named `Main` unless
 `Server(label=...)` supplies another name; the server itself has no separate
-visualization-wide title. The existing one-page API remains exact shorthand:
-`server.panes` is `server.pages.default.panes`.
+visualization-wide title. `server.panes` is the default page's pane API, the
+same object as `server.pages.default.panes`.
 
 Add more pages through `server.pages` and place panes through the returned
 page's `panes` API:
@@ -145,10 +145,6 @@ the axes do not reflow to the pane's shape. Reach for `add_plotly` when the
 viewer needs to interact, or rasterize into `add_image` when a figure holds so
 many marks that one SVG element per mark gets expensive.
 
-Matplotlib SVG source is limited to 16,777,216 UTF-16 code units
-(16 Mi-characters). Creation or update raises `ValueError` before publishing a
-larger figure; simplify or rasterize it before sending.
-
 Leika keeps only a weak reference to the source figure. Retain the figure
 yourself while you need to read or update it through the handle; if it is
 collected, the rendered SVG remains visible but the handle cannot reconstruct
@@ -201,14 +197,6 @@ The iframe is intentionally unsandboxed because the Viser client requires
 scripts, workers, and storage, and it uses a no-referrer policy. Cross-origin
 same-origin-policy isolation helps, but a same-origin target has the Leika
 page's authority. Embed only trusted Viser clients and absolute URLs.
-
-## Workspace limits
-
-One workspace retains at most 128 named pages and, across all of them, at most
-128 content panes, including hidden and minimized ones, and at most 16 Viser
-panes. All page pane sources share 32 Mi UTF-16 code units, 256 MiB of retained
-payload, and 64 Mi-pixels. These are Leika-owned state budgets rather than a
-bound on the memory retained by caller objects or by trusted renderer code.
 
 ## Updating a pane
 
@@ -319,16 +307,16 @@ Handles also carry `visible` and `remove()`. Matplotlib and Plotly handles
 expose `figure` under the ownership rules above, and assigning to it is the
 same as calling `update()`.
 
-Removal is terminal and scrubs retained payloads. The stable `pane_id` remains
-readable, but other synchronized reads, updates, and assignments raise
-`RuntimeError`; repeating `remove()` emits a warning and is otherwise a
-harmless no-op.
+Removal is terminal. The stable `pane_id` remains readable, but other reads,
+updates, and assignments raise `RuntimeError`; repeating `remove()` emits a
+warning and is otherwise a harmless no-op.
 
 ## Layout
 
 By default each new pane splits off the last visible one. `placement` and
 `relative_to` steer that, and the row, column, and grid helpers divide space
-equally instead:
+equally instead. Their `add_*` methods are the same as `server.panes`, except
+that they place panes themselves and reject `placement` and `relative_to`:
 
 ```python
 grid = server.panes.add_grid(columns=2)

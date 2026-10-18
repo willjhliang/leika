@@ -2,36 +2,28 @@
 
 from __future__ import annotations
 
-import contextlib
-import copy
 import dataclasses
 import io
-import json
 import threading
 import urllib.parse
 import uuid
 import warnings
 import weakref
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, Literal, NewType, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, NewType, cast
 
 import numpy as np
 from typing_extensions import TypeAlias
 
 from . import _messages
-from ._gui_resources import _GuiResourceCost
 from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._plotly import plotly_config, plotly_figure, plotly_json, plotly_theme_templates
 from ._validation import (
-    utf16_code_unit_length,
-    utf16_code_unit_length_exceeds,
     validate_layout_id,
+    validate_positive_integer,
     validate_positive_number,
     validate_renderer_string,
-)
-from ._validation import (
-    validate_positive_integer as _validate_positive_integer,
 )
 
 if TYPE_CHECKING:
@@ -48,141 +40,8 @@ Placement: TypeAlias = Literal["left", "right", "top", "bottom"]
 PaneLoading: TypeAlias = bool | str
 PaneId = NewType("PaneId", str)
 
-
-_PANE_MAX = 128
-_VISER_PANE_MAX = 16
-_PANE_TEXT_MAX_UTF16_CODE_UNITS = 32 * 1024 * 1024
-_PANE_PAYLOAD_MAX_BYTES = 256 * 1024 * 1024
-_PANE_PIXELS_MAX = 64 * 1024 * 1024
-
-
-@dataclasses.dataclass(frozen=True)
-class _PaneResourceCost:
-    text_units: int = 0
-    payload_bytes: int = 0
-    decoded_pixels: int = 0
-
-
-class _PanesAggregate:
-    """Server-wide ownership shared by every page's local pane registry."""
-
-    def __init__(self, owner: Server) -> None:
-        self._owner = owner
-        self._lock = threading.RLock()
-        self.resource_total = _PaneResourceCost()
-        self.live_panes = 0
-        self.live_viser_panes = 0
-
-    def replace_resource(
-        self,
-        old: _PaneResourceCost,
-        new: _PaneResourceCost,
-    ) -> None:
-        with self._lock:
-            prospective = _PaneResourceCost(
-                self.resource_total.text_units - old.text_units + new.text_units,
-                self.resource_total.payload_bytes - old.payload_bytes + new.payload_bytes,
-                self.resource_total.decoded_pixels - old.decoded_pixels + new.decoded_pixels,
-            )
-            if prospective.text_units > _PANE_TEXT_MAX_UTF16_CODE_UNITS:
-                raise RuntimeError("Panes exceeded the 32 Mi UTF-16 source budget.")
-            if prospective.payload_bytes > _PANE_PAYLOAD_MAX_BYTES:
-                raise RuntimeError("Panes exceeded the 256 MiB retained payload budget.")
-            if prospective.decoded_pixels > _PANE_PIXELS_MAX:
-                raise RuntimeError("Panes exceeded the 64 Mi-pixel raster budget.")
-            if (
-                min(
-                    prospective.text_units,
-                    prospective.payload_bytes,
-                    prospective.decoded_pixels,
-                )
-                < 0
-            ):
-                raise RuntimeError("pane aggregate resource accounting underflow")
-
-            # Pane rasters share the browser page allowance with server.gui.
-            self._owner._replace_gui_resource_cost(
-                _GuiResourceCost(decoded_pixels=old.decoded_pixels),
-                _GuiResourceCost(decoded_pixels=new.decoded_pixels),
-                page_global=True,
-            )
-            self.resource_total = prospective
-
-    def reserve_pane(self, *, viser: bool) -> None:
-        with self._lock:
-            if self.live_panes >= _PANE_MAX:
-                raise RuntimeError(f"A workspace cannot own more than {_PANE_MAX} panes.")
-            if viser and self.live_viser_panes >= _VISER_PANE_MAX:
-                raise RuntimeError(
-                    f"A workspace cannot own more than {_VISER_PANE_MAX} viser panes."
-                )
-            self.live_panes += 1
-            if viser:
-                self.live_viser_panes += 1
-
-    @contextlib.contextmanager
-    def replace_renderer(self, *, old_viser: bool, new_viser: bool) -> Iterator[None]:
-        with self._lock:
-            delta = int(new_viser) - int(old_viser)
-            if self.live_viser_panes + delta > _VISER_PANE_MAX:
-                raise RuntimeError(
-                    f"A workspace cannot own more than {_VISER_PANE_MAX} viser panes."
-                )
-            self.live_viser_panes += delta
-            try:
-                yield
-            except BaseException:
-                self.live_viser_panes -= delta
-                raise
-
-    def release_pane(self, *, viser: bool) -> None:
-        with self._lock:
-            if self.live_panes <= 0 or (viser and self.live_viser_panes <= 0):
-                raise RuntimeError("pane aggregate count accounting underflow")
-            self.live_panes -= 1
-            if viser:
-                self.live_viser_panes -= 1
-
-
-def _pane_resource_cost(handle: "_PaneContent[Any]") -> _PaneResourceCost:
-    props = handle._impl.props
-    text_units = 0
-    payload_bytes = 0
-    for field in dataclasses.fields(props):
-        value = getattr(props, field.name)
-        if isinstance(value, str):
-            text_units += utf16_code_unit_length(value)
-            payload_bytes += len(value.encode("utf-8"))
-        elif isinstance(value, bytes):
-            payload_bytes += len(value)
-    if isinstance(handle._impl, _EmptyPaneHandleState):
-        options = json.dumps(handle._impl.resume_options)
-        text_units += utf16_code_unit_length(options)
-        payload_bytes += len(options.encode("utf-8"))
-    decoded_pixels = 0
-    if isinstance(handle._impl, _ImagePaneHandleState):
-        image = handle._impl.image
-        payload_bytes += int(image.nbytes)
-        decoded_pixels = int(image.shape[0]) * int(image.shape[1])
-    return _PaneResourceCost(text_units, payload_bytes, decoded_pixels)
-
-
-_MATPLOTLIB_SVG_MAX_UTF16_CODE_UNITS = 16 * 1024 * 1024
-"""Bundled browser parser limit for one Matplotlib SVG pane."""
-
-
-class _BoundedSvgBuffer(io.BytesIO):
-    """Bound Matplotlib output before exact UTF-16 validation."""
-
-    def __init__(self, max_bytes: int) -> None:
-        super().__init__()
-        self._max_bytes = max_bytes
-
-    def write(self, data: Any) -> int:
-        proposed = self.tell() + len(data)
-        if proposed > self._max_bytes:
-            raise ValueError("Matplotlib figure exceeds the 16 Mi-character browser render limit.")
-        return super().write(data)
+_ROOT_PANE_ID = "__leika_root__"
+"""Hidden layout sentinel used when no data pane can anchor a split."""
 
 
 def _validate_loading(value: object) -> PaneLoading:
@@ -193,55 +52,36 @@ def _validate_loading(value: object) -> PaneLoading:
     raise TypeError("loading must be a bool or string")
 
 
-def _validate_title_visible_loading(
-    title: object,
-    visible: object,
-    loading: object,
-) -> tuple[str, bool, PaneLoading]:
-    title = cast(str, validate_renderer_string(title, "pane title"))
-    if type(visible) is not bool:
-        raise TypeError("visible must be a bool")
-    return title, visible, _validate_loading(loading)
+def _validate_fit(value: object) -> ImageFit | None:
+    if value is not None and (type(value) is not str or value not in ("fit", "fill", "stretch")):
+        raise ValueError("fit must be 'fit', 'fill', 'stretch', or None.")
+    return cast("ImageFit | None", value)
 
 
-def _matplotlib_figure_ref(figure: Any) -> weakref.ReferenceType[Any]:
-    """Require a renderer and non-owning introspection before any work."""
-    if not callable(getattr(figure, "savefig", None)):
-        raise TypeError(
-            f"figure must be a matplotlib Figure (an object with a savefig method); got {figure!r}."
+def _validate_video_group(value: str | None) -> str | None:
+    return None if value is None else validate_layout_id(value, "sync_group")
+
+
+def _validate_video_fps(value: float | None) -> float | None:
+    return None if value is None else float(validate_positive_number(value, "fps"))
+
+
+def _video_url(panes: Panes, source: Path | str) -> str:
+    if isinstance(source, Path):
+        return panes._owner.register_http_asset(source)
+    if not isinstance(source, str):
+        raise TypeError("video source must be a Path or HTTP URL")
+    parsed = urllib.parse.urlsplit(source)
+    if (
+        not (
+            (parsed.scheme in ("http", "https") and parsed.netloc)
+            or (source.startswith("/") and not source.startswith("//"))
         )
-    try:
-        return weakref.ref(figure)
-    except TypeError as error:
-        raise TypeError(
-            "matplotlib figure sources must support weak references so Leika "
-            "does not retain an unbounded caller-owned graph"
-        ) from error
-
-
-def _matplotlib_svg(figure: Any) -> str:
-    """Serialize a matplotlib figure to SVG source.
-
-    SVG rather than pixels so a resized pane rescales the figure crisply
-    without a Python redraw. The figure is written exactly as composed --
-    no tight bounding box, no recoloring -- so what the pane shows is what
-    ``savefig`` would have written.
-    """
-
-    savefig = getattr(figure, "savefig", None)
-    if not callable(savefig):
-        raise TypeError(
-            f"figure must be a matplotlib Figure (an object with a savefig method); got {figure!r}."
-        )
-    # A valid string within the UTF-16 limit needs at most three UTF-8 bytes
-    # per code unit. Bound generation at that conservative ceiling, then apply
-    # the client's exact JavaScript-string limit after decoding.
-    buffer = _BoundedSvgBuffer(_MATPLOTLIB_SVG_MAX_UTF16_CODE_UNITS * 3)
-    savefig(buffer, format="svg")
-    svg = buffer.getvalue().decode("utf-8")
-    if utf16_code_unit_length_exceeds(svg, _MATPLOTLIB_SVG_MAX_UTF16_CODE_UNITS):
-        raise ValueError("Matplotlib figure exceeds the 16 Mi-character browser render limit.")
-    return svg
+        or "\\" in source
+        or any(ord(c) < 32 for c in source)
+    ):
+        raise ValueError("video URLs must be absolute HTTP(S) or root-relative URLs")
+    return source
 
 
 def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
@@ -249,10 +89,8 @@ def _viser_embed_target(target: str | Any) -> tuple[str | None, int | None]:
 
     Accepts an absolute http(s) URL, used near-verbatim, or a viser
     ``ViserServer``-like object, duck-typed on callable ``get_port()`` and
-    ``get_host()``. Only the port is kept from server objects: viser binds
-    ``0.0.0.0`` by default, so its Python-side host is not something a
-    browser can connect to. The client instead combines the port with the
-    hostname the Leika page itself was loaded from.
+    ``get_host()``. Only the port is returned for server objects; Leika
+    proxies them through its own origin.
     """
 
     if isinstance(target, str):
@@ -330,271 +168,234 @@ def _minimize_viser_gui(target: Any) -> None:
             warnings.warn(
                 f"Could not minimize viser's control panel: {error}",
                 RuntimeWarning,
-                stacklevel=3,
+                stacklevel=4,
             )
 
 
-@dataclasses.dataclass
-class _EmptyPaneHandleState:
-    pane_id: str
-    props: _messages.ViewportEmptyProps
-    api: Panes
-    resume_kind: str | None = None
-    resume_options: dict[str, Any] = dataclasses.field(default_factory=dict)
-    removed: bool = False
+class _ViserRoute(NamedTuple):
+    """Leika's same-origin proxy route to one local Viser server."""
+
+    path: str
+    address: tuple[str, int]
 
 
-@dataclasses.dataclass
-class _ImagePaneHandleState:
-    pane_id: str
-    props: _messages.ViewportImageProps
-    api: Panes
-    image: np.ndarray
-    requested_format: Literal["auto", "jpeg", "png"]
-    jpeg_quality: int | None
-    removed: bool = False
+def _release(panes: Panes, source: object) -> None:
+    """Unregister a Viser proxy route; other renderer sources need no release."""
+    if isinstance(source, _ViserRoute):
+        panes._websock_interface._viser_proxy.unregister(source.path)
 
 
-@dataclasses.dataclass
-class _MatplotlibPaneHandleState:
-    pane_id: str
-    props: _messages.ViewportMatplotlibProps
-    api: Panes
-    figure_ref: weakref.ReferenceType[Any] | None
-    removed: bool = False
+class PaneHandle:
+    """A stable workspace pane whose content can be replaced or cleared.
 
+    ``set_*`` methods select a renderer and its settings. ``clear()`` releases
+    its content while retaining layout, title, visibility and refresh bindings.
+    Handles returned by ``add_video``, ``add_image``, etc. also provide their
+    typed ``update`` and properties. After clearing, ``update`` restores that
+    renderer with its previous settings. After selecting a different kind,
+    use ``set_*`` to switch back explicitly.
+    """
 
-@dataclasses.dataclass
-class _PlotlyPaneHandleState:
-    pane_id: str
-    props: _messages.ViewportPlotlyProps
-    api: Panes
-    config: dict[str, Any] | None
-    removed: bool = False
+    # Each handle class also describes one renderer: this class the empty
+    # pane, and each typed subclass its kind of content.
+    _kind: ClassVar[str] = "empty"
+    _props_type: ClassVar[type[Any]] = _messages.ViewportEmptyProps
+    _message_type: ClassVar[type[Any]] = _messages.ViewportEmptyMessage
+    _update_fields: ClassVar[tuple[str, ...]] = ()
+    """Content props that ``update()`` sends; a new renderer sends them all."""
 
+    def __init__(
+        self,
+        panes: Panes,
+        pane_id: str,
+        renderer: type[PaneHandle],
+        props: Any,
+        settings: dict[str, Any],
+        source: Any,
+    ) -> None:
+        self._panes = panes
+        self._pane_id = pane_id
+        self._renderer = renderer
+        """Handle class describing the content shown now."""
+        self._props = props
+        """Current props, replaced rather than mutated once published."""
+        self._settings = settings
+        """Settings of the last non-empty renderer, kept through ``clear()``."""
+        self._settings_kind = None if renderer is PaneHandle else renderer._kind
+        self._source: Any = source
+        """Renderer state: an image copy, a weak figure reference, or a Viser route."""
+        self._generation = 0
+        """Counts renderer replacements, so in-flight preparation can detect one."""
+        self._removed = False
+        self._refresh_controls: dict[str, weakref.ReferenceType[Any]] = {}
+        self._refresh_requests: dict[int, str] = {}
+        self._refresh_revision = 0
 
-@dataclasses.dataclass
-class _VideoPaneHandleState:
-    pane_id: str
-    props: _messages.ViewportVideoProps
-    api: Panes
-    removed: bool = False
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        """Return this renderer's content props and source for ``value``.
 
+        Runs outside the registry lock. ``previous`` is the pane's current
+        source, which a renderer may reuse.
+        """
+        return {}, None
 
-@dataclasses.dataclass
-class _ViserPaneHandleState:
-    pane_id: str
-    props: _messages.ViewportViserProps
-    api: Panes
-    minimize_gui: bool
-    proxy_path: str | None = None
-    proxy_address: tuple[str, int] | None = None
-    removed: bool = False
-
-
-_PaneStateT = TypeVar(
-    "_PaneStateT",
-    _EmptyPaneHandleState,
-    _ImagePaneHandleState,
-    _MatplotlibPaneHandleState,
-    _PlotlyPaneHandleState,
-    _ViserPaneHandleState,
-    _VideoPaneHandleState,
-)
-
-
-def _scrub_pane_handle_locked(handle: "_PaneContent[Any]") -> None:
-    """Drop all resource-charged state after terminal pane retirement."""
-    props = handle._impl.props
-    props.title = ""
-    props.loading = False
-    if isinstance(handle._impl, _EmptyPaneHandleState):
-        handle._impl.resume_options.clear()
-        handle._impl.resume_kind = None
-    elif isinstance(handle._impl, _ImagePaneHandleState):
-        handle._impl.image = np.empty((0,), dtype=np.uint8)
-        handle._impl.requested_format = "auto"
-        handle._impl.jpeg_quality = None
-        handle._impl.props._data = b""
-    elif isinstance(handle._impl, _MatplotlibPaneHandleState):
-        handle._impl.figure_ref = None
-        handle._impl.props._svg = ""
-    elif isinstance(handle._impl, _PlotlyPaneHandleState):
-        handle._impl.props._plotly_json_str = ""
-        handle._impl.props._theme_templates = ""
-    elif isinstance(handle._impl, _VideoPaneHandleState):
-        handle._impl.props._url = ""
-    elif isinstance(handle._impl, _ViserPaneHandleState):
-        handle._impl.api._websock_interface._viser_proxy.unregister(handle._impl.proxy_path)
-        handle._impl.proxy_path = None
-        handle._impl.proxy_address = None
-        handle._impl.props._url = None
-        handle._impl.props._port = None
-
-
-class _PaneContent(Generic[_PaneStateT]):
-    """Lifecycle and property logic shared by all pane handles."""
-
-    _impl: _PaneStateT
-
-    def __init__(self, state: _PaneStateT) -> None:
-        self._impl = state
+    @staticmethod
+    def _published(value: Any, settings: dict[str, Any]) -> None:
+        """React once content prepared from ``value`` is published."""
 
     def _check_not_removed(self) -> None:
-        if self._impl.removed:
+        if self._removed:
             raise RuntimeError(f"Cannot update a removed {type(self).__name__}.")
 
-    @property
-    def has_viewers(self) -> bool:
-        """Whether a connected browser may be displaying this pane.
-
-        Unknown dimensions count as visible until the browser reports them.
-        Applications can skip expensive routine work when False; explicit
-        selection/loading updates should still publish their new content.
-        """
+    def _require_kind(self) -> None:
+        """Check that this typed handle's kind of content is shown. Lock held."""
         self._check_not_removed()
-        return self.visible and any(
-            client.pane_size(self) != (0, 0) for client in self._impl.api._owner.clients.values()
-        )
-
-    def invalidate_on(self, *controls: Any) -> None:
-        """Hide this pane immediately when a bound GUI input changes.
-
-        Bind shared inputs owned by this server. The input callback must clear
-        stale content synchronously and reject obsolete background results.
-        Once callbacks finish, the browser receives a versioned snapshot;
-        late frames from earlier selections cannot reveal the previous image.
-        Repeated calls add bindings and prune removed controls.
-        """
-        from ._gui_handles import _GuiInputHandle
-
-        self._check_not_removed()
-        owner = self._impl.api._owner
-        for control in controls:
-            if not isinstance(control, _GuiInputHandle):
-                raise TypeError("invalidate_on requires GUI input handles.")
-            if control._impl.gui_api._owner is not owner or control._impl.removed:
-                raise ValueError("refresh controls must be live shared inputs on this server.")
-        with self._impl.api._lock:
-            bindings = {
-                uuid: reference
-                for uuid, reference in getattr(self, "_refresh_controls", {}).items()
-                if reference() is not None and not reference()._impl.removed
-            }
-            for control in controls:
-                bindings[control._impl.uuid] = weakref.ref(control)
-            if len(bindings) > 4096:
-                raise ValueError("a pane supports at most 4096 refresh controls.")
-            previous = getattr(self, "_refresh_controls", {})
-            self._refresh_controls = bindings
-            try:
-                self._queue_update({"_refresh_controls": tuple(bindings)})
-            except BaseException:
-                self._refresh_controls = previous
-                raise
-
-    def _ack_refresh(self, gui_uuid: str, request_id: str, client_id: int) -> None:
-        with self._impl.api._lock:
-            if self._impl.removed or gui_uuid not in getattr(self, "_refresh_controls", {}):
-                return
-            clients = self._impl.api._owner.clients
-            if client_id not in clients:
-                return
-            requests = {
-                key: value
-                for key, value in getattr(self, "_refresh_requests", {}).items()
-                if key in clients
-            }
-            requests[client_id] = request_id
-            self._refresh_requests = requests
-            self._refresh_revision = getattr(self, "_refresh_revision", 0) + 1
-            # The barrier rides on the content itself, so coalescing cannot
-            # drop a receipt or let an older image overtake it. One ID per
-            # connected client bounds retained state across reconnects.
-            self._queue_update(dataclasses.asdict(self._impl.props))
+        if self._renderer._kind != self._kind:
+            raise RuntimeError(
+                "This pane has different or empty content; use set_* to select its renderer."
+            )
 
     def _update_message(self, updates: dict[str, Any]) -> _messages.ViewportPaneUpdateMessage:
-        handle = self._impl.api._handle_from_pane_id.get(self._impl.pane_id, self)
-        if getattr(handle, "_refresh_controls", None):
+        if self._refresh_controls:
+            # The refresh barrier rides on the content itself, so coalescing
+            # cannot drop a receipt or let an older image overtake it.
             updates = {
                 **updates,
-                "_refresh_revision": getattr(handle, "_refresh_revision", 0),
-                "_refresh_controls": tuple(handle._refresh_controls),
-                "_refresh_requests": tuple(getattr(handle, "_refresh_requests", {}).values()),
+                "_refresh_revision": self._refresh_revision,
+                "_refresh_controls": tuple(self._refresh_controls),
+                "_refresh_requests": tuple(self._refresh_requests.values()),
             }
         return _messages.ViewportPaneUpdateMessage(
-            page_id=self._impl.api._page_id, pane_id=self._impl.pane_id, updates=updates
+            page_id=self._panes._page_id, pane_id=self._pane_id, updates=updates
         )
 
     def _queue_update(self, updates: dict[str, Any]) -> None:
-        self._impl.api._websock_interface.queue_message_or_raise(self._update_message(updates))
+        self._panes._websock_interface.queue_message_or_raise(self._update_message(updates))
 
-    def _publish_update_locked(
-        self,
-        updates: dict[str, Any],
-        *,
-        state_updates: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Commit prepared props, retained state, and their resource cost together.
-
-        Callers validate values and prepare expensive content before acquiring
-        the pane registry lock. Every mutation then passes through this path,
-        so failed budget admission or publication restores the same snapshot.
-        """
-        self._check_not_removed()
-        assignments: list[tuple[object, str, Any]] = [
-            (self._impl.props, name, value) for name, value in updates.items()
-        ]
-        if state_updates is not None:
-            assignments.extend((self._impl, name, value) for name, value in state_updates.items())
-        previous = [(target, name, getattr(target, name)) for target, name, _ in assignments]
-        try:
-            for target, name, value in assignments:
-                setattr(target, name, value)
-            with self._impl.api._resource_transaction_locked(self):
-                self._queue_update(updates)
-        except BaseException:
-            for target, name, value in reversed(previous):
-                setattr(target, name, value)
-            raise
-
-    def _set_prop(self, name: str, value: Any) -> None:
-        """Publish one validated property, skipping unchanged values."""
-        with self._impl.api._lock:
-            self._check_not_removed()
-            if value == getattr(self._impl.props, name):
+    def _set_prop(self, name: str, value: Any, *, setting: bool = False) -> None:
+        """Publish one validated prop; a ``setting`` is also kept for ``update()``."""
+        with self._panes._lock:
+            if setting:
+                self._require_kind()
+            else:
+                self._check_not_removed()
+            if value == getattr(self._props, name):
                 return
-            self._publish_update_locked({name: value})
+            self._queue_update({name: value})
+            self._props = dataclasses.replace(self._props, **{name: value})
+            if setting:
+                self._settings[name] = value
+
+    def _publish(
+        self,
+        renderer: type[PaneHandle],
+        value: Any,
+        settings: dict[str, Any] | None,
+        loading: PaneLoading | None,
+        frame: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Prepare content outside the lock, then publish it unless the pane changed.
+
+        ``settings`` None means ``update()``: new content for the renderer
+        shown, or the cleared renderer restored with its settings. Otherwise
+        the renderer is replaced. ``frame`` overrides settings for this content
+        only; ``loading`` None keeps the overlay.
+        """
+        panes = self._panes
+        if loading is not None:
+            loading = _validate_loading(loading)
+        with panes._lock:
+            self._check_not_removed()
+            replace = settings is not None
+            if settings is None:
+                if self._renderer is renderer:
+                    settings = self._settings
+                elif self._renderer is PaneHandle and self._settings_kind == renderer._kind:
+                    replace, settings = True, self._settings
+                else:
+                    raise RuntimeError(
+                        "This pane has a different renderer; use set_* to switch back."
+                    )
+            generation, previous = self._generation, self._source
+        fields, source = renderer._prepare(panes, value, {**settings, **(frame or {})}, previous)
+        try:
+            with panes._lock:
+                self._check_not_removed()
+                if self._generation != generation or (
+                    source is previous and source is not self._source
+                ):
+                    raise RuntimeError("Pane content changed during preparation.")
+                props = self._props
+                if replace:
+                    props = renderer._props_type(
+                        title=props.title,
+                        visible=props.visible,
+                        loading=props.loading if loading is None else loading,
+                        **fields,
+                    )
+                    messages = [
+                        renderer._message_type(
+                            page_id=panes._page_id,
+                            pane_id=self._pane_id,
+                            placement="right",
+                            relative_to=_ROOT_PANE_ID,
+                            equalize_group=(),
+                            props=props,
+                        )
+                    ]
+                    if self._refresh_controls:
+                        messages.append(self._update_message({}))
+                    panes._websock_interface.queue_messages_or_raise(messages)
+                    self._generation += 1
+                    self._renderer = renderer
+                    if renderer is not PaneHandle:
+                        self._settings, self._settings_kind = settings, renderer._kind
+                else:
+                    updates = {name: fields[name] for name in renderer._update_fields}
+                    if loading is not None:
+                        updates["loading"] = loading
+                    self._queue_update(updates)
+                    props = dataclasses.replace(
+                        props, **fields, loading=props.loading if loading is None else loading
+                    )
+                replaced, self._props, self._source = self._source, props, source
+        except BaseException:
+            if source is not previous:
+                _release(panes, source)
+            raise
+        if replaced is not source:
+            _release(panes, replaced)
+        renderer._published(value, settings)
 
     @property
     def pane_id(self) -> PaneId:
         """Stable identifier used to restore browser-managed layouts."""
 
-        return PaneId(self._impl.pane_id)
+        return PaneId(self._pane_id)
 
     @property
     def title(self) -> str:
         """Title rendered in the pane's corner label."""
 
         self._check_not_removed()
-        return self._impl.props.title
+        return self._props.title
 
     @title.setter
     def title(self, value: str) -> None:
-        self._check_not_removed()
-        value = cast(str, validate_renderer_string(value, "pane title"))
-        self._set_prop("title", value)
+        self._set_prop("title", validate_renderer_string(value, "pane title"))
 
     @property
     def visible(self) -> bool:
         """Whether this pane is visible."""
 
         self._check_not_removed()
-        return self._impl.props.visible
+        return self._props.visible
 
     @visible.setter
     def visible(self, value: bool) -> None:
-        self._check_not_removed()
         if type(value) is not bool:
             raise TypeError("visible must be a bool")
         self._set_prop("visible", value)
@@ -610,430 +411,98 @@ class _PaneContent(Generic[_PaneStateT]):
         """
 
         self._check_not_removed()
-        return self._impl.props.loading
+        return self._props.loading
 
     @loading.setter
     def loading(self, value: PaneLoading) -> None:
-        self._check_not_removed()
-        value = _validate_loading(value)
-        self._set_prop("loading", value)
+        self._set_prop("loading", _validate_loading(value))
+
+    @property
+    def has_viewers(self) -> bool:
+        """Whether a connected browser may be displaying this pane.
+
+        Unknown dimensions count as visible until the browser reports them.
+        Applications can skip expensive routine work when False; explicit
+        selection/loading updates should still publish their new content.
+        """
+        return self.visible and any(
+            client.pane_size(self) != (0, 0) for client in self._panes._owner.clients.values()
+        )
+
+    def invalidate_on(self, *controls: Any) -> None:
+        """Hide this pane immediately when a bound GUI input changes.
+
+        Bind shared inputs owned by this server. The input callback must clear
+        stale content synchronously and reject obsolete background results.
+        Once callbacks finish, the browser receives a versioned snapshot;
+        late frames from earlier selections cannot reveal the previous image.
+        Repeated calls add bindings and prune removed controls.
+        """
+        from ._gui_handles import _GuiInputHandle
+
+        owner = self._panes._owner
+        for control in controls:
+            if not isinstance(control, _GuiInputHandle):
+                raise TypeError("invalidate_on requires GUI input handles.")
+            if control._impl.gui_api._owner is not owner or control._impl.removed:
+                raise ValueError("refresh controls must be live shared inputs on this server.")
+        with self._panes._lock:
+            self._check_not_removed()
+            bindings = {
+                uuid: reference
+                for uuid, reference in self._refresh_controls.items()
+                if (control := reference()) is not None and not control._impl.removed
+            }
+            for control in controls:
+                bindings[control._impl.uuid] = weakref.ref(control)
+            previous, self._refresh_controls = self._refresh_controls, bindings
+            try:
+                self._queue_update({"_refresh_controls": tuple(bindings)})
+            except BaseException:
+                self._refresh_controls = previous
+                raise
+
+    def _ack_refresh(self, gui_uuid: str, request_id: str, client_id: int) -> None:
+        with self._panes._lock:
+            if self._removed or gui_uuid not in self._refresh_controls:
+                return
+            clients = self._panes._owner.clients
+            if client_id not in clients:
+                return
+            # One receipt per connected client, so reconnects do not accumulate.
+            self._refresh_requests = {
+                key: value for key, value in self._refresh_requests.items() if key in clients
+            }
+            self._refresh_requests[client_id] = request_id
+            self._refresh_revision += 1
+            self._queue_update(dataclasses.asdict(self._props))
 
     def remove(self) -> None:
         """Permanently remove this pane from the workspace."""
 
-        api = self._impl.api
-        with api._lock:
-            if self._impl.removed:
+        panes = self._panes
+        with panes._lock:
+            if self._removed:
                 warnings.warn(
                     f"Attempted to remove an already removed {type(self).__name__}.",
                     stacklevel=2,
                 )
                 return
             remaining = tuple(
-                pane_id for pane_id in api._handle_from_pane_id if pane_id != self._impl.pane_id
+                pane_id for pane_id in panes._handle_from_pane_id if pane_id != self._pane_id
             )
-            api._websock_interface.queue_messages_or_raise(
+            panes._websock_interface.queue_messages_or_raise(
                 (
                     _messages.ViewportPaneRemoveMessage(
-                        page_id=api._page_id,
-                        pane_id=self._impl.pane_id,
+                        page_id=panes._page_id, pane_id=self._pane_id
                     ),
-                    api._snapshot_message(remaining),
+                    panes._snapshot_message(remaining),
                 )
             )
-            self._impl.removed = True
-            api._handle_from_pane_id.pop(self._impl.pane_id, None)
-            try:
-                api._release_resource_locked(self._impl.pane_id)
-            finally:
-                try:
-                    api._aggregate.release_pane(viser=isinstance(self._impl, _ViserPaneHandleState))
-                finally:
-                    _scrub_pane_handle_locked(self)
-
-
-class _ImagePaneContent(_PaneContent[_ImagePaneHandleState]):
-    """Handle for updating or removing a native image pane."""
-
-    def __init__(self, state: _ImagePaneHandleState) -> None:
-        self._impl = state
-
-    @property
-    def image(self) -> np.ndarray:
-        """Current image. Assign a new array to stream another frame."""
-
-        self._check_not_removed()
-        return self._impl.image.copy()
-
-    @image.setter
-    def image(self, image: np.ndarray) -> None:
-        self._update_image(image, loading=None)
-
-    def _update_image(
-        self, image: np.ndarray, loading: PaneLoading | None, jpeg_quality: int | None = None
-    ) -> None:
-        self._check_not_removed()
-        if loading is not None:
-            loading = _validate_loading(loading)
-        _validate_image_encoding_options(self._impl.requested_format, jpeg_quality)
-        snapshot, resolved_format, data = prepare_image(
-            image,
-            self._impl.requested_format,
-            self._impl.jpeg_quality if jpeg_quality is None else jpeg_quality,
-        )
-        self._commit_image_snapshot(snapshot, resolved_format, data, loading)
-
-    def _commit_image_snapshot(
-        self,
-        image: np.ndarray,
-        resolved_format: Literal["jpeg", "png"],
-        data: bytes,
-        loading: PaneLoading | None,
-    ) -> None:
-        """Publish one already-prepared private pane image snapshot."""
-        with self._impl.api._lock:
-            # Encoding can be expensive. Recheck after taking the lock so a
-            # concurrent remove cannot queue an update for a reused pane ID.
-            self._check_not_removed()
-            updates: dict[str, Any] = {
-                "_format": resolved_format,
-                "_data": data,
-                "fit": self._impl.props.fit,
-            }
-            if loading is not None:
-                updates["loading"] = loading
-            self._publish_update_locked(updates, state_updates={"image": image})
-
-    def update(
-        self,
-        image: np.ndarray,
-        *,
-        loading: PaneLoading | None = None,
-        jpeg_quality: int | None = None,
-    ) -> None:
-        """Replace the image, optionally changing loading in the same update.
-
-        None leaves the current loading state unchanged. Pass False to reveal
-        the new image as part of the same pane update. ``jpeg_quality`` overrides
-        the creation quality for this update only (0–100); None uses the default.
-        """
-
-        self._update_image(image, loading, jpeg_quality)
-
-    @property
-    def format(self) -> Literal["auto", "jpeg", "png"]:
-        """Encoding requested when this pane was created."""
-
-        self._check_not_removed()
-        return self._impl.requested_format
-
-    @property
-    def fit(self) -> ImageFit | None:
-        """How the image is sized within its pane, or None to follow the
-        viewer's own "Image fit" setting."""
-
-        self._check_not_removed()
-        return self._impl.props.fit
-
-    @fit.setter
-    def fit(self, value: ImageFit | None) -> None:
-        self._check_not_removed()
-        value = _validate_fit(value)
-        self._set_prop("fit", value)
-
-
-class _MatplotlibPaneContent(_PaneContent[_MatplotlibPaneHandleState]):
-    """Handle that owns bounded SVG, with only a weak caller-Figure reference."""
-
-    def __init__(self, state: _MatplotlibPaneHandleState) -> None:
-        self._impl = state
-
-    @property
-    def figure(self) -> Any:
-        """Caller-owned source figure, if it is still alive. Assign to update."""
-
-        self._check_not_removed()
-        reference = self._impl.figure_ref
-        figure = None if reference is None else reference()
-        if figure is None:
-            raise RuntimeError(
-                "The caller-owned Matplotlib figure is no longer available; "
-                "retain it or assign another figure."
-            )
-        return figure
-
-    @figure.setter
-    def figure(self, figure: Any) -> None:
-        self._update_figure(figure, loading=None)
-
-    def _update_figure(self, figure: Any, loading: PaneLoading | None) -> None:
-        self._check_not_removed()
-        if loading is not None:
-            loading = _validate_loading(loading)
-        figure_ref = _matplotlib_figure_ref(figure)
-        svg = _matplotlib_svg(figure)
-        with self._impl.api._lock:
-            # Serialization can be expensive. Recheck after taking the lock so
-            # a concurrent remove cannot queue an update for a reused pane ID.
-            self._check_not_removed()
-            updates: dict[str, Any] = {"_svg": svg}
-            if loading is not None:
-                updates["loading"] = loading
-            self._publish_update_locked(updates, state_updates={"figure_ref": figure_ref})
-
-    def update(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
-        """Replace the matplotlib figure while retaining the pane configuration.
-
-        Call this after redrawing to push a new frame; matplotlib mutates
-        figures in place, so re-passing the same figure is normal. Pass a
-        loading value to change the overlay in the same pane update; None
-        leaves it unchanged.
-        """
-
-        self._update_figure(figure, loading)
-
-
-class _PlotlyPaneContent(_PaneContent[_PlotlyPaneHandleState]):
-    """Handle backed only by bounded JSON, never by the caller's mutable Figure."""
-
-    def __init__(self, state: _PlotlyPaneHandleState) -> None:
-        self._impl = state
-
-    @property
-    def figure(self) -> go.Figure:
-        """Independent snapshot of the displayed figure. Assign it to publish edits."""
-
-        with self._impl.api._lock:
-            self._check_not_removed()
-            source = self._impl.props._plotly_json_str
-        return plotly_figure(source)
-
-    @figure.setter
-    def figure(self, figure: go.Figure) -> None:
-        self._update_figure(figure, loading=None)
-
-    def _update_figure(self, figure: go.Figure, loading: PaneLoading | None) -> None:
-        api = self._impl.api
-        if loading is not None:
-            loading = _validate_loading(loading)
-        self._check_not_removed()
-        json_str = plotly_json(figure, self._impl.config)
-        with api._lock:
-            # Serialization can be expensive. Recheck after taking the lock so
-            # a concurrent remove cannot queue an update for a reused pane ID.
-            self._check_not_removed()
-            updates: dict[str, Any] = {"_plotly_json_str": json_str}
-            if loading is not None:
-                updates["loading"] = loading
-            self._publish_update_locked(updates)
-
-    def update(self, figure: go.Figure, *, loading: PaneLoading | None = None) -> None:
-        """Replace the Plotly figure, optionally changing loading with it.
-
-        None leaves the current loading state unchanged.
-        """
-
-        self._update_figure(figure, loading)
-
-
-class _ViserPaneContent(_PaneContent[_ViserPaneHandleState]):
-    """Handle for re-pointing or removing an embedded viser pane."""
-
-    def __init__(self, state: _ViserPaneHandleState) -> None:
-        self._impl = state
-
-    @property
-    def url(self) -> str | None:
-        """Embed URL shown in the pane. A same-origin path for local servers,
-        or the explicit URL supplied by the caller."""
-
-        self._check_not_removed()
-        return self._impl.props._url
-
-    @property
-    def port(self) -> int | None:
-        """Viser server port for port-based targets, or None when the pane
-        was pointed at an explicit URL."""
-
-        self._check_not_removed()
-        address = self._impl.proxy_address
-        return address[1] if address is not None else self._impl.props._port
-
-    def update(self, target: str | Any, *, loading: PaneLoading | None = None) -> None:
-        """Re-point the pane at another viser server or URL. Accepts the
-        same targets as :meth:`Panes.add_viser`, and re-applies the pane's
-        creation-time ``minimize_gui`` choice to server targets — including
-        the current one, so calling with the same server re-minimizes a
-        panel the viewer expanded. Pass a loading value to change the overlay
-        in the same pane update; None leaves it unchanged."""
-
-        self._check_not_removed()
-        if loading is not None:
-            loading = _validate_loading(loading)
-        url, port = _viser_embed_target(target)
-        address = (cast(Any, target).get_host(), port) if port is not None else None
-        proxy = self._impl.api._websock_interface._viser_proxy
-        with self._impl.api._lock:
-            self._check_not_removed()
-            new_path = None
-            if address is not None:
-                url = self._impl.proxy_path if address == self._impl.proxy_address else None
-                if url is None:
-                    url = new_path = proxy.register(*address)
-            try:
-                changed = url != self._impl.props._url
-                loading_changed = loading is not None and loading != self._impl.props.loading
-                if changed or loading_changed:
-                    updates: dict[str, Any] = {"_url": url, "_port": None}
-                    if loading is not None:
-                        updates["loading"] = loading
-                    self._publish_update_locked(updates)
-            except BaseException:
-                proxy.unregister(new_path)
-                raise
-            old_path = self._impl.proxy_path
-            self._impl.proxy_path = url if address is not None else None
-            self._impl.proxy_address = address
-            if old_path != self._impl.proxy_path:
-                proxy.unregister(old_path)
-        if port is not None and self._impl.minimize_gui:
-            _minimize_viser_gui(target)
-
-
-def _prepare_video(api: Panes, source: Path | str) -> str:
-    if isinstance(source, Path):
-        return api._owner.register_http_asset(source)
-    if not isinstance(source, str):
-        raise TypeError("video source must be a Path or HTTP URL")
-    parsed = urllib.parse.urlsplit(source)
-    if (
-        not (
-            (parsed.scheme in ("http", "https") and parsed.netloc)
-            or (source.startswith("/") and not source.startswith("//"))
-        )
-        or "\\" in source
-        or any(ord(c) < 32 for c in source)
-    ):
-        raise ValueError("video URLs must be absolute HTTP(S) or root-relative URLs")
-    if utf16_code_unit_length(source) > 16_384:
-        raise ValueError("video URL exceeds 16384 UTF-16 code units")
-    return source
-
-
-def _validate_video_group(value: str | None) -> str | None:
-    return None if value is None else validate_layout_id(value, "sync_group")
-
-
-def _validate_video_fps(value: float | None) -> float | None:
-    return None if value is None else float(validate_positive_number(value, "fps"))
-
-
-class _VideoPaneContent(_PaneContent[_VideoPaneHandleState]):
-    """One browser-native video player.
-
-    Updating with the same media URL preserves playback position and pause state.
-    Local files use the server's bounded immutable HTTP asset registry; no frames
-    are decoded in Python or streamed through the GUI websocket.
-    """
-
-    def __init__(self, impl: _VideoPaneHandleState) -> None:
-        self._impl = impl
-
-    @property
-    def sync_group(self) -> str | None:
-        """Named browser-local playback group, or None for independent playback."""
-        return self._impl.props.sync_group
-
-    @sync_group.setter
-    def sync_group(self, value: str | None) -> None:
-        self._set_prop("sync_group", _validate_video_group(value))
-
-    @property
-    def fps(self) -> float | None:
-        """Source frame rate for frame stepping; None disables frame stepping."""
-        return self._impl.props.fps
-
-    @fps.setter
-    def fps(self, value: float | None) -> None:
-        self._set_prop("fps", _validate_video_fps(value))
-
-    def update(self, source: Path | str, *, loading: PaneLoading | None = None) -> None:
-        """Replace the video source, optionally changing loading in the same update.
-
-        Paths are snapshotted using :meth:`Server.register_http_asset`; strings
-        are HTTP(S) or root-relative URLs. A different source starts a new player.
-        None leaves the loading state unchanged; False reveals the new video.
-        """
-        self._check_not_removed()
-        updates: dict[str, Any] = {}
-        if loading is not None:
-            updates["loading"] = _validate_loading(loading)
-        updates["_url"] = _prepare_video(self._impl.api, source)
-        with self._impl.api._lock:
-            self._publish_update_locked(updates)
-
-
-_ContentT = TypeVar("_ContentT", bound=_PaneContent[Any])
-
-
-@dataclasses.dataclass(frozen=True)
-class _PaneReplacement:
-    handle: PaneHandle[Any]
-    content: _PaneContent[Any]
-    loading: PaneLoading | None
-
-
-class PaneHandle(_PaneContent[_PaneStateT]):
-    """A stable workspace pane whose content can be replaced or cleared.
-
-    ``set_*`` methods select a renderer and its settings. ``clear()`` releases
-    its content while retaining layout, title, visibility and refresh bindings.
-    Handles returned by ``add_video``, ``add_image``, etc. also provide their
-    familiar typed ``update`` and properties. After clearing, ``update`` restores
-    that renderer with its previous settings. After selecting a different kind,
-    use ``set_*`` to switch back explicitly.
-    """
-
-    def __init__(self, state: _PaneStateT) -> None:
-        super().__init__(state)
-        factories: dict[type[Any], type[_PaneContent[Any]]] = {
-            _EmptyPaneHandleState: _PaneContent,
-            _ImagePaneHandleState: _ImagePaneContent,
-            _MatplotlibPaneHandleState: _MatplotlibPaneContent,
-            _PlotlyPaneHandleState: _PlotlyPaneContent,
-            _VideoPaneHandleState: _VideoPaneContent,
-            _ViserPaneHandleState: _ViserPaneContent,
-        }
-        self._content = factories[type(state)](state)
-
-    def _replace(
-        self,
-        kind: str,
-        *args: Any,
-        loading: PaneLoading | None = None,
-        expected: _PaneContent[Any] | None = None,
-        **options: Any,
-    ) -> None:
-        api = self._impl.api
-        with api._lock:
-            self._check_not_removed()
-            if expected is not None and self._content is not expected:
-                raise RuntimeError("Pane content changed during preparation.")
-            replacement = _PaneReplacement(self, self._content, loading)
-            title, visible = self.title, self.visible
-            effective_loading = self.loading if loading is None else _validate_loading(loading)
-        getattr(api, f"_add_{kind}")(
-            *args,
-            pane_id=self.pane_id,
-            title=title,
-            visible=visible,
-            loading=effective_loading,
-            placement="right",
-            relative_to=api._root_pane_id,
-            equalize_group=(),
-            replacement=replacement,
-            **options,
-        )
+            self._removed = True
+            del panes._handle_from_pane_id[self._pane_id]
+            _release(panes, self._source)
+            self._source = None
 
     def clear(self, *, loading: PaneLoading | None = None) -> None:
         """Release content and show an empty pane, keeping its ID and layout.
@@ -1044,38 +513,7 @@ class PaneHandle(_PaneContent[_PaneStateT]):
         caller-owned Viser server. Work preparing the previous content cannot
         publish after this call succeeds.
         """
-        with self._impl.api._lock:
-            self._check_not_removed()
-            current = self._content
-            state = current._impl
-            kind: str | None = None
-            options: dict[str, Any] = {}
-            if isinstance(state, _EmptyPaneHandleState):
-                kind, options = state.resume_kind, state.resume_options
-            elif isinstance(state, _ImagePaneHandleState):
-                kind = "image"
-                options = dict(
-                    format=state.requested_format,
-                    jpeg_quality=state.jpeg_quality,
-                    fit=state.props.fit,
-                )
-            elif isinstance(state, _VideoPaneHandleState):
-                kind = "video"
-                options = {
-                    key: getattr(state.props, key)
-                    for key in ("autoplay", "loop", "muted", "controls", "sync_group", "fps")
-                }
-            elif isinstance(state, _MatplotlibPaneHandleState):
-                kind = "matplotlib"
-            elif isinstance(state, _PlotlyPaneHandleState):
-                kind = "plotly"
-                options = dict(config=state.config)
-            elif isinstance(state, _ViserPaneHandleState):
-                kind = "viser"
-                options = dict(minimize_gui=state.minimize_gui)
-        self._replace(
-            "pane", loading=loading, expected=current, resume_kind=kind, resume_options=options
-        )
+        self._publish(PaneHandle, None, {}, loading)
 
     def set_image(
         self,
@@ -1087,9 +525,8 @@ class PaneHandle(_PaneContent[_PaneStateT]):
         loading: PaneLoading | None = None,
     ) -> None:
         """Display an image using :meth:`Panes.add_image` settings, keeping layout."""
-        self._replace(
-            "image", image, format=format, jpeg_quality=jpeg_quality, fit=fit, loading=loading
-        )
+        settings = ImagePaneHandle._validate(format, jpeg_quality, fit)
+        self._publish(ImagePaneHandle, image, settings, loading)
 
     def set_video(
         self,
@@ -1104,21 +541,12 @@ class PaneHandle(_PaneContent[_PaneStateT]):
         loading: PaneLoading | None = None,
     ) -> None:
         """Display a video using :meth:`Panes.add_video` settings, keeping layout."""
-        self._replace(
-            "video",
-            source,
-            autoplay=autoplay,
-            loop=loop,
-            muted=muted,
-            controls=controls,
-            sync_group=sync_group,
-            fps=fps,
-            loading=loading,
-        )
+        settings = VideoPaneHandle._validate(autoplay, loop, muted, controls, sync_group, fps)
+        self._publish(VideoPaneHandle, source, settings, loading)
 
     def set_matplotlib(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
         """Display a Matplotlib figure as SVG, keeping the pane's layout."""
-        self._replace("matplotlib", figure, loading=loading)
+        self._publish(MatplotlibPaneHandle, figure, {}, loading)
 
     def set_plotly(
         self,
@@ -1128,7 +556,7 @@ class PaneHandle(_PaneContent[_PaneStateT]):
         loading: PaneLoading | None = None,
     ) -> None:
         """Display an interactive Plotly figure, keeping the pane's layout."""
-        self._replace("plotly", figure, config=config, loading=loading)
+        self._publish(PlotlyPaneHandle, figure, PlotlyPaneHandle._validate(config), loading)
 
     def set_viser(
         self,
@@ -1138,50 +566,37 @@ class PaneHandle(_PaneContent[_PaneStateT]):
         loading: PaneLoading | None = None,
     ) -> None:
         """Embed Viser using :meth:`Panes.add_viser` settings, keeping layout."""
-        self._replace("viser", target, minimize_gui=minimize_gui, loading=loading)
-
-    def _typed_content(self, content_type: type[_ContentT]) -> _ContentT:
-        with self._impl.api._lock:
-            self._check_not_removed()
-            content = self._content
-            if not isinstance(content, content_type):
-                raise RuntimeError(
-                    "This pane has different or empty content; use set_* to select its renderer."
-                )
-            return content
-
-    def _update_content(
-        self, kind: str, content_type: type[_ContentT], value: Any, **kwargs: Any
-    ) -> None:
-        options: dict[str, Any] | None = None
-        worker: _ContentT | None = None
-        with self._impl.api._lock:
-            self._check_not_removed()
-            content = self._content
-            state = content._impl
-            if not isinstance(state, _EmptyPaneHandleState):
-                worker = self._typed_content(content_type)
-            elif state.resume_kind != kind:
-                raise RuntimeError("This pane has a different renderer; use set_* to switch back.")
-            else:
-                options = copy.deepcopy(state.resume_options)
-                if kind == "image":
-                    kwargs["update_quality"] = kwargs.pop("jpeg_quality", None)
-                options.update(kwargs)
-        if options is not None:
-            self._replace(kind, value, expected=content, **options)
-        else:
-            assert worker is not None
-            getattr(worker, "update")(value, **kwargs)
+        self._publish(ViserPaneHandle, target, ViserPaneHandle._validate(minimize_gui), loading)
 
 
-class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
-    """An image pane with convenient frame updates and image properties."""
+class ImagePaneHandle(PaneHandle):
+    """An image pane with frame updates and image properties."""
+
+    _kind = "image"
+    _props_type = _messages.ViewportImageProps
+    _message_type = _messages.ViewportImageMessage
+    _update_fields = ("_data", "_format", "fit")
+
+    @staticmethod
+    def _validate(format: object, jpeg_quality: object, fit: object) -> dict[str, Any]:
+        _validate_image_encoding_options(format, jpeg_quality)
+        return {"format": format, "jpeg_quality": jpeg_quality, "fit": _validate_fit(fit)}
+
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        snapshot, image_format, data = prepare_image(
+            value, settings["format"], settings["jpeg_quality"]
+        )
+        return {"_data": data, "_format": image_format, "fit": settings["fit"]}, snapshot
 
     @property
     def image(self) -> np.ndarray:
         """Independent copy of the current image. Assign to update."""
-        return self._typed_content(_ImagePaneContent).image
+        with self._panes._lock:
+            self._require_kind()
+            return self._source.copy()
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
@@ -1190,16 +605,21 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
     @property
     def format(self) -> Literal["auto", "jpeg", "png"]:
         """Requested image encoding."""
-        return self._typed_content(_ImagePaneContent).format
+        with self._panes._lock:
+            self._require_kind()
+            return self._settings["format"]
 
     @property
     def fit(self) -> ImageFit | None:
-        """Image sizing policy, or None to follow the viewer's preference."""
-        return self._typed_content(_ImagePaneContent).fit
+        """How the image is sized within its pane, or None to follow the
+        viewer's own "Image fit" setting."""
+        with self._panes._lock:
+            self._require_kind()
+            return self._props.fit
 
     @fit.setter
     def fit(self, value: ImageFit | None) -> None:
-        self._typed_content(_ImagePaneContent).fit = value
+        self._set_prop("fit", _validate_fit(value), setting=True)
 
     def update(
         self,
@@ -1208,69 +628,173 @@ class ImagePaneHandle(PaneHandle[_ImagePaneHandleState]):
         loading: PaneLoading | None = None,
         jpeg_quality: int | None = None,
     ) -> None:
-        """Replace the image; optional JPEG quality applies to this frame only.
+        """Replace the image, optionally changing loading in the same update.
 
-        None preserves loading. After clear(), restore the previous image settings.
+        None leaves the loading state unchanged; pass False to reveal the new
+        image as part of the same update. ``jpeg_quality`` (0 to 100)
+        overrides the creation quality for this frame only. After
+        ``clear()``, restores the image renderer with its previous settings.
         """
-        self._update_content(
-            "image", _ImagePaneContent, image, loading=loading, jpeg_quality=jpeg_quality
-        )
+        _validate_image_encoding_options("jpeg", jpeg_quality)
+        frame = {} if jpeg_quality is None else {"jpeg_quality": jpeg_quality}
+        self._publish(ImagePaneHandle, image, None, loading, frame)
 
 
-class VideoPaneHandle(PaneHandle[_VideoPaneHandleState]):
-    """A native video pane with convenient source and playback-setting updates."""
+class VideoPaneHandle(PaneHandle):
+    """One browser-native video player.
+
+    Updating with the same media URL preserves playback position and pause
+    state. Local files use the server's immutable HTTP asset registry; no
+    frames are decoded in Python or streamed through the GUI websocket.
+    """
+
+    _kind = "video"
+    _props_type = _messages.ViewportVideoProps
+    _message_type = _messages.ViewportVideoMessage
+    _update_fields = ("_url",)
+
+    @staticmethod
+    def _validate(
+        autoplay: object,
+        loop: object,
+        muted: object,
+        controls: object,
+        sync_group: str | None,
+        fps: float | None,
+    ) -> dict[str, Any]:
+        if any(type(value) is not bool for value in (autoplay, loop, muted, controls)):
+            raise TypeError("autoplay, loop, muted and controls must be bools")
+        return {
+            "autoplay": autoplay,
+            "loop": loop,
+            "muted": muted,
+            "controls": controls,
+            "sync_group": _validate_video_group(sync_group),
+            "fps": _validate_video_fps(fps),
+        }
+
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        return {"_url": _video_url(panes, value), **settings}, None
 
     @property
     def sync_group(self) -> str | None:
         """Named browser-local playback group, or None for independent playback."""
-        return self._typed_content(_VideoPaneContent).sync_group
+        with self._panes._lock:
+            self._require_kind()
+            return self._props.sync_group
 
     @sync_group.setter
     def sync_group(self, value: str | None) -> None:
-        self._typed_content(_VideoPaneContent).sync_group = value
+        self._set_prop("sync_group", _validate_video_group(value), setting=True)
 
     @property
     def fps(self) -> float | None:
         """Source frame rate for frame stepping; None disables frame stepping."""
-        return self._typed_content(_VideoPaneContent).fps
+        with self._panes._lock:
+            self._require_kind()
+            return self._props.fps
 
     @fps.setter
     def fps(self, value: float | None) -> None:
-        self._typed_content(_VideoPaneContent).fps = value
+        self._set_prop("fps", _validate_video_fps(value), setting=True)
 
     def update(self, source: Path | str, *, loading: PaneLoading | None = None) -> None:
         """Replace the source, preserving settings; the same URL preserves playback.
 
-        Local Paths use the immutable HTTP asset registry. None preserves loading.
-        After clear(), restore the previous video settings and playback group.
+        Paths are snapshotted using :meth:`Server.register_http_asset`; strings
+        are HTTP(S) or root-relative URLs. A different source starts a new
+        player. None leaves the loading state unchanged; False reveals the new
+        video. After ``clear()``, restores the previous video settings and
+        playback group.
         """
-        self._update_content("video", _VideoPaneContent, source, loading=loading)
+        self._publish(VideoPaneHandle, source, None, loading)
 
 
-class MatplotlibPaneHandle(PaneHandle[_MatplotlibPaneHandleState]):
-    """A Matplotlib pane with convenient figure updates."""
+class MatplotlibPaneHandle(PaneHandle):
+    """A Matplotlib figure relayed as SVG.
+
+    SVG rather than pixels, so a resized pane rescales the figure crisply
+    without a Python redraw. The figure is written exactly as composed -- no
+    tight bounding box, no recoloring -- so the pane shows what ``savefig``
+    would have written. Leika holds the figure only weakly.
+    """
+
+    _kind = "matplotlib"
+    _props_type = _messages.ViewportMatplotlibProps
+    _message_type = _messages.ViewportMatplotlibMessage
+    _update_fields = ("_svg",)
+
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        savefig = getattr(value, "savefig", None)
+        if not callable(savefig):
+            raise TypeError(
+                "figure must be a matplotlib Figure (an object with a savefig method); "
+                f"got {value!r}."
+            )
+        reference = weakref.ref(value)
+        buffer = io.BytesIO()
+        savefig(buffer, format="svg")
+        return {"_svg": buffer.getvalue().decode("utf-8")}, reference
 
     @property
     def figure(self) -> Any:
         """Caller-owned figure, if still alive. Assign to update."""
-        return self._typed_content(_MatplotlibPaneContent).figure
+        with self._panes._lock:
+            self._require_kind()
+            figure = self._source()
+        if figure is None:
+            raise RuntimeError(
+                "The caller-owned Matplotlib figure is no longer available; "
+                "retain it or assign another figure."
+            )
+        return figure
 
     @figure.setter
     def figure(self, figure: Any) -> None:
         self.update(figure)
 
     def update(self, figure: Any, *, loading: PaneLoading | None = None) -> None:
-        """Publish a figure after redrawing it; None preserves loading."""
-        self._update_content("matplotlib", _MatplotlibPaneContent, figure, loading=loading)
+        """Publish a figure after redrawing it; None preserves loading.
+
+        Matplotlib mutates figures in place, so passing the same figure again
+        is normal.
+        """
+        self._publish(MatplotlibPaneHandle, figure, None, loading)
 
 
-class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
-    """A Plotly pane with convenient figure updates."""
+class PlotlyPaneHandle(PaneHandle):
+    """A Plotly pane backed by serialized JSON, never by the caller's Figure."""
+
+    _kind = "plotly"
+    _props_type = _messages.ViewportPlotlyProps
+    _message_type = _messages.ViewportPlotlyMessage
+    _update_fields = ("_plotly_json_str",)
+
+    @staticmethod
+    def _validate(config: Mapping[str, Any] | None) -> dict[str, Any]:
+        return {"config": plotly_config(config)}
+
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        json_str = plotly_json(value, settings["config"])
+        panes._owner._ensure_plotly_runtime()
+        return {"_plotly_json_str": json_str, "_theme_templates": plotly_theme_templates()}, None
 
     @property
     def figure(self) -> go.Figure:
-        """Independent figure snapshot. Assign it back to publish edits."""
-        return self._typed_content(_PlotlyPaneContent).figure
+        """Independent snapshot of the displayed figure. Assign it to publish edits."""
+        with self._panes._lock:
+            self._require_kind()
+            source = self._props._plotly_json_str
+        return plotly_figure(source)
 
     @figure.setter
     def figure(self, figure: go.Figure) -> None:
@@ -1278,709 +802,141 @@ class PlotlyPaneHandle(PaneHandle[_PlotlyPaneHandleState]):
 
     def update(self, figure: go.Figure, *, loading: PaneLoading | None = None) -> None:
         """Replace the figure, preserving config; None preserves loading."""
-        self._update_content("plotly", _PlotlyPaneContent, figure, loading=loading)
+        self._publish(PlotlyPaneHandle, figure, None, loading)
 
 
-class ViserPaneHandle(PaneHandle[_ViserPaneHandleState]):
-    """An embedded Viser pane with convenient target updates."""
+class ViserPaneHandle(PaneHandle):
+    """An embedded Viser pane."""
+
+    _kind = "viser"
+    _props_type = _messages.ViewportViserProps
+    _message_type = _messages.ViewportViserMessage
+    _update_fields = ("_url", "_port")
+
+    @staticmethod
+    def _validate(minimize_gui: object) -> dict[str, Any]:
+        if type(minimize_gui) is not bool:
+            raise TypeError("minimize_gui must be a bool")
+        return {"minimize_gui": minimize_gui}
+
+    @staticmethod
+    def _prepare(
+        panes: Panes, value: Any, settings: dict[str, Any], previous: Any
+    ) -> tuple[dict[str, Any], Any]:
+        url, port = _viser_embed_target(value)
+        if port is None:
+            return {"_url": url, "_port": None}, None
+        address = (value.get_host(), port)
+        if isinstance(previous, _ViserRoute) and previous.address == address:
+            # The same server keeps its route, so the embedded client stays loaded.
+            route = previous
+        else:
+            route = _ViserRoute(panes._websock_interface._viser_proxy.register(*address), address)
+        return {"_url": route.path, "_port": None}, route
+
+    @staticmethod
+    def _published(value: Any, settings: dict[str, Any]) -> None:
+        if settings["minimize_gui"] and not isinstance(value, str):
+            _minimize_viser_gui(value)
 
     @property
     def url(self) -> str | None:
-        """Current embed URL; a same-origin path for local servers."""
-        return self._typed_content(_ViserPaneContent).url
+        """Embed URL shown in the pane; a same-origin path for local servers,
+        or the explicit URL supplied by the caller."""
+        with self._panes._lock:
+            self._require_kind()
+            return self._props._url
 
     @property
     def port(self) -> int | None:
         """Viser server port, or None for explicit URL targets."""
-        return self._typed_content(_ViserPaneContent).port
+        with self._panes._lock:
+            self._require_kind()
+            source = self._source
+        return source.address[1] if isinstance(source, _ViserRoute) else None
 
     def update(self, target: str | Any, *, loading: PaneLoading | None = None) -> None:
-        """Re-point Viser, preserving minimize_gui; None preserves loading."""
-        self._update_content("viser", _ViserPaneContent, target, loading=loading)
+        """Re-point the pane at another viser server or URL.
+
+        Accepts the same targets as :meth:`Panes.add_viser`, and re-applies
+        the pane's ``minimize_gui`` choice to server targets -- including the
+        current one, so calling with the same server re-minimizes a panel the
+        viewer expanded. None leaves the loading state unchanged.
+        """
+        self._publish(ViserPaneHandle, target, None, loading)
 
 
-class PaneGroup:
-    """Adds panes to an equally divided row or column.
+class _PaneAdder:
+    """The ``add_*`` methods shared by a page's panes and its layout groups."""
 
-    Returned by :meth:`Panes.add_row` and :meth:`Panes.add_column`.
-    Each pane added through the group is placed along the group's axis and the
-    group re-divides its combined space equally, without disturbing panes
-    outside the group. The group only shapes creation-time placement: creating
-    it sends nothing to clients, panes it creates are ordinary panes
-    afterwards, and browser-saved arrangements still take precedence on
-    reload.
-    """
+    _panes: Panes
 
-    def __init__(
-        self,
-        api: Panes,
-        axis: Literal["row", "column"],
-        placement: Placement,
-        relative_to: str | None,
-    ) -> None:
-        if type(axis) is not str or axis not in ("row", "column"):
-            raise ValueError("axis must be 'row' or 'column'.")
-        if type(placement) is not str or placement not in (
-            "left",
-            "right",
-            "top",
-            "bottom",
-        ):
-            raise ValueError("placement must be left, right, top, or bottom.")
-        self._api = api
-        self._axis: Literal["row", "column"] = axis
-        self._placement: Placement = placement
-        self._relative_to = (
-            None if relative_to is None else validate_layout_id(relative_to, "relative_to")
-        )
-        self._members: list[weakref.ReferenceType[PaneHandle[Any]]] = []
-        self._declaration_lock = threading.Lock()
-
-    def _next_declaration(
-        self,
+    def _place(
+        self, placement: Placement | None, relative_to: str | None
     ) -> tuple[Placement, str, tuple[str, ...]]:
-        """Placement hints for the group's next pane.
+        """Edge, anchor pane, and equally divided siblings for the next pane. Lock held."""
+        raise NotImplementedError
 
-        Hidden and removed members cannot anchor placement or take part in
-        equalization, so the next pane attaches to the group's last member
-        that is still visible; when none remain, it falls back to the group's
-        own placement, like a first pane. Membership is checked by handle
-        identity so an unrelated pane reusing a removed member's ID is not
-        adopted into the group.
-        """
+    def _placed(self, handle: PaneHandle) -> None:
+        """Track a pane this adder placed. Lock held."""
 
-        with self._api._lock:
-            live_handles = [
-                handle
-                for reference in self._members
-                if (handle := reference()) is not None
-                and self._api._handle_from_pane_id.get(handle.pane_id) is handle
-            ]
-        self._members = [weakref.ref(handle) for handle in live_handles]
-        members = [handle.pane_id for handle in live_handles if handle.visible]
-        if not members:
-            # A group's original anchor can itself be hidden or removed before
-            # the next member is declared (notably a grid column whose adopted
-            # top-row seed disappeared). Fall back to the API's current visible
-            # default instead of resolving a stale ID.
-            visible = self._api._visible_pane_ids()
-            relative_to = self._relative_to if self._relative_to in visible else None
-            return self._placement, self._api._resolve_relative_to(relative_to), ()
-        placement: Placement = "right" if self._axis == "row" else "bottom"
-        return placement, members[-1], tuple(members)
-
-    def add_pane(
+    def _add(
         self,
+        handle_type: type[PaneHandle],
+        value: Any,
+        settings: dict[str, Any],
         *,
-        pane_id: str | None = None,
-        title: str = "",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> PaneHandle[Any]:
-        """Add an empty pane, with placement managed by this container.
-
-        See :meth:`Panes.add_pane` for content and lifecycle behavior.
-        """
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_pane(
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-    def add_image(
-        self,
-        image: np.ndarray,
-        *,
-        pane_id: str | None = None,
-        title: str = "Image",
-        format: Literal["auto", "png", "jpeg"] = "auto",
-        jpeg_quality: int | None = None,
-        fit: ImageFit | None = None,
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> ImagePaneHandle:
-        """Add an image pane to the group. Accepts the same arguments as
-        :meth:`Panes.add_image`, minus placement, which the group
-        owns."""
-
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_image(
-                image,
-                pane_id=pane_id,
-                title=title,
-                format=format,
-                jpeg_quality=jpeg_quality,
-                fit=fit,
-                visible=visible,
-                loading=loading,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-    def add_matplotlib(
-        self,
-        figure: Any,
-        *,
-        pane_id: str | None = None,
-        title: str = "Figure",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> MatplotlibPaneHandle:
-        """Add a matplotlib pane to the group. Accepts the same arguments as
-        :meth:`Panes.add_matplotlib`, minus placement, which the group
-        owns."""
-
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_matplotlib(
-                figure,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-    def add_plotly(
-        self,
-        figure: go.Figure,
-        *,
-        config: Mapping[str, Any] | None = None,
-        pane_id: str | None = None,
-        title: str = "Plotly",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> PlotlyPaneHandle:
-        """Add a Plotly pane to the group. Accepts the same arguments as
-        :meth:`Panes.add_plotly`, minus placement, which the group
-        owns."""
-
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_plotly(
-                figure,
-                config=config,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-    def add_video(
-        self,
-        source: Path | str,
-        *,
-        autoplay: bool = True,
-        loop: bool = True,
-        muted: bool = True,
-        controls: bool = True,
-        sync_group: str | None = None,
-        fps: float | None = None,
-        pane_id: str | None = None,
-        title: str = "Video",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> VideoPaneHandle:
-        """Add a video with the group's placement; see :meth:`Panes.add_video`."""
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_video(
-                source,
-                autoplay=autoplay,
-                loop=loop,
-                muted=muted,
-                controls=controls,
-                sync_group=sync_group,
-                fps=fps,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-    def add_viser(
-        self,
-        target: str | Any,
-        *,
-        pane_id: str | None = None,
-        title: str = "viser",
-        visible: bool = True,
-        loading: PaneLoading = False,
-        minimize_gui: bool = True,
-    ) -> ViserPaneHandle:
-        """Add a viser pane to the group. Accepts the same arguments as
-        :meth:`Panes.add_viser`, minus placement, which the group
-        owns."""
-
-        with self._declaration_lock:
-            placement, relative_to, equalize_group = self._next_declaration()
-            handle = self._api._add_viser(
-                target,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                minimize_gui=minimize_gui,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            )
-            self._members.append(weakref.ref(handle))
-        return handle
-
-
-class PaneGrid:
-    """Adds panes to an equally divided grid.
-
-    Returned by :meth:`Panes.add_grid`. Panes fill left to right, top
-    to bottom: the first ``columns`` panes form the top row, and later panes
-    wrap onto new rows beneath it, re-dividing their row and column equally
-    on each addition. Like :class:`PaneGroup`, the grid only shapes
-    creation-time placement; see it for details.
-    """
-
-    def __init__(
-        self,
-        api: Panes,
-        columns: int,
-        placement: Placement,
-        relative_to: str | None,
-    ) -> None:
-        _validate_positive_integer(columns, "columns")
-        self._api = api
-        self._columns = columns
-        self._row = PaneGroup(api, "row", placement, relative_to)
-        self._column_groups: list[PaneGroup] = []
-        self._count = 0
-        self._declaration_lock = threading.Lock()
-
-    def _next_group(self) -> PaneGroup:
-        """Group that places the grid's next pane: the shared top row while
-        it is still filling, then the column the pane wraps onto."""
-
-        if self._count < self._columns:
-            return self._row
-        return self._column_groups[self._count % self._columns]
-
-    def _track(self, group: PaneGroup, handle: PaneHandle[Any]) -> None:
-        """Advance the fill position after a successful add. A top-row pane
-        seeds its column group as an adopted first member, so panes beneath
-        equalize together with it into exact equal parts."""
-
-        if group is self._row:
-            column = PaneGroup(self._api, "column", "bottom", relative_to=handle.pane_id)
-            column._members.append(weakref.ref(handle))
-            self._column_groups.append(column)
-        self._count += 1
-        if self._count >= 2 * self._columns:
-            self._count = self._columns
-
-    def add_pane(
-        self,
-        *,
-        pane_id: str | None = None,
-        title: str = "",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> PaneHandle[Any]:
-        """Add an empty pane, with placement managed by this container.
-
-        See :meth:`Panes.add_pane` for content and lifecycle behavior.
-        """
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_pane(pane_id=pane_id, title=title, visible=visible, loading=loading)
-            self._track(group, handle)
-        return handle
-
-    def add_image(
-        self,
-        image: np.ndarray,
-        *,
-        pane_id: str | None = None,
-        title: str = "Image",
-        format: Literal["auto", "png", "jpeg"] = "auto",
-        jpeg_quality: int | None = None,
-        fit: ImageFit | None = None,
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> ImagePaneHandle:
-        """Add an image pane to the grid's next cell. Accepts the same
-        arguments as :meth:`Panes.add_image`, minus placement, which
-        the grid owns."""
-
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_image(
-                image,
-                pane_id=pane_id,
-                title=title,
-                format=format,
-                jpeg_quality=jpeg_quality,
-                fit=fit,
-                visible=visible,
-                loading=loading,
-            )
-            self._track(group, handle)
-        return handle
-
-    def add_matplotlib(
-        self,
-        figure: Any,
-        *,
-        pane_id: str | None = None,
-        title: str = "Figure",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> MatplotlibPaneHandle:
-        """Add a matplotlib pane to the grid's next cell. Accepts the same
-        arguments as :meth:`Panes.add_matplotlib`, minus placement, which
-        the grid owns."""
-
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_matplotlib(
-                figure,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-            )
-            self._track(group, handle)
-        return handle
-
-    def add_plotly(
-        self,
-        figure: go.Figure,
-        *,
-        config: Mapping[str, Any] | None = None,
-        pane_id: str | None = None,
-        title: str = "Plotly",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> PlotlyPaneHandle:
-        """Add a Plotly pane to the grid's next cell. Accepts the same
-        arguments as :meth:`Panes.add_plotly`, minus placement, which
-        the grid owns."""
-
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_plotly(
-                figure,
-                config=config,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-            )
-            self._track(group, handle)
-        return handle
-
-    def add_video(
-        self,
-        source: Path | str,
-        *,
-        autoplay: bool = True,
-        loop: bool = True,
-        muted: bool = True,
-        controls: bool = True,
-        sync_group: str | None = None,
-        fps: float | None = None,
-        pane_id: str | None = None,
-        title: str = "Video",
-        visible: bool = True,
-        loading: PaneLoading = False,
-    ) -> VideoPaneHandle:
-        """Add a video to the next cell; see :meth:`Panes.add_video`."""
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_video(
-                source,
-                autoplay=autoplay,
-                loop=loop,
-                muted=muted,
-                controls=controls,
-                sync_group=sync_group,
-                fps=fps,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-            )
-            self._track(group, handle)
-        return handle
-
-    def add_viser(
-        self,
-        target: str | Any,
-        *,
-        pane_id: str | None = None,
-        title: str = "viser",
-        visible: bool = True,
-        loading: PaneLoading = False,
-        minimize_gui: bool = True,
-    ) -> ViserPaneHandle:
-        """Add a viser pane to the grid's next cell. Accepts the same
-        arguments as :meth:`Panes.add_viser`, minus placement, which
-        the grid owns."""
-
-        with self._declaration_lock:
-            group = self._next_group()
-            handle = group.add_viser(
-                target,
-                pane_id=pane_id,
-                title=title,
-                visible=visible,
-                loading=loading,
-                minimize_gui=minimize_gui,
-            )
-            self._track(group, handle)
-        return handle
-
-
-class Panes:
-    """Declare image, matplotlib, Plotly, and viser panes in the browser-managed
-    workspace."""
-
-    _root_pane_id: Literal["__leika_root__"] = "__leika_root__"
-    """Hidden layout sentinel used when no data pane can anchor a split."""
-
-    def __init__(
-        self,
-        owner: Server,
-        *,
-        page_id: str = "default",
-        aggregate: _PanesAggregate | None = None,
-        queue_snapshot: bool = True,
-    ) -> None:
-        self._lock = threading.RLock()
-        self._owner = owner
-        self._page_id = validate_layout_id(page_id, "Page ID")
-        self._aggregate = aggregate if aggregate is not None else _PanesAggregate(owner)
-        self._websock_interface = owner._websock_server
-        self._handle_from_pane_id: dict[str, PaneHandle[Any]] = {}
-        self._resource_from_pane_id: dict[str, _PaneResourceCost] = {}
-        self._resource_total = _PaneResourceCost()
-        self._terminal = False
-        if queue_snapshot:
-            self._queue_snapshot()
-
-    def _set_resource_locked(self, pane_id: str, cost: _PaneResourceCost) -> _PaneResourceCost:
-        old = self._resource_from_pane_id.get(pane_id, _PaneResourceCost())
-        prospective = _PaneResourceCost(
-            self._resource_total.text_units - old.text_units + cost.text_units,
-            self._resource_total.payload_bytes - old.payload_bytes + cost.payload_bytes,
-            self._resource_total.decoded_pixels - old.decoded_pixels + cost.decoded_pixels,
-        )
-        self._aggregate.replace_resource(old, cost)
-        self._resource_total = prospective
-        if cost == _PaneResourceCost():
-            self._resource_from_pane_id.pop(pane_id, None)
-        else:
-            self._resource_from_pane_id[pane_id] = cost
-        return old
-
-    @contextlib.contextmanager
-    def _resource_transaction_locked(self, handle: _PaneContent[Any]) -> Iterator[None]:
-        old = self._set_resource_locked(handle._impl.pane_id, _pane_resource_cost(handle))
-        try:
-            yield
-        except BaseException:
-            self._set_resource_locked(handle._impl.pane_id, old)
-            raise
-
-    def _release_resource_locked(self, pane_id: str) -> None:
-        self._set_resource_locked(pane_id, _PaneResourceCost())
-
-    def _retire_without_queue(self) -> None:
-        with self._lock:
-            if self._terminal:
-                return
-            self._terminal = True
-            for handle in tuple(self._handle_from_pane_id.values()):
-                handle._impl.removed = True
-                try:
-                    self._aggregate.release_pane(
-                        viser=isinstance(handle._impl, _ViserPaneHandleState)
-                    )
-                finally:
-                    _scrub_pane_handle_locked(handle)
-            self._handle_from_pane_id.clear()
-            # Release every reservation, including a defensive orphan left by
-            # an interrupted or corrupted registry transition.
-            for pane_id in tuple(self._resource_from_pane_id):
-                self._release_resource_locked(pane_id)
-            self._resource_total = _PaneResourceCost()
-
-    def _known_pane_ids(self) -> tuple[str, ...]:
-        """Return live pane IDs in declaration order."""
-
-        with self._lock:
-            return tuple(self._handle_from_pane_id)
-
-    def _visible_pane_ids(self) -> set[str]:
-        with self._lock:
-            return {self._root_pane_id} | {
-                handle.pane_id for handle in self._handle_from_pane_id.values() if handle.visible
-            }
-
-    def _snapshot_message(
-        self, pane_ids: tuple[str, ...] | None = None
-    ) -> _messages.ViewportPaneSnapshotMessage:
-        """Build the authoritative pane-registry reconciliation message."""
-        return _messages.ViewportPaneSnapshotMessage(
-            page_id=self._page_id, pane_ids=self._known_pane_ids() if pane_ids is None else pane_ids
-        )
-
-    def _queue_snapshot(self) -> None:
-        self._websock_interface.queue_message_or_raise(self._snapshot_message())
-
-    def _validate_pane_declaration(
-        self,
         pane_id: str | None,
-        placement: Placement,
-    ) -> str:
-        """Validate shared pane arguments and return the resolved pane ID."""
-
-        if pane_id is None:
-            pane_id = str(uuid.uuid4())
-        else:
-            pane_id = validate_layout_id(pane_id, "Pane ID")
-        if pane_id == self._root_pane_id:
+        title: str,
+        visible: bool,
+        loading: PaneLoading,
+        placement: Placement | None,
+        relative_to: str | None,
+    ) -> Any:
+        panes = self._panes
+        title = cast(str, validate_renderer_string(title, "pane title"))
+        if type(visible) is not bool:
+            raise TypeError("visible must be a bool")
+        loading = _validate_loading(loading)
+        pane_id = str(uuid.uuid4()) if pane_id is None else validate_layout_id(pane_id, "Pane ID")
+        if pane_id == _ROOT_PANE_ID:
             raise ValueError(f"Pane ID {pane_id!r} is reserved.")
-        if type(placement) is not str or placement not in (
-            "left",
-            "right",
-            "top",
-            "bottom",
-        ):
-            raise ValueError("placement must be left, right, top, or bottom.")
-        return pane_id
-
-    def _resolve_relative_to(self, relative_to: str | None) -> str:
-        """Resolve ``None`` placement to the latest live, visible pane."""
-
-        with self._lock:
-            visible = self._visible_pane_ids()
-            if relative_to is not None:
-                relative_to = validate_layout_id(relative_to, "relative_to")
-                if relative_to not in visible:
-                    raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
-                return relative_to
-            for pane_id, handle in reversed(tuple(self._handle_from_pane_id.items())):
-                if handle.visible:
-                    return pane_id
-            return self._root_pane_id
-
-    def _register_pane(
-        self,
-        pane_id: str,
-        handle: PaneHandle[Any],
-        create_message: _messages._ViewportPaneCreateMessage,
-        relative_to: str,
-        replacement: _PaneReplacement | None = None,
-    ) -> None:
-        """Register a new pane handle and queue its creation messages."""
-
-        with self._lock:
-            if self._terminal:
-                raise RuntimeError("Panes is no longer active.")
-            if replacement is not None:
-                self._replace_pane_locked(handle, create_message, replacement)
-                return
-            if pane_id in self._handle_from_pane_id:
-                raise ValueError(f"Pane ID {pane_id!r} already exists.")
-            if relative_to not in self._visible_pane_ids():
-                raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
-            is_viser = isinstance(handle._impl, _ViserPaneHandleState)
-            self._aggregate.reserve_pane(viser=is_viser)
-            try:
-                old_resource = self._set_resource_locked(pane_id, _pane_resource_cost(handle))
-                self._handle_from_pane_id[pane_id] = handle
-                try:
-                    self._websock_interface.queue_messages_or_raise(
-                        (
-                            _messages.ViewportPaneMessage(
-                                page_id=self._page_id,
-                                pane_id=pane_id,
-                                placement=create_message.placement,
-                                relative_to=create_message.relative_to,
-                                equalize_group=create_message.equalize_group,
-                                props=_messages.ViewportEmptyProps(
-                                    title=handle.title,
-                                    visible=handle.visible,
-                                    loading=handle.loading,
-                                ),
+        fields, source = handle_type._prepare(panes, value, settings, None)
+        try:
+            with panes._lock:
+                if pane_id in panes._handle_from_pane_id:
+                    raise ValueError(f"Pane ID {pane_id!r} already exists.")
+                edge, anchor, equalize_group = self._place(placement, relative_to)
+                props = handle_type._props_type(
+                    title=title, visible=visible, loading=loading, **fields
+                )
+                declaration: dict[str, Any] = dict(
+                    page_id=panes._page_id,
+                    pane_id=pane_id,
+                    placement=edge,
+                    relative_to=anchor,
+                    equalize_group=equalize_group,
+                )
+                panes._websock_interface.queue_messages_or_raise(
+                    (
+                        _messages.ViewportPaneMessage(
+                            **declaration,
+                            props=_messages.ViewportEmptyProps(
+                                title=title, visible=visible, loading=loading
                             ),
-                            create_message,
-                            self._snapshot_message(),
-                        )
+                        ),
+                        handle_type._message_type(**declaration, props=props),
+                        panes._snapshot_message((*panes._handle_from_pane_id, pane_id)),
                     )
-                except BaseException:
-                    self._handle_from_pane_id.pop(pane_id, None)
-                    self._set_resource_locked(pane_id, old_resource)
-                    raise
-            except BaseException:
-                self._aggregate.release_pane(viser=is_viser)
-                raise
-
-    def _replace_pane_locked(
-        self,
-        prepared: PaneHandle[Any],
-        message: _messages._ViewportPaneCreateMessage,
-        replacement: _PaneReplacement,
-    ) -> None:
-        target, expected, loading = replacement.handle, replacement.content, replacement.loading
-        target._check_not_removed()
-        if target._content is not expected:
-            raise RuntimeError("Pane content changed during preparation.")
-        props = prepared._impl.props
-        props.title = target.title
-        props.visible = target.visible
-        props.loading = target.loading if loading is None else loading
-        message = dataclasses.replace(message, **{"props": copy.deepcopy(props)})
-        old = target._content
-        with (
-            self._aggregate.replace_renderer(
-                old_viser=isinstance(old._impl, _ViserPaneHandleState),
-                new_viser=isinstance(prepared._impl, _ViserPaneHandleState),
-            ),
-            self._resource_transaction_locked(prepared),
-        ):
-            messages: list[_messages.Message] = [message]
-            if getattr(target, "_refresh_controls", None):
-                messages.append(target._update_message({}))
-            self._websock_interface.queue_messages_or_raise(tuple(messages))
-        target._content = prepared._content
-        target._impl = prepared._impl
-        old._impl.removed = True
-        _scrub_pane_handle_locked(old)
+                )
+                handle = handle_type(panes, pane_id, handle_type, props, settings, source)
+                panes._handle_from_pane_id[pane_id] = handle
+                self._placed(handle)
+        except BaseException:
+            _release(panes, source)
+            raise
+        handle_type._published(value, settings)
+        return handle
 
     def add_pane(
         self,
@@ -1989,9 +945,9 @@ class Panes:
         title: str = "",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
-    ) -> PaneHandle[Any]:
+    ) -> PaneHandle:
         """Add an empty pane, ready for any of the handle's ``set_*`` methods.
 
         The pane keeps its ID and browser arrangement when its content changes.
@@ -1999,58 +955,17 @@ class Panes:
         overlay; they do not create a player, image, plot, or embedded server.
         Placement and persistence work just like :meth:`add_image`.
         """
-        return self._add_pane(
+        return self._add(
+            PaneHandle,
+            None,
+            {},
             pane_id=pane_id,
             title=title,
             visible=visible,
             loading=loading,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
-
-    def _add_pane(
-        self,
-        *,
-        pane_id: str | None,
-        title: str,
-        visible: bool,
-        loading: PaneLoading,
-        placement: Placement,
-        relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-        resume_kind: str | None = None,
-        resume_options: dict[str, Any] | None = None,
-    ) -> PaneHandle[Any]:
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-        relative_to = self._resolve_relative_to(relative_to)
-        props = _messages.ViewportEmptyProps(title=title, visible=visible, loading=loading)
-        handle = PaneHandle(
-            _EmptyPaneHandleState(
-                pane_id,
-                copy.deepcopy(props),
-                self,
-                resume_kind,
-                copy.deepcopy(resume_options or {}),
-            )
-        )
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportEmptyMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-            replacement=replacement,
-        )
-        return handle
 
     def add_image(
         self,
@@ -2063,109 +978,50 @@ class Panes:
         fit: ImageFit | None = None,
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
     ) -> ImagePaneHandle:
         """Add a native image pane to the workspace.
 
         The browser owns pane arrangement and persists it locally. Placement
         and relative_to are only used when the browser first encounters a pane
-        that is not already present in its saved layout.
+        that is not already present in its saved layout. Rows, columns, and
+        grids place their panes themselves and reject both arguments.
 
         Args:
-            image: RGB or RGBA image with shape (height, width, 3|4).
+            image: RGB or RGBA image with shape (height, width, 3|4). Floats
+                are read as 0 to 1 and integers as 0 to 255.
             pane_id: Stable identifier for browser layout persistence. By
                 default a UUID is generated. Set this explicitly to restore a
                 pane's position after a server restart.
             title: Pane corner-label title.
             format: Transport encoding. "auto" chooses PNG for RGBA and JPEG
                 for RGB.
-            jpeg_quality: JPEG encoder quality from 0 to 100.
+            jpeg_quality: JPEG encoder quality from 0 to 100; 85 by default.
             fit: Image sizing policy within the pane. By default the viewer's
                 own "Image fit" setting decides; pass a value to override it.
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to.
-            relative_to: Visible pane used for initial placement.
+            placement: Initial split edge relative to relative_to; "right" by
+                default.
+            relative_to: Visible pane used for initial placement; the latest
+                visible pane by default.
 
         Returns:
             Handle for updating or removing the image pane.
         """
-
-        return self._add_image(
+        return self._add(
+            ImagePaneHandle,
             image,
+            ImagePaneHandle._validate(format, jpeg_quality, fit),
             pane_id=pane_id,
             title=title,
-            format=format,
-            jpeg_quality=jpeg_quality,
-            fit=fit,
             visible=visible,
             loading=loading,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
-
-    def _add_image(
-        self,
-        image: np.ndarray,
-        *,
-        pane_id: str | None,
-        title: str,
-        format: Literal["auto", "png", "jpeg"],
-        jpeg_quality: int | None,
-        fit: ImageFit | None,
-        visible: bool,
-        loading: PaneLoading,
-        placement: Placement,
-        relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-        update_quality: int | None = None,
-    ) -> ImagePaneHandle:
-        _validate_image_encoding_options(format, jpeg_quality)
-        _validate_image_encoding_options(format, update_quality)
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-        fit = _validate_fit(fit)
-        relative_to = self._resolve_relative_to(relative_to)
-        snapshot, resolved_format, data = prepare_image(
-            image, format, jpeg_quality if update_quality is None else update_quality
-        )
-        props = _messages.ViewportImageProps(
-            _data=data,
-            _format=resolved_format,
-            title=title,
-            visible=visible,
-            loading=loading,
-            fit=fit,
-        )
-        handle = ImagePaneHandle(
-            _ImagePaneHandleState(
-                pane_id=pane_id,
-                props=copy.deepcopy(props),
-                api=self,
-                image=snapshot,
-                requested_format=format,
-                jpeg_quality=jpeg_quality,
-            )
-        )
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportImageMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-            replacement=replacement,
-        )
-        return handle
 
     def add_matplotlib(
         self,
@@ -2175,7 +1031,7 @@ class Panes:
         title: str = "Figure",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
     ) -> MatplotlibPaneHandle:
         """Add a native matplotlib pane to the workspace.
@@ -2185,26 +1041,19 @@ class Panes:
         hover, zoom, or pan, and the axes do not reflow to the pane's shape.
         Use :meth:`add_plotly` for a chart the viewer can interact with.
 
-        The bundled browser accepts at most 16,777,216 UTF-16 code units of
-        generated SVG per pane; larger figures raise before publication.
-
         SVG suits the line and scatter plots figures usually hold. A figure
         with very many marks -- a scatter of 100k points, a fine-grained
         heatmap -- serializes one element per mark and is better sent as an
         interactive Plotly figure, or rasterized and sent with
         :meth:`add_image`.
 
-        The browser owns pane arrangement and persists it locally. Placement
-        and relative_to are only used when the browser first encounters a
-        pane that is not already present in its saved layout.
-
         Args:
             figure: matplotlib figure to display, e.g. from
                 ``plt.subplots()``. Duck-typed on ``savefig``, so matplotlib
-                is not a Leika dependency. Leika retains the bounded SVG, not
-                this arbitrary source graph; keep your own reference if you
-                want to read it back, mutate it, and assign it to the handle
-                again to update the pane.
+                is not a Leika dependency. Leika keeps the SVG and only a weak
+                reference to the figure; keep your own reference if you want
+                to read it back, mutate it, and assign it to the handle again
+                to update the pane.
             pane_id: Stable identifier for browser layout persistence. By
                 default a UUID is generated. Set this explicitly to restore a
                 pane's position after a server restart.
@@ -2212,72 +1061,24 @@ class Panes:
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to.
+            placement: Initial split edge relative to relative_to; see
+                :meth:`add_image`.
             relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for updating or removing the matplotlib pane.
         """
-
-        return self._add_matplotlib(
+        return self._add(
+            MatplotlibPaneHandle,
             figure,
+            {},
             pane_id=pane_id,
             title=title,
             visible=visible,
             loading=loading,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
-
-    def _add_matplotlib(
-        self,
-        figure: Any,
-        *,
-        pane_id: str | None,
-        title: str,
-        visible: bool,
-        loading: PaneLoading,
-        placement: Placement,
-        relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-    ) -> MatplotlibPaneHandle:
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-
-        figure_ref = _matplotlib_figure_ref(figure)
-        svg = _matplotlib_svg(figure)
-        props = _messages.ViewportMatplotlibProps(
-            _svg=svg,
-            title=title,
-            visible=visible,
-            loading=loading,
-        )
-        handle = MatplotlibPaneHandle(
-            _MatplotlibPaneHandleState(
-                pane_id=pane_id,
-                props=copy.deepcopy(props),
-                api=self,
-                figure_ref=figure_ref,
-            )
-        )
-        relative_to = self._resolve_relative_to(relative_to)
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportMatplotlibMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-            replacement=replacement,
-        )
-        return handle
 
     def add_plotly(
         self,
@@ -2288,17 +1089,14 @@ class Panes:
         title: str = "Plotly",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
     ) -> PlotlyPaneHandle:
         """Add a native interactive Plotly pane to the workspace.
         Requires the `plotly` package to be installed.
 
         The plot is dynamically sized: it always fills its pane, including
-        when panes are resized in the browser. The browser owns pane
-        arrangement and persists it locally. Placement and relative_to are
-        only used when the browser first encounters a pane that is not
-        already present in its saved layout.
+        when panes are resized in the browser.
 
         Figures that carry plotly's stock default template are rendered with
         a template matched to each viewer's theme: "plotly_white" when Leika
@@ -2325,76 +1123,24 @@ class Panes:
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to.
+            placement: Initial split edge relative to relative_to; see
+                :meth:`add_image`.
             relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for updating or removing the Plotly pane.
         """
-
-        return self._add_plotly(
+        return self._add(
+            PlotlyPaneHandle,
             figure,
-            config=config,
+            PlotlyPaneHandle._validate(config),
             pane_id=pane_id,
             title=title,
             visible=visible,
             loading=loading,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
-
-    def _add_plotly(
-        self,
-        figure: go.Figure,
-        *,
-        config: Mapping[str, Any] | None,
-        pane_id: str | None,
-        title: str,
-        visible: bool,
-        loading: PaneLoading,
-        placement: Placement,
-        relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-    ) -> PlotlyPaneHandle:
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-
-        config = plotly_config(config)
-        json_str = plotly_json(figure, config)
-        self._owner._ensure_plotly_runtime()
-        props = _messages.ViewportPlotlyProps(
-            _plotly_json_str=json_str,
-            _theme_templates=plotly_theme_templates(),
-            title=title,
-            visible=visible,
-            loading=loading,
-        )
-        handle = PlotlyPaneHandle(
-            _PlotlyPaneHandleState(
-                pane_id=pane_id,
-                props=copy.deepcopy(props),
-                api=self,
-                config=config,
-            )
-        )
-        relative_to = self._resolve_relative_to(relative_to)
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportPlotlyMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-            replacement=replacement,
-        )
-        return handle
 
     def add_video(
         self,
@@ -2410,7 +1156,7 @@ class Panes:
         title: str = "Video",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
     ) -> VideoPaneHandle:
         """Add one native video player to the workspace.
@@ -2430,80 +1176,21 @@ class Panes:
         frame stepping. None leaves the rate unknown. Replacing a grouped source
         restarts the timeline while retaining the viewer's pause and speed.
 
-        Compose multiple videos with :meth:`add_grid`, :meth:`add_row`, or
-        :meth:`add_column`. Each video is an independently arranged pane.
+        Compose multiple videos with :meth:`Panes.add_grid`, :meth:`Panes.add_row`,
+        or :meth:`Panes.add_column`. Each video is an independently arranged
+        pane. Placement works as in :meth:`add_image`.
         """
-        return self._add_video(
+        return self._add(
+            VideoPaneHandle,
             source,
-            autoplay=autoplay,
-            loop=loop,
-            muted=muted,
-            controls=controls,
-            sync_group=sync_group,
-            fps=fps,
+            VideoPaneHandle._validate(autoplay, loop, muted, controls, sync_group, fps),
             pane_id=pane_id,
             title=title,
             visible=visible,
             loading=loading,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
-
-    def _add_video(
-        self,
-        source: Path | str,
-        *,
-        autoplay: bool,
-        loop: bool,
-        muted: bool,
-        controls: bool,
-        sync_group: str | None,
-        fps: float | None,
-        pane_id: str | None,
-        title: str,
-        visible: bool,
-        loading: PaneLoading,
-        placement: Placement,
-        relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-    ) -> VideoPaneHandle:
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        if any(type(value) is not bool for value in (autoplay, loop, muted, controls)):
-            raise TypeError("autoplay, loop, muted and controls must be bools")
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-        relative_to = self._resolve_relative_to(relative_to)
-        sync_group = _validate_video_group(sync_group)
-        fps = _validate_video_fps(fps)
-        props = _messages.ViewportVideoProps(
-            _url=_prepare_video(self, source),
-            autoplay=autoplay,
-            loop=loop,
-            muted=muted,
-            controls=controls,
-            sync_group=sync_group,
-            fps=fps,
-            title=title,
-            visible=visible,
-            loading=loading,
-        )
-        handle = VideoPaneHandle(_VideoPaneHandleState(pane_id, copy.deepcopy(props), self))
-        self._register_pane(
-            pane_id,
-            handle,
-            _messages.ViewportVideoMessage(
-                page_id=self._page_id,
-                pane_id=pane_id,
-                props=props,
-                placement=placement,
-                relative_to=relative_to,
-                equalize_group=equalize_group,
-            ),
-            relative_to,
-            replacement=replacement,
-        )
-        return handle
 
     def add_viser(
         self,
@@ -2514,7 +1201,7 @@ class Panes:
         visible: bool = True,
         loading: PaneLoading = False,
         minimize_gui: bool = True,
-        placement: Placement = "right",
+        placement: Placement | None = None,
         relative_to: str | None = None,
     ) -> ViserPaneHandle:
         """Add a pane embedding a live viser 3D scene.
@@ -2551,10 +1238,7 @@ class Panes:
         policy. An ``http://`` URL cannot be embedded into an ``https://``
         Leika page because browsers block mixed content.
 
-        The embedded client follows Leika's light/dark theme. The browser
-        owns pane arrangement and persists it locally; placement and
-        relative_to are only used when the browser first encounters a pane
-        that is not already present in its saved layout.
+        The embedded client follows Leika's light/dark theme.
 
         Args:
             target: What to embed: a ``viser.ViserServer`` (any object with
@@ -2571,97 +1255,179 @@ class Panes:
                 and minimize it to a rail. Applies to server-object targets
                 on viser versions with ``gui.main_panel``; ignored for URL
                 targets, which Python cannot reach into.
-            placement: Initial split edge relative to relative_to.
+            placement: Initial split edge relative to relative_to; see
+                :meth:`add_image`.
             relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for re-pointing or removing the viser pane.
         """
-
-        return self._add_viser(
+        return self._add(
+            ViserPaneHandle,
             target,
+            ViserPaneHandle._validate(minimize_gui),
             pane_id=pane_id,
             title=title,
             visible=visible,
             loading=loading,
-            minimize_gui=minimize_gui,
             placement=placement,
             relative_to=relative_to,
-            equalize_group=(),
         )
 
-    def _add_viser(
+
+class PaneGroup(_PaneAdder):
+    """Adds panes to an equally divided row or column.
+
+    Returned by :meth:`Panes.add_row` and :meth:`Panes.add_column`.
+    Each pane added through the group is placed along the group's axis and the
+    group re-divides its combined space equally, without disturbing panes
+    outside the group. The group only shapes creation-time placement: creating
+    it sends nothing to clients, panes it creates are ordinary panes
+    afterwards, and browser-saved arrangements still take precedence on
+    reload.
+    """
+
+    def __init__(
         self,
-        target: str | Any,
-        *,
-        pane_id: str | None,
-        title: str,
-        visible: bool,
-        loading: PaneLoading,
-        minimize_gui: bool,
+        panes: Panes,
+        axis: Literal["row", "column"],
         placement: Placement,
         relative_to: str | None,
-        equalize_group: tuple[str, ...],
-        replacement: _PaneReplacement | None = None,
-    ) -> ViserPaneHandle:
-        title, visible, loading = _validate_title_visible_loading(title, visible, loading)
-        if type(minimize_gui) is not bool:
-            raise TypeError("minimize_gui must be a bool")
-        pane_id = self._validate_pane_declaration(pane_id, placement)
-
-        url, port = _viser_embed_target(target)
-        relative_to = self._resolve_relative_to(relative_to)
-        proxy = self._websock_interface._viser_proxy
-        address = (cast(Any, target).get_host(), port) if port is not None else None
-        proxy_path = proxy.register(*address) if address is not None else None
-        props = _messages.ViewportViserProps(
-            _url=proxy_path or url,
-            _port=None,
-            title=title,
-            visible=visible,
-            loading=loading,
+    ) -> None:
+        self._panes = panes
+        self._axis = axis
+        self._placement: Placement = placement
+        self._relative_to = (
+            None if relative_to is None else validate_layout_id(relative_to, "relative_to")
         )
-        handle = ViserPaneHandle(
-            _ViserPaneHandleState(
-                pane_id=pane_id,
-                props=copy.deepcopy(props),
-                api=self,
-                minimize_gui=minimize_gui,
-                proxy_path=proxy_path,
-                proxy_address=address,
-            )
-        )
-        try:
-            self._register_pane(
-                pane_id,
-                handle,
-                _messages.ViewportViserMessage(
-                    page_id=self._page_id,
-                    pane_id=pane_id,
-                    props=props,
-                    placement=placement,
-                    relative_to=relative_to,
-                    equalize_group=equalize_group,
-                ),
-                relative_to,
-                replacement=replacement,
-            )
-        except BaseException:
-            proxy.unregister(proxy_path)
-            raise
-        # Only after registration succeeds: a failed add (duplicate pane_id,
-        # bad relative_to) must leave the user's viser server untouched. The
-        # placement commands replay to late-joining clients, so applying
-        # them after the pane's create message changes nothing.
-        if port is not None and minimize_gui:
-            _minimize_viser_gui(target)
-        return handle
+        self._members: list[weakref.ReferenceType[PaneHandle]] = []
 
-    def add_row(
-        self,
-        *,
-        relative_to: str | None = None,
-    ) -> PaneGroup:
+    def _place(
+        self, placement: Placement | None, relative_to: str | None
+    ) -> tuple[Placement, str, tuple[str, ...]]:
+        """Attach to the group's last visible member and equalize with the visible ones.
+
+        Hidden and removed members cannot anchor placement, so with none
+        visible the next pane falls back to the group's own placement, like a
+        first pane. Membership is checked by handle identity, so an unrelated
+        pane reusing a removed member's ID is not adopted.
+        """
+        if placement is not None or relative_to is not None:
+            raise TypeError(
+                "A row, column, or grid places its own panes; "
+                "placement and relative_to apply only to Panes."
+            )
+        panes = self._panes
+        members = [
+            handle
+            for reference in self._members
+            if (handle := reference()) is not None
+            and panes._handle_from_pane_id.get(handle.pane_id) is handle
+        ]
+        self._members = [weakref.ref(handle) for handle in members]
+        visible = [handle.pane_id for handle in members if handle._props.visible]
+        if not visible:
+            # The group's own anchor may be hidden or removed as well (notably
+            # a grid column whose top-row seed disappeared).
+            anchor = self._relative_to if self._relative_to in panes._visible_pane_ids() else None
+            return self._placement, panes._resolve_relative_to(anchor), ()
+        return ("right" if self._axis == "row" else "bottom"), visible[-1], tuple(visible)
+
+    def _placed(self, handle: PaneHandle) -> None:
+        self._members.append(weakref.ref(handle))
+
+
+class PaneGrid(_PaneAdder):
+    """Adds panes to an equally divided grid.
+
+    Returned by :meth:`Panes.add_grid`. Panes fill left to right, top
+    to bottom: the first ``columns`` panes form the top row, and later panes
+    wrap onto new rows beneath it, re-dividing their row and column equally
+    on each addition. Like :class:`PaneGroup`, the grid only shapes
+    creation-time placement; see it for details.
+    """
+
+    def __init__(self, panes: Panes, columns: int, relative_to: str | None) -> None:
+        self._panes = panes
+        self._columns = columns
+        self._row = PaneGroup(panes, "row", "right", relative_to)
+        self._column_groups: list[PaneGroup] = []
+        self._count = 0
+
+    def _next_group(self) -> PaneGroup:
+        """The shared top row while it is still filling, then the column the
+        next pane wraps onto."""
+        if self._count < self._columns:
+            return self._row
+        return self._column_groups[self._count % self._columns]
+
+    def _place(
+        self, placement: Placement | None, relative_to: str | None
+    ) -> tuple[Placement, str, tuple[str, ...]]:
+        return self._next_group()._place(placement, relative_to)
+
+    def _placed(self, handle: PaneHandle) -> None:
+        group = self._next_group()
+        group._placed(handle)
+        if group is self._row:
+            # A top-row pane seeds its column, so panes beneath it equalize
+            # together with it into exact equal parts.
+            column = PaneGroup(self._panes, "column", "bottom", handle.pane_id)
+            column._placed(handle)
+            self._column_groups.append(column)
+        self._count += 1
+        if self._count >= 2 * self._columns:
+            self._count = self._columns
+
+
+class Panes(_PaneAdder):
+    """Declare image, matplotlib, Plotly, video, and viser panes on one page."""
+
+    def __init__(self, owner: Server, page_id: str) -> None:
+        self._owner = owner
+        self._page_id = page_id
+        self._panes = self
+        self._lock = threading.RLock()
+        self._websock_interface = owner._websock_server
+        self._handle_from_pane_id: dict[str, PaneHandle] = {}
+
+    def _place(
+        self, placement: Placement | None, relative_to: str | None
+    ) -> tuple[Placement, str, tuple[str, ...]]:
+        placement = "right" if placement is None else placement
+        if type(placement) is not str or placement not in ("left", "right", "top", "bottom"):
+            raise ValueError("placement must be left, right, top, or bottom.")
+        return placement, self._resolve_relative_to(relative_to), ()
+
+    def _visible_pane_ids(self) -> set[str]:
+        return {_ROOT_PANE_ID} | {
+            pane_id
+            for pane_id, handle in self._handle_from_pane_id.items()
+            if handle._props.visible
+        }
+
+    def _resolve_relative_to(self, relative_to: str | None) -> str:
+        """Resolve ``None`` placement to the latest visible pane. Lock held."""
+        if relative_to is not None:
+            relative_to = validate_layout_id(relative_to, "relative_to")
+            if relative_to not in self._visible_pane_ids():
+                raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
+            return relative_to
+        for pane_id, handle in reversed(self._handle_from_pane_id.items()):
+            if handle._props.visible:
+                return pane_id
+        return _ROOT_PANE_ID
+
+    def _snapshot_message(
+        self, pane_ids: tuple[str, ...] | None = None
+    ) -> _messages.ViewportPaneSnapshotMessage:
+        """Build the authoritative pane-registry reconciliation message."""
+        return _messages.ViewportPaneSnapshotMessage(
+            page_id=self._page_id,
+            pane_ids=tuple(self._handle_from_pane_id) if pane_ids is None else pane_ids,
+        )
+
+    def add_row(self, *, relative_to: str | None = None) -> PaneGroup:
         """Create a group that lays out added panes side by side with equal
         widths.
 
@@ -2682,11 +1448,7 @@ class Panes:
 
         return PaneGroup(self, "row", "right", relative_to)
 
-    def add_column(
-        self,
-        *,
-        relative_to: str | None = None,
-    ) -> PaneGroup:
+    def add_column(self, *, relative_to: str | None = None) -> PaneGroup:
         """Create a group that lays out added panes stacked with equal
         heights.
 
@@ -2702,12 +1464,7 @@ class Panes:
 
         return PaneGroup(self, "column", "bottom", relative_to)
 
-    def add_grid(
-        self,
-        *,
-        columns: int = 2,
-        relative_to: str | None = None,
-    ) -> PaneGrid:
+    def add_grid(self, *, columns: int = 2, relative_to: str | None = None) -> PaneGrid:
         """Create a group that lays out added panes in an equally divided
         grid.
 
@@ -2726,11 +1483,5 @@ class Panes:
             Grid for adding equally sized panes.
         """
 
-        _validate_positive_integer(columns, "columns")
-        return PaneGrid(self, columns, "right", relative_to)
-
-
-def _validate_fit(value: object) -> ImageFit | None:
-    if value is not None and (type(value) is not str or value not in ("fit", "fill", "stretch")):
-        raise ValueError("fit must be 'fit', 'fill', 'stretch', or None.")
-    return cast("ImageFit | None", value)
+        validate_positive_integer(columns, "columns")
+        return PaneGrid(self, columns, relative_to)

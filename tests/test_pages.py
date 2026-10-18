@@ -8,8 +8,6 @@ import pytest
 
 import leika
 from leika import _messages
-from leika import _pages as pages_impl
-from leika import _panes as panes_impl
 from leika._transport._websocket import ClientId
 
 
@@ -99,7 +97,7 @@ def test_pages_scope_pane_ids_placement_updates_and_removal(
     )
 
 
-def test_page_names_are_stable_identity_updates_and_legacy_labels(
+def test_page_names_are_stable_identity_updates_and_labels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
@@ -191,8 +189,6 @@ def test_page_add_queue_failure_rolls_back_without_a_ghost(
     assert len(server.pages) == 1
     assert "rejected" not in server.pages._page_from_page_id
     assert _retained(server) == before_messages
-    assert server.pages._aggregate.live_panes == 0
-    assert server.pages._aggregate.resource_total == panes_impl._PaneResourceCost()
 
 
 def test_page_names_are_unique_and_failed_changes_are_transactional(
@@ -208,41 +204,3 @@ def test_page_names_are_unique_and_failed_changes_are_transactional(
 
     assert tuple(page.name for page in server.pages) == ("Main", "Analysis")
     assert _retained(server) == before_messages
-
-
-def test_pane_and_page_limits_remain_aggregate_across_pages(
-    server: leika.Server,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    frame = np.zeros((1, 1, 3), dtype=np.uint8)
-    other = server.pages.add("Other", page_id="other")
-
-    monkeypatch.setattr(panes_impl, "_PANE_MAX", 1)
-    first = server.panes.add_image(frame, pane_id="same")
-    with pytest.raises(RuntimeError, match="more than 1 panes"):
-        other.panes.add_image(frame, pane_id="same")
-    first.remove()
-    replacement = other.panes.add_image(frame, pane_id="same")
-    assert replacement.pane_id == "same"
-
-    monkeypatch.setattr(pages_impl, "_PAGE_MAX", len(server.pages))
-    with pytest.raises(RuntimeError, match="more than 2 pages"):
-        server.pages.add("Overflow", page_id="overflow")
-
-
-def test_stop_retires_every_pages_panes_and_releases_shared_ownership(
-    server: leika.Server,
-) -> None:
-    frame = np.zeros((1, 1, 3), dtype=np.uint8)
-    other = server.pages.add("Other", page_id="other")
-    first = server.panes.add_image(frame, pane_id="first")
-    second = other.panes.add_image(frame, pane_id="second")
-
-    server.stop()
-
-    assert first._impl.removed and second._impl.removed
-    assert server.pages._aggregate.live_panes == 0
-    assert server.pages._aggregate.live_viser_panes == 0
-    assert server.pages._aggregate.resource_total == panes_impl._PaneResourceCost()
-    assert server.panes._handle_from_pane_id == {}
-    assert other.panes._handle_from_pane_id == {}

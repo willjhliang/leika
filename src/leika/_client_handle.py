@@ -99,7 +99,7 @@ class ClientHandle:
         A hidden pane reports (0, 0). A pane on another subscribed page also
         returns (0, 0). Applications may use this hint to size streamed images.
         """
-        page_id = pane._impl.api._page_id
+        page_id = pane._panes._page_id
         if self._websock_connection.delivery_scope() != page_id:
             return (0, 0)
         with self._pane_size_lock:

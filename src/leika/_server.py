@@ -27,7 +27,7 @@ from ._executor import BoundedThreadPoolExecutor
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
-from ._pages import Pages, _normalize_legacy_page_label
+from ._pages import Pages, _page_name_from_label
 from ._share import CloudflaredTunnel, ShareTunnelError
 from ._transport._auth import HttpPasswordGuard
 from ._transport._http_assets import HttpAsset
@@ -114,7 +114,7 @@ class Server:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("port must be an integer from 0 to 65535.")
         workspace_id = validate_layout_id(workspace_id, "workspace_id")
-        default_page_name = _normalize_legacy_page_label(label)
+        default_page_name = _page_name_from_label(label)
         if password is not None:
             if type(password) is not str:
                 raise TypeError("password must be a string or None.")
@@ -463,8 +463,6 @@ class Server:
         # Re-publish current content on the SAME ordered broadcast producer.
         # A private replay could overtake a newer live update. Other browsers
         # see their own encoding of this harmless same-content refresh.
-        from ._panes import _ImagePaneHandleState
-
         page_id = client._websock_connection.delivery_scope()
         if page_id is None:
             return
@@ -474,10 +472,10 @@ class Server:
             return
         with page.panes._lock:
             for handle in page.panes._handle_from_pane_id.values():
-                if isinstance(handle._impl, _ImagePaneHandleState) and (
+                if handle._renderer._kind == "image" and (
                     pane_id is None or handle.pane_id == pane_id
                 ):
-                    handle._queue_update(dataclasses.asdict(handle._impl.props))
+                    handle._queue_update(dataclasses.asdict(handle._props))
 
     def _handle_rendering_settings(
         self, client_id: ClientId, message: _messages.RenderingSettingsMessage
@@ -698,9 +696,6 @@ class Server:
             gui = getattr(self, "gui", None)
             if gui is not None:
                 gui._retire_scope_without_queue()
-            pages = getattr(self, "pages", None)
-            if pages is not None:
-                pages._retire_without_queue()
 
         server_thread = self._websock_server._server_thread
         if (
