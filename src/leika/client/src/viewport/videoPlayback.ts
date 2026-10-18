@@ -342,7 +342,7 @@ export function groupPlaybackKey(group: string): string {
   return JSON.stringify(["group", group]);
 }
 
-/** Bounded by the live pane and mounted GUI counts. A dock view can detach
+/** Shared by panes and GUI controls. A control-panel view can unmount
  * without destroying a controller that still owns panes. */
 export class VideoPlaybackRegistry {
   private groups = new Map<

@@ -140,10 +140,3 @@ export function startMarkdownCarry(
   activeCarry = active;
   handle = platform.requestFrame(step);
 }
-
-/** Test/diagnostic seam: completed and unmounted renders own no DOM closure. */
-export function markdownCarryIsActive(owner?: CarryOwner): boolean {
-  return (
-    activeCarry !== null && (owner === undefined || activeCarry.owner === owner)
-  );
-}

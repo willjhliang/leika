@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelMarkdownCarry,
-  markdownCarryIsActive,
   MARKDOWN_CARRY_DURATION_MS,
   MARKDOWN_CARRY_SETTLEMENT_FRAMES,
   startMarkdownCarry,
@@ -78,21 +77,20 @@ describe("markdown carry ownership", () => {
     const { frame, target, setTargetTop } = elements(500);
     const { callbacks, platform, run } = fakeFrames();
     startMarkdownCarry(frame, target, owner, platform);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
 
     run(MARKDOWN_CARRY_DURATION_MS / 2);
     expect(frame.scrollTop).toBe(437.5);
     setTargetTop(700);
     run(MARKDOWN_CARRY_DURATION_MS);
     expect(frame.scrollTop).toBe(700);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
 
     setTargetTop(760);
     run(MARKDOWN_CARRY_DURATION_MS + 16);
     expect(frame.scrollTop).toBe(760);
     for (let at = 2; at <= MARKDOWN_CARRY_SETTLEMENT_FRAMES; at += 1)
       run(MARKDOWN_CARRY_DURATION_MS + at * 16);
-    expect(markdownCarryIsActive()).toBe(false);
     expect(callbacks.size).toBe(0);
   });
 
@@ -104,20 +102,19 @@ describe("markdown carry ownership", () => {
 
     run(MARKDOWN_CARRY_DURATION_MS);
     run(MARKDOWN_CARRY_DURATION_MS + 16);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
     run(MARKDOWN_CARRY_DURATION_MS + 32);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
 
     setTargetTop(700);
     run(MARKDOWN_CARRY_DURATION_MS + 48);
     expect(frame.scrollTop).toBe(700);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
 
     for (let at = 4; at < MARKDOWN_CARRY_SETTLEMENT_FRAMES; at += 1)
       run(MARKDOWN_CARRY_DURATION_MS + at * 16);
-    expect(markdownCarryIsActive(owner)).toBe(true);
+    expect(callbacks.size).toBe(1);
     run(MARKDOWN_CARRY_DURATION_MS + MARKDOWN_CARRY_SETTLEMENT_FRAMES * 16);
-    expect(markdownCarryIsActive()).toBe(false);
     expect(callbacks.size).toBe(0);
   });
 
@@ -132,7 +129,6 @@ describe("markdown carry ownership", () => {
       setTargetTop(500 + at * 10);
       run(MARKDOWN_CARRY_DURATION_MS + at * 16);
     }
-    expect(markdownCarryIsActive()).toBe(false);
     expect(callbacks.size).toBe(0);
   });
 
@@ -157,8 +153,6 @@ describe("markdown carry ownership", () => {
     );
 
     stale(MARKDOWN_CARRY_DURATION_MS);
-    expect(markdownCarryIsActive(first)).toBe(false);
-    expect(markdownCarryIsActive(second)).toBe(true);
     expect(callbacks.size).toBe(1);
     cancelMarkdownCarry(second);
   });
@@ -176,7 +170,7 @@ describe("markdown carry ownership", () => {
       platform,
     );
     cancelMarkdownCarry(first);
-    expect(markdownCarryIsActive()).toBe(false);
+    expect(callbacks.size).toBe(0);
 
     startMarkdownCarry(
       secondElements.frame,
@@ -185,7 +179,7 @@ describe("markdown carry ownership", () => {
       platform,
     );
     cancelMarkdownCarry(first);
-    expect(markdownCarryIsActive(second)).toBe(true);
+    expect(callbacks.size).toBe(1);
     cancelMarkdownCarry(second);
     expect(callbacks.size).toBe(0);
   });
@@ -202,7 +196,6 @@ describe("markdown carry ownership", () => {
 
       frame.dispatchEvent(new Event(event));
 
-      expect(markdownCarryIsActive()).toBe(false);
       expect(callbacks.size).toBe(0);
       expect(remove).toHaveBeenCalledTimes(4);
       if (event !== "keydown")
@@ -224,7 +217,6 @@ describe("markdown carry ownership", () => {
 
       run(16);
 
-      expect(markdownCarryIsActive()).toBe(false);
       expect(callbacks.size).toBe(0);
       expect(remove).toHaveBeenCalledTimes(4);
     },

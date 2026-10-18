@@ -366,7 +366,7 @@ export function createGuiState() {
         commands: cleanGuiState.commands,
       });
       tabOwnerFromUuid.clear();
-      configStore.setAll({}, true);
+      configStore.clear();
     },
     updateUploadState: (uploadState) => {
       const state = store.get();

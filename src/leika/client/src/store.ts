@@ -33,8 +33,6 @@ export function createStore<T extends object>(initialState: T): Store<T> {
     // Skip notify if nothing changed.
     const keys = Object.keys(partial) as (keyof T)[];
     if (keys.every((k) => Object.is(state[k], (partial as T)[k]))) return;
-    // Object spread defines own data properties; Object.assign into `{}`
-    // would invoke the legacy `__proto__` setter for an own hostile key.
     state = { ...state, ...partial };
     listeners.forEach((l) => l());
   }
@@ -124,28 +122,14 @@ export interface KeyedStore<V> {
    * Only listeners for affected keys are notified.
    */
   set: (updates: Record<string, V | undefined>) => void;
-  /**
-   * Replace the entire store contents. If replace=true, keys not in
-   * newState are deleted.
-   */
-  setAll: (newState: Record<string, V>, replace?: boolean) => void;
+  /** Delete every entry. */
+  clear: () => void;
   /** Subscribe to changes for a specific key. Returns unsubscribe. */
   subscribe: (key: string, listener: Listener) => () => void;
-  /** Number of values currently owned by this store. */
-  size: () => number;
-  /** Stable copy of all current values for bounded whole-frame preflight. */
-  values: () => readonly V[];
-  /** Internal lifecycle diagnostic: absent, unobserved keys must not leave
-   * version bookkeeping behind forever. */
-  retainedVersionCount: () => number;
 }
 
-export function createKeyedStore<V>(
-  initialEntries?: Record<string, V>,
-): KeyedStore<V> {
-  const map = new Map<string, V>(
-    initialEntries ? Object.entries(initialEntries) : [],
-  );
+export function createKeyedStore<V>(): KeyedStore<V> {
+  const map = new Map<string, V>();
   // Per-key listeners.
   const keyListeners = new Map<string, Set<Listener>>();
   // Per-key version counters (bumped on every change to that key).
@@ -200,33 +184,11 @@ export function createKeyedStore<V>(
     }
   }
 
-  function setAll(newState: Record<string, V>, replace?: boolean): void {
-    const affectedKeys = new Set<string>();
-
-    if (replace) {
-      // Mark all existing keys as affected (they may be removed).
-      for (const key of map.keys()) {
-        affectedKeys.add(key);
-      }
-      map.clear();
-    }
-
-    for (const [key, value] of Object.entries(newState)) {
-      map.set(key, value);
+  function clear(): void {
+    const keys = [...map.keys()];
+    map.clear();
+    for (const key of keys) {
       bumpVersion(key);
-      affectedKeys.add(key);
-    }
-
-    if (replace) {
-      // Bump versions for keys that were removed.
-      for (const key of affectedKeys) {
-        if (!map.has(key)) {
-          bumpVersion(key);
-        }
-      }
-    }
-
-    for (const key of affectedKeys) {
       notifyKey(key);
       reclaimVersion(key);
     }
@@ -326,11 +288,8 @@ export function createKeyedStore<V>(
 
   useKeyedStore.get = get;
   useKeyedStore.set = set;
-  useKeyedStore.setAll = setAll;
+  useKeyedStore.clear = clear;
   useKeyedStore.subscribe = subscribeToKey;
-  useKeyedStore.size = () => map.size;
-  useKeyedStore.values = () => [...map.values()];
-  useKeyedStore.retainedVersionCount = () => keyVersions.size;
 
   return useKeyedStore as KeyedStore<V>;
 }

@@ -227,7 +227,8 @@ describe("createGuiState", () => {
       removal("folder", ["form", "tabs", "nested", "leaf"], ["individual-tab"]),
     ]);
 
-    expect(gui.configStore.size()).toBe(0);
+    for (const uuid of ["folder", "form", "tabs", "nested", "leaf"])
+      expect(gui.configStore.get(uuid)).toBeUndefined();
     expect(gui.store.get().guiUuidSetFromContainerUuid).toEqual({ root: {} });
     expect(gui.store.get().guiOrderFromUuid).toEqual({});
     expect(gui.store.get().uploadsInProgress).toEqual({});
@@ -251,7 +252,8 @@ describe("createGuiState", () => {
     ]);
 
     expect(gui.store.get().modals).toEqual([]);
-    expect(gui.configStore.size()).toBe(0);
+    expect(gui.configStore.get("folder")).toBeUndefined();
+    expect(gui.configStore.get("leaf")).toBeUndefined();
     expect(gui.store.get().guiUuidSetFromContainerUuid).toEqual({ root: {} });
   });
 

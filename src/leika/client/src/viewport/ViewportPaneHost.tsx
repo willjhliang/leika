@@ -201,9 +201,9 @@ export function ViewportPaneHost({
           // hidden, only a pointer over the strip the bar occupies reveals it.
           onPointerEnter={() => setIsHovered(true)}
           onPointerLeave={() => setIsHovered(false)}
-          // Dock chrome on a pane: the dock's card surface, square corners
+          // Control-panel chrome on a pane: the panel's card surface, square corners
           // (every corner of the bar sits on a pane seam), and the muted
-          // field-label type the dock's rows use. Focus is border-only, like
+          // field-label type the panel's rows use. Focus is border-only, like
           // every other control.
           className={cn(
             "absolute inset-x-0 top-0 z-20 flex items-center rounded-none border border-transparent bg-card px-2 text-sm outline-none select-none focus-visible:border-ring",
