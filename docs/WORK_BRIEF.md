@@ -126,6 +126,12 @@ on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 `LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
 
+The `lwm` env installs Leika editable from this checkout, and its visualizer
+Pilot jobs serve this checkout's `client/build`. After each merge, run
+`make build-client` here (the lwm env has no npm to rebuild a stale client) and
+tell lwm's job session to restart its visualizers; until they restart, a page
+reload fails the protocol check. do_anything and Babble install fixed wheels.
+
 `dist/` in this checkout holds the wheel Babble's `docs/VIEWER.md` verifies by
 SHA256, and `make package` empties `dist/`; build release checks into another
 directory until Babble moves to a newer install.
