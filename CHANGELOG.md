@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Browser: every image is decoded by the browser itself. Images are no longer
+  header-checked or held to a page-wide pixel limit; one the browser cannot
+  decode (including formats such as TIFF in a file preview) shows its ordinary
+  broken-image state instead of a Leika status and download button.
 - Browser: the client keeps its WebSocket on the page instead of a worker and
   applies each batch as it arrives, once per animation frame, instead of
   replaying the server's timing or closing the connection over its own queue

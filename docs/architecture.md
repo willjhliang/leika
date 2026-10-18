@@ -111,8 +111,8 @@ existing transition slot while a fresh catalog and page stream replay.
 Matching pane IDs and renderer sources keep their mounted browser elements,
 including local video playback state and Viser's iframe. Replayed state remains
 authoritative: removed panes disappear, changed sources update, and a different
-server or workspace clears the retained page. Transfers and GUI controls still reset per connection;
-retained renderers keep their resource leases until replaced or unmounted.
+server or workspace clears the retained page. Transfers and GUI controls still
+reset per connection.
 
 Named pages partition the viewport state, not the whole application. The GUI
 tree and control panel are workspace-global and stay mounted as the viewer
@@ -171,9 +171,7 @@ content panes, including hidden and minimized ones, and at most 16 Viser panes.
 Pane sources share 32 Mi UTF-16 code units, 256 MiB of retained payload, and 64
 Mi-pixels. Across all GUI scopes on one server, retained GUI state is capped at
 256 MiB and GUI rasters at 128 Mi-pixels; `server.gui` and all workspace panes
-additionally share a 64 Mi-pixel workspace-global raster ledger. The browser
-counts every mounted copy of a direct raster against its own 128 Mi-pixel
-document budget.
+additionally share a 64 Mi-pixel workspace-global raster ledger.
 
 Image preparation has a separate 512 MiB server-wide envelope and charges four
 times the source buffer, making 128 MiB the effective per-call ndarray source
@@ -229,7 +227,7 @@ snapshot becomes ready. Up to 128 early image resolutions belong to each text
 stream (bounded source/asset URLs); stale streams cannot update a new preview.
 The final transfer remains the complete downloadable document. Reopened cached
 documents mount in batches of 96 blocks; following an internal link completes
-mounting before resolving its target. Image decoding remains viewport-bound.
+mounting before resolving its target. Markdown images load lazily.
 
 Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
 code units (16 Mi-characters). Public creation, update, and assignment preflight
@@ -238,22 +236,17 @@ the Plotly runtime the server sends and renders each figure as it arrives.
 
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
 Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update
-raise `ValueError` before publishing a larger source. The bundled client also
-declines an oversized payload before DOM, Blob, or image parsing and shows a
-status in the affected control or pane.
+raise `ValueError` before publishing a larger source.
 
 Direct GUI and pane ndarray APIs limit each side to 16,384 pixels and the image
-to 33,554,432 decoded pixels, raising before encoding an oversized source. A
-received file-preview, Markdown, or registered-asset image reaches the decoder
-only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
-animated, oversized, and unsupported files remain available through an explicit
-link or download fallback. Local Markdown image paths resolve from the document
+to 33,554,432 decoded pixels, raising before encoding an oversized source. The
+browser decodes every received image itself; one it cannot decode shows its
+ordinary broken-image state. Local Markdown image paths resolve from the document
 directory (or `add_text`'s `image_root`) with ordinary filesystem semantics,
 including parent directories, absolute paths, and symlinks. This base directory
 does not restrict which local images a document can reference.
-Markdown does not fetch external images; only a
-bounded data image or the exact hash-and-dimensions URL Leika emits for a
-registered picture can render inline.
+Markdown does not fetch external images; only a data image or a Leika asset
+URL renders inline, and an asset URL carries its measured size.
 
 Plotly figures are preflighted through 500,000 values, configurations through
 4,096 items, and the combined detached JSON snapshot through the size ceiling

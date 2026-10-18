@@ -10,7 +10,6 @@ import { resetFilePreviewState } from "./filePreview";
 import { decodeHybridMessage } from "./hybridMessageDecode";
 import { handleMessages } from "./MessageHandler";
 import { resetNotifications } from "./notifications";
-import { resetMountedRasterPixels } from "./rasterPixelBudget";
 import { retainedDownloads } from "./retainedDownloadBudget";
 import { useViewer, warnDisconnectedSend } from "./ViewerContext";
 import { LEIKA_PROTOCOL, type Message } from "./WebsocketMessages";
@@ -104,9 +103,6 @@ export function WebsocketMessageProducer() {
       resetMarkdownDocumentCache();
       resetNotifications();
       resetFileTransferFailureToast();
-      // Retained renderers still own their pixel leases during an ordinary
-      // reconnect; their unmount releases them after replay or eviction.
-      if (!retainPanes) resetMountedRasterPixels();
     };
 
     const updateRetryInterval = () => {

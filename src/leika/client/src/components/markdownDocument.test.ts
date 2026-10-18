@@ -26,7 +26,7 @@ import {
   warmMarkdownDocument,
 } from "./markdownDocument";
 import {
-  AdmittedMarkdownImage,
+  MarkdownImage,
   MarkdownMediaController,
   MarkdownPicture,
 } from "./MarkdownMedia";
@@ -43,23 +43,21 @@ const interactiveHtml = (markdown: string) =>
     ),
   );
 
-const admittedImage = (
+const figure = (
   width: number,
   height: number,
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>,
 ) =>
-  createElement(AdmittedMarkdownImage, {
+  createElement(MarkdownImage, {
     alt: "Plot",
     linkedBy,
-    measured: { width, height },
-    sourceKind: "asset",
     src: measuredAsset(width, height),
   });
 
-const admittedHtml = (width: number, height: number) =>
-  renderToStaticMarkup(admittedImage(width, height));
+const figureHtml = (width: number, height: number) =>
+  renderToStaticMarkup(figure(width, height));
 
-const interactiveAdmittedHtml = (
+const interactiveFigureHtml = (
   width: number,
   height: number,
   linkedBy?: React.AnchorHTMLAttributes<HTMLAnchorElement>,
@@ -68,7 +66,7 @@ const interactiveAdmittedHtml = (
     createElement(
       MarkdownMediaController,
       null,
-      admittedImage(width, height, linkedBy),
+      figure(width, height, linkedBy),
     ),
   );
 
@@ -305,15 +303,15 @@ test("a served figure reserves the size the server measured", () => {
   // The whole point of the exercise: the browser knows the shape of the box
   // before the picture is in it, so a document lays out once instead of
   // reflowing under the reader as each figure lands.
-  const drawn = admittedHtml(640, 360);
+  const drawn = figureHtml(640, 360);
   expect(drawn).toContain('width="640"');
   expect(drawn).toContain('height="360"');
   expect(drawn).toContain('alt="Plot"');
 });
 
-test("admitted figures load immediately and decode asynchronously", () => {
-  const drawn = admittedHtml(640, 360);
-  expect(drawn).toContain('loading="eager"');
+test("measured figures load lazily and decode asynchronously", () => {
+  const drawn = figureHtml(640, 360);
+  expect(drawn).toContain('loading="lazy"');
   expect(drawn).toContain('decoding="async"');
   // Scheduling hints must not trade away the stable geometry that prevents
   // images arriving under the reader from moving the document.
@@ -321,28 +319,15 @@ test("admitted figures load immediately and decode asynchronously", () => {
   expect(drawn).toContain('height="360"');
 });
 
-test("an external figure is an explicit link and causes no image request", () => {
+test("an external figure is a link and causes no image request", () => {
   const drawn = html("![Plot](https://example.com/plot.png)");
-  expect(drawn).toContain('role="status"');
   expect(drawn).toContain('href="https://example.com/plot.png"');
+  expect(drawn).toContain(">Plot</a>");
   expect(drawn).not.toContain("<img");
 });
 
-test("forged or mismatched measured asset URLs cannot bless generic bytes", () => {
-  for (const source of [
-    `/leika-assets/${"a".repeat(64)}.png?w=1&h=1`,
-    `/leika-assets/${"a".repeat(64)}-1x1.png?w=2&h=1`,
-    `/leika-assets/not-a-digest-1x1.png?w=1&h=1`,
-    `/leika-assets/${"a".repeat(64)}-1x1.too_long_suffix_name?w=1&h=1`,
-  ]) {
-    const drawn = html(`![Plot](${source})`);
-    expect(drawn).toContain('role="status"');
-    expect(drawn).not.toContain("<img");
-  }
-});
-
 test("a controlled figure has one accessible expand control", () => {
-  const drawn = interactiveAdmittedHtml(8, 8);
+  const drawn = interactiveFigureHtml(8, 8);
   const surface = matching(
     drawn,
     /<span\b[^>]*data-leika-inline-media[^>]*>.*?<\/span>/,
@@ -354,7 +339,7 @@ test("a controlled figure has one accessible expand control", () => {
 });
 
 test("a linked figure keeps link and expand as sibling actions", () => {
-  const drawn = interactiveAdmittedHtml(8, 8, {
+  const drawn = interactiveFigureHtml(8, 8, {
     href: "https://example.com/report",
   });
   const surface = matching(
@@ -390,7 +375,7 @@ test("a controlled picture drops source selection and admits only its fallback",
         createElement("source", {
           srcSet: "https://example.com/wide.png 2x",
         }),
-        admittedImage(8, 8),
+        figure(8, 8),
       ),
     ),
   );

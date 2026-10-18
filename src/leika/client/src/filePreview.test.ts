@@ -781,7 +781,7 @@ describe("progressive preview images", () => {
       url: asset,
     });
 
-  it("retains ready images with the warmed stream and rejects stale or unsafe URLs", () => {
+  it("retains ready images with the warmed stream and ignores stale streams", () => {
     part("old");
     image("old");
     requestFilePreview("report", "Report");
@@ -794,7 +794,6 @@ describe("progressive preview images", () => {
     ).toBe(url);
     part("new");
     image("old");
-    image("new", "plot é.png", "https://example.com/remote.png");
     expect(
       filePreviewStore.snapshot()?.textStream?.imageSources,
     ).toBeUndefined();
@@ -807,14 +806,5 @@ describe("progressive preview images", () => {
     image("new");
     requestFilePreview("report", "Report");
     expect(filePreviewStore.snapshot()?.textStream).toBeUndefined();
-  });
-
-  it("bounds early image state while the complete document remains authoritative", () => {
-    part("stream");
-    for (let i = 0; i < 200; i++) image("stream", `figure-${i}.png`);
-    requestFilePreview("report", "Report");
-    expect(filePreviewStore.snapshot()?.textStream?.imageSources?.size).toBe(
-      128,
-    );
   });
 });

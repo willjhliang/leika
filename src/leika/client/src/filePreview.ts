@@ -3,7 +3,6 @@ import {
   type RetainedDownload,
   retainedDownloads,
 } from "./retainedDownloadBudget";
-import { normalizedSafeRasterMimeType } from "./imageSafety";
 import { randomUuid } from "./utils/randomUuid";
 import { resetPreviewDocumentCache } from "./previewDocumentCache";
 import type {
@@ -11,7 +10,6 @@ import type {
   GuiPreviewImageMessage,
 } from "./WebsocketMessages";
 import { previewImageSourceKey } from "./previewImageSources";
-import { inspectMarkdownImageSource } from "./components/markdownMediaSafety";
 
 // Which viewer a previewed file gets, and the reading of its size.
 //
@@ -144,10 +142,7 @@ export function previewKindFor(
     // SVG is an image the browser will happily render, and also a document
     // that can carry script. It is shown as its source instead, which is a
     // truthful preview and not a way to run anything.
-    if (type === "image/svg+xml") return "text";
-    return normalizedSafeRasterMimeType(type) === null
-      ? "unsupported"
-      : "image";
+    return type === "image/svg+xml" ? "text" : "image";
   }
   if (type.startsWith("video/")) return "video";
   if (type.startsWith("audio/")) return "audio";
@@ -517,27 +512,14 @@ export function receiveFilePreviewImage(message: GuiPreviewImageMessage): void {
   const active =
     current?.sourceUuid === message.uuid ? current.textStream : undefined;
   const previous = active?.id === message.stream_uuid ? active : cached;
-  if (
-    previous?.id !== message.stream_uuid ||
-    message.source.length > 8192 ||
-    message.url.length > 256
-  )
-    return;
-  const inspected = inspectMarkdownImageSource(message.url);
-  if (!inspected.admission.ok || inspected.sourceKind !== "asset") return;
+  if (previous?.id !== message.stream_uuid) return;
   let key: string;
   try {
     key = previewImageSourceKey(message.source);
-    if (key.length > 8192) return;
   } catch {
     return;
   }
   if (previous.imageSources?.get(key) === message.url) return;
-  if (
-    (previous.imageSources?.size ?? 0) >= 128 &&
-    !previous.imageSources?.has(key)
-  )
-    return;
   const imageSources = new Map(previous.imageSources);
   imageSources.set(key, message.url);
   const stream = { ...previous, imageSources };

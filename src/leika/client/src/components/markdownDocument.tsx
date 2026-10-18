@@ -34,11 +34,10 @@ const components: MarkdownComponents = {
   // lands -- under the reader, who has been reading since the text arrived.
   // The server measures what it serves and says so in the URL; this is where
   // that becomes the width and height the browser reserves from. See
-  // `_link_markdown_assets`, and MarkdownImage for why it travels
-  // there rather than in the tag.
-  // The image component reserves measured geometry and admits decoding only
-  // near the viewport. Streamed previews resolve each source through context,
-  // keeping the same component and DOM when the final document arrives.
+  // `_link_markdown_assets`, and markdownImageSource for why it travels
+  // there rather than in the tag. Streamed previews resolve each source
+  // through context, keeping the same component and DOM when the final
+  // document arrives.
   img: MarkdownImage,
   picture: MarkdownPicture,
   // typeset holds a table's headings on one line, so a table with long ones

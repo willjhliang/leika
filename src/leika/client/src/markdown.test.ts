@@ -7,7 +7,6 @@
  * top lives in the e2e suite, which has a browser to measure it in.
  */
 
-import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
@@ -17,16 +16,11 @@ import {
   DOCUMENT_ID_PREFIX,
 } from "./markdown";
 import {
-  AdmittedMarkdownImage,
   MarkdownImage,
   MarkdownLink,
   MarkdownPicture,
 } from "./components/MarkdownMedia";
-import {
-  inspectMarkdownImageSource,
-  MARKDOWN_RESERVED_MAX_DIMENSION,
-  MARKDOWN_RESERVED_MAX_PIXELS,
-} from "./components/markdownMediaSafety";
+import { markdownImageSource } from "./components/markdownMediaSafety";
 
 /** Unstyled, so the assertions read as HTML rather than as Tailwind. */
 const render = createMarkdownRenderer({});
@@ -143,19 +137,10 @@ describe("what a document may contain", () => {
     const ordinary = productionMediaHtml(
       '<a href="https://example.com" target="_blank" rel="author">report</a>',
     );
-    const image = renderToStaticMarkup(
-      createElement(AdmittedMarkdownImage, {
-        alt: "Plot",
-        linkedBy: {
-          href: "https://example.com",
-          rel: "author",
-          target: "_blank",
-        },
-        measured: { width: 8, height: 8 },
-        sourceKind: "asset",
-        src: measuredAsset(8, 8),
-      }),
+    const image = productionMediaHtml(
+      `<a href="https://example.com" target="_blank" rel="author"><img alt="Plot" src="${measuredAsset(8, 8)}"></a>`,
     );
+    expect(image).toContain("<img");
     for (const out of [ordinary, image]) {
       const rel = /<a\b[^>]*\brel="([^"]+)"/.exec(out)?.[1].split(" ");
       expect(rel).toEqual(expect.arrayContaining(["noreferrer", "noopener"]));
@@ -165,42 +150,32 @@ describe("what a document may contain", () => {
     }
   });
 
-  test("only sane measured asset dimensions reserve an image box", () => {
-    const validWidth = MARKDOWN_RESERVED_MAX_DIMENSION;
-    const validHeight = MARKDOWN_RESERVED_MAX_PIXELS / validWidth;
-    const validSource = measuredAsset(validWidth, validHeight);
-    expect(inspectMarkdownImageSource(validSource)).toEqual({
-      admission: {
-        ok: true,
-        size: { width: validWidth, height: validHeight },
-      },
-      sourceKind: "asset",
+  test("only Leika's assets and data images are drawn; the rest stay links", () => {
+    expect(markdownImageSource(measuredAsset(640, 360))).toEqual({
+      kind: "asset",
+      size: { width: 640, height: 360 },
     });
-    const valid = renderToStaticMarkup(
-      createElement(AdmittedMarkdownImage, {
-        alt: "plot",
-        measured: { width: validWidth, height: validHeight },
-        sourceKind: "asset",
-        src: validSource,
-      }),
-    );
-    expect(valid).toContain(`width="${validWidth}"`);
-    expect(valid).toContain(`height="${validHeight}"`);
-    expect(valid).toContain('loading="eager"');
+    expect(markdownImageSource("/leika-assets/plot.png")).toEqual({
+      kind: "asset",
+      size: null,
+    });
+    expect(markdownImageSource("data:image/png;base64,AAAA").kind).toBe("data");
+
+    // A measured asset reserves its box, so it can be fetched lazily.
+    const asset = productionMediaHtml(`![plot](${measuredAsset(640, 360)})`);
+    expect(asset).toContain('width="640"');
+    expect(asset).toContain('height="360"');
+    expect(asset).toContain('loading="lazy"');
 
     for (const source of [
-      `/leika-assets/${"a".repeat(64)}.png?w=1&h=1`,
-      `/leika-assets/${"a".repeat(64)}-1x1.png?w=2&h=1`,
-      `/leika-assets/${"a".repeat(64)}-${MARKDOWN_RESERVED_MAX_DIMENSION + 1}x1.png?w=${MARKDOWN_RESERVED_MAX_DIMENSION + 1}&h=1`,
-      `/leika-assets/${"a".repeat(64)}-${validWidth}x${validHeight + 1}.png?w=${validWidth}&h=${validHeight + 1}`,
-      `/leika-assets/${"a".repeat(64)}-${"9".repeat(400)}x1.png?w=${"9".repeat(400)}&h=1`,
+      "https://example.com/plot.png",
+      "figures/plot.png",
+      "data:text/html,plot",
     ]) {
-      expect(inspectMarkdownImageSource(source).admission.ok).toBe(false);
-      const out = productionMediaHtml(`![plot](${source})`);
-      expect(out).not.toMatch(/\bwidth=/);
-      expect(out).not.toMatch(/\bheight=/);
-      expect(out).not.toContain('loading="eager"');
+      expect(markdownImageSource(source).kind).toBe("blocked");
+      const out = productionMediaHtml(`![plot](<${source}>)`);
       expect(out).not.toContain("<img");
+      expect(out).toMatch(/<a\b[^>]*>plot<\/a>/);
     }
   });
 
