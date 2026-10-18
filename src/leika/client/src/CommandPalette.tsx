@@ -9,7 +9,7 @@ import {
   CommandShortcut,
 } from "./components/ui/command";
 import { HoverScrollText } from "./components/HoverScrollText";
-import Fuse, { FuseResult, IFuseOptions } from "fuse.js";
+import { defaultFilter } from "cmdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useViewer } from "./ViewerContext";
 import {
@@ -33,7 +33,7 @@ type CommandAction = {
   disabled?: boolean;
   onClick?: () => void;
   iconHtml?: string;
-  keywords?: string[];
+  keywords: string[];
 };
 type HotkeyKey = NonNullable<RegisterCommandMessage["props"]["hotkey"]>;
 type KeyModifier = NonNullable<RegisterCommandMessage["props"]["modifier"]>;
@@ -96,41 +96,17 @@ function useCommandActions(
           disabled,
           onClick: disabled ? undefined : () => onTrigger(command.uuid),
           iconHtml: command.props._icon_html ?? undefined,
-          // Descriptions are no longer shown, but they stay searchable.
-          keywords: command.props.description
-            ? [command.props.description]
-            : undefined,
+          // Descriptions are not shown, but they stay searchable.
+          keywords: [command.props.label, command.props.description ?? ""],
         };
       }),
     [commands, onTrigger],
   );
 }
 
-const FUSE_OPTIONS: IFuseOptions<CommandAction> = {
-  keys: ["label", "keywords"],
-  threshold: 0.4,
-  ignoreLocation: true,
-};
-
-/** Hook returning a stable fuzzy filter function that reuses its Fuse index. */
-function useFuseFilter() {
-  const fuseRef = useRef<{
-    items: CommandAction[];
-    fuse: Fuse<CommandAction>;
-  } | null>(null);
-
-  return useCallback((query: string, items: CommandAction[]) => {
-    const normalizedQuery = query.trim();
-    if (!normalizedQuery) return items;
-
-    // Rebuild the Fuse index only when the registered command list changes.
-    if (!fuseRef.current || fuseRef.current.items !== items) {
-      fuseRef.current = { items, fuse: new Fuse(items, FUSE_OPTIONS) };
-    }
-    return fuseRef.current.fuse
-      .search(normalizedQuery)
-      .map((result: FuseResult<CommandAction>) => result.item);
-  }, []);
+/** Rank by label and description; an item's value is its id. */
+function filterCommand(_id: string, search: string, keywords?: string[]) {
+  return defaultFilter(keywords?.join(" ") ?? "", search);
 }
 
 export function CommandPalette() {
@@ -139,7 +115,6 @@ export function CommandPalette() {
   const viewerMutable = viewer.mutable.current;
   const opened = useCommandPaletteOpen();
   const [query, setQuery] = useState("");
-  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleTrigger = useCallback(
@@ -153,15 +128,6 @@ export function CommandPalette() {
   );
 
   const actions = useCommandActions(commands, handleTrigger);
-  const fuseFilter = useFuseFilter();
-  const visibleActions = useMemo(
-    () => fuseFilter(query, actions),
-    [actions, fuseFilter, query],
-  );
-  const selectableActions = useMemo(
-    () => visibleActions.filter((action) => !action.disabled),
-    [visibleActions],
-  );
   const wasOpenedRef = useRef(false);
 
   useEffect(() => {
@@ -169,19 +135,9 @@ export function CommandPalette() {
     wasOpenedRef.current = opened;
     if (!justOpened) return;
     setQuery("");
-    setHighlightedId(actions.find((action) => !action.disabled)?.id ?? null);
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [actions, opened]);
-
-  useEffect(() => {
-    if (
-      highlightedId === null ||
-      !selectableActions.some((action) => action.id === highlightedId)
-    ) {
-      setHighlightedId(selectableActions[0]?.id ?? null);
-    }
-  }, [highlightedId, selectableActions]);
+  }, [opened]);
 
   useEffect(() => {
     if (actions.length === 0 && opened) commandPalette.close();
@@ -231,9 +187,7 @@ export function CommandPalette() {
       <Command
         data-leika-command-palette
         label="Search commands"
-        shouldFilter={false}
-        value={highlightedId ?? ""}
-        onValueChange={setHighlightedId}
+        filter={filterCommand}
       >
         <CommandInput
           ref={inputRef}
@@ -253,7 +207,7 @@ export function CommandPalette() {
               heading a multi-group palette would use, so one list and many
               read alike. */}
           <CommandGroup heading="Commands">
-            {visibleActions.map((action) => (
+            {actions.map((action) => (
               <CommandItem
                 key={action.id}
                 id={"leika-command-" + action.id}
@@ -261,9 +215,6 @@ export function CommandPalette() {
                 keywords={action.keywords}
                 data-leika-command-action
                 disabled={action.disabled}
-                onMouseMove={() => {
-                  if (!action.disabled) setHighlightedId(action.id);
-                }}
                 onSelect={() => triggerAction(action)}
               >
                 {action.iconHtml ? (
