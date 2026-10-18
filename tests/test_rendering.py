@@ -12,7 +12,7 @@ from leika import _messages
 from leika._client_handle import ClientHandle
 from leika._image_encoding import encode_image_binary
 from leika._rendering import render_image, render_message
-from leika.infra import ClientId
+from leika._transport._websocket import ClientId
 
 
 def source_image(format="jpeg"):

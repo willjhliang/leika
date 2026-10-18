@@ -3,29 +3,117 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import threading
-from typing import Any, Callable, ClassVar
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 
-import numpy as np
+import msgspec.msgpack
 import pytest
 
 from leika import _messages
-from leika.infra import _async_message_buffer as buffer_impl
-from leika.infra._async_message_buffer import AsyncMessageBuffer
-from leika.infra._infra import _message_producer
+from leika._transport import _message_buffer as buffer_impl
+from leika._transport._message_buffer import AsyncMessageBuffer, MessageWindow
+from leika._transport._websocket import _ClientHandleState, _message_producer
+
+Windows = AsyncGenerator[MessageWindow, None]
+_PANE_PROPS = _messages.ViewportEmptyProps("Pane", True, False)
+
+
+class _QueuedLoop:
+    """Records thread-safe callbacks instead of running them."""
+
+    def __init__(self) -> None:
+        self.callbacks: list[tuple[Callable[..., Any], tuple[Any, ...]]] = []
+
+    def call_soon_threadsafe(self, callback: Callable[..., Any], *args: Any) -> None:
+        self.callbacks.append((callback, args))
+
+
+class _ClosedLoop:
+    def call_soon_threadsafe(self, callback: Callable[..., Any], *args: Any) -> None:
+        raise RuntimeError("loop is closed")
+
+
+@dataclasses.dataclass
+class _Scoped(_messages.Message):
+    """A retained message delivered only to subscribers of its scope."""
+
+    scope: str
+    value: str
+
+    def delivery_scope(self) -> str:
+        return self.scope
+
+
+def _buffer(persistent: bool = True) -> AsyncMessageBuffer:
+    """A buffer whose wakeups are recorded, for tests that never window."""
+    return AsyncMessageBuffer(_QueuedLoop(), persistent_messages=persistent)  # type: ignore[arg-type]
+
+
+def _live_buffer(persistent: bool = True, **kwargs: Any) -> AsyncMessageBuffer:
+    return AsyncMessageBuffer(
+        asyncio.get_running_loop(), persistent_messages=persistent, window_duration_sec=0, **kwargs
+    )
+
+
+def _retained(buffer: AsyncMessageBuffer) -> list[_messages.Message]:
+    return list(buffer.message_from_id.values())
+
+
+def _streams(page_id: str, generation: int) -> tuple[_messages.Message, _messages.Message]:
+    return (
+        _messages.PageStreamBeginMessage(page_id, generation),
+        _messages.PageStreamReadyMessage(page_id, generation),
+    )
+
+
+def _text(uuid: str, container_uuid: str = "root") -> _messages.GuiTextMessage:
+    props = _messages.GuiTextProps(
+        order=0.0,
+        label=uuid,
+        hint=None,
+        visible=True,
+        disabled=False,
+        multiline=False,
+        rows=None,
+        editable=False,
+        markdown=False,
+        _source=uuid,
+    )
+    return _messages.GuiTextMessage(
+        uuid=uuid, value=uuid, container_uuid=container_uuid, props=props
+    )
+
+
+async def _receive(
+    buffer: AsyncMessageBuffer, windows: Windows, client_id: int, count: int
+) -> list[_messages.Message]:
+    """Exactly ``count`` messages from consecutive windows, each marked sent."""
+    received: list[_messages.Message] = []
+    while len(received) < count:
+        window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+        buffer.mark_messages_sent(client_id, window.last_message_id)
+        received.extend(record.message for record in window.messages)
+    assert len(received) == count
+    return received
+
+
+async def _pending(windows: Windows) -> asyncio.Future[MessageWindow]:
+    """Start waiting for the next window and check that none is ready."""
+    pending = asyncio.ensure_future(windows.__anext__())
+    done, _ = await asyncio.wait({pending}, timeout=0.05)
+    assert not done
+    return pending
 
 
 def test_window_generator_cleans_up_flush_wait() -> None:
     async def run() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        generator = buffer.window_generator(client_id=0)
-        next_window = asyncio.create_task(generator.__anext__())
+        next_window = asyncio.ensure_future(buffer.window_generator(0).__anext__())
         await asyncio.sleep(0)
 
         buffer.set_done()
-        try:
+        with pytest.raises(StopAsyncIteration):
             await next_window
-        except StopAsyncIteration:
-            pass
 
         current = asyncio.current_task()
         assert [task for task in asyncio.all_tasks() if task is not current] == []
@@ -34,333 +122,318 @@ def test_window_generator_cleans_up_flush_wait() -> None:
 
 
 def test_closed_buffer_discards_queued_messages_and_rejects_new_ones() -> None:
-    async def run() -> None:
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=False,
-        )
-        assert buffer.push(_messages.ClientPingMessage(sent_ms=0.0)) is True
-        assert len(buffer.message_from_id) == 1
+    buffer = _buffer()
+    buffer.register_client(1)
+    assert buffer.reserve_file_bytes(3)
+    assert buffer.push_reserved_file_message(_messages.FileTransferPart(None, "t", 0, b"abc"), 3)
+    assert buffer.push(_messages.GuiRemoveMessage("removed"))
+    assert len(buffer.message_from_id) == 2
 
-        buffer.set_done()
+    buffer.set_done()
 
-        assert buffer.push(_messages.ClientPingMessage(sent_ms=1.0)) is False
-        assert buffer.message_from_id == {}
-        assert buffer.id_from_redundancy_key == {}
-
-    asyncio.run(run())
-
-
-class _QueuedLoop:
-    def __init__(self) -> None:
-        self.callbacks: list[tuple[Callable[..., Any], tuple[Any, ...]]] = []
-
-    def call_soon_threadsafe(self, callback: Callable[..., Any], *args: Any) -> None:
-        self.callbacks.append((callback, args))
+    # Queued file parts give back the capacity they held.
+    assert (buffer._file_bytes, buffer._file_parts) == (0, 0)
+    assert buffer.message_from_id == {}
+    assert not buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
+    assert not buffer.push_many([_messages.ClientPingMessage(sent_ms=2.0)])
+    assert not buffer.request_delivery_scope(1, "page", *_streams("page", 1))
+    assert not buffer.reserve_file_bytes(1)
+    assert buffer.message_from_id == {}
 
 
-@dataclasses.dataclass
-class _ArrayMessage(_messages.Message):
-    values: np.ndarray
-    key: str = "array"
-
-    def redundancy_key(self) -> str:
-        return self.key
-
-
-@dataclasses.dataclass
-class _ScopedMessage(_messages.Message):
-    scope: str
-    value: str
-
-    def delivery_scope(self) -> str:
-        return self.scope
-
-    def redundancy_key(self) -> str:
-        return f"{type(self).__name__}:{self.scope}:{self.value}"
-
-
-@dataclasses.dataclass
-class _ScopedUpdateMessage(_messages.Message):
-    scope: str
-    key: str
-    value: str
-
-    def delivery_scope(self) -> str:
-        return self.scope
-
-    def redundancy_key(self) -> str:
-        return "{}:{}:{}".format(type(self).__name__, self.scope, self.key)
-
-
-@dataclasses.dataclass
-class _SingleReadScopeMessage(_messages.Message):
-    scope: str
-    value: str
-
-    _calls: ClassVar[dict[str, int]] = {}
-
-    def delivery_scope(self) -> str:
-        calls = type(self)._calls
-        calls[self.value] = calls.get(self.value, 0) + 1
-        if calls[self.value] > 1:
-            raise RuntimeError("delivery scope was evaluated more than once")
-        return self.scope
-
-
-@dataclasses.dataclass
-class _InvalidScopeMessage(_messages.Message):
-    value: str
-
-    _scope: ClassVar[Any] = None
-
-    def delivery_scope(self) -> Any:
-        return type(self)._scope
-
-
-async def _next_sent_window(
-    message_buffer: AsyncMessageBuffer,
-    generator: Any,
-    client_id: int,
-) -> buffer_impl.MessageWindow:
-    window = await asyncio.wait_for(generator.__anext__(), timeout=0.5)
-    if window.last_message_id >= 0:
-        message_buffer.mark_messages_sent(client_id, window.last_message_id)
-    return window
-
-
-def _stream_controls(
-    page_id: str,
-    generation: int,
-) -> tuple[_messages.PageStreamBeginMessage, _messages.PageStreamReadyMessage]:
-    return (
-        _messages.PageStreamBeginMessage(page_id, generation),
-        _messages.PageStreamReadyMessage(page_id, generation),
-    )
-
-
-@dataclasses.dataclass
-class _UnhashableEntityMessage(
-    _messages.Message,
-    entity=_messages.EntityLifecycle("gui", "create", "uuid"),
-):
-    uuid: list[str]
-
-
-@dataclasses.dataclass
-class _UnhashablePurgeMessage(
-    _messages.Message,
-    entity=_messages.EntityLifecycle("gui", "remove", "uuid"),
-):
-    uuid: str
-
-    def purge_entities(self) -> tuple[tuple[str, object], ...]:
-        return (("gui", ["not", "hashable"]),)
-
-
-class _ClosedLoop:
-    def call_soon_threadsafe(self, callback: Callable[..., Any], *args: Any) -> None:
-        del callback, args
-        raise RuntimeError("loop is closed")
-
-
-@pytest.mark.parametrize("max_window_size", [0, -1, True, 1.5])
-def test_window_size_must_be_a_positive_integer(max_window_size: Any) -> None:
-    with pytest.raises(ValueError, match="positive integer"):
-        AsyncMessageBuffer(
-            _QueuedLoop(),  # type: ignore[arg-type]
-            persistent_messages=False,
-            max_window_size=max_window_size,
-        )
-
-
-@pytest.mark.parametrize("duration", [-1, float("inf"), float("nan"), True, "fast"])
-def test_window_duration_must_be_finite_and_nonnegative(duration: Any) -> None:
-    with pytest.raises(ValueError, match="finite non-negative"):
-        AsyncMessageBuffer(
-            _QueuedLoop(),  # type: ignore[arg-type]
-            persistent_messages=False,
-            window_duration_sec=duration,
-        )
-
-
-def test_push_coalesces_threadsafe_event_pulses() -> None:
+def test_push_and_flush_coalesce_threadsafe_event_pulses() -> None:
     loop = _QueuedLoop()
     buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
 
     assert buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-    assert buffer.push(_messages.RunJavascriptMessage("second"))
-    assert len(loop.callbacks) == 1
+    assert buffer.push_many([_messages.RunJavascriptMessage("second")] * 2)
+    for _ in range(1_000):
+        buffer.flush()
+    assert len(loop.callbacks) == 2
 
-    callback, args = loop.callbacks.pop()
-    callback(*args)
+    for callback, args in loop.callbacks:
+        callback(*args)
     assert buffer.message_event.is_set()
+    assert buffer.flush_event.is_set()
 
+    # Each pulse is scheduled again only after the previous one ran.
+    loop.callbacks.clear()
     assert buffer.push(_messages.RunJavascriptMessage("third"))
-    assert len(loop.callbacks) == 1
+    buffer.flush()
+    buffer.flush()
+    assert len(loop.callbacks) == 2
 
 
-def test_push_is_transactional_when_event_loop_is_closed() -> None:
-    buffer = AsyncMessageBuffer(_ClosedLoop(), persistent_messages=False)  # type: ignore[arg-type]
+def test_closed_event_loop_raises_before_any_state_changes() -> None:
+    buffer = AsyncMessageBuffer(_ClosedLoop(), persistent_messages=True)  # type: ignore[arg-type]
 
     with pytest.raises(RuntimeError, match="loop is closed"):
         buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-
-    assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
-    assert buffer.message_counter == 0
-
-
-def test_reserved_push_is_transactional_when_event_loop_is_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_BYTES", 4)
-    buffer = AsyncMessageBuffer(_ClosedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-    assert buffer.reserve_file_bytes(4)
-
-    message = _messages.FileTransferPart(None, "transfer", 0, b"data")
     with pytest.raises(RuntimeError, match="loop is closed"):
-        buffer.push_reserved_file_message(message, 4)
-    buffer.release_file_bytes(4)
-
+        buffer.push_many([_messages.RunJavascriptMessage("a"), _messages.RunJavascriptMessage("b")])
     assert buffer.message_from_id == {}
-    assert buffer._file_bytes_from_id == {}
-    assert buffer._file_bytes_reserved == 0
-    assert buffer._file_parts_reserved == 0
+
+    # Teardown on a closed loop neither raises nor schedules.
+    buffer.atomic_start()
+    buffer.set_done()
+    buffer.atomic_end()
+    assert buffer.atomic_counter == 0
 
 
 def test_nested_atomic_blocks_and_unmatched_end() -> None:
     loop = _QueuedLoop()
     buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
+    assert not buffer.file_transfer_must_be_deferred()
     buffer.atomic_start()
     buffer.atomic_start()
-    assert buffer.atomic_counter == 2
+    assert buffer.push(_messages.RunJavascriptMessage("held"))
+    assert buffer.file_transfer_must_be_deferred()
     buffer.atomic_end()
-    assert buffer.atomic_counter == 1
     assert loop.callbacks == []
     buffer.atomic_end()
-    assert buffer.atomic_counter == 0
     assert len(loop.callbacks) == 1
+    assert not buffer.file_transfer_must_be_deferred()
     with pytest.raises(RuntimeError, match="without a matching"):
         buffer.atomic_end()
 
 
-def test_file_reservation_blocks_at_capacity_and_wakes_on_release(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_BYTES", 4)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    assert buffer.reserve_file_bytes(4)
-    completed = threading.Event()
-    result: list[bool] = []
-
-    def reserve() -> None:
-        result.append(buffer.reserve_file_bytes(1))
-        completed.set()
-
-    thread = threading.Thread(target=reserve)
-    thread.start()
-    assert not completed.wait(0.05)
-    buffer.release_file_bytes(4)
-    assert completed.wait(1)
-    assert result == [True]
-    buffer.release_file_bytes(1)
-    buffer.set_done()
-    thread.join(timeout=1)
-    assert not thread.is_alive()
-
-
-def test_shutdown_wakes_a_blocked_file_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_BYTES", 4)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    assert buffer.reserve_file_bytes(4)
-    completed = threading.Event()
-    result: list[bool] = []
-
-    def reserve() -> None:
-        result.append(buffer.reserve_file_bytes(1))
-        completed.set()
-
-    thread = threading.Thread(target=reserve)
-    thread.start()
-    assert not completed.wait(0.05)
-    buffer.set_done()
-    assert completed.wait(1)
-    assert result == [False]
-    buffer.release_file_bytes(4)
-    thread.join(timeout=1)
-
-
-def test_reserved_windows_preserve_order_and_own_capacity_until_send() -> None:
+def test_flush_cuts_the_batching_delay() -> None:
     async def run() -> None:
         buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=False,
-            window_duration_sec=0,
+            asyncio.get_running_loop(), persistent_messages=False, window_duration_sec=60
         )
-        first = _messages.FileTransferPart(None, "transfer", 0, b"ab")
-        second = _messages.FileTransferPart(None, "transfer", 1, b"cd")
-        assert buffer.reserve_file_bytes(2)
-        assert buffer.push_reserved_file_message(first, 2)
-        assert buffer.reserve_file_bytes(2)
-        assert buffer.push_reserved_file_message(second, 2)
+        first = _messages.RunJavascriptMessage("first")
+        second = _messages.RunJavascriptMessage("second")
+        windows = buffer.window_generator(1)
+        assert buffer.push(first)
+        assert await _receive(buffer, windows, 1, 1) == [first]
 
-        generator = buffer.window_generator(1)
-        window = await generator.__anext__()
-        assert window.messages == (first, second)
-        assert window.file_bytes_reserved == 4
-        assert window.file_parts_reserved == 2
-        assert buffer._file_bytes_reserved == 4
-        buffer.release_file_bytes(window.file_bytes_reserved, window.file_parts_reserved)
-        assert buffer._file_bytes_reserved == 0
-        assert buffer._file_parts_reserved == 0
-        await generator.aclose()
+        # The next window waits out the batching delay unless flushed.
+        assert buffer.push(second)
+        pending = await _pending(windows)
+        buffer.flush()
+        window = await asyncio.wait_for(pending, timeout=1)
+        assert [record.message for record in window.messages] == [second]
+        await windows.aclose()
         buffer.set_done()
 
     asyncio.run(run())
 
 
-def test_reserved_message_cannot_exclude_its_destination() -> None:
+def test_validation_errors_surface_at_push_and_leave_the_buffer_unchanged() -> None:
     loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    message = _messages.FileTransferPart(None, "transfer", 0, b"x")
-    message.excluded_self_client = 4
-    assert buffer.reserve_file_bytes(1)
-    with pytest.raises(ValueError, match="cannot exclude"):
-        buffer.push_reserved_file_message(message, 1)
-    buffer.release_file_bytes(1)
+    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
+    invalid = _messages.RunJavascriptMessage(source=1)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="expected"):
+        buffer.push(invalid)
+    with pytest.raises(TypeError, match="expected"):
+        buffer.push_many([_messages.RunJavascriptMessage("valid"), invalid])
+    with pytest.raises(TypeError, match="unsupported protocol value"):
+        buffer.push(_messages.GuiUpdateMessage("field", {"value": object()}))
+
+    assert buffer.message_from_id == {}
+    assert loop.callbacks == []
+
+
+def test_each_message_is_encoded_once_and_shared_by_every_client() -> None:
+    async def run() -> None:
+        buffer = _live_buffer()
+        message = _messages.GuiUpdateMessage("slider", {"value": 1})
+        assert buffer.push(message)
+        message.updates["value"] = 2
+
+        first, second = buffer.window_generator(1), buffer.window_generator(2)
+        (record,) = (await asyncio.wait_for(first.__anext__(), timeout=1)).messages
+        (shared,) = (await asyncio.wait_for(second.__anext__(), timeout=1)).messages
+        assert shared is record
+        assert record.message is message
+        # The queued bytes are the message as it was pushed.
+        assert msgspec.msgpack.decode(record.data) == {
+            "type": "GuiUpdateMessage",
+            "uuid": "slider",
+            "updates": {"value": 1},
+        }
+        await first.aclose()
+        await second.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> None:
+    buffer = _buffer()
+    value = _messages.GuiUpdateMessage("field", {"value": 1})
+    label = _messages.GuiUpdateMessage("field", {"label": "Field"})
+    script = _messages.RunJavascriptMessage("same")
+    tab = _messages.GuiTabMessage("tab", "tabs", "Tab", None)
+    child = _text("child", "tab")
+    pages = _messages.PageCatalogMessage(("alpha",))
+    snapshot_a = _messages.ViewportPaneSnapshotMessage("alpha", ("one",))
+    snapshot_b = _messages.ViewportPaneSnapshotMessage("beta", ("one",))
+    assert buffer.push_many(
+        [
+            value,
+            label,
+            script,
+            script,
+            tab,
+            child,
+            _messages.GuiTabUpdateMessage("tab", "tabs", "Old", None),
+            _messages.ServerPongMessage(1.0),
+            _messages.ThemeConfigurationMessage("floating", "auto"),
+            _messages.GuiFormSubmitMessage("form"),
+            pages,
+            snapshot_a,
+            snapshot_b,
+        ]
+    )
+    newest = [
+        _messages.GuiTabUpdateMessage("tab", "tabs", "New", None),
+        _messages.ServerPongMessage(2.0),
+        _messages.ThemeConfigurationMessage("left", "dark"),
+        _messages.GuiFormSubmitMessage("form"),
+        _messages.PageCatalogMessage(("alpha", "beta")),
+        _messages.ViewportPaneSnapshotMessage("alpha", ("two",)),
+        _messages.GuiUpdateMessage("field", {"value": 2}),
+    ]
+    assert buffer.push_many(newest)
+
+    # A replacement takes the newest position; a tab's rename never moves its
+    # declaration behind the children it contains.
+    retained = _retained(buffer)
+    assert retained == [label, script, script, tab, child, snapshot_b, *newest]
+    assert retained[-1] is newest[-1]
+
+
+@pytest.mark.parametrize(
+    ("before", "removal", "survivors"),
+    [
+        pytest.param(
+            [
+                _messages.GuiFolderMessage(
+                    uuid="parent",
+                    container_uuid="root",
+                    props=_messages.GuiFolderProps(0.0, "Parent", True, True),
+                ),
+                _text("child", "parent"),
+                _messages.GuiUpdateMessage("child", {"value": "updated"}),
+                _messages.GuiUpdateMessage("grandchild", {"value": "updated"}),
+                _text("sibling"),
+            ],
+            _messages.GuiRemoveMessage("parent", removed_uuids=("grandchild", "child")),
+            [_text("sibling")],
+            id="parent",
+        ),
+        pytest.param(
+            [
+                _messages.GuiTabMessage("tab", "tabs", "Tab", None),
+                _text("child", "tab"),
+                _messages.GuiTabUpdateMessage("tab", "tabs", "Renamed", None),
+                _messages.GuiTabMessage("other", "tabs", "Other", None),
+            ],
+            _messages.GuiRemoveMessage("tab", removed_uuids=("child",)),
+            [_messages.GuiTabMessage("other", "tabs", "Other", None)],
+            id="tab",
+        ),
+        pytest.param(
+            [
+                _messages.GuiTabMessage("outer", "group-a", "Outer", None),
+                _messages.GuiTabMessage("inner", "group-b", "Inner", None),
+                _text("child", "inner"),
+            ],
+            _messages.GuiRemoveMessage(
+                "folder", removed_uuids=("child",), removed_tab_uuids=("inner", "outer")
+            ),
+            [],
+            id="nested-tabs",
+        ),
+        pytest.param(
+            [
+                _messages.GuiModalMessage(0.0, "modal", "Modal"),
+                _text("child", "modal"),
+                _messages.GuiUpdateMessage("child", {"value": "updated"}),
+            ],
+            _messages.GuiCloseModalMessage("modal", removed_uuids=("child",)),
+            [],
+            id="modal",
+        ),
+        pytest.param(
+            [
+                _messages.ViewportPaneMessage("page", "pane", "right", "root", (), _PANE_PROPS),
+                _messages.ViewportEmptyMessage("page", "pane", "right", "root", (), _PANE_PROPS),
+                _messages.ViewportPaneUpdateMessage("page", "pane", {"title": "Renamed"}),
+                _messages.ViewportPaneUpdateMessage("other", "pane", {"title": "Kept"}),
+            ],
+            _messages.ViewportPaneRemoveMessage("page", "pane"),
+            [_messages.ViewportPaneUpdateMessage("other", "pane", {"title": "Kept"})],
+            id="pane",
+        ),
+    ],
+)
+def test_removal_purges_entity_state_and_named_descendants(
+    before: list[_messages.Message],
+    removal: _messages.Message,
+    survivors: list[_messages.Message],
+) -> None:
+    buffer = _buffer()
+    buffer.register_client(1)
+    assert buffer.push_many(before)
+    assert buffer.push(removal)
+
+    # The connected client still needs the removal itself.
+    assert _retained(buffer) == [*survivors, removal]
+    (remove_id,) = [key for key, value in buffer.message_from_id.items() if value is removal]
+    buffer.mark_messages_sent(1, remove_id)
+    assert _retained(buffer) == survivors
+
+
+def test_recreated_entity_replays_without_its_purged_state() -> None:
+    buffer = _buffer()
+    buffer.register_client(1)
+    group = _messages.GuiTabGroupMessage(
+        uuid="tabs",
+        container_uuid="root",
+        props=_messages.GuiTabGroupProps(_tabs=(), order=0.0, visible=True),
+    )
+    assert buffer.push_many(
+        [
+            group,
+            _messages.GuiTabMessage("tab", "tabs", "Old", None),
+            _text("child", "tab"),
+            _messages.GuiRemoveMessage("tab", removed_uuids=("child",)),
+        ]
+    )
+    recreated = _messages.GuiTabMessage("tab", "tabs", "New", None)
+    assert buffer.push(recreated)
+    retained = _retained(buffer)
+    assert retained[0] is group
+    assert retained[-1] is recreated
+    assert not any(isinstance(message, _messages.GuiTextMessage) for message in retained)
 
 
 def test_tombstone_waits_for_every_connected_client_then_is_collected() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
+    buffer = _buffer()
     buffer.register_client(1)
     buffer.register_client(2)
     remove = _messages.GuiRemoveMessage("removed")
     assert buffer.push(remove)
-    assert list(buffer.message_from_id.values()) == [remove]
+    assert _retained(buffer) == [remove]
 
     buffer.mark_messages_sent(1, 0)
-    assert list(buffer.message_from_id.values()) == [remove]
+    assert _retained(buffer) == [remove]
     buffer.mark_messages_sent(2, 0)
     assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
 
 
 def test_tombstones_are_not_retained_when_no_client_needs_them() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-
-    for index in range(1_000):
+    buffer = _buffer()
+    for index in range(100):
         assert buffer.push(_messages.GuiRemoveMessage(f"removed-{index}"))
-
     assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
 
 
-def test_failed_persistent_send_keeps_tombstone_until_disconnect() -> None:
+def test_failed_send_keeps_tombstone_until_disconnect() -> None:
     async def run() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=True)
         buffer.register_client(7)
@@ -368,1355 +441,406 @@ def test_failed_persistent_send_keeps_tombstone_until_disconnect() -> None:
         assert buffer.push(remove)
 
         class FailingSocket:
-            async def send(self, payload: object) -> None:
-                assert payload
-                assert list(buffer.message_from_id.values()) == [remove]
+            async def send(self, frame: bytes) -> None:
+                assert frame
+                assert _retained(buffer) == [remove]
                 raise RuntimeError("send failed")
 
+        state = _ClientHandleState(buffer, buffer)
         with pytest.raises(RuntimeError, match="send failed"):
-            await _message_producer(FailingSocket(), buffer, 7)  # type: ignore[arg-type]
+            await _message_producer(FailingSocket(), buffer, 7, state)  # type: ignore[arg-type]
 
-        assert buffer._sent_message_id_from_client == {}
+        # The producer's exit unregistered the client, which released it.
         assert buffer.message_from_id == {}
         buffer.set_done()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("persistent", [False, True])
-def test_sparse_message_history_jumps_to_retained_ids(persistent: bool) -> None:
-    async def run() -> None:
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=persistent,
-            max_window_size=2,
-            window_duration_sec=0,
-        )
-        buffer.register_client(9)
-        first = _messages.RunJavascriptMessage("first")
-        second = _messages.RunJavascriptMessage("second")
-        buffer.message_counter = 10_000_001
-        buffer.message_from_id = {9_999_998: first, 10_000_000: second}
-        buffer._message_ids = list(buffer.message_from_id)
-        buffer._serialized_size_from_id = {
-            message_id: message.serialized_size_upper_bound()
-            for message_id, message in buffer.message_from_id.items()
-        }
-        buffer._decoded_nodes_from_id = {
-            message_id: message.serialized_metrics_upper_bound()[3]
-            for message_id, message in buffer.message_from_id.items()
-        }
-        buffer._delivery_scope_from_id = {message_id: None for message_id in buffer.message_from_id}
-        buffer._queued_metadata_bytes = sum(
-            size[0] for size in buffer._serialized_size_from_id.values()
-        )
-        buffer._queued_raw_binary_bytes = sum(
-            size[1] for size in buffer._serialized_size_from_id.values()
-        )
-
-        generator = buffer.window_generator(9)
-        window = await asyncio.wait_for(generator.__anext__(), timeout=0.1)
-        assert window.messages == (first, second)
-        assert window.last_message_id == 10_000_000
-        buffer.mark_messages_sent(9, window.last_message_id)
-        await generator.aclose()
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_delivery_scope_is_captured_once_before_locked_routing() -> None:
-    async def run() -> None:
-        _SingleReadScopeMessage._calls.clear()
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            window_duration_sec=0,
-        )
-        retained = _SingleReadScopeMessage("page-a", "retained")
-        assert message_buffer.push(retained)
-        assert _SingleReadScopeMessage._calls == {"retained": 1}
-
-        message_buffer.register_client(1)
-        begin, ready = _stream_controls("page-a", 1)
-        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
-        begin.generation = 99
-        ready.generation = 99
-        generator = message_buffer.window_generator(1)
-        delivered = [await _next_sent_window(message_buffer, generator, 1) for _ in range(3)]
-        assert [tuple(window.messages) for window in delivered] == [
-            (_messages.PageStreamBeginMessage("page-a", 1),),
-            (retained,),
-            (_messages.PageStreamReadyMessage("page-a", 1),),
-        ]
-        assert _SingleReadScopeMessage._calls == {"retained": 1}
-
-        await generator.aclose()
-        message_buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_delivery_scope_must_be_none_or_a_nonempty_string() -> None:
-    async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-        )
-        _InvalidScopeMessage._scope = ""
-        with pytest.raises(ValueError, match="non-empty string"):
-            message_buffer.push(_InvalidScopeMessage("empty"))
-        _InvalidScopeMessage._scope = 1
-        with pytest.raises(TypeError, match="non-empty string"):
-            message_buffer.push(_InvalidScopeMessage("integer"))
-        assert message_buffer.message_from_id == {}
-        assert message_buffer._delivery_scope_from_id == {}
-        message_buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_unsubscribed_persistent_client_receives_only_global_messages() -> None:
-    async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            window_duration_sec=0,
-        )
-        first_global = _messages.ClientPingMessage(sent_ms=1.0)
-        second_global = _messages.RunJavascriptMessage("global")
-        assert message_buffer.push_many(
-            (
-                first_global,
-                _ScopedMessage("page-a", "initial-a"),
-                second_global,
-                _ScopedMessage("page-b", "initial-b"),
-            )
-        )
-
-        generator = message_buffer.window_generator(1)
-        initial = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(initial.messages) == (first_global, second_global)
-
-        live_global = _messages.GuiUpdateMessage("component", {"value": "global"})
-        assert message_buffer.push_many(
-            (
-                _ScopedMessage("page-a", "live-a"),
-                live_global,
-                _ScopedMessage("page-b", "live-b"),
-            )
-        )
-        live = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(live.messages) == (live_global,)
-
-        await generator.aclose()
-        message_buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_scope_subscription_frames_replay_and_live_delivery() -> None:
-    async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            max_window_size=1,
-            window_duration_sec=0,
-        )
-        replayed = _ScopedMessage("page-a", "replayed")
-        stale_update = _ScopedUpdateMessage("page-a", "pane", "stale")
-        assert message_buffer.push_many((replayed, stale_update))
-        message_buffer.register_client(1)
-        begin, ready = _stream_controls("page-a", 7)
-        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
-        generator = message_buffer.window_generator(1)
-
-        begin_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(begin_window.messages) == (begin,)
-        replay_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(replay_window.messages) == (replayed,)
-
-        replacement = _ScopedUpdateMessage("page-a", "pane", "replacement")
-        assert message_buffer.push(replacement)
-        ready_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(ready_window.messages) == (ready,)
-        replacement_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(replacement_window.messages) == (replacement,)
-
-        selected_live = _ScopedMessage("page-a", "selected-live")
-        inactive_live = _ScopedMessage("page-b", "inactive-live")
-        global_live = _messages.ClientPingMessage(sent_ms=2.0)
-        assert message_buffer.push_many((inactive_live, selected_live, global_live))
-        selected_window = await _next_sent_window(message_buffer, generator, 1)
-        global_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(selected_window.messages) == (selected_live,)
-        assert tuple(global_window.messages) == (global_live,)
-
-        await generator.aclose()
-        message_buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_scope_subscriptions_isolate_two_clients() -> None:
-    async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            window_duration_sec=0,
-        )
-        retained_a = _ScopedMessage("page-a", "retained-a")
-        retained_b = _ScopedMessage("page-b", "retained-b")
-        assert message_buffer.push_many((retained_a, retained_b))
-
-        message_buffer.register_client(1)
-        message_buffer.register_client(2)
-        begin_a, ready_a = _stream_controls("page-a", 1)
-        begin_b, ready_b = _stream_controls("page-b", 1)
-        assert message_buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
-        assert message_buffer.request_delivery_scope(2, "page-b", begin_b, ready_b)
-        generator_a = message_buffer.window_generator(1)
-        generator_b = message_buffer.window_generator(2)
-
-        for generator, client_id, begin, replay, ready in (
-            (generator_a, 1, begin_a, retained_a, ready_a),
-            (generator_b, 2, begin_b, retained_b, ready_b),
-        ):
-            begin_window = await _next_sent_window(message_buffer, generator, client_id)
-            replay_window = await _next_sent_window(message_buffer, generator, client_id)
-            ready_window = await _next_sent_window(message_buffer, generator, client_id)
-            assert tuple(begin_window.messages) == (begin,)
-            assert tuple(replay_window.messages) == (replay,)
-            assert tuple(ready_window.messages) == (ready,)
-
-        live_a = _ScopedMessage("page-a", "live-a")
-        live_b = _ScopedMessage("page-b", "live-b")
-        global_live = _messages.RunJavascriptMessage("shared-live")
-        assert message_buffer.push_many((live_a, live_b, global_live))
-        client_a = await _next_sent_window(message_buffer, generator_a, 1)
-        client_b = await _next_sent_window(message_buffer, generator_b, 2)
-        assert tuple(client_a.messages) == (live_a, global_live)
-        assert tuple(client_b.messages) == (live_b, global_live)
-
-        await generator_a.aclose()
-        await generator_b.aclose()
-        message_buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_rapid_scope_replacement_abandons_old_replay() -> None:
-    async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            max_window_size=1,
-            window_duration_sec=0,
-        )
-        retained_a_first = _ScopedMessage("page-a", "retained-a-first")
-        retained_a_second = _ScopedMessage("page-a", "retained-a-second")
-        retained_b = _ScopedMessage("page-b", "retained-b")
-        assert message_buffer.push_many((retained_a_first, retained_a_second, retained_b))
-
-        message_buffer.register_client(1)
-        begin_a, ready_a = _stream_controls("page-a", 1)
-        assert message_buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
-        generator = message_buffer.window_generator(1)
-        assert tuple((await _next_sent_window(message_buffer, generator, 1)).messages) == (begin_a,)
-        assert tuple((await _next_sent_window(message_buffer, generator, 1)).messages) == (
-            retained_a_first,
-        )
-
-        begin_b, ready_b = _stream_controls("page-b", 2)
-        assert message_buffer.request_delivery_scope(1, "page-b", begin_b, ready_b)
-        transition = [await _next_sent_window(message_buffer, generator, 1) for _ in range(3)]
-        assert [tuple(window.messages) for window in transition] == [
-            (begin_b,),
-            (retained_b,),
-            (ready_b,),
-        ]
-
-        live_a = _ScopedMessage("page-a", "live-a")
-        live_b = _ScopedMessage("page-b", "live-b")
-        global_live = _messages.ClientPingMessage(sent_ms=3.0)
-        assert message_buffer.push_many((live_a, live_b, global_live))
-        delivered = [await _next_sent_window(message_buffer, generator, 1) for _ in range(2)]
-        assert [tuple(window.messages) for window in delivered] == [
-            (live_b,),
-            (global_live,),
-        ]
-        assert all(
-            retained_a_second not in window.messages and live_a not in window.messages
-            for window in delivered
-        )
-
-        await generator.aclose()
-        message_buffer.set_done()
 
     asyncio.run(run())
 
 
 def test_skipped_inactive_tombstone_advances_cursor_and_is_collected() -> None:
     async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            window_duration_sec=0,
-        )
-        message_buffer.register_client(1)
-        global_message = _messages.RunJavascriptMessage("global")
-        inactive_remove = _messages.ViewportPaneRemoveMessage(
-            page_id="page-b",
-            pane_id="removed-pane",
-        )
-        assert message_buffer.push_many((global_message, inactive_remove))
+        buffer = _live_buffer()
+        buffer.register_client(1)
+        script = _messages.RunJavascriptMessage("global")
+        inactive_remove = _messages.ViewportPaneRemoveMessage("page-b", "removed-pane")
+        assert buffer.push_many((script, inactive_remove))
 
-        generator = message_buffer.window_generator(1)
-        window = await asyncio.wait_for(generator.__anext__(), timeout=0.5)
-        assert tuple(window.messages) == (global_message,)
+        windows = buffer.window_generator(1)
+        window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+        assert [record.message for record in window.messages] == [script]
         assert window.last_message_id == 1
-        assert inactive_remove in message_buffer.message_from_id.values()
+        assert inactive_remove in _retained(buffer)
 
-        message_buffer.mark_messages_sent(1, window.last_message_id)
-        assert inactive_remove not in message_buffer.message_from_id.values()
-        assert inactive_remove.redundancy_key() not in message_buffer.id_from_redundancy_key
+        buffer.mark_messages_sent(1, window.last_message_id)
+        assert _retained(buffer) == [script]
+        await windows.aclose()
+        buffer.set_done()
 
-        await generator.aclose()
-        message_buffer.set_done()
+    asyncio.run(run())
+
+
+def test_connection_local_buffer_drops_windowed_messages_and_persistent_buffer_replays() -> None:
+    async def run() -> None:
+        messages = [_messages.RunJavascriptMessage("a"), _messages.RunJavascriptMessage("b")]
+        local = _live_buffer(persistent=False)
+        assert local.push_many(messages)
+        windows = local.window_generator(1)
+        assert await _receive(local, windows, 1, 2) == messages
+        assert local.message_from_id == {}
+        await windows.aclose()
+        local.set_done()
+
+        retained = _live_buffer()
+        assert retained.push_many(messages)
+        early = retained.window_generator(1)
+        assert await _receive(retained, early, 1, 2) == messages
+        late = retained.window_generator(2)
+        assert await _receive(retained, late, 2, 2) == messages
+        assert _retained(retained) == messages
+        await early.aclose()
+        await late.aclose()
+        retained.set_done()
+
+    asyncio.run(run())
+
+
+def test_excluded_client_never_receives_its_own_echo() -> None:
+    async def run() -> None:
+        buffer = _live_buffer()
+        echo = _messages.GuiUpdateMessage("slider", {"value": 1})
+        echo.excluded_self_client = 1
+        sender, other = buffer.window_generator(1), buffer.window_generator(2)
+        assert buffer.push(echo)
+
+        assert await _receive(buffer, other, 2, 1) == [echo]
+        pending = await _pending(sender)
+        later = _messages.RunJavascriptMessage("later")
+        assert buffer.push(later)
+        window = await asyncio.wait_for(pending, timeout=1)
+        assert [record.message for record in window.messages] == [later]
+        await sender.aclose()
+        await other.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_unsubscribed_persistent_client_receives_only_global_messages() -> None:
+    async def run() -> None:
+        buffer = _live_buffer()
+        first_global = _messages.ClientPingMessage(sent_ms=1.0)
+        second_global = _messages.RunJavascriptMessage("global")
+        assert buffer.push_many(
+            (first_global, _Scoped("page-a", "a"), second_global, _Scoped("page-b", "b"))
+        )
+
+        windows = buffer.window_generator(1)
+        assert await _receive(buffer, windows, 1, 2) == [first_global, second_global]
+
+        live_global = _messages.GuiUpdateMessage("component", {"value": "global"})
+        assert buffer.push_many(
+            (_Scoped("page-a", "live-a"), live_global, _Scoped("page-b", "live-b"))
+        )
+        assert await _receive(buffer, windows, 1, 1) == [live_global]
+        await windows.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_scope_subscription_frames_replay_and_live_delivery() -> None:
+    async def run() -> None:
+        buffer = _live_buffer(max_window_size=1)
+        replayed = _Scoped("page-a", "replayed")
+        stale = _messages.ViewportPaneUpdateMessage("page-a", "pane", {"title": "stale"})
+        assert buffer.push_many((replayed, stale))
+        buffer.register_client(1)
+        begin, ready = _streams("page-a", 7)
+        assert buffer.request_delivery_scope(1, "page-a", begin, ready)
+        windows = buffer.window_generator(1)
+        assert await _receive(buffer, windows, 1, 2) == [begin, replayed]
+
+        # A replacement queued mid-replay arrives once, after the ready marker.
+        replacement = _messages.ViewportPaneUpdateMessage("page-a", "pane", {"title": "new"})
+        assert buffer.push(replacement)
+        assert await _receive(buffer, windows, 1, 2) == [ready, replacement]
+
+        selected = _Scoped("page-a", "selected-live")
+        live_global = _messages.ClientPingMessage(sent_ms=2.0)
+        assert buffer.push_many((_Scoped("page-b", "inactive-live"), selected, live_global))
+        assert await _receive(buffer, windows, 1, 2) == [selected, live_global]
+        await windows.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_scope_subscriptions_isolate_two_clients() -> None:
+    async def run() -> None:
+        buffer = _live_buffer()
+        retained_a = _Scoped("page-a", "retained-a")
+        retained_b = _Scoped("page-b", "retained-b")
+        assert buffer.push_many((retained_a, retained_b))
+
+        clients = []
+        for client_id, page_id, retained in ((1, "page-a", retained_a), (2, "page-b", retained_b)):
+            buffer.register_client(client_id)
+            begin, ready = _streams(page_id, 1)
+            assert buffer.request_delivery_scope(client_id, page_id, begin, ready)
+            assert buffer.delivery_scope_from_client(client_id) == page_id
+            windows = buffer.window_generator(client_id)
+            assert await _receive(buffer, windows, client_id, 3) == [begin, retained, ready]
+            clients.append(windows)
+
+        live_a = _Scoped("page-a", "live-a")
+        live_b = _Scoped("page-b", "live-b")
+        live_global = _messages.RunJavascriptMessage("shared-live")
+        assert buffer.push_many((live_a, live_b, live_global))
+        assert await _receive(buffer, clients[0], 1, 2) == [live_a, live_global]
+        assert await _receive(buffer, clients[1], 2, 2) == [live_b, live_global]
+        for windows in clients:
+            await windows.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_rapid_scope_replacement_abandons_old_replay() -> None:
+    async def run() -> None:
+        buffer = _live_buffer(max_window_size=1)
+        retained_a_first = _Scoped("page-a", "retained-a-first")
+        retained_a_second = _Scoped("page-a", "retained-a-second")
+        retained_b = _Scoped("page-b", "retained-b")
+        assert buffer.push_many((retained_a_first, retained_a_second, retained_b))
+
+        buffer.register_client(1)
+        begin_a, ready_a = _streams("page-a", 1)
+        assert buffer.request_delivery_scope(1, "page-a", begin_a, ready_a)
+        windows = buffer.window_generator(1)
+        assert await _receive(buffer, windows, 1, 2) == [begin_a, retained_a_first]
+
+        begin_b, ready_b = _streams("page-b", 2)
+        assert buffer.request_delivery_scope(1, "page-b", begin_b, ready_b)
+        assert await _receive(buffer, windows, 1, 3) == [begin_b, retained_b, ready_b]
+
+        live_b = _Scoped("page-b", "live-b")
+        live_global = _messages.ClientPingMessage(sent_ms=3.0)
+        assert buffer.push_many((_Scoped("page-a", "live-a"), live_b, live_global))
+        assert await _receive(buffer, windows, 1, 2) == [live_b, live_global]
+        await windows.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+def test_scope_requests_need_a_connected_client() -> None:
+    buffer = _buffer()
+    assert not buffer.request_delivery_scope(1, "page-a", *_streams("page-a", 1))
+    assert buffer.delivery_scope_from_client(1) is None
+
+    buffer.register_client(1)
+    assert buffer.request_delivery_scope(1, "page-a", *_streams("page-a", 1))
+    assert buffer.request_delivery_scope(1, "page-b", *_streams("page-b", 2))
+    assert buffer.delivery_scope_from_client(1) == "page-b"
+    buffer.unregister_client(1)
+    assert buffer.delivery_scope_from_client(1) is None
+
+    # Connection-local buffers have no retained scopes.
+    local = _buffer(persistent=False)
+    local.register_client(1)
+    assert not local.request_delivery_scope(1, "page-a", *_streams("page-a", 1))
+
+
+def test_atomic_block_holds_connection_local_windows() -> None:
+    async def run() -> None:
+        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
+        queued = _messages.RunJavascriptMessage("queued")
+        assert buffer.push(queued)
+        buffer.atomic_start()
+        windows = buffer.window_generator(1)
+        pending = await _pending(windows)
+        assert _retained(buffer) == [queued]
+
+        buffer.atomic_end()
+        window = await asyncio.wait_for(pending, timeout=1)
+        assert [record.message for record in window.messages] == [queued]
+        await windows.aclose()
+        buffer.set_done()
 
     asyncio.run(run())
 
 
 def test_atomic_scope_request_waits_and_drains_global_prefix_first() -> None:
     async def run() -> None:
-        message_buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            window_duration_sec=0,
-        )
-        message_buffer.register_client(1)
-        begin, ready = _stream_controls("page-a", 1)
+        buffer = _live_buffer()
+        buffer.register_client(1)
+        begin, ready = _streams("page-a", 1)
 
-        message_buffer.atomic_start()
+        buffer.atomic_start()
         first_global = _messages.ClientPingMessage(sent_ms=4.0)
-        scoped = _ScopedMessage("page-a", "retained")
+        scoped = _Scoped("page-a", "retained")
         second_global = _messages.RunJavascriptMessage("global")
-        assert message_buffer.push_many((first_global, scoped, second_global))
-        assert message_buffer.request_delivery_scope(1, "page-a", begin, ready)
+        assert buffer.push_many((first_global, scoped, second_global))
+        assert buffer.request_delivery_scope(1, "page-a", begin, ready)
 
-        generator = message_buffer.window_generator(1)
-        pending = asyncio.create_task(generator.__anext__())
-        await asyncio.sleep(0)
-        assert not pending.done()
-
-        message_buffer.atomic_end()
-        global_window = await asyncio.wait_for(pending, timeout=0.5)
-        assert tuple(global_window.messages) == (first_global, second_global)
-        message_buffer.mark_messages_sent(1, global_window.last_message_id)
-
-        begin_window = await _next_sent_window(message_buffer, generator, 1)
-        replay_window = await _next_sent_window(message_buffer, generator, 1)
-        ready_window = await _next_sent_window(message_buffer, generator, 1)
-        assert tuple(begin_window.messages) == (begin,)
-        assert tuple(replay_window.messages) == (scoped,)
-        assert tuple(ready_window.messages) == (ready,)
-
-        await generator.aclose()
-        message_buffer.set_done()
+        windows = buffer.window_generator(1)
+        pending = await _pending(windows)
+        buffer.atomic_end()
+        window = await asyncio.wait_for(pending, timeout=1)
+        assert [record.message for record in window.messages] == [
+            first_global,
+            second_global,
+            begin,
+            scoped,
+            ready,
+        ]
+        await windows.aclose()
+        buffer.set_done()
 
     asyncio.run(run())
 
 
-def test_file_part_tokens_bound_tiny_chunks_and_wake_on_release(
+def _reserve_in_thread(buffer: AsyncMessageBuffer) -> tuple[threading.Thread, list[bool]]:
+    """Start a one-byte reservation and check that it blocks."""
+    result: list[bool] = []
+    thread = threading.Thread(target=lambda: result.append(buffer.reserve_file_bytes(1)))
+    thread.start()
+    thread.join(timeout=0.05)
+    assert thread.is_alive()
+    return thread, result
+
+
+def test_file_reservation_blocks_at_byte_capacity_and_wakes_on_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_BYTES", 4)
+    buffer = _buffer(persistent=False)
+    assert buffer.reserve_file_bytes(4)
+    thread, result = _reserve_in_thread(buffer)
+
+    buffer.release_file_bytes(4)
+    thread.join(timeout=1)
+    assert result == [True]
+    assert (buffer._file_bytes, buffer._file_parts) == (1, 1)
+
+
+def test_file_reservation_blocks_at_part_capacity_and_wakes_on_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_PARTS", 2)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
+    buffer = _buffer(persistent=False)
     assert buffer.reserve_file_bytes(1)
     assert buffer.reserve_file_bytes(1)
-    completed = threading.Event()
-    result: list[bool] = []
+    thread, result = _reserve_in_thread(buffer)
 
-    def reserve() -> None:
-        result.append(buffer.reserve_file_bytes(1))
-        completed.set()
-
-    thread = threading.Thread(target=reserve)
-    thread.start()
-    assert not completed.wait(0.05)
-    assert buffer._file_parts_reserved == 2
     buffer.release_file_bytes(1)
-    assert completed.wait(1)
+    thread.join(timeout=1)
     assert result == [True]
-    assert buffer._file_parts_reserved == 2
-    buffer.release_file_bytes(2, 2)
+    assert buffer._file_parts == 2
+
+
+def test_shutdown_wakes_a_blocked_file_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(buffer_impl, "_FILE_TRANSFER_BUFFER_BYTES", 4)
+    buffer = _buffer(persistent=False)
+    assert buffer.reserve_file_bytes(4)
+    thread, result = _reserve_in_thread(buffer)
+
     buffer.set_done()
     thread.join(timeout=1)
-
-
-def test_flush_coalesces_threadsafe_event_pulses() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    for _ in range(10_000):
-        buffer.flush()
-    assert len(loop.callbacks) == 1
-
-    callback, args = loop.callbacks.pop()
-    callback(*args)
-    assert buffer.flush_event.is_set()
-    buffer.flush()
-    assert len(loop.callbacks) == 1
-
-
-def test_connection_message_overload_is_terminal_instead_of_silent_loss(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_CONNECTION_MESSAGE_BUFFER_MAX", 2)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    assert buffer.push(_messages.RunJavascriptMessage("one"))
-    assert buffer.push(_messages.GuiRemoveMessage("one"))
-    assert not buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-
-    assert buffer.done
-    assert buffer.overload_reason is not None
-    assert buffer.message_from_id == {}
-    assert not buffer.push(_messages.GuiRemoveMessage("one"))
-
-
-def test_connection_metadata_backlog_has_an_exact_terminal_bound(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    messages = tuple(_messages.RunJavascriptMessage(value) for value in ("one", "two", "three"))
-    exact_two = sum(message.serialized_size_upper_bound()[0] for message in messages[:2])
-    monkeypatch.setattr(buffer_impl, "_CONNECTION_MESSAGE_BUFFER_MAX_METADATA_BYTES", exact_two)
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-
-    assert buffer.push(messages[0])
-    assert buffer.push(messages[1])
-    assert buffer._queued_metadata_bytes == exact_two
-    assert not buffer.push(messages[2])
-    assert buffer.done
-    assert buffer._queued_metadata_bytes == 0
-    assert buffer._queued_raw_binary_bytes == 0
-
-
-def test_connection_raw_backlog_is_bounded_and_released_on_drain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def run() -> None:
-        first = _ArrayMessage(np.zeros(5, dtype="u1"), "first")
-        second = _ArrayMessage(np.zeros(5, dtype="u1"), "second")
-        raw_size = first.serialized_size_upper_bound()[1]
-        monkeypatch.setattr(buffer_impl, "_CONNECTION_MESSAGE_BUFFER_MAX_RAW_BYTES", raw_size)
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(), persistent_messages=False, window_duration_sec=0
-        )
-        assert buffer.push(first)
-        assert buffer._queued_raw_binary_bytes == raw_size
-        window = await buffer.window_generator(1).__anext__()
-        assert window.messages[0].key == "first"  # type: ignore[attr-defined]
-        assert buffer._queued_raw_binary_bytes == 0
-        assert buffer.push(second)
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_persistent_entry_and_byte_caps_reject_without_losing_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    messages = tuple(_messages.RunJavascriptMessage(value) for value in ("one", "two", "three"))
-    exact_two = sum(message.serialized_size_upper_bound()[0] for message in messages[:2])
-    monkeypatch.setattr(buffer_impl, "_PERSISTENT_MESSAGE_BUFFER_MAX", 2)
-    monkeypatch.setattr(buffer_impl, "_PERSISTENT_MESSAGE_BUFFER_MAX_METADATA_BYTES", exact_two)
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    assert buffer.push(messages[0])
-    assert buffer.push(messages[1])
-    with pytest.raises(RuntimeError, match="persistent message backlog"):
-        buffer.push(messages[2])
-    assert not buffer.done
-    assert tuple(message.source for message in buffer.message_from_id.values()) == (
-        "one",
-        "two",
-    )
-    assert buffer._queued_metadata_bytes == exact_two
-
-
-def test_replacement_purge_and_tombstone_gc_update_byte_accounting() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(7)
-    assert buffer.push(_messages.GuiUpdateMessage("field", {"value": "x" * 100}))
-    assert buffer.push(_messages.GuiUpdateMessage("field", {"value": "short"}))
-    (stored_id,) = buffer.message_from_id
-    assert buffer._queued_metadata_bytes == buffer._serialized_size_from_id[stored_id][0]
-
-    assert buffer.push(_messages.GuiRemoveMessage("field"))
-    assert len(buffer.message_from_id) == 1
-    (remove_id,) = buffer.message_from_id
-    assert isinstance(buffer.message_from_id[remove_id], _messages.GuiRemoveMessage)
-    assert buffer._queued_metadata_bytes == buffer._serialized_size_from_id[remove_id][0]
-    buffer.mark_messages_sent(7, remove_id)
-    assert buffer.message_from_id == {}
-    assert buffer._queued_metadata_bytes == 0
-    assert buffer._queued_raw_binary_bytes == 0
-
-
-def test_protocol_strings_are_validated_before_any_buffer_mutation() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-    message = _messages.GuiUpdateMessage("component", {"nested": ["valid", {"bad": "\ud800"}]})
-
-    with pytest.raises(ValueError, match="surrogate"):
-        buffer.push(message)
-
-    assert buffer.message_counter == 0
-    assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
-    assert loop.callbacks == []
-
-
-def test_invalid_object_array_is_rejected_before_deepcopy_hooks_run() -> None:
-    class MustNotCopy:
-        def __deepcopy__(self, memo: object) -> object:
-            del memo
-            raise AssertionError("object array was copied before validation")
-
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="Python objects"):
-        buffer.push(_ArrayMessage(np.array([MustNotCopy()], dtype=object)))
-    assert buffer.message_from_id == {}
-
-
-def test_individually_oversized_persistent_message_is_never_retained(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_OUTGOING_METADATA_LIMIT_BYTES", 16)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="metadata exceeds"):
-        buffer.push(_messages.RunJavascriptMessage("x" * 128))
-
-    assert buffer.message_counter == 0
-    assert buffer.message_from_id == {}
-    assert loop.callbacks == []
-
-
-def test_single_message_decoded_node_limit_is_enforced_before_windowing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    message = _messages.GuiUpdateMessage("component", {"value": ["one", "two", "three"]})
-    decoded_nodes = message.serialized_metrics_upper_bound()[3]
-
-    monkeypatch.setattr(buffer_impl, "_OUTGOING_DECODED_NODE_LIMIT", 1 + decoded_nodes)
-    exact = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    assert exact.push(message)
-
-    monkeypatch.setattr(buffer_impl, "_OUTGOING_DECODED_NODE_LIMIT", decoded_nodes)
-    oversized = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="client traversal limit"):
-        oversized.push(message)
-    assert oversized.message_from_id == {}
-    assert oversized.id_from_redundancy_key == {}
-    assert oversized.message_counter == 0
-
-
-def test_large_valid_persistent_state_is_split_into_deliverable_windows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def run() -> None:
-        monkeypatch.setattr(buffer_impl, "_OUTGOING_METADATA_LIMIT_BYTES", 150)
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            max_window_size=128,
-            window_duration_sec=0,
-        )
-        messages = [_messages.RunJavascriptMessage(f"{index:02d}" + "x" * 18) for index in range(4)]
-        for message in messages:
-            assert buffer.push(message)
-
-        generator = buffer.window_generator(3)
-        delivered: list[_messages.Message] = []
-        windows = 0
-        while len(delivered) < len(messages):
-            window = await generator.__anext__()
-            windows += 1
-            delivered.extend(window.messages)
-            buffer.mark_messages_sent(3, window.last_message_id)
-        assert windows > 1
-        assert delivered == messages
-        await generator.aclose()
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_atomic_block_prevents_nonpersistent_window_extraction() -> None:
-    async def run() -> None:
-        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        assert buffer.push(_messages.RunJavascriptMessage("queued"))
-        buffer.atomic_start()
-        generator = buffer.window_generator(1)
-        pending = asyncio.create_task(generator.__anext__())
-        await asyncio.sleep(0)
-        assert not pending.done()
-        assert len(buffer.message_from_id) == 1
-        buffer.atomic_end()
-        window = await asyncio.wait_for(pending, 1)
-        assert [message.source for message in window.messages] == ["queued"]
-        await generator.aclose()
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_push_snapshots_nested_mutable_protocol_state_and_cached_size() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-    props = _messages.GuiTextProps(
-        order=0.0,
-        label="before",
-        hint=None,
-        disabled=False,
-        visible=True,
-        editable=False,
-        markdown=False,
-        multiline=False,
-        rows=None,
-        _source="before",
-    )
-    message = _messages.GuiTextMessage(
-        value="before",
-        uuid="component",
-        container_uuid="root",
-        props=props,
-    )
-    assert buffer.push(message)
-    stored = buffer.message_from_id[0]
-    cached_size = buffer._serialized_size_from_id[0]
-
-    props.label = "after" * 100_000
-    props._source = "after" * 100_000
-
-    assert isinstance(stored, _messages.GuiTextMessage)
-    assert stored.props.label == "before"
-    assert stored.props._source == "before"
-    assert buffer._serialized_size_from_id[0] == cached_size
-    assert stored.serialized_size_upper_bound() == cached_size
-
-
-def test_single_message_admission_includes_envelope_and_zstd_overhead(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    message = _messages.RunJavascriptMessage("x")
-    metadata, raw, binary_count = message.serialized_size_upper_bound()
-    envelope = buffer_impl._metadata_envelope_upper_bound(metadata, binary_count)
-    monkeypatch.setattr(buffer_impl, "_OUTGOING_METADATA_LIMIT_BYTES", envelope - 1)
-
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="metadata exceeds"):
-        buffer.push(message)
-    assert buffer.message_from_id == {}
-    assert raw == 0
-
-
-def test_push_many_rolls_back_if_a_later_insertion_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    original = buffer._insert_prepared_locked
-    calls = 0
-
-    def fail_second(prepared: object, *, file_bytes_reserved: int) -> bool:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("second insertion failed")
-        return original(prepared, file_bytes_reserved=file_bytes_reserved)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(buffer, "_insert_prepared_locked", fail_second)
-    with pytest.raises(RuntimeError, match="second insertion failed"):
-        buffer.push_many(
-            (
-                _messages.RunJavascriptMessage("first"),
-                _messages.RunJavascriptMessage("second"),
-            )
-        )
-
-    assert buffer.message_counter == 0
-    assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
-    assert buffer._serialized_size_from_id == {}
-    assert buffer._queued_metadata_bytes == 0
-    assert buffer._queued_raw_binary_bytes == 0
-
-
-def test_snapshot_recomputes_payload_derived_redundancy_key() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    message = _messages.GuiUpdateMessage("before", {"value": 1})
-    assert message.redundancy_key() == "gui:before:update:value"
-
-    message.uuid = "after"
-    message.updates = {"visible": True}
-    assert buffer.push(message)
-
-    stored = buffer.message_from_id[0]
-    assert isinstance(stored, _messages.GuiUpdateMessage)
-    assert stored.redundancy_key() == "gui:after:update:visible"
-    assert buffer.id_from_redundancy_key == {"gui:after:update:visible": 0}
-
-
-def test_unsupported_dynamic_value_is_rejected_before_deepcopy_hook() -> None:
-    class MustNotCopy:
-        def __deepcopy__(self, memo: object) -> object:
-            del memo
-            raise AssertionError("unsupported object reached deepcopy")
-
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="unsupported outbound protocol value"):
-        buffer.push(_messages.GuiUpdateMessage("component", {"value": MustNotCopy()}))
-    assert buffer.message_from_id == {}
-    assert loop.callbacks == []
-
-
-def test_oversized_ndarray_is_rejected_before_deepcopy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from leika.infra import _messages as infra_messages
-
-    monkeypatch.setattr(infra_messages, "_OUTBOUND_PREFLIGHT_RAW_BYTES_LIMIT", 3)
-    value = np.zeros(4, dtype=np.uint8)
-
-    def forbidden_snapshot(*_: object, **__: object) -> object:
-        raise AssertionError("oversized ndarray reached structural snapshot")
-
-    monkeypatch.setattr(
-        _messages.Message,
-        "_bounded_transport_snapshot",
-        forbidden_snapshot,
-    )
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="binary data exceeds"):
-        buffer.push(_ArrayMessage(value))
-    assert buffer.message_from_id == {}
-
-
-def test_push_many_false_overload_rolls_back_without_closing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_CONNECTION_MESSAGE_BUFFER_MAX", 2)
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    existing = _messages.RunJavascriptMessage("existing")
-    assert buffer.push(existing)
-    loop.callbacks.clear()
-    before = (
-        buffer.message_counter,
-        buffer.message_from_id.copy(),
-        buffer.id_from_redundancy_key.copy(),
-        buffer._serialized_size_from_id.copy(),
-        buffer._decoded_nodes_from_id.copy(),
-        buffer._queued_metadata_bytes,
-        buffer._queued_raw_binary_bytes,
-    )
-
-    # The batch length itself is valid. Its first insertion reaches the cap and
-    # the second returns False, exercising transaction rollback rather than the
-    # earlier hostile-sequence preparation guard.
-    assert not buffer.push_many(
-        (
-            _messages.RunJavascriptMessage("first"),
-            _messages.RunJavascriptMessage("second"),
-        )
-    )
-    assert not buffer.done
-    assert buffer.overload_reason is None
-    assert (
-        buffer.message_counter,
-        buffer.message_from_id,
-        buffer.id_from_redundancy_key,
-        buffer._serialized_size_from_id,
-        buffer._decoded_nodes_from_id,
-        buffer._queued_metadata_bytes,
-        buffer._queued_raw_binary_bytes,
-    ) == before
-    assert tuple(buffer.message_from_id.values()) == (existing,)
-    assert loop.callbacks == []
-
-
-def test_atomic_end_after_shutdown_never_schedules_on_closed_loop() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=False)  # type: ignore[arg-type]
-    buffer.atomic_start()
-    buffer.set_done()
-    buffer.event_loop = _ClosedLoop()  # type: ignore[assignment]
-    buffer.atomic_end()
-    assert buffer.atomic_counter == 0
-
-
-def test_outgoing_windows_split_at_the_browser_decoded_node_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def run() -> None:
-        messages = tuple(
-            _messages.GuiUpdateMessage(f"component-{index}", {"value": [1, 2, 3]})
-            for index in range(3)
-        )
-        one_message_nodes = messages[0].serialized_metrics_upper_bound()[3]
-        monkeypatch.setattr(
-            buffer_impl,
-            "_OUTGOING_DECODED_NODE_LIMIT",
-            1 + one_message_nodes,
-        )
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=False,
-            max_window_size=128,
-            window_duration_sec=0,
-        )
-        assert buffer.push_many(messages)
-        generator = buffer.window_generator(1)
-        windows = [await generator.__anext__() for _ in range(3)]
-        assert [len(window.messages) for window in windows] == [1, 1, 1]
-        await generator.aclose()
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_parent_removal_purges_every_named_descendant_from_replay() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(7)
-    props = _messages.GuiTextProps(
-        order=0.0,
-        label="child",
-        hint=None,
-        disabled=False,
-        visible=True,
-        editable=False,
-        markdown=False,
-        multiline=False,
-        rows=None,
-        _source="child",
-    )
-    assert buffer.push(
-        _messages.GuiTextMessage(
-            value="child",
-            uuid="child",
-            container_uuid="parent",
-            props=props,
-        )
-    )
-    assert buffer.push(_messages.GuiUpdateMessage("child", {"value": "updated"}))
-    assert buffer.push(_messages.GuiUpdateMessage("grandchild", {"value": "updated"}))
-    assert buffer.push(
-        _messages.GuiRemoveMessage(
-            "parent",
-            removed_uuids=("grandchild", "child"),
-        )
-    )
-
-    assert len(buffer.message_from_id) == 1
-    (stored,) = buffer.message_from_id.values()
-    assert isinstance(stored, _messages.GuiRemoveMessage)
-    assert stored.removed_uuids == ("grandchild", "child")
-
-
-def _tab_group_props(*tabs: _messages.GuiTab) -> _messages.GuiTabGroupProps:
-    return _messages.GuiTabGroupProps(_tabs=tabs, order=0.0, visible=True)
-
-
-def _tab_child_message(uuid: str, container_uuid: str) -> _messages.GuiTextMessage:
-    return _messages.GuiTextMessage(
-        value=uuid,
-        uuid=uuid,
-        container_uuid=container_uuid,
-        props=_messages.GuiTextProps(
-            order=0.0,
-            label=uuid,
-            hint=None,
-            disabled=False,
-            visible=True,
-            editable=False,
-            markdown=False,
-            multiline=False,
-            rows=None,
-            _source=uuid,
-        ),
-    )
-
-
-def test_tab_lifecycle_is_prefix_safe_for_slow_and_inflight_clients() -> None:
-    async def run() -> None:
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=True,
-            max_window_size=1,
-            window_duration_sec=0,
-        )
-        group = _messages.GuiTabGroupMessage("tabs", "root", _tab_group_props())
-        tab_a = _messages.GuiTabMessage("tab-a", "tabs", "Alpha", None)
-        tab_b = _messages.GuiTabMessage("tab-b", "tabs", "Beta", None)
-        assert buffer.push(group)
-        assert buffer.push(tab_a)
-        assert buffer.push(_tab_child_message("child-a", "tab-a"))
-
-        client = buffer.window_generator(1)
-        group_window = await asyncio.wait_for(client.__anext__(), 0.5)
-        tab_a_window = await asyncio.wait_for(client.__anext__(), 0.5)
-        assert isinstance(group_window.messages[0], _messages.GuiTabGroupMessage)
-        assert group_window.messages[0].props._tabs == ()
-        assert tab_a_window.messages == (tab_a,)
-
-        # Metadata updates can move after children because the structural tab
-        # declaration remains retained before every child and already owns the
-        # container. A yielded older update remains immutable.
-        update_a = _messages.GuiTabUpdateMessage("tab-a", "tabs", "Alpha", "old")
-        assert buffer.push(update_a)
-        child_a_window = await asyncio.wait_for(client.__anext__(), 0.5)
-        assert isinstance(child_a_window.messages[0], _messages.GuiTextMessage)
-        old_window = await asyncio.wait_for(client.__anext__(), 0.5)
-        assert old_window.messages == (update_a,)
-        update_a_new = _messages.GuiTabUpdateMessage("tab-a", "tabs", "Alpha", "new")
-        assert buffer.push(update_a_new)
-        assert old_window.messages == (update_a,)
-
-        assert buffer.push(tab_b)
-        assert buffer.push(_tab_child_message("child-b", "tab-b"))
-        tail = [(await asyncio.wait_for(client.__anext__(), 0.5)).messages[0] for _ in range(3)]
-        assert [type(message) for message in tail] == [
-            _messages.GuiTabUpdateMessage,
-            _messages.GuiTabMessage,
-            _messages.GuiTextMessage,
-        ]
-
-        fresh = buffer.window_generator(2)
-        replay = [(await asyncio.wait_for(fresh.__anext__(), 0.5)).messages[0] for _ in range(6)]
-        assert [type(message) for message in replay] == [
-            _messages.GuiTabGroupMessage,
-            _messages.GuiTabMessage,
-            _messages.GuiTextMessage,
-            _messages.GuiTabUpdateMessage,
-            _messages.GuiTabMessage,
-            _messages.GuiTextMessage,
-        ]
-        assert replay[0].props._tabs == ()  # type: ignore[union-attr]
-        assert replay[1].uuid == "tab-a"  # type: ignore[union-attr]
-        assert replay[5].container_uuid == "tab-b"  # type: ignore[union-attr]
-
-        await client.aclose()
-        await fresh.aclose()
-        buffer.set_done()
-
-    asyncio.run(run())
-
-
-def test_tab_remove_purges_declaration_update_and_descendants_before_recreate() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(1)
-    assert buffer.push(_messages.GuiTabGroupMessage("tabs", "root", _tab_group_props()))
-    declaration = _messages.GuiTabMessage("tab-a", "tabs", "Alpha", None)
-    assert buffer.push(declaration)
-    assert buffer.push(_tab_child_message("child-a", "tab-a"))
-    assert buffer.push(_messages.GuiTabUpdateMessage("tab-a", "tabs", "Renamed", "icon"))
-    assert buffer.push(
-        _messages.GuiRemoveMessage(
-            "tab-a",
-            removed_uuids=("child-a",),
-        )
-    )
-    assert all(
-        not (
-            getattr(message, "uuid", None) in {"tab-a", "child-a"}
-            and message.lifecycle_phase != "remove"
-        )
-        for message in buffer.message_from_id.values()
-    )
-
-    recreated = _messages.GuiTabMessage("tab-a", "tabs", "New", None)
-    assert buffer.push(recreated)
-    recreate_id = buffer.id_from_redundancy_key[recreated.redundancy_key()]  # type: ignore[index]
-    assert recreate_id > 0
-    assert buffer.message_from_id[recreate_id] == recreated
-
-
-def test_nested_tab_tombstones_purge_lifecycle_without_expanding_component_list() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(1)
-    assert buffer.push(_messages.GuiTabMessage("outer", "group-a", "Outer", None))
-    assert buffer.push(_messages.GuiTabMessage("inner", "group-b", "Inner", None))
-    assert buffer.push(_tab_child_message("child", "inner"))
-    remove = _messages.GuiRemoveMessage(
-        "folder",
-        removed_uuids=("child",),
-        removed_tab_uuids=("inner", "outer"),
-    )
-    assert buffer.push(remove)
-    assert tuple(buffer.message_from_id.values()) == (remove,)
-    assert remove.purge_entities() == (
-        ("gui", "folder"),
-        ("gui", "child"),
-        ("gui", "inner"),
-        ("gui", "outer"),
-    )
-
-
-def test_large_subtree_purge_does_not_scan_unrelated_retained_entries() -> None:
-    class CountingDict(dict[int, _messages.Message]):
-        items_calls = 0
-        item_visits = 0
-
-        def items(self) -> Any:
-            self.items_calls += 1
-            entries = super().items()
-
-            def count() -> Any:
-                for entry in entries:
-                    self.item_visits += 1
-                    yield entry
-
-            return count()
-
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(1)
-    tab_count = 1_024
-    for index in range(tab_count):
-        assert buffer.push(_messages.GuiTabMessage(f"tab-{index}", "tabs", f"Tab {index}", None))
-
-    retained = CountingDict(buffer.message_from_id)
-    buffer.message_from_id = retained
-    remove = _messages.GuiRemoveMessage(
-        "folder",
-        removed_tab_uuids=tuple(f"tab-{index}" for index in range(tab_count)),
-    )
-    assert buffer.push(remove)
-
-    # Entity and tombstone indexes avoid walking unrelated retained payloads,
-    # even when one removal names a large subtree.
-    assert retained.items_calls == 0
-    assert retained.item_visits == 0
-    assert tuple(buffer.message_from_id.values()) == (remove,)
-    (remove_id,) = buffer.message_from_id
-    assert buffer.id_from_redundancy_key == {remove.redundancy_key(): remove_id}
-    assert buffer._queued_metadata_bytes == buffer._serialized_size_from_id[remove_id][0]
-    assert buffer._queued_raw_binary_bytes == buffer._serialized_size_from_id[remove_id][1]
-    assert set(buffer._decoded_nodes_from_id) == {remove_id}
-
-
-def test_unhashable_lifecycle_identifier_is_rejected_before_insertion() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="lifecycle entity identifiers must be hashable"):
-        buffer.push(_UnhashableEntityMessage(["not", "hashable"]))
-    assert not buffer.done
-    assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
-    assert buffer._queued_metadata_bytes == 0
-    assert buffer._queued_raw_binary_bytes == 0
-
-
-def test_unhashable_purge_identifier_is_rejected_before_insertion() -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="purged entity identifiers must be hashable"):
-        buffer.push(_UnhashablePurgeMessage("owner"))
-    assert not buffer.done
-    assert buffer.message_from_id == {}
-    assert buffer.id_from_redundancy_key == {}
-    assert buffer._queued_metadata_bytes == 0
-    assert buffer._queued_raw_binary_bytes == 0
-
-
-def test_push_many_rejects_huge_sequence_before_iteration() -> None:
-    class HugeSequence:
-        touched = False
-
-        def __len__(self) -> int:
-            return buffer_impl._CONNECTION_MESSAGE_BUFFER_MAX + 2
-
-        def __getitem__(self, index: int) -> _messages.Message:
-            self.touched = True
-            raise AssertionError(index)
-
-    messages = HugeSequence()
-    buffer = AsyncMessageBuffer(asyncio.new_event_loop(), persistent_messages=False)
-    try:
-        with pytest.raises(RuntimeError, match="preparation limit"):
-            buffer.push_many(messages)  # type: ignore[arg-type]
-        assert not messages.touched
-        assert not buffer.done
-        assert buffer.message_from_id == {}
-    finally:
-        buffer.event_loop.close()
-
-
-@pytest.mark.parametrize("reported_length", [0, 1])
-def test_push_many_rejects_a_sequence_that_yields_more_than_reported(
-    reported_length: int,
-) -> None:
-    class LyingSequence:
-        yielded = 0
-
-        def __len__(self) -> int:
-            return reported_length
-
-        def __iter__(self) -> Any:
-            while True:
-                self.yielded += 1
-                yield _messages.RunJavascriptMessage(str(self.yielded))
-
-    messages = LyingSequence()
-    buffer = AsyncMessageBuffer(asyncio.new_event_loop(), persistent_messages=False)
-    try:
-        with pytest.raises(RuntimeError, match="length changed"):
-            buffer.push_many(messages)  # type: ignore[arg-type]
-        assert messages.yielded <= buffer_impl._CONNECTION_MESSAGE_BUFFER_MAX + 2
-        assert buffer.message_from_id == {}
-        assert not buffer.done
-    finally:
-        buffer.event_loop.close()
-
-
-def test_push_many_rejects_a_sequence_that_yields_fewer_than_reported() -> None:
-    class ShortSequence:
-        def __len__(self) -> int:
-            return 2
-
-        def __iter__(self) -> Any:
-            yield _messages.RunJavascriptMessage("only")
-
-    buffer = AsyncMessageBuffer(asyncio.new_event_loop(), persistent_messages=False)
-    try:
-        with pytest.raises(RuntimeError, match="length changed"):
-            buffer.push_many(ShortSequence())  # type: ignore[arg-type]
-        assert buffer.message_from_id == {}
-        assert not buffer.done
-    finally:
-        buffer.event_loop.close()
-
-
-def test_duplicate_runtime_script_sources_coalesce_by_content() -> None:
-    loop = _QueuedLoop()
-    buffer = AsyncMessageBuffer(loop, persistent_messages=True)  # type: ignore[arg-type]
-    assert buffer.push(_messages.RunJavascriptMessage("runtime"))
-    assert buffer.push(_messages.RunJavascriptMessage("runtime"))
-    assert len(buffer.message_from_id) == 1
-
-
-def test_preparation_reservation_serializes_bounded_deepcopy_owners(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_PREPARATION_OWNER_MAX", 1)
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-    original = buffer._prepare_message
-    entered = threading.Event()
-    release = threading.Event()
-    calls = 0
-    call_lock = threading.Lock()
-
-    def blocked(message: _messages.Message, estimate: tuple[int, int]):
-        nonlocal calls
-        with call_lock:
-            calls += 1
-            current = calls
-        if current == 1:
-            entered.set()
-            assert release.wait(2.0)
-        return original(message, estimate)
-
-    monkeypatch.setattr(buffer, "_prepare_message", blocked)
-    results: list[bool] = []
-    threads = [
-        threading.Thread(
-            target=lambda index=index: results.append(
-                buffer.push(_messages.ClientPingMessage(sent_ms=float(index)))
-            )
-        )
-        for index in range(2)
-    ]
-    for thread in threads:
-        thread.start()
-    assert entered.wait(2.0)
-    threading.Event().wait(0.05)
-    with call_lock:
-        assert calls == 1
-    release.set()
-    for thread in threads:
-        thread.join(2.0)
-    assert results == [True, True]
-    assert buffer._preparation_owners == 0
-    assert buffer._preparation_metadata_bytes == 0
-    assert buffer._preparation_raw_bytes == 0
-
-
-def test_batch_preparation_rejects_cumulative_cost_before_copy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-    messages = (
-        _messages.RunJavascriptMessage("first"),
-        _messages.RunJavascriptMessage("second"),
-    )
-    one_metadata = buffer._preparation_estimate(messages[0])[0]
-    monkeypatch.setattr(buffer_impl, "_PREPARATION_METADATA_MAX_BYTES", one_metadata)
-
-    def forbidden(*_: object, **__: object) -> object:
-        raise AssertionError("snapshot ran before cumulative preparation admission")
-
-    monkeypatch.setattr(
-        _messages.Message,
-        "_bounded_transport_snapshot",
-        forbidden,
-    )
-    with pytest.raises(RuntimeError, match="preparation exceeds"):
-        buffer.push_many(messages)
-    assert buffer.message_from_id == {}
-    assert buffer._preparation_owners == 0
-
-
-def test_preparation_failure_and_shutdown_release_or_wake_owners(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-    original = _messages.Message._bounded_transport_snapshot
-    monkeypatch.setattr(
-        _messages.Message,
-        "_bounded_transport_snapshot",
-        lambda *args, **kwargs: (_ for _ in ()).throw(MemoryError("copy failed")),
-    )
-    with pytest.raises(MemoryError, match="copy failed"):
-        buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-    assert buffer._preparation_owners == 0
-    assert buffer._preparation_metadata_bytes == 0
-    assert buffer._preparation_raw_bytes == 0
-
-    monkeypatch.setattr(_messages.Message, "_bounded_transport_snapshot", original)
-    assert buffer.push(_messages.ClientPingMessage(sent_ms=2.0))
-    assert buffer._preparation_owners == 0
-
-    with buffer._preparation_condition:
-        buffer._preparation_owners = buffer_impl._PREPARATION_OWNER_MAX
-    result: list[bool] = []
-    waiter = threading.Thread(
-        target=lambda: result.append(buffer.push(_messages.ClientPingMessage(sent_ms=3.0)))
-    )
-    waiter.start()
-    threading.Event().wait(0.05)
-    assert waiter.is_alive()
-    buffer.set_done()
-    waiter.join(2.0)
     assert result == [False]
-    # The synthetic occupied slots aren't real reservations; restore them so
-    # the invariant assertion describes only the waiter under test.
-    with buffer._preparation_condition:
-        buffer._preparation_owners = 0
 
 
-def test_message_preparation_reentrancy_fails_without_deadlock_and_recovers() -> None:
-    target: list[AsyncMessageBuffer] = []
+def test_reserved_windows_preserve_order_and_own_capacity_until_sent() -> None:
+    async def run() -> None:
+        buffer = _live_buffer(persistent=False)
+        first = _messages.FileTransferPart(None, "transfer", 0, b"ab")
+        start = _messages.RunJavascriptMessage("between")
+        second = _messages.FileTransferPart(None, "transfer", 1, b"cd")
+        assert buffer.reserve_file_bytes(2)
+        assert buffer.push_reserved_file_message(first, 2)
+        assert buffer.push(start)
+        assert buffer.reserve_file_bytes(2)
+        assert buffer.push_reserved_file_message(second, 2)
 
-    # Private helper leaves are not registered as wire types (though private
-    # structural roots are still traversed when they own public descendants).
-    # This buffer-only hook must not mutate the bundled high-level protocol.
-    @dataclasses.dataclass
-    class _ReentrantMessage(_messages.Message):
-        value: int
+        windows = buffer.window_generator(1)
+        window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+        assert [record.message for record in window.messages] == [first, start, second]
+        assert (window.file_bytes, window.file_parts) == (4, 2)
+        # Leaving the queue does not free capacity; the completed send does.
+        assert buffer.message_from_id == {}
+        assert (buffer._file_bytes, buffer._file_parts) == (4, 2)
+        buffer.release_file_bytes(window.file_bytes, window.file_parts)
+        assert (buffer._file_bytes, buffer._file_parts) == (0, 0)
+        await windows.aclose()
+        buffer.set_done()
 
-        def redundancy_key(self) -> str:
-            target[0].push(_messages.ClientPingMessage(sent_ms=99.0))
-            return "reentrant"
-
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=False)  # type: ignore[arg-type]
-    target.append(buffer)
-    with pytest.raises(RuntimeError, match="cannot re-enter"):
-        buffer.push(_ReentrantMessage(1))
-    assert buffer._preparation_owners == 0
-    assert buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-
-
-def test_ordinary_push_and_ack_do_not_scan_retained_payloads() -> None:
-    class NoScanDict(dict[int, _messages.Message]):
-        def items(self) -> Any:
-            raise AssertionError("ordinary transport work scanned the retained scene")
-
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(1)
-    for index in range(256):
-        assert buffer.push(_messages.GuiTabMessage(str(index), "tabs", str(index), None))
-    buffer.message_from_id = NoScanDict(buffer.message_from_id)
-    # A pending remove must not make every later update scan the backlog.
-    assert buffer.push(_messages.GuiRemoveMessage("0"))
-    assert buffer.push(_messages.GuiTabMessage("new", "tabs", "New", None))
-    buffer.mark_messages_sent(1, buffer.message_counter - 1)
-    assert len(buffer.message_from_id) == 256
-    assert not buffer._tombstone_ids
-
-
-def test_lifecycle_indexes_rollback_after_partial_batch_purge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(buffer_impl, "_PERSISTENT_MESSAGE_BUFFER_MAX", 3)
-    buffer = AsyncMessageBuffer(_QueuedLoop(), persistent_messages=True)  # type: ignore[arg-type]
-    buffer.register_client(1)
-    original = (
-        _messages.GuiTabMessage("target", "tabs", "Target", None),
-        _messages.GuiUpdateMessage("target", {"label": "Changed"}),
-        _messages.GuiTabMessage("keep", "tabs", "Keep", None),
-    )
-    assert buffer.push_many(original)
-    remove = _messages.GuiRemoveMessage("target")
-    with pytest.raises(RuntimeError, match="persistent message backlog"):
-        buffer.push_many(
-            (
-                remove,
-                _messages.GuiTabMessage("first", "tabs", "First", None),
-                _messages.GuiTabMessage("second", "tabs", "Second", None),
-            )
-        )
-    assert tuple(buffer.message_from_id.values()) == original
-    with buffer.buffer_lock:
-        assert tuple(message for _, message in buffer._messages_after_locked(-1, 10)) == original
-    assert buffer.push(remove)
-    assert tuple(buffer.message_from_id.values()) == (original[2], remove)
-    buffer.mark_messages_sent(1, buffer.message_counter - 1)
-    assert tuple(buffer.message_from_id.values()) == (original[2],)
-    assert not buffer._tombstone_ids
-    buffer.set_done()
-    assert not buffer._entity_from_id
-    assert not buffer._message_ids_from_entity
-    assert not buffer._message_ids
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("persistent", [False, True])
-def test_message_index_compacts_replacements_and_delivers_new_tail_once(persistent: bool) -> None:
+def test_windows_split_at_the_message_count_in_order(persistent: bool) -> None:
     async def run() -> None:
-        buffer = AsyncMessageBuffer(
-            asyncio.get_running_loop(),
-            persistent_messages=persistent,
-            max_window_size=16,
-            window_duration_sec=0,
-        )
-        for index in range(128):
-            assert buffer.push(_messages.GuiTabMessage(str(index), "tabs", str(index), None))
-        for revision in range(1_000):
-            assert buffer.push(_messages.GuiTabMessage("0", "tabs", str(revision), None))
-        assert len(buffer._message_ids) <= 2 * len(buffer.message_from_id) + 1
-        expected = tuple(buffer.message_from_id.values())
-        generator = buffer.window_generator(1)
+        buffer = _live_buffer(persistent, max_window_size=2)
+        messages = [_messages.RunJavascriptMessage(str(index)) for index in range(5)]
+        assert buffer.push_many(messages)
+        windows = buffer.window_generator(1)
+        sizes = []
         received: list[_messages.Message] = []
-        for _ in range(8):
-            window = await _next_sent_window(buffer, generator, 1)
-            received.extend(window.messages)
-        assert tuple(received) == expected
+        while len(received) < len(messages):
+            window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+            buffer.mark_messages_sent(1, window.last_message_id)
+            sizes.append(len(window.messages))
+            received.extend(record.message for record in window.messages)
+        assert sizes == [2, 2, 1]
+        assert received == messages
+        await windows.aclose()
+        buffer.set_done()
 
-        update = _messages.GuiTabMessage("0", "tabs", "live", None)
+    asyncio.run(run())
+
+
+def test_windows_stop_before_the_byte_limit_unless_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        small = [_messages.RunJavascriptMessage(value) for value in ("aa", "bb", "cc")]
+        large = _messages.RunJavascriptMessage("x" * 1_000)
+        monkeypatch.setattr(buffer_impl, "_WINDOW_MAX_BYTES", 2 * len(small[0].encode()))
+        buffer = _live_buffer(persistent=False)
+        assert buffer.push_many([*small, large])
+        windows = buffer.window_generator(1)
+        batches = []
+        for _ in range(3):
+            window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+            batches.append([record.message for record in window.messages])
+        # A message larger than the limit still goes, alone.
+        assert batches == [small[:2], small[2:], [large]]
+        await windows.aclose()
+        buffer.set_done()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_sparse_index_compaction_delivers_each_message_once(persistent: bool) -> None:
+    async def run() -> None:
+        buffer = _live_buffer(persistent, max_window_size=16)
+        for index in range(128):
+            assert buffer.push(_messages.GuiUpdateMessage(str(index), {"value": 0}))
+        for revision in range(1_000):
+            assert buffer.push(_messages.GuiUpdateMessage("0", {"value": revision}))
+        # Replaced IDs leave the replay index instead of accumulating.
+        assert len(buffer._ids) <= 2 * len(buffer.message_from_id)
+        expected = _retained(buffer)
+        assert len(expected) == 128
+
+        windows = buffer.window_generator(1)
+        assert await _receive(buffer, windows, 1, 128) == expected
+
+        update = _messages.GuiUpdateMessage("0", {"value": "live"})
         assert buffer.push(update)
-        window = await _next_sent_window(buffer, generator, 1)
-        assert window.messages == (update,)
-        assert window.last_message_id == buffer.message_counter - 1
-        await generator.aclose()
+        window = await asyncio.wait_for(windows.__anext__(), timeout=1)
+        assert [record.message for record in window.messages] == [update]
+        assert window.last_message_id == buffer._next_id - 1
+        await windows.aclose()
         buffer.set_done()
 
     asyncio.run(run())

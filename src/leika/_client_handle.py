@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ContextManager, Iterator, Sequence
 from uuid import uuid4
 
-from . import _downloads, _messages, infra
+from . import _downloads, _messages
 from ._async_errors import print_async_errors
 from ._file_transfer import PREVIEW_MAX_BYTES, validate_file_display_name
 from ._gui_api import GuiApi
 from ._notification_handle import NotificationHandle
 from ._rendering import RenderingMode, render_message
+from ._transport._websocket import WebsockClientConnection
 from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
 
 if TYPE_CHECKING:
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 class ClientHandle:
     """A connected browser with its own client-local GUI."""
 
-    def __init__(self, conn: infra.WebsockClientConnection, server: Server) -> None:
+    def __init__(self, conn: WebsockClientConnection, server: Server) -> None:
         # Private attributes.
         self._websock_connection = conn
         self._server = server
@@ -47,8 +48,8 @@ class ClientHandle:
         self._outgoing_transfer_cancel_from_uuid: dict[str, threading.Event] = {}
 
     async def _prepare_rendering(
-        self, messages: Sequence[infra.Message]
-    ) -> Sequence[infra.Message]:
+        self, messages: Sequence[_messages.Message]
+    ) -> Sequence[_messages.Message]:
         with self._pane_size_lock:
             mode, fit = self._rendering, self._image_fit
             sizes = self._pane_sizes.copy()
@@ -64,7 +65,7 @@ class ClientHandle:
 
         delivery_rate = self.delivery_rate if mode == "auto" else None
 
-        def prepare() -> Sequence[infra.Message]:
+        def prepare() -> Sequence[_messages.Message]:
             return tuple(
                 render_message(
                     message,

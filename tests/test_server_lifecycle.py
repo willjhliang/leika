@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 import socket
 import sys
 import threading
 import time
 import types
-import weakref
-from collections.abc import Sequence
 from concurrent.futures import Future
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,14 +16,30 @@ from websockets.typing import Subprotocol
 
 import leika
 import leika._client_autobuild
-import leika._messages
 import leika._pages as pages_impl
 import leika._server as server_impl
-import leika.infra._infra as infra_impl
+import leika._transport._websocket as websocket_impl
 from leika._client_handle import ClientHandle
 from leika._executor import BoundedThreadPoolExecutor
-from leika.infra import protocol_fingerprint
-from leika.infra._http_security import _ALLOWED_HOSTS_MAX
+from leika._messages import Message
+from leika._transport._message_buffer import AsyncMessageBuffer
+from leika._transport._typescript import protocol_fingerprint
+from leika._transport._websocket import ClientId, WebsockClientConnection, WebsockServer
+
+PROTOCOL = Subprotocol(f"leika-{protocol_fingerprint()}")
+
+
+@pytest.fixture(autouse=True)
+def _skip_client_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+
+
+async def _ignore(_: WebsockClientConnection) -> None:
+    pass
+
+
+def _low_level_server(host: str = "127.0.0.1", port: int = 0) -> WebsockServer:
+    return WebsockServer(host, port, on_connect=_ignore, on_disconnect=_ignore, verbose=False)
 
 
 @pytest.mark.parametrize("interruption_type", [KeyboardInterrupt, SystemExit])
@@ -43,14 +55,14 @@ def test_start_interruption_is_signalled_and_never_waits_without_a_bound(
             assert worker_started.wait(1.0)
             raise interruption_type()
 
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    server = _low_level_server()
 
     def stubborn_worker(_: Future[None]) -> None:
         worker_started.set()
         release_worker.wait()
 
-    monkeypatch.setattr(infra_impl, "Future", InterruptingFuture)
-    monkeypatch.setattr(infra_impl, "_SERVER_STOP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(websocket_impl, "Future", InterruptingFuture)
+    monkeypatch.setattr(websocket_impl, "_SERVER_STOP_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(server, "_background_worker", stubborn_worker)
 
     try:
@@ -80,17 +92,17 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
         async def __aenter__(self) -> Any:
             loops.append(asyncio.get_running_loop())
             socket = SimpleNamespace(getsockname=lambda: ("127.0.0.1", 43210))
-            return SimpleNamespace(server=SimpleNamespace(sockets=[socket]))
+            return SimpleNamespace(sockets=[socket])
 
         async def __aexit__(self, *_: Any) -> None:
             raise OSError("ready server failed during shutdown")
 
     monkeypatch.setattr(
-        infra_impl.websockets.legacy.server,
+        websocket_impl.websockets.legacy.server,
         "serve",
         lambda *args, **kwargs: FailingServeContext(),
     )
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    server = _low_level_server()
     startup: Future[None] = Future()
     failures: list[BaseException] = []
 
@@ -103,7 +115,7 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
     worker = threading.Thread(target=run_worker)
     worker.start()
     startup.result(timeout=1.0)
-    server._signal_stop()
+    server.signal_stop()
     worker.join(timeout=1.0)
 
     assert not worker.is_alive()
@@ -112,13 +124,9 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
     assert str(failures[0]) == "ready server failed during shutdown"
     assert len(loops) == 1 and loops[0].is_closed()
     assert server._background_event_loop is None
-    assert server._stop_event is None
 
 
-def test_high_level_stop_is_safe_from_the_server_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+def test_high_level_stop_is_safe_from_the_server_event_loop() -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     callback_returned = threading.Event()
     failures: list[BaseException] = []
@@ -147,10 +155,7 @@ def test_high_level_stop_is_safe_from_the_server_event_loop(
         server.stop()
 
 
-def test_high_level_stop_from_sync_connection_callback_returns_promptly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+def test_high_level_stop_from_sync_connection_callback_returns_promptly() -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     callback_returned = threading.Event()
     failures: list[BaseException] = []
@@ -167,13 +172,10 @@ def test_high_level_stop_from_sync_connection_callback_returns_promptly(
             elapsed.append(time.monotonic() - started)
             callback_returned.set()
 
-    protocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{protocol_fingerprint(leika._messages.Message)}"
-    )
     try:
         with connect(
             f"ws://127.0.0.1:{server.port}",
-            subprotocols=[protocol],
+            subprotocols=[PROTOCOL],
             open_timeout=2,
         ):
             assert callback_returned.wait(2.0)
@@ -195,7 +197,6 @@ def test_high_level_stop_from_sync_connection_callback_returns_promptly(
 def test_stop_finalizer_start_failure_can_be_retried_while_callback_is_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     original_start = threading.Thread.start
     failed = False
@@ -233,7 +234,6 @@ def test_stop_finalizer_start_failure_can_be_retried_while_callback_is_active(
 def test_stop_finalizer_target_failure_clears_ownership_and_allows_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     original_finish = server._finish_stop
     first_failed = threading.Event()
@@ -359,14 +359,16 @@ def test_client_handle_uses_the_live_connection_loop_before_server_start_returns
         _next_gui_order=lambda: 1.0,
     )
 
-    async def make_buffer() -> infra_impl.AsyncMessageBuffer:
+    async def make_buffer(persistent: bool) -> AsyncMessageBuffer:
         # Build the buffer on its owning loop, matching production.
-        return infra_impl.AsyncMessageBuffer(loop, persistent_messages=False)
+        return AsyncMessageBuffer(loop, persistent_messages=persistent)
 
-    buffer = loop.run_until_complete(make_buffer())
-    connection = infra_impl.WebsockClientConnection(
-        infra_impl.ClientId(1),
-        infra_impl._ClientHandleState(buffer),
+    connection = WebsockClientConnection(
+        ClientId(1),
+        websocket_impl._ClientHandleState(
+            loop.run_until_complete(make_buffer(False)),
+            loop.run_until_complete(make_buffer(True)),
+        ),
     )
 
     try:
@@ -402,12 +404,9 @@ def test_high_level_async_connection_callbacks_are_isolated(
     async def continue_disconnect(_: ClientHandle) -> None:
         disconnected.set()
 
-    protocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{protocol_fingerprint(leika._messages.Message)}"
-    )
     with connect(
         f"ws://127.0.0.1:{server.port}",
-        subprotocols=[protocol],
+        subprotocols=[PROTOCOL],
         open_timeout=2,
     ):
         assert connected.wait(2.0)
@@ -439,12 +438,9 @@ def test_high_level_callbacks_await_callable_objects_and_returned_awaitables(
     server.on_client_connect(AsyncRecorder("connect", connected))
     server.on_client_disconnect(AsyncRecorder("disconnect", disconnected))
 
-    protocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{protocol_fingerprint(leika._messages.Message)}"
-    )
     with connect(
         f"ws://127.0.0.1:{server.port}",
-        subprotocols=[protocol],
+        subprotocols=[PROTOCOL],
         open_timeout=2,
     ):
         assert connected.wait(2.0)
@@ -500,39 +496,14 @@ def test_invalid_high_level_constructor_inputs_fail_before_build_or_workers(
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    ("field", "exception_type", "message"),
     [
-        {"host": ""},
-        {"host": "bad_host"},
-        {"port": -1},
-        {"port": 65_536},
-        {"port": True},
-        {"password": 1},
-        {"verbose": 1},
-        {"allow_embedding": 1},
-        {"message_class": object},
-        {"message_class": "Message"},
+        ("host", ValueError, "host must be a valid"),
+        ("password", TypeError, "password must be a string"),
     ],
 )
-def test_invalid_low_level_constructor_inputs_fail_before_start(
-    kwargs: dict[str, Any],
-) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        infra_impl.WebsockServer(**{"host": "127.0.0.1", "port": 0, **kwargs})
-
-
-@pytest.mark.parametrize(
-    ("level", "field", "exception_type", "message"),
-    [
-        ("high", "host", ValueError, "host must be a valid"),
-        ("high", "password", TypeError, "password must be a string"),
-        ("low", "host", ValueError, "host must be a valid"),
-        ("low", "password", TypeError, "password must be a string"),
-    ],
-)
-def test_server_constructors_reject_string_subclasses_before_allocation(
+def test_server_rejects_string_subclasses_before_allocation(
     monkeypatch: pytest.MonkeyPatch,
-    level: str,
     field: str,
     exception_type: type[Exception],
     message: str,
@@ -551,51 +522,8 @@ def test_server_constructors_reject_string_subclasses_before_allocation(
     arguments: dict[str, Any] = {"host": "127.0.0.1", "port": 0, "verbose": False}
     arguments[field] = value
     with pytest.raises(exception_type, match=message):
-        if level == "high":
-            leika.Server(**arguments)
-        else:
-            infra_impl.WebsockServer(**arguments)
+        leika.Server(**arguments)
     assert not built
-
-
-def test_low_level_http_root_detaches_path_subclasses(tmp_path: Path) -> None:
-    class Payload:
-        pass
-
-    class RichPath(type(Path())):
-        def resolve(self, *args: Any, **kwargs: Any) -> Path:
-            del args, kwargs
-            raise AssertionError("Path subclass resolve hook must not run")
-
-    root = tmp_path / "served"
-    root.mkdir()
-    payload = Payload()
-    payload_ref = weakref.ref(payload)
-    rich_root = RichPath(root)
-    rich_root.payload = payload
-
-    server = infra_impl.WebsockServer(
-        host="127.0.0.1",
-        port=0,
-        http_server_root=rich_root,
-        verbose=False,
-    )
-    assert server._http_server_root == root.resolve()
-    assert type(server._http_server_root) is type(Path())
-
-    del rich_root, payload
-    gc.collect()
-    assert payload_ref() is None
-
-
-def test_low_level_stop_before_start_is_terminal() -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    server.stop()
-
-    assert server._lifecycle_state == "stopped"
-    assert server._stop_requested.is_set()
-    with pytest.raises(RuntimeError, match="only be started once"):
-        server.start()
 
 
 def test_client_build_failure_occurs_before_executor_allocation(
@@ -624,10 +552,9 @@ def test_client_build_failure_occurs_before_executor_allocation(
 def test_late_constructor_failure_stops_server_and_executors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
-    servers: list[infra_impl.WebsockServer] = []
+    servers: list[WebsockServer] = []
     executors: list[BoundedThreadPoolExecutor] = []
-    real_server = infra_impl.WebsockServer
+    real_server = WebsockServer
     real_executor = server_impl.BoundedThreadPoolExecutor
 
     class RecordingServer(real_server):
@@ -644,7 +571,7 @@ def test_late_constructor_failure_stops_server_and_executors(
         del owner
         raise RuntimeError("late pane initialization failure")
 
-    monkeypatch.setattr(server_impl.infra, "WebsockServer", RecordingServer)
+    monkeypatch.setattr(server_impl, "WebsockServer", RecordingServer)
     monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
     monkeypatch.setattr(pages_impl, "Panes", fail_panes)
 
@@ -661,7 +588,6 @@ def test_late_constructor_failure_stops_server_and_executors(
 def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     primary = RuntimeError("primary pane construction failure")
     executors: list[BoundedThreadPoolExecutor] = []
     real_executor = server_impl.BoundedThreadPoolExecutor
@@ -695,10 +621,9 @@ def test_constructor_failure_is_not_masked_by_executor_cleanup_failure(
 def test_workspace_publication_failure_rolls_back_started_server_and_executors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
-    servers: list[infra_impl.WebsockServer] = []
+    servers: list[WebsockServer] = []
     executors: list[BoundedThreadPoolExecutor] = []
-    real_server = infra_impl.WebsockServer
+    real_server = WebsockServer
     real_executor = server_impl.BoundedThreadPoolExecutor
 
     class RejectingServer(real_server):
@@ -706,7 +631,7 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
             super().__init__(*args, **kwargs)
             servers.append(self)
 
-        def queue_message(self, message: infra_impl.Message) -> bool:
+        def queue_message(self, message: Message) -> bool:
             del message
             return False
 
@@ -715,7 +640,7 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
             super().__init__(max_workers, **kwargs)
             executors.append(self)
 
-    monkeypatch.setattr(server_impl.infra, "WebsockServer", RejectingServer)
+    monkeypatch.setattr(server_impl, "WebsockServer", RejectingServer)
     monkeypatch.setattr(server_impl, "BoundedThreadPoolExecutor", RecordingExecutor)
 
     with pytest.raises(RuntimeError, match="closed connection"):
@@ -728,185 +653,8 @@ def test_workspace_publication_failure_rolls_back_started_server_and_executors(
     assert all(executor._shutdown for executor in executors)
 
 
-def test_allowed_hosts_sequence_is_normalized_once_before_worker_allocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
-
-    class SingleUseHosts(Sequence[str]):
-        def __init__(self) -> None:
-            self.iterations = 0
-
-        def __len__(self) -> int:
-            return 1
-
-        def __getitem__(self, index: int) -> str:
-            if index != 0:
-                raise IndexError
-            return "dashboard.example"
-
-        def __iter__(self):
-            self.iterations += 1
-            if self.iterations > 1:
-                raise RuntimeError("allowed hosts were consumed twice")
-            yield "dashboard.example"
-
-    hosts = SingleUseHosts()
-    server = leika.Server(
-        host="127.0.0.1",
-        port=0,
-        verbose=False,
-        allowed_hosts=hosts,  # type: ignore[arg-type]
-    )
-    try:
-        assert hosts.iterations == 1
-        assert server._websock_server._allowed_hosts == frozenset({"dashboard.example"})
-    finally:
-        server.stop()
-
-
-def test_allowed_hosts_are_bounded_even_when_a_sequence_lies_about_length() -> None:
-    exact = tuple(f"host-{index}.example" for index in range(_ALLOWED_HOSTS_MAX))
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, allowed_hosts=exact, verbose=False)
-    assert len(server._allowed_hosts) == _ALLOWED_HOSTS_MAX
-
-    with pytest.raises(ValueError, match="more than 256"):
-        infra_impl.WebsockServer(
-            host="127.0.0.1",
-            port=0,
-            allowed_hosts=exact + ("one-too-many.example",),
-            verbose=False,
-        )
-
-    class LyingHosts(Sequence[str]):
-        def __len__(self) -> int:
-            return 1
-
-        def __getitem__(self, index: int) -> str:
-            return f"host-{index}.example"
-
-        def __iter__(self):
-            for index in range(_ALLOWED_HOSTS_MAX + 1):
-                yield f"host-{index}.example"
-
-    with pytest.raises(ValueError, match="length changed"):
-        infra_impl.WebsockServer(
-            host="127.0.0.1",
-            port=0,
-            allowed_hosts=LyingHosts(),
-            verbose=False,
-        )
-
-
-def test_start_stop_race_never_erases_the_stop_request() -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    entered_clear = threading.Event()
-    release_clear = threading.Event()
-    stop_returned = threading.Event()
-
-    class PausingEvent(threading.Event):
-        def clear(self) -> None:
-            super().clear()
-            entered_clear.set()
-            assert release_clear.wait(2)
-
-    server._stop_requested = PausingEvent()
-    failures: list[BaseException] = []
-
-    def start() -> None:
-        try:
-            server.start()
-        except BaseException as error:
-            failures.append(error)
-
-    def stop() -> None:
-        try:
-            server.stop()
-        except BaseException as error:
-            failures.append(error)
-        finally:
-            stop_returned.set()
-
-    starter = threading.Thread(target=start)
-    stopper = threading.Thread(target=stop)
-    starter.start()
-    assert entered_clear.wait(1)
-    stopper.start()
-    # stop() waits for start() to finish its locked publication instead of
-    # returning while a not-yet-launched listener can still appear.
-    assert not stop_returned.wait(0.05)
-    release_clear.set()
-    starter.join(timeout=3)
-    stopper.join(timeout=3)
-    server.stop()
-
-    assert not starter.is_alive()
-    assert not stopper.is_alive()
-    assert failures == []
-    assert server._stop_requested.is_set()
-    assert server._server_thread is not None
-    assert not server._server_thread.is_alive()
-
-
-def test_stop_waits_for_a_paused_worker_thread_start(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    worker_start_entered = threading.Event()
-    release_worker_start = threading.Event()
-    stop_returned = threading.Event()
-    failures: list[BaseException] = []
-    original_start = threading.Thread.start
-
-    def pause_server_worker(thread: threading.Thread) -> None:
-        if thread is server._server_thread:
-            worker_start_entered.set()
-            assert release_worker_start.wait(2)
-        original_start(thread)
-
-    monkeypatch.setattr(threading.Thread, "start", pause_server_worker)
-
-    def start() -> None:
-        try:
-            server.start()
-        except BaseException as error:
-            failures.append(error)
-
-    def stop() -> None:
-        try:
-            server.stop()
-        except BaseException as error:
-            failures.append(error)
-        finally:
-            stop_returned.set()
-
-    starter = threading.Thread(target=start)
-    stopper = threading.Thread(target=stop)
-    original_start(starter)
-    assert worker_start_entered.wait(1)
-    original_start(stopper)
-    assert not stop_returned.wait(0.05)
-    release_worker_start.set()
-    starter.join(timeout=3)
-    stopper.join(timeout=3)
-
-    assert failures == []
-    assert stop_returned.is_set()
-    assert server._server_thread is not None
-    assert not server._server_thread.is_alive()
-
-
-def test_quiet_low_level_lifecycle_prints_no_shutdown_banner(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    server.start()
-    server.stop()
-    assert "Server stopped" not in capsys.readouterr().out
-
-
-def test_low_level_server_is_one_shot() -> None:
-    server = infra_impl.WebsockServer(host="127.0.0.1", port=0, verbose=False)
+def test_quiet_low_level_server_is_one_shot(capsys: pytest.CaptureFixture[str]) -> None:
+    server = _low_level_server()
     server.start()
     try:
         with pytest.raises(RuntimeError, match="only be started once"):
@@ -915,6 +663,7 @@ def test_low_level_server_is_one_shot() -> None:
         server.stop()
     with pytest.raises(RuntimeError, match="only be started once"):
         server.start()
+    assert "Server stopped" not in capsys.readouterr().out
 
 
 def test_requested_occupied_port_fails_without_scanning() -> None:
@@ -922,7 +671,7 @@ def test_requested_occupied_port_fails_without_scanning() -> None:
         occupied.bind(("127.0.0.1", 0))
         occupied.listen()
         port = occupied.getsockname()[1]
-        server = infra_impl.WebsockServer(host="127.0.0.1", port=port, verbose=False)
+        server = _low_level_server(port=port)
         with pytest.raises(OSError):
             server.start()
     assert server._port == port
@@ -931,7 +680,7 @@ def test_requested_occupied_port_fails_without_scanning() -> None:
 
 
 def test_localhost_ephemeral_multi_bind_fails_with_actionable_guidance() -> None:
-    server = infra_impl.WebsockServer(host="localhost", port=0, verbose=False)
+    server = _low_level_server("localhost")
     try:
         server.start()
     except RuntimeError as error:
@@ -1004,12 +753,9 @@ def test_show_requires_and_honors_embedding_opt_in(
     assert shown == [frame]
 
 
-def test_stop_from_external_future_returned_by_callback_never_joins_its_owner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_stop_from_external_future_returned_by_callback_never_joins_its_owner() -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     returned = threading.Event()
     failures: list[BaseException] = []
@@ -1030,14 +776,11 @@ def test_stop_from_external_future_returned_by_callback_never_joins_its_owner(
 
         return external.submit(stop)
 
-    protocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{protocol_fingerprint(leika._messages.Message)}"
-    )
     websocket = None
     try:
         websocket = connect(
             f"ws://127.0.0.1:{server.port}",
-            subprotocols=[protocol],
+            subprotocols=[PROTOCOL],
             open_timeout=2,
         )
         assert returned.wait(2.0)
@@ -1062,7 +805,7 @@ def test_stop_from_external_future_returned_by_callback_never_joins_its_owner(
 def test_immediate_connect_callback_skips_a_disconnected_snapshot(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client_id = infra_impl.ClientId(99)
+    client_id = ClientId(99)
     stale = SimpleNamespace(client_id=client_id)
     with server._client_lock:
         server._connected_clients[client_id] = stale  # type: ignore[assignment]
@@ -1132,10 +875,7 @@ def test_workspace_id_obeys_browser_utf16_layout_limit(
         server.stop()
 
 
-def test_tunnel_close_failure_does_not_skip_owned_shutdown_cleanup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+def test_tunnel_close_failure_does_not_skip_owned_shutdown_cleanup() -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     server.on_client_connect(lambda _: None)
     server.on_client_disconnect(lambda _: None)
@@ -1157,10 +897,7 @@ def test_tunnel_close_failure_does_not_skip_owned_shutdown_cleanup(
     server.stop()
 
 
-def test_callback_stop_hands_slow_share_tunnel_to_finalizer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+def test_callback_stop_hands_slow_share_tunnel_to_finalizer() -> None:
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
     close_started = threading.Event()
     release_close = threading.Event()
@@ -1194,7 +931,6 @@ def test_callback_stop_hands_slow_share_tunnel_to_finalizer(
     assert server._share_tunnel is None
 
 
-@pytest.mark.parametrize("server_type", [leika.Server, infra_impl.WebsockServer])
-def test_delivery_backpressure_rejects_non_boolean_before_start(server_type: Any) -> None:
+def test_delivery_backpressure_rejects_non_boolean_before_start() -> None:
     with pytest.raises(TypeError, match="delivery_backpressure must be a bool"):
-        server_type(host="127.0.0.1", port=0, delivery_backpressure="yes")
+        leika.Server(host="127.0.0.1", port=0, delivery_backpressure="yes")  # type: ignore[arg-type]

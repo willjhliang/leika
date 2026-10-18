@@ -22,7 +22,7 @@ from typing import (
 import numpy as np
 import numpy.typing as npt
 
-from .infra._messages import validated_protocol_value_copy
+from ._messages import validated_protocol_value_copy
 
 
 class HasProps(Protocol):

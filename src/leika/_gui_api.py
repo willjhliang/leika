@@ -154,7 +154,7 @@ if TYPE_CHECKING:
 
     from ._client_handle import ClientHandle
     from ._server import Server
-    from .infra import ClientId
+    from ._transport._websocket import ClientId
 
 GuiInputPropsType = TypeVar("GuiInputPropsType", bound=GuiBaseProps)
 IntOrFloat = TypeVar("IntOrFloat", int, float)

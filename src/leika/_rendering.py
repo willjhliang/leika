@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal
 from PIL import Image, JpegImagePlugin
 
 from . import _messages
-from .infra._messages import Message
+from ._messages import Message
 
 if TYPE_CHECKING:
     from ._server import Server

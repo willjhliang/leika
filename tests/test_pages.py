@@ -11,9 +11,9 @@ from leika import _messages
 from leika import _pages as pages_impl
 from leika import _panes as panes_impl
 from leika import _server as server_impl
-from leika.infra import ClientId
-from leika.infra import _async_message_buffer as buffer_impl
-from leika.infra import _infra as infra_impl
+from leika._transport import _message_buffer as buffer_impl
+from leika._transport import _websocket as websocket_impl
+from leika._transport._websocket import ClientId
 
 
 def _retained(server: leika.Server) -> tuple[_messages.Message, ...]:
@@ -272,16 +272,16 @@ def test_plotly_runtime_follows_page_subscriptions(
         client_id: ClientId,
     ) -> tuple[
         server_impl.ClientHandle,
-        infra_impl.WebsockClientConnection,
+        websocket_impl.WebsockClientConnection,
         buffer_impl.AsyncMessageBuffer,
     ]:
         local = buffer_impl.AsyncMessageBuffer(
             server._event_loop,
             persistent_messages=False,
         )
-        connection = infra_impl.WebsockClientConnection(
+        connection = websocket_impl.WebsockClientConnection(
             client_id,
-            infra_impl._ClientHandleState(local, retained),
+            websocket_impl._ClientHandleState(local, retained),
         )
         retained.register_client(client_id)
         client = server_impl.ClientHandle(connection, server)
@@ -290,12 +290,11 @@ def test_plotly_runtime_follows_page_subscriptions(
         return client, connection, local
 
     def bootstraps(buffer: buffer_impl.AsyncMessageBuffer) -> list[str]:
-        with buffer.buffer_lock:
-            return [
-                message.source
-                for message in buffer.message_from_id.values()
-                if isinstance(message, _messages.RunJavascriptMessage)
-            ]
+        return [
+            message.source
+            for message in buffer.message_from_id.values()
+            if isinstance(message, _messages.RunJavascriptMessage)
+        ]
 
     first, first_connection, first_local = connect(ClientId(101))
     second, second_connection, second_local = connect(ClientId(102))
@@ -342,11 +341,10 @@ def test_plotly_runtime_follows_page_subscriptions(
         assert load_count == 1
         assert bootstraps(first_local) == [bootstrap]
         assert bootstraps(second_local) == [bootstrap]
-        with retained.buffer_lock:
-            assert not any(
-                isinstance(message, _messages.RunJavascriptMessage)
-                for message in retained.message_from_id.values()
-            )
+        assert not any(
+            isinstance(message, _messages.RunJavascriptMessage)
+            for message in retained.message_from_id.values()
+        )
     finally:
         with server._client_lock:
             server._connected_clients.pop(first_connection.client_id, None)

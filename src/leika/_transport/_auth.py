@@ -15,15 +15,12 @@ handshake.
 from __future__ import annotations
 
 import http
-import os
 import secrets
-import stat
 import time
 from collections import deque
 from hmac import compare_digest
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
-from types import MappingProxyType
 from urllib.parse import unquote
 
 from websockets.datastructures import Headers
@@ -72,8 +69,6 @@ class HttpPasswordGuard:
     """
 
     def __init__(self, password: str) -> None:
-        if not isinstance(password, str):
-            raise TypeError("password must be a string.")
         try:
             encoded = password.encode("utf-8")
         except UnicodeEncodeError as error:
@@ -180,30 +175,7 @@ class HttpPasswordGuard:
         )
 
 
-_MAX_FONT_BYTES = 512 * 1024
-
-
-def _load_font_payloads() -> MappingProxyType[str, bytes]:
-    """Load the two immutable login fonts once, before request processing."""
-    payloads: dict[str, bytes] = {}
-    for url_path, file_path in _FONT_FILES.items():
-        try:
-            with file_path.open("rb") as file:
-                metadata = os.fstat(file.fileno())
-                if not stat.S_ISREG(metadata.st_mode):
-                    raise OSError("font asset is not a regular file")
-                if metadata.st_size > _MAX_FONT_BYTES:
-                    raise OSError("font asset exceeds its bounded size")
-                payload = file.read(_MAX_FONT_BYTES + 1)
-        except OSError as error:
-            raise RuntimeError(f"cannot load bundled login font {file_path}") from error
-        if len(payload) > _MAX_FONT_BYTES or not payload.startswith(b"wOF2"):
-            raise RuntimeError(f"invalid bundled login font {file_path}")
-        payloads[url_path] = payload
-    return MappingProxyType(payloads)
-
-
-_FONT_PAYLOADS = _load_font_payloads()
+_FONT_PAYLOADS = {url_path: path.read_bytes() for url_path, path in _FONT_FILES.items()}
 
 
 def _font_response(path: str) -> Response:

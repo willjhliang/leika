@@ -28,8 +28,8 @@ from leika import _gui_api as gui_api_impl
 from leika import _messages
 from leika._file_transfer import PREVIEW_MAX_BYTES
 from leika._gui_handles import GuiEvent, GuiPreviewButtonHandle
-from leika.infra import ClientId
-from leika.infra import _http_assets as asset_impl
+from leika._transport import _http_assets as asset_impl
+from leika._transport._websocket import ClientId
 
 
 class _Client:
@@ -754,7 +754,7 @@ def test_disconnecting_drops_queued_preview_work(
         with server.gui._preview_work_lock:
             state = server.gui._preview_work_from_key[(client_id, handle.id)]
             worker = state.worker
-        disconnect = server._websock_server._client_disconnect_cb[-1]
+        disconnect = server._on_disconnect
         assert inspect.iscoroutinefunction(disconnect)
         asyncio.run(disconnect(SimpleNamespace(client_id=client_id)))
         with server.gui._preview_work_lock:

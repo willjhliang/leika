@@ -94,7 +94,7 @@ Leika uses the WebSockets 12 API on every supported version (12 through 17),
 and supports Pillow 11.3 through 12.x. There is one server implementation,
 imported explicitly from `websockets.legacy.server`, with native HTTP and
 subprotocol hooks. Upstream owns parsing, framing and connection shutdown;
-Leika owns request routing, response budgets and application policy. There is
+Leika owns request routing and application policy. There is
 no version detection or compatibility adapter.
 
 The upstream legacy API remains available in newer releases but is deprecated

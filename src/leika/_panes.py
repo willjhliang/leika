@@ -29,6 +29,7 @@ from ._plotly import (
     _plotly_payload_from_json,
     _plotly_theme_templates_json,
 )
+from ._transport._image_headers import validate_image_pixel_size
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -39,7 +40,6 @@ from ._validation import (
 from ._validation import (
     validate_positive_integer as _validate_positive_integer,
 )
-from .infra._image_headers import validate_image_pixel_size
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go

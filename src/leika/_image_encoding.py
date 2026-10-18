@@ -7,7 +7,7 @@ import numpy as np
 from typing_extensions import assert_never
 
 from ._assignable_props_api import colors_to_uint8
-from .infra._image_headers import validate_image_pixel_size
+from ._transport._image_headers import validate_image_pixel_size
 
 
 def _validate_image_encoding_options(

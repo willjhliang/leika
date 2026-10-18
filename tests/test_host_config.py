@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import http.client
-import json
 import os
 import socket
 from pathlib import Path
@@ -13,9 +12,8 @@ from websockets.typing import Subprotocol
 
 import leika
 import leika._client_autobuild
-import leika._messages
-from leika import infra
-from leika.infra._http_security import _configured_allowed_hosts
+from leika._transport._http_security import _configured_allowed_hosts
+from leika._transport._typescript import protocol_fingerprint
 
 
 def _write_config(payload: str) -> Path:
@@ -34,7 +32,9 @@ def test_home_fallback_and_normalization(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     path = tmp_path / ".config/leika/allowed_hosts.json"
     path.parent.mkdir(parents=True)
-    path.write_text('["Dashboard.Example.", "100.64.0.1", "fd7a:115c:a1e0::1"]')
+    path.write_text(
+        '["Dashboard.Example.", "dashboard.example", "100.64.0.1", "fd7a:115c:a1e0::1"]'
+    )
     assert _configured_allowed_hosts(None) == frozenset(
         {"dashboard.example", "100.64.0.1", "fd7a:115c:a1e0::1"}
     )
@@ -53,8 +53,6 @@ def test_home_fallback_and_normalization(tmp_path: Path, monkeypatch: pytest.Mon
         '["dashboard.example:8080"]',
         '["dashboard.example/path"]',
         "[1]",
-        '["Dashboard.Example", "dashboard.example."]',
-        json.dumps([f"host-{index}.example" for index in range(257)]),
     ],
 )
 def test_bad_config_fails_before_client_build(
@@ -107,9 +105,7 @@ def test_persistent_names_work_for_http_and_websockets_without_daemon(
     _write_config('["dashboard", "dashboard.tailnet.ts.net"]')
     monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     server = leika.Server(host="127.0.0.1", port=0, verbose=False)
-    protocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{infra.protocol_fingerprint(leika._messages.Message)}"
-    )
+    protocol = Subprotocol(f"leika-{protocol_fingerprint()}")
     try:
         for host in ["localhost", "dashboard", "dashboard.tailnet.ts.net", "unlisted.example"]:
             connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)

@@ -18,8 +18,8 @@ from ._messages import (
     NotificationUpdateMessage,
     RemoveNotificationMessage,
 )
+from ._transport._websocket import WebsockMessageHandler
 from ._validation import validate_renderer_string
-from .infra._infra import WebsockMessageHandler
 
 
 @dataclasses.dataclass

@@ -5,11 +5,12 @@ HTTP serves the client bundle; a binary msgpack websocket carries typed
 messages in both directions. Large payloads use zstd compression and uploads
 are chunked.
 
-The high-level Leika client and server negotiate an exact version and generated
-protocol fingerprint as their WebSocket subprotocol. A low-level
-`infra.WebsockServer` configured with a custom `Message` root instead accepts
-ordinary clients without requiring Leika's bundled subprotocol. Either form
-admits at most 128 active WebSocket clients per server instance.
+The bundled client offers one protocol fingerprint, a hash of the package
+version and the generated message schema, as its WebSocket subprotocol. The
+server closes a connection whose fingerprint differs from its own with a
+"Protocol mismatch" reason, so a page built from other code is turned away
+instead of misreading messages. A server admits at most 128 active WebSocket
+connections.
 
 The server binds to `0.0.0.0` by default and has no password unless one is
 configured. Use `host="127.0.0.1"` for same-machine access, or set `password=`
@@ -33,9 +34,9 @@ transition has a clear home.
 | Renderer preparation shared by GUI controls and panes | `_array_snapshot.py`, `_plotly.py`, `_markdown.py`, `_image_encoding.py` |
 | Per-browser raster variants after transport coalescing | `_rendering.py` |
 | Retained GUI/pane resource measurement | `_gui_resources.py` |
-| Typed wire schema and generated client contract | `_messages.py`, `infra/_messages.py`, `infra/_typescript_interface_gen.py` |
-| WebSocket lifecycle, dispatch, replay, and flow control | `infra/_infra.py`, `infra/_async_message_buffer.py` |
-| HTTP request policy, immutable assets, and worker-owned serving | `infra/_http_security.py`, `infra/_http_assets.py`, `infra/_http_server.py` |
+| Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
+| WebSocket lifecycle, dispatch, replay, and flow control | `_transport/_websocket.py`, `_transport/_message_buffer.py` |
+| HTTP request policy, password gate, routing, assets, and the Viser proxy | `_transport/_http_security.py`, `_transport/_auth.py`, `_transport/_http.py`, `_transport/_http_assets.py`, `_transport/_viser_proxy.py` |
 | Regular-file snapshots and display-name validation | `_file_transfer.py` |
 
 `Server` composes the public APIs and shared resources. `ClientHandle` depends
@@ -46,11 +47,19 @@ shared helpers directly. Pane property setters use one transaction that
 reserves the prospective resource cost, queues the update, and commits the
 handle; a failed admission or queue restores the previous state and cost.
 
-The HTTP asset registry owns its locks, snapshots, load reservations, and
-terminal state. The WebSocket worker creates an HTTP server that owns static
-file caching and response reservations. Request policy owns accepted host and
-proxy rules. Splitting these owners keeps socket lifecycle code independent of
-file-serving details while preserving their shared shutdown boundary.
+`leika._transport` is private. `Server` alone owns connect and disconnect
+callbacks and shutdown; the transport runs one worker thread whose teardown
+closes every message buffer, the Viser proxy, and the handler registry. Request
+policy owns accepted host and proxy rules, and the HTTP handler serves the
+single-file client from memory with a precomputed gzip copy, rereading it when
+the file changes.
+
+Every message type is a dataclass under the one `Message` base in
+`_messages.py`. An outbound message is checked against its annotations and
+encoded once when it is queued; each outgoing window frames those bytes, so a
+broadcast is serialized once for every client. Only messages that a browser's
+rendering preferences replace are encoded again. A browser's message is decoded
+and validated against the schema before any handler sees it.
 
 | Responsibility | Browser modules, relative to `client/src/` |
 | --- | --- |
@@ -78,8 +87,12 @@ runtime orchestration; see [Development](development.md) for their entry points.
 
 1. Python creates named pages, page-scoped panes, and workspace-wide GUI
    handles, then queues typed lifecycle messages.
-2. Persistent messages are retained for clients that connect later. Repeated
-   updates to the same entity/property key coalesce to the newest value.
+2. Persistent messages are retained for clients that connect later. A queued
+   message replaces an older one with the same redundancy key: lifecycle
+   messages derive theirs from the entity, so repeated updates to the same
+   properties coalesce to the newest value, and a removal purges its entity's
+   retained messages. Other messages keep their order unless they declare a
+   key.
 3. Each browser receives workspace-global metadata and GUI state, but pane
    payloads only for its selected page. It applies each received batch in order
    and keeps an independent pane layout for every page.
@@ -116,7 +129,7 @@ temporarily expose the loading surface.
 
 `server.atomic()` is a queue-emission barrier: no message queued inside it is
 emitted until the outermost context exits, and message order is preserved.
-The result may then be split into several browser-safe transport windows, so
+The result may then be split into several transport windows, so
 the context is not a browser transaction, an all-or-nothing operation, or a
 delivery/render acknowledgement. `flush()` only requests an immediate outbound
 window by bypassing the batching delay; it is not a delivery or render barrier.
@@ -134,8 +147,8 @@ The setting defaults to false, preserving existing transport behavior.
 Tab groups use an explicit flat lifecycle. The group declaration is retained
 separately from stable tab create, update, and remove records, so every replay
 prefix is valid and recursive removal retires both a descriptor and its GUI
-subtree. This is an internal contract between the exact-version bundled client
-and server, not a protocol-compatibility promise for custom low-level clients.
+subtree. This is an internal contract between a server and the client built
+from the same code.
 
 ## Bounded Leika-owned state
 
@@ -153,10 +166,9 @@ One connected browser document combines `server.gui` with its own `client.gui`,
 and therefore admits at most 8,192 components, 2,048 commands, 64 modals, 256
 notifications, 32,768 tabs and collection entries, 32 Mi UTF-16 code units, and
 256 MiB of retained GUI payload. Notifications have a separate 4 Mi UTF-16
-document ledger. Each handle retains at most 256 callbacks; connect and
-disconnect lists retain at most 256 each. Programmatic GUI callbacks queue at
-most 1,024 snapshots and 128 MiB before later callbacks are reported and
-declined.
+document ledger. Each handle retains at most 256 callbacks. Programmatic GUI
+callbacks queue at most 1,024 snapshots and 128 MiB before later callbacks are
+reported and declined.
 
 The workspace owns at most 128 named pages and, across all pages, at most 128
 content panes, including hidden and minimized ones, and at most 16 Viser panes.
@@ -175,13 +187,12 @@ a bound on total Python-process memory. Registered callbacks and lazy file
 providers remain trusted caller-owned callables and may close over arbitrary
 state.
 
-Browser-to-server protocol messages are limited to 4 MiB. A server-to-browser
-hybrid frame is limited to 512 MiB, including at most 256 MiB of metadata, 128
-messages, and 16,384 binary buffers. The browser bounds the whole decoded
-envelope to 500,000 values and depth 128, and validates it before applying any
-message in that frame. Browser sends also stop at 16 MiB of WebSocket buffered
-data, 8,192 throttled slots, or 1,024 uncoalesced events; overflow closes the
-connection instead of silently dropping state.
+Browser-to-server protocol messages are limited to 4 MiB, and each decoded
+message to 100,000 values, depth 64, and 4 MiB of strings and bytes. A
+server-to-browser window carries at most 128 messages and takes no more once
+its encoded messages pass 8 MiB. Browser sends also stop at 16 MiB of
+WebSocket buffered data, 8,192 throttled slots, or 1,024 uncoalesced events;
+overflow closes the connection instead of silently dropping state.
 
 Uploads are paced in acknowledged 512 KiB parts and capped at 64 MiB each.
 The server's 256 MiB combined upload budget includes transfers in progress,
@@ -190,11 +201,9 @@ cancellation releases a transfer's reservation. The server admits at most 128
 active uploads per server instance; each browser document independently admits
 at most 128.
 
-Runtime HTTP assets are capped at 64 MiB each and their immutable snapshot
-cache at 128 MiB/1,024 entries. Static files are capped at 32 MiB each and
-their cache at 32 MiB/128 entries. Across both paths, live response bodies
-share a 128 MiB and 256-owner per-server budget; overload returns 503 with
-`Retry-After: 1`.
+Runtime HTTP assets are capped at 64 MiB each; their immutable snapshots
+share 128 MiB, beyond which the oldest registrations are evicted and their URLs
+answer 404.
 
 Downloads are stream-flow-controlled to an 8 MiB queued budget per server
 client, but browser save and link flows still assemble the complete file as a
@@ -229,14 +238,13 @@ mounting before resolving its target. Image decoding remains viewport-bound.
 Plotly figure and theme-template JSON is parsed only through 16,777,216 UTF-16
 code units (16 Mi-characters). Public creation, update, and assignment preflight
 that bound and raise `ValueError` before publication. The bundled client repeats
-the check and shows a visible status if a custom low-level sender bypasses the
-Python boundary.
+the check and shows a visible status if a payload bypasses the Python boundary.
 
 GUI HTML is rendered through 1,048,576 UTF-16 code units (1 Mi-character), and
 Matplotlib SVG through 16,777,216 (16 Mi-characters). Public creation and update
 raise `ValueError` before publishing a larger source. The bundled client also
-declines an oversized custom low-level payload before DOM, Blob, or image
-parsing and shows a status in the affected control or pane.
+declines an oversized payload before DOM, Blob, or image parsing and shows a
+status in the affected control or pane.
 
 Direct GUI and pane ndarray APIs limit each side to 16,384 pixels and the image
 to 33,554,432 decoded pixels, raising before encoding an oversized source. A
@@ -248,8 +256,8 @@ directory (or `add_text`'s `image_root`) with ordinary filesystem semantics,
 including parent directories, absolute paths, and symlinks. This base directory
 does not restrict which local images a document can reference.
 Markdown does not fetch external images; only a
-bounded data image or the exact hash-and-dimensions URL emitted for a validated
-Leika asset can render inline.
+bounded data image or the exact hash-and-dimensions URL Leika emits for a
+registered picture can render inline.
 
 Plotly figures are preflighted through 500,000 values, configurations through
 4,096 items, and the combined detached JSON snapshot through the size ceiling

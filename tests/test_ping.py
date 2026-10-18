@@ -13,7 +13,7 @@ from typing import Any, List
 
 import leika
 from leika import _messages
-from leika.infra import ClientId
+from leika._transport._websocket import ClientId
 
 
 class _RecordingConnection:
@@ -89,12 +89,9 @@ def test_only_the_client_that_pinged_is_answered(server: leika.Server) -> None:
 
 def test_pings_do_not_replace_one_another_in_the_buffer(server: leika.Server) -> None:
     # The buffer drops messages that share a redundancy key, keeping the last.
-    # Under the name-based default every ping would share one, so a second ping
-    # would swallow the first and the round trip it was timing would never be
-    # answered.
-    first = _messages.ClientPingMessage(sent_ms=1.0)
-    second = _messages.ClientPingMessage(sent_ms=2.0)
-    assert first.redundancy_key() != second.redundancy_key()
+    # Pings have none, so a second ping never swallows the round trip the first
+    # is timing; only the latest pending pong is worth sending.
+    assert _messages.ClientPingMessage(sent_ms=1.0).redundancy_key() is None
 
     pongs = (
         _messages.ServerPongMessage(sent_ms=1.0),

@@ -39,7 +39,7 @@ with a shared home. Include only intentional endpoint names.
 Passing `allowed_hosts=[...]` replaces the file's list for that server; passing
 `allowed_hosts=[]` ignores the file and adds no names. A missing file preserves
 the default policy; malformed or unreadable configuration fails startup with
-its path and cause. The same validation and 256-entry limit apply to both inputs.
+its path and cause. The same validation applies to both inputs.
 Restart running dashboards after changing the file. Neither configuring names
 nor using a VPN bypasses the matching browser `Origin` requirement.
 

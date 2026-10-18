@@ -26,7 +26,6 @@ import {
   RegisterCommandMessage,
   ThemeConfigurationMessage,
   isGuiComponentMessage,
-  validateMessage,
 } from "../WebsocketMessages";
 import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 import { isBoundedLayoutId } from "../persistenceLimits";
@@ -205,11 +204,6 @@ function validUpdatedGuiConfig(
     return null;
   }
   const candidate = buildGuiConfigUpdate(config, updates);
-  try {
-    validateMessage(candidate);
-  } catch {
-    return null;
-  }
   return guiConfigWithinEntityLimits(candidate) ? candidate : null;
 }
 
@@ -906,11 +900,6 @@ export function createGuiState(initialServer: string) {
             ...previous,
             props: { ...previous.props, ...accepted },
           };
-          try {
-            validateMessage(candidate);
-          } catch {
-            return reject("command update violates its schema");
-          }
           if (!guiCommandWithinEntityLimits(candidate)) {
             return reject("command update exceeds its string limit");
           }

@@ -7,7 +7,6 @@ import { decodeHybridMessage } from "./hybridMessageDecode";
 import { newPacingState, paceBatch } from "./pacing";
 import { PendingRawFrameBudget } from "./pendingFrameBudget";
 import { shouldRetryWebsocket } from "./utils/shouldRetryWebsocket";
-import { LEIKA_VERSION } from "./VersionInfo";
 import { LEIKA_PROTOCOL, Message } from "./WebsocketMessages";
 import {
   acquireConnectionMessageOrder,
@@ -233,11 +232,11 @@ const workerScope = self as unknown as WorkerScope;
       return;
     }
 
-    // One subprotocol string carries the client identification, the version,
-    // and the schema this bundle was built against. The server turns away
-    // anything it does not match, which is what keeps a page from connecting
-    // to a server whose messages it cannot read.
-    const protocol = `leika-v${LEIKA_VERSION}+p${LEIKA_PROTOCOL}`;
+    // One subprotocol string identifies the client and the package version and
+    // schema this bundle was built against. The server turns away anything it
+    // does not match, which is what keeps a page from connecting to a server
+    // whose messages it cannot read.
+    const protocol = `leika-${LEIKA_PROTOCOL}`;
     let socket: WebSocket;
     try {
       socket = new WebSocket(targetServer, [protocol]);
@@ -348,8 +347,7 @@ const workerScope = self as unknown as WorkerScope;
 
       if (closeKind === "version_mismatch") {
         console.warn(
-          `Connection rejected: ${event.reason}. Client version: ${LEIKA_VERSION},` +
-            ` protocol: ${LEIKA_PROTOCOL}`,
+          `Connection rejected: ${event.reason}. Client protocol: ${LEIKA_PROTOCOL}`,
         );
       }
     };
@@ -424,9 +422,8 @@ const workerScope = self as unknown as WorkerScope;
 
           counters.messagesReceived += data.messages.length;
           const messages = takePongs(data.messages, jsReceivedMs);
-          // Ndarray views use the raw frame; msgpack binary values (images
-          // and file parts) use the decompressed metadata. Transfer both owned
-          // buffers without walking the message tree or cloning binary bytes.
+          // Binary values (images and file parts) are views into the
+          // decompressed payload; transfer it without cloning their bytes.
           const handOffBatch = () => {
             if (failure.hasFailed || ws !== socket) return false;
             const batchId = nextBatchId;

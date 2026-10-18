@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from leika._image_encoding import encode_image_binary
-from leika.infra._image_headers import image_pixel_size
+from leika._transport._image_headers import image_pixel_size
 
 
 def _png(width: int, height: int) -> bytes:

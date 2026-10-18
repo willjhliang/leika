@@ -8,7 +8,7 @@ import pytest
 
 import leika
 from leika import _messages
-from leika.infra import ClientId
+from leika._transport._websocket import ClientId
 
 
 def test_playback_clock_pause_loop_and_buffering(server: leika.Server) -> None:

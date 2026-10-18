@@ -5,6 +5,19 @@ versioning.
 
 ## Unreleased
 
+- Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP
+  server is now private, with one message base; use `leika.Server`. Custom
+  message roots and low-level servers are no longer supported.
+- Server (breaking): `remove_client_connect_callback()` and
+  `remove_client_disconnect_callback()` are removed, as are the 256-entry caps
+  on connect and disconnect callbacks and on `allowed_hosts` (duplicate host
+  names now collapse instead of raising).
+- Server-to-browser messages are encoded once when queued and shared by every
+  client, without outgoing size limits or HTTP response budgets; browser input
+  stays bounded and validated. A page built from different code than the
+  server is turned away with one "Protocol mismatch" reason that covers both
+  the schema and the package version. The client page is served only at `/`.
+
 - Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
   One WebSockets server implementation uses the API available from version 12
   through 17, with no version dispatch or compatibility adapter.

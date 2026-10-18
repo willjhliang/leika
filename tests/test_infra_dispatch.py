@@ -1,118 +1,153 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import random
 import threading
 import time
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from typing import Any
 
 import msgspec.msgpack
-import numpy as np
 import pytest
 import zstandard
 from websockets.exceptions import ConnectionClosed
-from websockets.sync.client import connect
+from websockets.sync.client import ClientConnection, connect
 from websockets.typing import Subprotocol
 
-import leika
-import leika.infra._infra as infra_impl
 from leika import _messages
-from leika.infra import ClientId, WebsockServer, protocol_fingerprint
-from leika.infra._async_message_buffer import AsyncMessageBuffer
-from leika.infra._infra import (
-    _allocate_client_id,
-    _message_consumer,
+from leika._transport import _websocket as websocket_impl
+from leika._transport._message_buffer import AsyncMessageBuffer
+from leika._transport._typescript import protocol_fingerprint
+from leika._transport._websocket import (
+    ClientId,
+    WebsockClientConnection,
+    WebsockServer,
+    _ClientHandleState,
     _message_producer,
     _run_connection_tasks,
 )
 
 
-def _client_subprotocol() -> Subprotocol:
-    return Subprotocol(f"leika-v{leika.__version__}+p{protocol_fingerprint(_messages.Message)}")
+async def _ignore(_: WebsockClientConnection) -> None:
+    pass
+
+
+def _server(**kwargs: Any) -> WebsockServer:
+    kwargs.setdefault("on_connect", _ignore)
+    kwargs.setdefault("on_disconnect", _ignore)
+    return WebsockServer("127.0.0.1", 0, verbose=False, **kwargs)
+
+
+def _connect(server: WebsockServer, *subprotocols: str) -> ClientConnection:
+    """Connect offering Leika's subprotocol, or the given ones ("" offers none)."""
+    offered = subprotocols or (f"leika-{protocol_fingerprint()}",)
+    return connect(
+        f"ws://127.0.0.1:{server._port}",
+        subprotocols=[Subprotocol(value) for value in offered if value] or None,
+        open_timeout=2,
+    )
+
+
+def _admitted(server: WebsockServer) -> bool:
+    """Whether a new client is accepted and kept open."""
+    with _connect(server) as websocket:
+        try:
+            websocket.recv(timeout=0.1)
+        except TimeoutError:
+            pass
+        except ConnectionClosed:
+            return False
+    return True
 
 
 def _wait_for(predicate: Callable[[], bool], timeout: float = 2.0) -> None:
+    """Poll until ``predicate`` holds, evaluating it once per attempt."""
     deadline = time.monotonic() + timeout
-    while not predicate() and time.monotonic() < deadline:
+    while not predicate():
+        assert time.monotonic() < deadline, "condition not reached in time"
         time.sleep(0.01)
-    assert predicate()
 
 
-class _DecodedMessage:
-    @classmethod
-    def deserialize(cls, raw: bytes) -> str:
-        return raw.decode()
+def _decode_frame(frame: bytes | str) -> list[dict[str, Any]]:
+    """Messages of one frame: a little-endian uint64 size, then zstd MessagePack."""
+    assert isinstance(frame, bytes)
+    size = int.from_bytes(frame[:8], "little")
+    payload = zstandard.ZstdDecompressor().decompress(frame[8:], max_output_size=size)
+    assert len(payload) == size
+    envelope = msgspec.msgpack.decode(payload)
+    assert isinstance(envelope["timestampSec"], float)
+    return envelope["messages"]
 
 
-class _ScriptedSocket:
-    def __init__(self, frames: list[bytes]) -> None:
-        self.frames = frames
-        self.recv_count = 0
-
-    async def recv(self) -> bytes:
-        self.recv_count += 1
-        if not self.frames:
-            raise StopAsyncIteration
-        return self.frames.pop(0)
+def _close_code(websocket: ClientConnection) -> tuple[int, str]:
+    with pytest.raises(ConnectionClosed) as closed:
+        websocket.recv(timeout=2)
+    assert closed.value.rcvd is not None
+    return closed.value.rcvd.code, closed.value.rcvd.reason
 
 
-def test_low_level_handler_and_connection_callback_registration_validates_eagerly() -> None:
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-
-    with pytest.raises(TypeError, match="Message subclass"):
-        server.register_handler(str, lambda *_: None)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="callback must be callable"):
-        server.register_handler(_messages.ClientPingMessage, None)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="Message subclass"):
-        server.unregister_handler(str)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="callable"):
-        server.on_client_connect(None)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="callable"):
-        server.on_client_disconnect(None)  # type: ignore[arg-type]
+async def _block(started: threading.Event, cancelled: threading.Event) -> None:
+    started.set()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        cancelled.set()
+        raise
 
 
-def test_message_consumer_awaits_handlers_in_wire_order() -> None:
-    async def scenario() -> None:
-        socket = _ScriptedSocket([b"first", b"second"])
-        seen: list[str] = []
+class _RecordingSocket:
+    """Records sent frames; each ping returns a receipt the test resolves."""
 
-        async def handle(message: str) -> None:
-            seen.append("start " + message)
-            await asyncio.sleep(0)
-            seen.append("end " + message)
+    def __init__(self, *, automatic_receipts: bool = False) -> None:
+        self.frames: asyncio.Queue[bytes] = asyncio.Queue()
+        self.receipts: asyncio.Queue[asyncio.Future[float]] = asyncio.Queue()
+        self.automatic_receipts = automatic_receipts
+        self.sent = 0
 
-        with pytest.raises(StopAsyncIteration):
-            await _message_consumer(
-                socket,  # type: ignore[arg-type]
-                handle,  # type: ignore[arg-type]
-                _DecodedMessage,  # type: ignore[arg-type]
-            )
-        assert seen == ["start first", "end first", "start second", "end second"]
+    async def send(self, frame: bytes) -> None:
+        self.sent += 1
+        self.frames.put_nowait(frame)
 
-    asyncio.run(scenario())
+    async def ping(self) -> asyncio.Future[float]:
+        receipt = asyncio.get_running_loop().create_future()
+        if self.automatic_receipts:
+            receipt.set_result(0.0)
+        else:
+            self.receipts.put_nowait(receipt)
+        return receipt
 
 
-def test_message_consumer_propagates_handler_failure_before_reading_more() -> None:
-    failure = RuntimeError("handler failed")
+def _produce(
+    socket: _RecordingSocket,
+    buffer: AsyncMessageBuffer,
+    client_id: int,
+    state: _ClientHandleState | None = None,
+    *,
+    delivery_backpressure: bool = False,
+) -> asyncio.Task[None]:
+    return asyncio.ensure_future(
+        _message_producer(
+            socket,  # type: ignore[arg-type]
+            buffer,
+            client_id,
+            state or _ClientHandleState(buffer, buffer),
+            delivery_backpressure=delivery_backpressure,
+        )
+    )
 
-    async def scenario() -> None:
-        socket = _ScriptedSocket([b"first", b"second"])
 
-        async def handle(_: Any) -> None:
-            raise failure
+async def _next_frame(socket: _RecordingSocket) -> list[dict[str, Any]]:
+    return _decode_frame(await asyncio.wait_for(socket.frames.get(), timeout=1))
 
-        with pytest.raises(RuntimeError, match="handler failed") as captured:
-            await _message_consumer(
-                socket,  # type: ignore[arg-type]
-                handle,
-                _DecodedMessage,  # type: ignore[arg-type]
-            )
-        assert captured.value is failure
-        assert socket.recv_count == 1
 
-    asyncio.run(scenario())
+async def _shut_down(buffer: AsyncMessageBuffer, *tasks: asyncio.Task[None]) -> None:
+    buffer.set_done()
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def test_connection_task_failure_cancels_and_awaits_siblings() -> None:
@@ -141,259 +176,164 @@ def test_connection_task_failure_cancels_and_awaits_siblings() -> None:
     asyncio.run(scenario())
 
 
-def test_registered_handler_failure_is_reported_without_aborting_dispatch(
+def test_handlers_run_in_registration_order_and_failures_do_not_stop_later_ones(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    server = WebsockServer(host="127.0.0.1", port=0, verbose=False)
+    server = _server()
+    completion: Future[None] = Future()
     events: list[str] = []
 
+    def awaited(_: ClientId, __: _messages.ClientPingMessage) -> Future[None]:
+        events.append("returns future")
+        return completion
+
     async def fail(_: ClientId, __: _messages.ClientPingMessage) -> None:
-        events.append("failure started")
-        await asyncio.sleep(0)
-        events.append("failure reported")
+        events.append("fails")
         raise RuntimeError("user callback failed")
 
-    async def continue_dispatch(_: ClientId, __: _messages.ClientPingMessage) -> None:
-        events.append("later handler ran")
-
+    server.register_handler(_messages.ClientPingMessage, awaited)
     server.register_handler(_messages.ClientPingMessage, fail)
-    server.register_handler(_messages.ClientPingMessage, continue_dispatch)
-    asyncio.run(
-        server._handle_incoming_message(ClientId(4), _messages.ClientPingMessage(sent_ms=1.0))
-    )
+    server.register_handler(_messages.ClientPingMessage, lambda *_: events.append("last"))
 
-    assert events == [
-        "failure started",
-        "failure reported",
-        "later handler ran",
-    ]
-    captured = capsys.readouterr()
-    assert "Task failed with exception" in captured.err
-    assert "RuntimeError: user callback failed" in captured.err
+    async def scenario() -> None:
+        ping = _messages.ClientPingMessage(sent_ms=1.0)
+        task = asyncio.ensure_future(server._handle_incoming_message(ClientId(4), ping))
+        while not events:
+            await asyncio.sleep(0)
+        # A handler registered mid-dispatch applies only to later messages.
+        server.register_handler(_messages.ClientPingMessage, lambda *_: events.append("late"))
+        await asyncio.sleep(0.01)
+        assert events == ["returns future"]
+        completion.set_result(None)
+        await asyncio.wait_for(task, timeout=1)
+        assert events == ["returns future", "fails", "last"]
+
+        await server._handle_incoming_message(ClientId(4), ping)
+        assert events[3:] == ["returns future", "fails", "last", "late"]
+
+    asyncio.run(scenario())
+    assert "RuntimeError: user callback failed" in capsys.readouterr().err
 
 
-def test_peer_close_cancels_a_blocked_ordered_handler() -> None:
-    started = threading.Event()
-    cancelled = threading.Event()
-    release = threading.Event()
+def test_server_then_connection_handlers_finish_each_message_in_wire_order() -> None:
+    events: list[str] = []
+    finished = threading.Event()
+
+    async def server_handler(_: ClientId, message: _messages.ClientPingMessage) -> None:
+        events.append(f"server {message.sent_ms:g}")
+        await asyncio.sleep(0.01)
+        events.append(f"server done {message.sent_ms:g}")
+
+    async def connection_handler(_: ClientId, message: _messages.ClientPingMessage) -> None:
+        events.append(f"connection {message.sent_ms:g}")
+        if message.sent_ms == 2:
+            finished.set()
+
+    async def on_connect(connection: WebsockClientConnection) -> None:
+        connection.register_handler(_messages.ClientPingMessage, connection_handler)
+
+    server = _server(on_connect=on_connect)
+    server.register_handler(_messages.ClientPingMessage, server_handler)
+    server.start()
+    try:
+        with _connect(server) as websocket:
+            websocket.send(_messages.ClientPingMessage(sent_ms=1.0).encode())
+            websocket.send(_messages.ClientPingMessage(sent_ms=2.0).encode())
+            assert finished.wait(2)
+        assert events == [
+            "server 1",
+            "server done 1",
+            "connection 1",
+            "server 2",
+            "server done 2",
+            "connection 2",
+        ]
+    finally:
+        server.stop()
+
+
+def test_peer_close_cancels_a_blocked_handler() -> None:
+    started, cancelled = threading.Event(), threading.Event()
 
     async def block(_: ClientId, __: _messages.ClientPingMessage) -> None:
-        started.set()
-        try:
-            while not release.is_set():
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
+        await _block(started, cancelled)
 
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
+    server = _server()
     server.register_handler(_messages.ClientPingMessage, block)
     server.start()
-    websocket = None
     try:
-        websocket = connect(
-            f"ws://127.0.0.1:{server._port}",
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        )
-        message = _messages.ClientPingMessage(sent_ms=1.0)
-        websocket.send(msgspec.msgpack.encode(message.as_serializable_dict()))
-        assert started.wait(2.0)
-
-        websocket.close()
-        assert cancelled.wait(2.0)
+        with _connect(server) as websocket:
+            websocket.send(_messages.ClientPingMessage(sent_ms=1.0).encode())
+            assert started.wait(2)
+        assert cancelled.wait(2)
         _wait_for(lambda: server._client_state_from_id == {})
     finally:
-        release.set()
-        if websocket is not None:
-            websocket.close()
         server.stop()
 
 
-def test_peer_close_cancels_connect_callbacks_and_runs_teardown(
+def test_peer_close_cancels_a_blocked_connect_callback_and_runs_disconnect() -> None:
+    started, cancelled = threading.Event(), threading.Event()
+    disconnected: list[ClientId] = []
+
+    async def on_connect(_: WebsockClientConnection) -> None:
+        await _block(started, cancelled)
+
+    async def on_disconnect(connection: WebsockClientConnection) -> None:
+        disconnected.append(connection.client_id)
+
+    server = _server(on_connect=on_connect, on_disconnect=on_disconnect)
+    server.start()
+    try:
+        with _connect(server):
+            assert started.wait(2)
+        assert cancelled.wait(2)
+        _wait_for(lambda: len(disconnected) == 1)
+        assert server._client_state_from_id == {}
+    finally:
+        server.stop()
+
+
+def test_failed_connect_callback_is_reported_and_the_connection_stays_live(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    started = threading.Event()
-    cancelled = threading.Event()
-    disconnected = threading.Event()
-    release = threading.Event()
-
-    async def fail(_: Any) -> None:
+    async def on_connect(_: WebsockClientConnection) -> None:
         raise RuntimeError("connect callback failed")
 
-    async def block(_: Any) -> None:
-        started.set()
-        try:
-            while not release.is_set():
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
-
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-    server.on_client_connect(fail)
-    server.on_client_connect(block)
-    server.on_client_disconnect(lambda _: disconnected.set())
+    server = _server(on_connect=on_connect)
     server.start()
-    websocket = None
     try:
-        websocket = connect(
-            f"ws://127.0.0.1:{server._port}",
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        )
-        assert started.wait(2.0)
-
-        websocket.close()
-        assert cancelled.wait(2.0)
-        assert disconnected.wait(2.0)
-        _wait_for(lambda: server._client_state_from_id == {})
-        assert "RuntimeError: connect callback failed" in capsys.readouterr().err
+        with _connect(server) as websocket:
+            assert server.queue_message(_messages.RunJavascriptMessage("still live"))
+            server.flush()
+            assert _decode_frame(websocket.recv(timeout=2)) == [
+                {"type": "RunJavascriptMessage", "source": "still live"}
+            ]
     finally:
-        release.set()
-        if websocket is not None:
-            websocket.close()
         server.stop()
+    assert "RuntimeError: connect callback failed" in capsys.readouterr().err
 
 
-def test_server_stop_cancels_blocked_disconnect_callbacks(
+def test_server_stop_cancels_a_blocked_disconnect_callback(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    started = threading.Event()
-    cancelled = threading.Event()
-    release = threading.Event()
+    monkeypatch.setattr(websocket_impl, "_SERVER_STOP_TIMEOUT_SECONDS", 2.0)
+    started, cancelled = threading.Event(), threading.Event()
 
-    async def fail(_: Any) -> None:
-        raise RuntimeError("disconnect callback failed")
+    async def on_disconnect(_: WebsockClientConnection) -> None:
+        await _block(started, cancelled)
 
-    async def block(_: Any) -> None:
-        started.set()
-        try:
-            while not release.is_set():
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
-
-    monkeypatch.setattr("leika.infra._infra._SERVER_STOP_TIMEOUT_SECONDS", 1.0)
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-    server.on_client_disconnect(fail)
-    server.on_client_disconnect(block)
+    server = _server(on_disconnect=on_disconnect)
     server.start()
-    websocket = connect(
-        f"ws://127.0.0.1:{server._port}",
-        subprotocols=[_client_subprotocol()],
-        open_timeout=2,
-    )
-    stopped = False
     try:
-        websocket.close()
-        assert started.wait(2.0)
-        _wait_for(lambda: server._client_state_from_id == {})
-
+        with _connect(server):
+            pass
+        assert started.wait(2)
         server.stop()
-        stopped = True
-        assert cancelled.wait(2.0)
+        assert cancelled.is_set()
         assert server._server_thread is not None
-        # A stop concurrent with callback-owned work is signal-first to avoid
-        # circular waits with returned external Futures; its finalizer joins.
-        _wait_for(lambda: not server._server_thread.is_alive())
-        assert "RuntimeError: disconnect callback failed" in capsys.readouterr().err
+        assert not server._server_thread.is_alive()
     finally:
-        release.set()
-        websocket.close()
-        if not stopped:
-            server.stop()
-
-
-class _RecordingProducerSocket:
-    def __init__(self) -> None:
-        self.sent: list[object] = []
-        self.closed: list[tuple[int, str]] = []
-
-    async def send(self, payload: object) -> None:
-        self.sent.append(payload)
-
-    async def close(self, code: int, reason: str) -> None:
-        self.closed.append((code, reason))
-
-
-def test_outgoing_metadata_limit_closes_only_the_affected_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        monkeypatch.setattr(infra_impl, "_OUTGOING_METADATA_LIMIT_BYTES", 64)
-        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        assert buffer.push(_messages.RunJavascriptMessage("x" * 1_000))
-        socket = _RecordingProducerSocket()
-
-        await asyncio.wait_for(_message_producer(socket, buffer, ClientId(1)), timeout=1)
-        assert socket.sent == []
-        assert socket.closed == [(1009, "Outgoing message batch exceeds the client size limit.")]
-        buffer.set_done()
-
-    asyncio.run(scenario())
-
-
-def test_outgoing_frame_limit_is_checked_before_join_and_send(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        monkeypatch.setattr(infra_impl, "_OUTGOING_METADATA_LIMIT_BYTES", 1_024)
-        monkeypatch.setattr(infra_impl, "_OUTGOING_FRAME_LIMIT_BYTES", 32)
-        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        assert buffer.push(_messages.ClientPingMessage(sent_ms=1.0))
-        socket = _RecordingProducerSocket()
-
-        await asyncio.wait_for(_message_producer(socket, buffer, ClientId(1)), timeout=1)
-        assert socket.sent == []
-        assert socket.closed and socket.closed[0][0] == 1009
-        buffer.set_done()
-
-    asyncio.run(scenario())
-
-
-def test_outgoing_binary_buffers_are_sent_as_one_fragmented_message() -> None:
-    async def scenario() -> None:
-        buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-
-        @dataclasses.dataclass
-        class _BinaryArrayMessage(_messages.Message):
-            values: Any
-
-            def redundancy_key(self) -> None:
-                return None
-
-        backing = np.frombuffer(bytearray(b"array payload"), dtype=np.uint8)
-        assert buffer.push(_BinaryArrayMessage(backing))
-
-        class FragmentSocket(_RecordingProducerSocket):
-            async def send(self, payload: object) -> None:
-                await super().send(payload)
-                buffer.set_done()
-
-        socket = FragmentSocket()
-        await asyncio.wait_for(_message_producer(socket, buffer, ClientId(1)), timeout=1)
-
-        assert len(socket.sent) == 1
-        fragments = socket.sent[0]
-        assert isinstance(fragments, list)
-        assert all(isinstance(fragment, (bytes, memoryview)) for fragment in fragments)
-        assert isinstance(fragments[-1], memoryview)
-        assert isinstance(fragments[-1].obj, np.ndarray)
-        assert fragments[-1].obj is not backing
-        assert b"".join(fragments).endswith(backing.tobytes())
-
-    asyncio.run(scenario())
-
-
-def test_metadata_preflight_counts_true_lower_bounds_without_false_positives() -> None:
-    assert not infra_impl._metadata_payload_exceeds("é" * 2, 4)
-    assert infra_impl._metadata_payload_exceeds("é" * 3, 4)
-    # Tiny integers encode in one byte. Charging their maximum nine-byte form
-    # would reject a valid compact collection before exact MsgPack encoding.
-    assert not infra_impl._metadata_payload_exceeds([0] * 100, 101)
+        server.stop()
 
 
 @pytest.mark.parametrize(
@@ -401,14 +341,8 @@ def test_metadata_preflight_counts_true_lower_bounds_without_false_positives() -
     [
         ("text frame", 1003),
         (b"\xc1", 1007),
-        (
-            msgspec.msgpack.encode({"type": "UnknownMessage", "value": "anything"}),
-            1007,
-        ),
-        (
-            msgspec.msgpack.encode({"type": "ClientPingMessage", "sent_ms": "not-a-number"}),
-            1007,
-        ),
+        (msgspec.msgpack.encode({"type": "UnknownMessage", "value": "anything"}), 1007),
+        (msgspec.msgpack.encode({"type": "ClientPingMessage", "sent_ms": "soon"}), 1007),
     ],
 )
 def test_malformed_protocol_input_closes_only_its_connection(
@@ -416,469 +350,226 @@ def test_malformed_protocol_input_closes_only_its_connection(
     expected_code: int,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
+    server = _server()
     server.start()
-    url = f"ws://127.0.0.1:{server._port}"
     try:
-        with connect(
-            url,
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        ) as websocket:
+        with _connect(server) as healthy, _connect(server) as websocket:
             websocket.send(payload)
-            with pytest.raises(ConnectionClosed) as closed:
-                websocket.recv(timeout=2)
-            assert closed.value.rcvd is not None
-            assert closed.value.rcvd.code == expected_code
+            assert _close_code(websocket)[0] == expected_code
 
-        # A malformed peer cannot poison the listener or another connection.
-        with connect(
-            url,
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        ) as healthy:
-            assert healthy.protocol.close_code is None
+            # The listener and every other connection stay healthy.
+            assert server.queue_message(_messages.RunJavascriptMessage("after"))
+            server.flush()
+            assert _decode_frame(healthy.recv(timeout=2))[-1]["source"] == "after"
         assert "Traceback" not in capsys.readouterr().err
     finally:
         server.stop()
 
 
-def test_oversized_incoming_frame_closes_cleanly_and_server_stays_healthy() -> None:
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-    server.start()
-    url = f"ws://127.0.0.1:{server._port}"
-    try:
-        with connect(
-            url,
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        ) as websocket:
-            websocket.send(b"x" * (infra_impl._INCOMING_MESSAGE_LIMIT_BYTES + 1))
-            with pytest.raises(ConnectionClosed) as closed:
-                websocket.recv(timeout=2)
-            assert closed.value.rcvd is not None
-            assert closed.value.rcvd.code == 1009
-
-        with connect(
-            url,
-            subprotocols=[_client_subprotocol()],
-            open_timeout=2,
-        ) as healthy:
-            assert healthy.protocol.close_code is None
-    finally:
-        server.stop()
-
-
-def test_low_level_dispatch_awaits_concurrent_future_and_uses_stable_snapshot() -> None:
-    server = WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    completion: Future[None] = Future()
-    first_started = threading.Event()
-    events: list[str] = []
-
-    def first(_: ClientId, __: _messages.ClientPingMessage) -> Future[None]:
-        events.append("first")
-        first_started.set()
-        return completion
-
-    def second(_: ClientId, __: _messages.ClientPingMessage) -> None:
-        events.append("second")
-
-    server.register_handler(_messages.ClientPingMessage, first)
-    server.register_handler(_messages.ClientPingMessage, second)
-
-    async def scenario() -> None:
-        task = asyncio.create_task(
-            server._handle_incoming_message(ClientId(7), _messages.ClientPingMessage(sent_ms=1.0))
-        )
-        while not first_started.is_set():
-            await asyncio.sleep(0)
-        # Registration mutation is lock-safe and affects only later dispatches;
-        # this message owns the snapshot captured at its start.
-        server.unregister_handler(_messages.ClientPingMessage, second)
-        assert events == ["first"]
-        completion.set_result(None)
-        await task
-        assert events == ["first", "second"]
-
-        await server._handle_incoming_message(ClientId(7), _messages.ClientPingMessage(sent_ms=2.0))
-        assert events == ["first", "second", "first"]
-
-    asyncio.run(scenario())
-
-
-def test_active_websocket_connection_limit_rejects_and_releases(
+def test_oversized_incoming_frame_closes_cleanly_and_server_stays_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(infra_impl, "_MAX_ACTIVE_CONNECTIONS", 1)
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-    server.start()
-    url = f"ws://127.0.0.1:{server._port}"
-    first = second = third = None
-    try:
-        first = connect(url, subprotocols=[_client_subprotocol()], open_timeout=2)
-        _wait_for(lambda: len(server._client_state_from_id) == 1)
-        second = connect(url, subprotocols=[_client_subprotocol()], open_timeout=2)
-        with pytest.raises(ConnectionClosed) as closed:
-            second.recv(timeout=2)
-        assert closed.value.rcvd is not None
-        assert closed.value.rcvd.code == 1013
-        assert len(server._client_state_from_id) == 1
-
-        first.close()
-        _wait_for(lambda: server._client_state_from_id == {})
-        third = connect(url, subprotocols=[_client_subprotocol()], open_timeout=2)
-        _wait_for(lambda: len(server._client_state_from_id) == 1)
-        assert third.protocol.close_code is None
-    finally:
-        for websocket in (first, second, third):
-            if websocket is not None:
-                websocket.close()
-        server.stop()
-
-
-def test_custom_low_level_protocol_roundtrips_without_leika_subprotocol() -> None:
-    class _CustomProtocolRoot(infra_impl.Message):
-        pass
-
-    @dataclasses.dataclass
-    class CustomRequest(_CustomProtocolRoot):
-        value: str
-
-        def redundancy_key(self) -> str:
-            return "custom-request"
-
-    @dataclasses.dataclass
-    class CustomResponse(_CustomProtocolRoot):
-        value: str
-
-        def redundancy_key(self) -> str:
-            return "custom-response"
-
-    received = threading.Event()
-    server = WebsockServer("127.0.0.1", 0, message_class=_CustomProtocolRoot, verbose=False)
-
-    def reply(_: ClientId, message: CustomRequest) -> None:
-        assert server.queue_message(CustomResponse(message.value.upper()))
-        received.set()
-
-    server.register_handler(CustomRequest, reply)
+    # A small limit keeps the unread remainder from stalling the server-side
+    # close for websockets' ten-second close timeout.
+    monkeypatch.setattr(websocket_impl, "_INCOMING_MESSAGE_LIMIT_BYTES", 1024)
+    server = _server()
     server.start()
     try:
-        with connect(f"ws://127.0.0.1:{server._port}", open_timeout=2) as websocket:
-            assert websocket.subprotocol is None
-            websocket.send(msgspec.msgpack.encode(CustomRequest("hello").as_serializable_dict()))
-            frame = websocket.recv(timeout=2)
-            assert received.wait(2)
-            assert isinstance(frame, bytes)
-            inner_size = int.from_bytes(frame[:8], "little")
-            compressed_size = int.from_bytes(frame[8:16], "little")
-            envelope = msgspec.msgpack.decode(
-                zstandard.ZstdDecompressor().decompress(
-                    frame[16 : 16 + compressed_size], max_output_size=inner_size
-                )
-            )
-            assert envelope["messages"] == [{"value": "HELLO", "type": "CustomResponse"}]
+        with _connect(server) as websocket:
+            # The server may close before the whole frame is written.
+            with contextlib.suppress(ConnectionClosed):
+                websocket.send(b"x" * 1025)
+            assert _close_code(websocket)[0] == 1009
+        assert _admitted(server)
     finally:
         server.stop()
 
 
-def test_persistent_delivery_scope_filters_real_websocket_transport() -> None:
-    class _ScopedDispatchProtocol(infra_impl.Message):
-        pass
+def test_connection_cap_rejects_extra_clients_and_releases_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(websocket_impl, "_MAX_ACTIVE_CONNECTIONS", 1)
+    server = _server()
+    server.start()
+    try:
+        with _connect(server):
+            _wait_for(lambda: len(server._client_state_from_id) == 1)
+            with _connect(server) as rejected:
+                assert _close_code(rejected)[0] == 1013
+            assert len(server._client_state_from_id) == 1
 
-    @dataclasses.dataclass
-    class ScopedTransportGlobalMessage(_ScopedDispatchProtocol):
-        value: str
+        # The slot frees once the first connection's teardown finishes.
+        _wait_for(lambda: _admitted(server))
+    finally:
+        server.stop()
 
-        def redundancy_key(self) -> str:
-            return "scoped-transport-global"
 
-    @dataclasses.dataclass
-    class ScopedTransportStateMessage(_ScopedDispatchProtocol):
-        scope: str
-        value: str
+@pytest.mark.parametrize("subprotocol", ["", "leika-000000000000", "leika-v0.4.0+p000000000000"])
+def test_protocol_mismatch_is_rejected_with_a_reason_and_releases_its_slot(
+    monkeypatch: pytest.MonkeyPatch,
+    subprotocol: str,
+) -> None:
+    monkeypatch.setattr(websocket_impl, "_MAX_ACTIVE_CONNECTIONS", 1)
+    server = _server()
+    server.start()
+    try:
+        with _connect(server, subprotocol) as rejected:
+            code, reason = _close_code(rejected)
+        assert code == 1002
+        assert reason.startswith("Protocol mismatch")
+        assert server._client_state_from_id == {}
+        _wait_for(lambda: _admitted(server))
+    finally:
+        server.stop()
 
-        def redundancy_key(self) -> str:
-            return f"scoped-transport-state-{self.scope}"
 
-        def delivery_scope(self) -> str:
-            return self.scope
+def test_delivery_scope_filters_real_websocket_transport() -> None:
+    connections: dict[ClientId, WebsockClientConnection] = {}
 
-    @dataclasses.dataclass
-    class ScopedTransportSubscribeMessage(_ScopedDispatchProtocol):
-        scope: str
-
-        def redundancy_key(self) -> None:
-            return None
-
-    @dataclasses.dataclass
-    class ScopedTransportBeginMessage(_ScopedDispatchProtocol):
-        scope: str
-
-        def redundancy_key(self) -> None:
-            return None
-
-    @dataclasses.dataclass
-    class ScopedTransportReadyMessage(_ScopedDispatchProtocol):
-        scope: str
-
-        def redundancy_key(self) -> None:
-            return None
-
-    def receive_messages(websocket: Any, timeout: float = 2.0) -> list[dict[str, Any]]:
-        frame = websocket.recv(timeout=timeout)
-        assert isinstance(frame, bytes)
-        inner_size = int.from_bytes(frame[:8], "little")
-        compressed_size = int.from_bytes(frame[8:16], "little")
-        envelope = msgspec.msgpack.decode(
-            zstandard.ZstdDecompressor().decompress(
-                frame[16 : 16 + compressed_size], max_output_size=inner_size
-            )
-        )
-        return envelope["messages"]
-
-    connections: dict[ClientId, Any] = {}
-    server = WebsockServer(
-        "127.0.0.1",
-        0,
-        message_class=_ScopedDispatchProtocol,
-        verbose=False,
-    )
-
-    @server.on_client_connect
-    def remember_connection(connection: Any) -> None:
+    async def remember(connection: WebsockClientConnection) -> None:
         connections[connection.client_id] = connection
 
-    def subscribe(client_id: ClientId, message: ScopedTransportSubscribeMessage) -> None:
-        connections[client_id].request_delivery_scope(
-            message.scope,
-            ScopedTransportBeginMessage(message.scope),
-            ScopedTransportReadyMessage(message.scope),
+    def subscribe(client_id: ClientId, message: _messages.PageSubscribeMessage) -> None:
+        page_id, generation = message.page_id, message.generation
+        assert connections[client_id].request_delivery_scope(
+            page_id,
+            _messages.PageStreamBeginMessage(page_id, generation),
+            _messages.PageStreamReadyMessage(page_id, generation),
         )
 
-    server.register_handler(ScopedTransportSubscribeMessage, subscribe)
+    server = _server(on_connect=remember)
+    server.register_handler(_messages.PageSubscribeMessage, subscribe)
     server.start()
     try:
-        assert server.queue_message(ScopedTransportGlobalMessage("retained-global"))
-        assert server.queue_message(ScopedTransportStateMessage("alpha", "retained-alpha"))
-        assert server.queue_message(ScopedTransportStateMessage("beta", "retained-beta"))
-        server.flush()
+        assert server.queue_message(_messages.PageCatalogMessage(("alpha", "beta")))
+        assert server.queue_message(_messages.ViewportPaneSnapshotMessage("alpha", ("a",)))
+        assert server.queue_message(_messages.ViewportPaneSnapshotMessage("beta", ("b",)))
 
-        with connect(f"ws://127.0.0.1:{server._port}", open_timeout=2) as websocket:
-            assert receive_messages(websocket) == [
-                {"value": "retained-global", "type": "ScopedTransportGlobalMessage"}
+        with _connect(server) as websocket:
+            assert _decode_frame(websocket.recv(timeout=2)) == [
+                {"type": "PageCatalogMessage", "page_ids": ["alpha", "beta"]}
             ]
 
-            websocket.send(
-                msgspec.msgpack.encode(
-                    ScopedTransportSubscribeMessage("alpha").as_serializable_dict()
-                )
-            )
-            subscription_messages: list[dict[str, Any]] = []
-            while not any(
-                message["type"] == "ScopedTransportReadyMessage"
-                for message in subscription_messages
-            ):
-                subscription_messages.extend(receive_messages(websocket))
-
-            assert subscription_messages == [
-                {"scope": "alpha", "type": "ScopedTransportBeginMessage"},
-                {
-                    "scope": "alpha",
-                    "value": "retained-alpha",
-                    "type": "ScopedTransportStateMessage",
-                },
-                {"scope": "alpha", "type": "ScopedTransportReadyMessage"},
+            websocket.send(_messages.PageSubscribeMessage("alpha", 1).encode())
+            received: list[dict[str, Any]] = []
+            while not received or received[-1]["type"] != "PageStreamReadyMessage":
+                received.extend(_decode_frame(websocket.recv(timeout=2)))
+            assert received == [
+                {"type": "PageStreamBeginMessage", "page_id": "alpha", "generation": 1},
+                {"type": "ViewportPaneSnapshotMessage", "page_id": "alpha", "pane_ids": ["a"]},
+                {"type": "PageStreamReadyMessage", "page_id": "alpha", "generation": 1},
             ]
+            assert connections[ClientId(0)].delivery_scope() == "alpha"
 
-            assert server.queue_message(ScopedTransportStateMessage("beta", "live-beta"))
+            assert server.queue_message(_messages.ViewportPaneSnapshotMessage("beta", ("live",)))
             server.flush()
             with pytest.raises(TimeoutError):
                 websocket.recv(timeout=0.2)
 
-            assert server.queue_message(ScopedTransportStateMessage("alpha", "live-alpha"))
+            assert server.queue_message(_messages.ViewportPaneSnapshotMessage("alpha", ("live",)))
             server.flush()
-            assert receive_messages(websocket) == [
-                {
-                    "scope": "alpha",
-                    "value": "live-alpha",
-                    "type": "ScopedTransportStateMessage",
-                }
+            assert _decode_frame(websocket.recv(timeout=2)) == [
+                {"type": "ViewportPaneSnapshotMessage", "page_id": "alpha", "pane_ids": ["live"]}
             ]
     finally:
         server.stop()
 
 
-def test_client_id_allocator_wraps_at_javascript_safe_max_without_collision() -> None:
-    maximum = infra_impl._CLIENT_ID_MAX
-    first, next_candidate = _allocate_client_id(maximum, set())
-    assert first == maximum
-    assert next_candidate == 0
+def test_closed_connection_refuses_state_messages() -> None:
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        local = AsyncMessageBuffer(loop, persistent_messages=False)
+        retained = AsyncMessageBuffer(loop, persistent_messages=True)
+        connection = WebsockClientConnection(ClientId(1), _ClientHandleState(local, retained))
+        message = _messages.RunJavascriptMessage("state")
+        with connection.atomic():
+            assert local.atomic_counter == 1
+            connection.queue_messages_or_raise([message])
+        assert local.atomic_counter == 0
 
-    active = {ClientId(0), ClientId(1), ClientId(maximum)}
-    allocated, next_candidate = _allocate_client_id(maximum, active)
-    assert allocated == 2
-    assert next_candidate == 3
-    assert 0 <= allocated <= maximum
+        local.set_done()
+        assert connection.queue_message(message) is False
+        with pytest.raises(RuntimeError, match="closed connection"):
+            connection.queue_message_or_raise(message)
+        with pytest.raises(RuntimeError, match="closed connection"):
+            connection.queue_messages_or_raise([message, message])
+        retained.set_done()
+
+    asyncio.run(scenario())
 
 
-def test_active_connection_slot_releases_after_protocol_rejection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(infra_impl, "_MAX_ACTIVE_CONNECTIONS", 1)
-    server = WebsockServer("127.0.0.1", 0, _messages.Message, verbose=False)
-    server.start()
-    url = f"ws://127.0.0.1:{server._port}"
-    try:
-        rejected = connect(
-            url,
-            subprotocols=[Subprotocol("leika-v0.0.0+pwrong")],
-            open_timeout=2,
+def test_frames_reuse_bytes_encoded_once_at_push() -> None:
+    encoded: list[str] = []
+
+    @dataclasses.dataclass
+    class _Counted(_messages.Message):
+        value: str
+
+        def encode(self) -> bytes:
+            encoded.append(self.value)
+            return super().encode()
+
+    async def scenario() -> None:
+        buffer = AsyncMessageBuffer(
+            asyncio.get_running_loop(), persistent_messages=True, window_duration_sec=0
         )
-        with pytest.raises(ConnectionClosed) as closed:
-            rejected.recv(timeout=2)
-        assert closed.value.rcvd is not None
-        assert closed.value.rcvd.code == 1002
-        rejected.close()
+        kept, swapped = _Counted("kept"), _Counted("swapped")
+        assert buffer.push_many((kept, swapped))
+        assert encoded == ["kept", "swapped"]
 
-        healthy = connect(url, subprotocols=[_client_subprotocol()], open_timeout=2)
+        async def prepare(messages: Sequence[_messages.Message]) -> list[_messages.Message]:
+            assert list(messages) == [kept, swapped]
+            return [kept, _Counted("replacement")]
+
+        hooked_state = _ClientHandleState(buffer, buffer, prepare_outgoing=prepare)
+        plain, hooked = _RecordingSocket(), _RecordingSocket()
+        producers = [_produce(plain, buffer, 1), _produce(hooked, buffer, 2, hooked_state)]
         try:
-            _wait_for(lambda: len(server._client_state_from_id) == 1)
-            assert healthy.protocol.close_code is None
+            assert await _next_frame(plain) == [
+                {"type": "_Counted", "value": "kept"},
+                {"type": "_Counted", "value": "swapped"},
+            ]
+            assert await _next_frame(hooked) == [
+                {"type": "_Counted", "value": "kept"},
+                {"type": "_Counted", "value": "replacement"},
+            ]
+            # Both clients' frames used the bytes stored at push; only the
+            # hook's replacement was encoded again.
+            assert encoded == ["kept", "swapped", "replacement"]
         finally:
-            healthy.close()
-    finally:
-        server.stop()
+            await _shut_down(buffer, *producers)
+
+    asyncio.run(scenario())
 
 
-def test_low_level_callback_returned_future_can_stop_without_join_deadlock() -> None:
-    server = WebsockServer(host="127.0.0.1", port=0, verbose=False)
-    executor = ThreadPoolExecutor(max_workers=1)
-    stop_returned = threading.Event()
-
-    def stop_from_external_worker() -> None:
-        server.stop()
-        stop_returned.set()
-
-    @server.on_client_connect
-    def on_connect(_: object) -> Future[None]:
-        return executor.submit(stop_from_external_worker)
-
-    server.start()
-    websocket = None
-    try:
-        websocket = connect(f"ws://127.0.0.1:{server._port}", open_timeout=2)
-        assert stop_returned.wait(2.0)
-        _wait_for(
-            lambda: server._server_thread is not None and not server._server_thread.is_alive()
-        )
-    finally:
-        if websocket is not None:
-            websocket.close()
-        server.stop()
-        executor.shutdown(wait=True)
-
-
-def test_low_level_callback_registries_are_bounded_removable_and_terminal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(infra_impl, "_CALLBACK_REGISTRATION_MAX", 1)
-    server = WebsockServer("127.0.0.1", 0, verbose=False)
-
-    def handler(_: ClientId, __: _messages.Message) -> None:
-        pass
-
-    def other_handler(_: ClientId, __: _messages.Message) -> None:
-        pass
-
-    server.register_handler(_messages.GuiUpdateMessage, handler)
-    with pytest.raises(RuntimeError, match="more than 1 handlers"):
-        server.register_handler(_messages.GuiUpdateMessage, other_handler)
-    server.unregister_handler(_messages.GuiUpdateMessage, handler)
-    server.register_handler(_messages.GuiUpdateMessage, other_handler)
-
-    connect = lambda _: None
-    disconnect = lambda _: None
-    server.on_client_connect(connect)
-    with pytest.raises(RuntimeError, match="more than 1 connect"):
-        server.on_client_connect(lambda _: None)
-    server.remove_client_connect_callback(connect)
-    server.on_client_connect(connect)
-    server.on_client_disconnect(disconnect)
-    with pytest.raises(RuntimeError, match="more than 1 disconnect"):
-        server.on_client_disconnect(lambda _: None)
-    server.remove_client_disconnect_callback()
-    assert server._client_disconnect_cb == []
-
-    server.stop()
-    assert server._incoming_handlers == {}
-    assert server._client_connect_cb == []
-    assert server._client_disconnect_cb == []
-
-
-@pytest.mark.parametrize("character", ["a", "é", "漢", "😀"])
-def test_metadata_utf8_preflight_across_chunk_boundaries(character: str) -> None:
-    payload = character * (64 * 1024 + 1)
-    encoded_size = len(payload.encode("utf-8"))
-    assert not infra_impl._metadata_payload_exceeds(payload, encoded_size)
-    assert infra_impl._metadata_payload_exceeds(payload, encoded_size - 1)
-
-
-@pytest.mark.parametrize("delivery_backpressure", [False, True])
-def test_delivery_backpressure_coalesces_pending_updates_when_enabled(
-    delivery_backpressure: bool,
-) -> None:
+@pytest.mark.parametrize("mode", ["off", "server", "rendering"])
+def test_delivery_backpressure_coalesces_pending_updates_until_receipt(mode: str) -> None:
     async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        sends: asyncio.Queue[bytes] = asyncio.Queue()
-        receipts: asyncio.Queue[asyncio.Future[float]] = asyncio.Queue()
-
-        class DeliverySocket(_RecordingProducerSocket):
-            async def send(self, payload: Any) -> None:
-                await super().send(payload)
-                sends.put_nowait(b"".join(payload))
-
-            async def ping(self) -> asyncio.Future[float]:
-                receipt = asyncio.get_running_loop().create_future()
-                receipts.put_nowait(receipt)
-                return receipt
-
-        socket = DeliverySocket()
-        buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 0}))
-        producer = asyncio.create_task(
-            _message_producer(
-                socket, buffer, ClientId(1), delivery_backpressure=delivery_backpressure
-            )
-        )
+        state = _ClientHandleState(buffer, buffer, rendering_backpressure=mode == "rendering")
+        socket = _RecordingSocket()
+        assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": 0}))
+        producer = _produce(socket, buffer, 1, state, delivery_backpressure=mode == "server")
         try:
-            await asyncio.wait_for(sends.get(), timeout=1)
-            receipt = (
-                await asyncio.wait_for(receipts.get(), timeout=1) if delivery_backpressure else None
-            )
+            await _next_frame(socket)
+            receipt = None
+            if mode != "off":
+                receipt = await asyncio.wait_for(socket.receipts.get(), timeout=1)
             for value in range(1, 100):
-                buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": value}))
+                assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": value}))
             buffer.flush()
             if receipt is not None:
-                # No more bytes can enter the socket before receipt, even
-                # though 99 replacement updates have accumulated.
+                # Nothing more enters the socket before the peer's receipt.
                 with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(sends.get(), timeout=0.05)
-                assert len(socket.sent) == 1
+                    await asyncio.wait_for(socket.frames.get(), timeout=0.05)
+                assert socket.sent == 1
                 receipt.set_result(0.0)
-            frame = await asyncio.wait_for(sends.get(), timeout=1)
-            compressed_size = int.from_bytes(frame[8:16], "little")
-            envelope = msgspec.msgpack.decode(
-                zstandard.ZstdDecompressor().decompress(frame[16 : 16 + compressed_size])
-            )
-            assert [message["updates"]["value"] for message in envelope["messages"]] == [99]
-            if not delivery_backpressure:
-                assert receipts.empty()
-            assert socket.closed == []
+            frame = await _next_frame(socket)
+            assert [message["updates"]["value"] for message in frame] == [99]
+            if mode == "off":
+                assert socket.receipts.empty()
         finally:
-            buffer.set_done()
-            producer.cancel()
-            await asyncio.gather(producer, return_exceptions=True)
-        assert producer.done()
+            await _shut_down(buffer, producer)
 
     asyncio.run(scenario())
 
@@ -886,101 +577,56 @@ def test_delivery_backpressure_coalesces_pending_updates_when_enabled(
 def test_delivery_backpressure_does_not_block_another_client() -> None:
     async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=True)
-        sent: asyncio.Queue[int] = asyncio.Queue()
-        release_slow = asyncio.get_running_loop().create_future()
-
-        class DeliverySocket(_RecordingProducerSocket):
-            def __init__(self, client_id: int) -> None:
-                super().__init__()
-                self.client_id = client_id
-
-            async def send(self, payload: object) -> None:
-                await super().send(payload)
-                sent.put_nowait(self.client_id)
-
-            async def ping(self) -> asyncio.Future[float]:
-                if self.client_id == 1:
-                    return release_slow
-                receipt = asyncio.get_running_loop().create_future()
-                receipt.set_result(0.0)
-                return receipt
-
-        for client_id in (1, 2):
-            buffer.register_client(ClientId(client_id))
-        buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 0}))
-        sockets = [DeliverySocket(1), DeliverySocket(2)]
+        slow, fast = _RecordingSocket(), _RecordingSocket(automatic_receipts=True)
+        assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": 0}))
         producers = [
-            asyncio.create_task(
-                _message_producer(
-                    socket, buffer, ClientId(socket.client_id), delivery_backpressure=True
-                )
-            )
-            for socket in sockets
+            _produce(slow, buffer, 1, delivery_backpressure=True),
+            _produce(fast, buffer, 2, delivery_backpressure=True),
         ]
         try:
-            initial = [await asyncio.wait_for(sent.get(), timeout=1) for _ in range(2)]
-            assert sorted(initial) == [1, 2]
-            buffer.push(_messages.GuiUpdateMessage(uuid="slider", updates={"value": 1}))
+            await _next_frame(slow)
+            await _next_frame(fast)
+            receipt = await asyncio.wait_for(slow.receipts.get(), timeout=1)
+
+            assert buffer.push(_messages.GuiUpdateMessage("slider", {"value": 1}))
             buffer.flush()
-            assert await asyncio.wait_for(sent.get(), timeout=1) == 2
-            assert len(sockets[0].sent) == 1
-            assert len(sockets[1].sent) == 2
-            assert not release_slow.done()
+            assert [message["updates"]["value"] for message in await _next_frame(fast)] == [1]
+            assert slow.sent == 1
+            assert not receipt.done()
         finally:
-            buffer.set_done()
-            for producer in producers:
-                producer.cancel()
-            await asyncio.gather(*producers, return_exceptions=True)
-            for client_id in (1, 2):
-                buffer.unregister_client(ClientId(client_id))
+            await _shut_down(buffer, *producers)
 
     asyncio.run(scenario())
 
 
-def test_delivery_rate_waits_for_bulk_receipt():
-    async def scenario():
+def test_delivery_rate_waits_for_bulk_receipt() -> None:
+    async def scenario() -> None:
         buffer = AsyncMessageBuffer(asyncio.get_running_loop(), persistent_messages=False)
-        state = infra_impl._ClientHandleState(buffer)
-        receipts = asyncio.Queue()
-
-        class Socket(_RecordingProducerSocket):
-            async def ping(self):
-                receipt = asyncio.get_running_loop().create_future()
-                receipts.put_nowait(receipt)
-                return receipt
-
-        # Binary payload is not compressed away, even when every byte is equal.
-        buffer.push(
-            _messages.ViewportPaneUpdateMessage(
-                "page", "video", {"_data": np.zeros(32_000, dtype=np.uint8)}
-            )
-        )
-        producer = asyncio.create_task(
-            _message_producer(
-                Socket(), buffer, ClientId(1), delivery_backpressure=True, client_state=state
-            )
-        )
+        state = _ClientHandleState(buffer, buffer)
+        socket = _RecordingSocket()
+        # Random bytes, so compression cannot shrink the frame below bulk size.
+        payload = random.Random(0).randbytes(32_000)
+        assert buffer.push(_messages.FileTransferPart(None, "transfer", 0, payload))
+        producer = _produce(socket, buffer, 1, state, delivery_backpressure=True)
         try:
-            receipt = await asyncio.wait_for(receipts.get(), 1)
+            receipt = await asyncio.wait_for(socket.receipts.get(), timeout=1)
             assert state.delivery_rate is None
             await asyncio.sleep(0.03)
             receipt.set_result(0.0)
-            await asyncio.sleep(0.01)
+            for _ in range(100):
+                if state.delivery_rate is not None:
+                    break
+                await asyncio.sleep(0.001)
             assert state.delivery_rate is not None
             assert 0 < state.delivery_rate < 2_000_000
-            before = state.delivery_rate
-            state.record_delivery(100, 1)
-            assert state.delivery_rate == before
         finally:
-            buffer.set_done()
-            producer.cancel()
-            await asyncio.gather(producer, return_exceptions=True)
+            await _shut_down(buffer, producer)
 
     asyncio.run(scenario())
 
 
-def test_delivery_rate_tracks_slowdown_and_recovery_without_control_noise():
-    state = infra_impl._ClientHandleState(None)
+def test_delivery_rate_tracks_slowdown_and_recovery_without_control_noise() -> None:
+    state = _ClientHandleState(None, None)  # type: ignore[arg-type]
     state.record_delivery(1_000_000, 0.01)
     assert state.delivery_rate == 100_000_000
     state.record_delivery(125_000, 1)
@@ -988,6 +634,8 @@ def test_delivery_rate_tracks_slowdown_and_recovery_without_control_noise():
     for _ in range(10):
         state.record_delivery(125_000, 1)
     assert 125_000 <= state.delivery_rate < 130_000
+
+    # Tiny control frames and zero-duration samples measure nothing.
     slow = state.delivery_rate
     state.record_delivery(100, 10)
     state.record_delivery(125_000, 0)

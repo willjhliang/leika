@@ -26,7 +26,7 @@ import leika._notification_handle as notification_impl
 import leika._plotly as plotly_impl
 from leika import _messages
 from leika._server import ClientHandle
-from leika.infra import ClientId
+from leika._transport._websocket import ClientId
 
 
 def _wait_for(predicate, timeout: float = 2.0) -> None:
@@ -1759,9 +1759,7 @@ def test_full_component_graph_depth_is_bounded_transactionally(
 
     def state() -> tuple[object, ...]:
         return (
-            buffer.message_counter,
-            dict(buffer.message_from_id),
-            dict(buffer.id_from_redundancy_key),
+            buffer.message_from_id,
             server.gui._live_component_count,
             server.gui._resource_total,
             dict(server.gui._resource_from_gui_uuid),

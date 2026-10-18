@@ -15,7 +15,7 @@ from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 import leika
-from leika.infra._viser_proxy import VISER_PROXY_PREFIX, _rebase_assets
+from leika._transport._viser_proxy import VISER_PROXY_PREFIX, _rebase_assets
 
 
 @contextlib.contextmanager
@@ -205,29 +205,16 @@ def test_embedded_client_cannot_open_an_independent_tunnel(protected, kind):
         assert messages == []
 
 
-def test_proxy_response_size_is_bounded(protected, monkeypatch):
-    monkeypatch.setattr("leika.infra._viser_proxy._MAX_HTTP_BYTES", 2)
-    with backend() as (target, _, _):
-        pane = protected.panes.add_viser(target)
-        assert get(protected, pane.url, login(protected))[0] == 503
-
-
-def test_legacy_asset_urls_stay_with_their_pane_and_charge_expansion(monkeypatch):
+def test_legacy_asset_urls_stay_with_their_pane():
     source = b'''<script src="/assets/app.js"></script> new Worker('/assets/worker.js')
         new URL("/assets/sort.wasm", import.meta.url); "/logo.svg"; "/manifest.json";
         "https://example.org/assets/remote.js"; "./assets/relative.js"'''
-    reservations = []
     first = VISER_PROXY_PREFIX + "first/"
-    second = VISER_PROXY_PREFIX + "second/"
-    rewritten = _rebase_assets(source, first, lambda size: reservations.append(size) or True)
+    rewritten = _rebase_assets(source, first)
     assert rewritten.count(first.encode()) == 5
     assert b'"https://example.org/assets/remote.js"' in rewritten
     assert b'"./assets/relative.js"' in rewritten
-    assert reservations == [len(source) + 2 * len(rewritten)]
-    assert first.encode() not in _rebase_assets(source, second, lambda _: True)
-    assert _rebase_assets(source, first, lambda _: False) is None
-    monkeypatch.setattr("leika.infra._viser_proxy._MAX_HTTP_BYTES", len(source))
-    assert _rebase_assets(source, first, lambda _: True) is None
+    assert first.encode() not in _rebase_assets(source, VISER_PROXY_PREFIX + "second/")
 
 
 def test_proxy_preserves_encoded_binary_representations_and_ranges(protected):

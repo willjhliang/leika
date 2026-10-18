@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, TypeVar, cast
 from urllib.parse import urlsplit
 
-from . import _client_autobuild, _downloads, _messages, infra
+from . import _client_autobuild, _downloads, _messages
 from ._async_errors import (
     await_user_callback,
     in_sync_user_callback,
@@ -34,16 +34,17 @@ from ._gui_resources import _GuiResourceCost
 from ._notification_handle import NotificationHandle
 from ._pages import Pages, _normalize_legacy_page_label
 from ._share import CloudflaredTunnel, ShareTunnelError
-from ._validation import utf16_code_unit_length, validate_layout_id
-from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
-from ._validation import validate_positive_integer as _validate_positive_integer
-from .infra._auth import HttpPasswordGuard
-from .infra._http_assets import HttpAsset
-from .infra._http_security import (
+from ._transport._auth import HttpPasswordGuard
+from ._transport._http_assets import HttpAsset
+from ._transport._http_security import (
     _canonical_hostname,
     _configured_allowed_hosts,
     _is_loopback_host,
 )
+from ._transport._websocket import ClientId, WebsockClientConnection, WebsockServer
+from ._validation import utf16_code_unit_length, validate_layout_id
+from ._validation import validate_nonnegative_integer as _validate_nonnegative_integer
+from ._validation import validate_positive_integer as _validate_positive_integer
 
 NoneOrCoroutine = TypeVar("NoneOrCoroutine", None, Coroutine)
 
@@ -56,7 +57,6 @@ _FILE_UPLOAD_MAX_ACTIVE = 128
 _SERVER_GUI_RETAINED_MAX_BYTES = 256 * 1024 * 1024
 _SERVER_GUI_PIXELS_MAX = 128 * 1024 * 1024
 _SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
-_SERVER_CALLBACK_MAX = 256
 _IMAGE_PREPARATION_MAX_BYTES = 512 * 1024 * 1024
 
 _CALLBACK_EXECUTOR_MAX_PENDING = 256
@@ -106,15 +106,14 @@ class Server:
 
     Wildcard binds accept localhost and IP-literal request hosts by default.
     Add intentional DNS, mDNS, or tailnet names with ``allowed_hosts``;
-    entries are hostnames without ports and the sequence is capped at 256.
+    entries are hostnames without ports.
     With ``allowed_hosts=None``, load the JSON array in
     ``$XDG_CONFIG_HOME/leika/allowed_hosts.json`` (default
     ``~/.config/leika/allowed_hosts.json``). A missing file adds no names.
     An explicit sequence replaces user configuration; ``[]`` disables it.
     Configuration is read once per server construction, before allocating resources.
-    Invalid, duplicate, changing, or oversized sequences raise ``ValueError``
-    during construction. Browser ``Origin`` must still match
-    the accepted request origin. Pages deny framing by default; set
+    Invalid names raise ``ValueError`` during construction. Browser ``Origin``
+    must still match the accepted request origin. Pages deny framing by default; set
     ``allow_embedding=True`` only for an intentional iframe or notebook
     :meth:`show` use.
 
@@ -150,8 +149,7 @@ class Server:
         if password is not None:
             if type(password) is not str:
                 raise TypeError("password must be a string or None.")
-            # Validate before building the client or allocating executors. The
-            # guard repeats this low-level boundary for direct infrastructure use.
+            # Validate before building the client or allocating executors.
             HttpPasswordGuard(password)
         if not isinstance(allow_embedding, bool):
             raise TypeError("allow_embedding must be a bool.")
@@ -161,7 +159,7 @@ class Server:
             raise TypeError("verbose must be a bool.")
         if not isinstance(delivery_backpressure, bool):
             raise TypeError("delivery_backpressure must be a bool.")
-        normalized_allowed_hosts = tuple(sorted(_configured_allowed_hosts(allowed_hosts)))
+        normalized_allowed_hosts = _configured_allowed_hosts(allowed_hosts)
         # Sharing means the dashboard carries data worth protecting, and a
         # non-loopback bind would serve that same data as unencrypted HTTP to
         # the local network -- where the password itself travels in the clear.
@@ -216,13 +214,14 @@ class Server:
         self._plotly_js_source: str | None = None
         self._plotly_resource_cost = _GuiResourceCost()
         self._plotly_js_required_globally = False
-        self._plotly_js_sent_client_ids: set[infra.ClientId] = set()
+        self._plotly_js_sent_client_ids: set[ClientId] = set()
 
-        server = infra.WebsockServer(
-            host=host,
-            port=port,
-            message_class=_messages.Message,
-            http_server_root=Path(__file__).resolve().parent / "client" / "build",
+        server = WebsockServer(
+            host,
+            port,
+            on_connect=self._on_connect,
+            on_disconnect=self._on_disconnect,
+            index_html=Path(__file__).resolve().parent / "client" / "build" / "index.html",
             verbose=verbose,
             password=password,
             allowed_hosts=normalized_allowed_hosts,
@@ -230,40 +229,11 @@ class Server:
             delivery_backpressure=delivery_backpressure,
         )
         self._websock_server = server
-
-        @server.on_client_connect
-        async def _on_connect(conn: infra.WebsockClientConnection) -> None:
-            client = ClientHandle(conn, self)
-            with self._client_lock:
-                self._connected_clients[conn.client_id] = client
-                callbacks = tuple(self._client_connect_cb)
-            # The connection-local queue is registered before user callbacks,
-            # so their Plotly messages cannot overtake this bootstrap.
-            self._initialize_plotly_connection(conn)
-            for callback in callbacks:
-                await self._await_user_callback(callback, client)
-
         server.register_handler(_messages.PageSubscribeMessage, self._handle_page_subscribe)
         server.register_handler(_messages.ClientPingMessage, self._handle_client_ping)
         server.register_handler(_messages.PaneViewportMessage, self._handle_pane_viewport)
         server.register_handler(_messages.RenderingSettingsMessage, self._handle_rendering_settings)
         server.register_handler(_messages.FileTransferAbort, self._handle_file_transfer_abort)
-
-        @server.on_client_disconnect
-        async def _on_disconnect(conn: infra.WebsockClientConnection) -> None:
-            with self._client_lock:
-                client = self._connected_clients.pop(conn.client_id, None)
-                callbacks = tuple(self._client_disconnect_cb)
-            self._discard_plotly_connection(conn.client_id)
-            if client is None:
-                return
-            client._cancel_all_outgoing_file_transfers()
-            client.gui._discard_client_work(conn.client_id, release_retained_uploads=True)
-            gui = getattr(self, "gui", None)
-            if gui is not None:
-                gui._discard_client_work(conn.client_id)
-            for callback in callbacks:
-                await self._await_user_callback(callback, client)
 
         try:
             # Allocate worker pools only after all pure construction and handler
@@ -337,6 +307,32 @@ class Server:
                 except BaseException:
                     pass
             raise
+
+    async def _on_connect(self, conn: WebsockClientConnection) -> None:
+        client = ClientHandle(conn, self)
+        with self._client_lock:
+            self._connected_clients[conn.client_id] = client
+            callbacks = tuple(self._client_connect_cb)
+        # The connection-local queue is registered before user callbacks,
+        # so their Plotly messages cannot overtake this bootstrap.
+        self._initialize_plotly_connection(conn)
+        for callback in callbacks:
+            await self._await_user_callback(callback, client)
+
+    async def _on_disconnect(self, conn: WebsockClientConnection) -> None:
+        with self._client_lock:
+            client = self._connected_clients.pop(conn.client_id, None)
+            callbacks = tuple(self._client_disconnect_cb)
+        self._discard_plotly_connection(conn.client_id)
+        if client is None:
+            return
+        client._cancel_all_outgoing_file_transfers()
+        client.gui._discard_client_work(conn.client_id, release_retained_uploads=True)
+        gui = getattr(self, "gui", None)
+        if gui is not None:
+            gui._discard_client_work(conn.client_id)
+        for callback in callbacks:
+            await self._await_user_callback(callback, client)
 
     @property
     def share_url(self) -> str | None:
@@ -500,7 +496,7 @@ class Server:
             self._gui_order_counter += 1
             return self._gui_order_counter
 
-    def _queue_plotly_js_locked(self, connection: infra.WebsockClientConnection) -> None:
+    def _queue_plotly_js_locked(self, connection: WebsockClientConnection) -> None:
         """Queue the cached runtime once for one browser connection. Lock held."""
         client_id = connection.client_id
         if client_id in self._plotly_js_sent_client_ids:
@@ -526,7 +522,7 @@ class Server:
         self._plotly_resource_cost = cost
         self._plotly_js_source = source
 
-    def _ensure_plotly_js_sent(self, connection: infra.WebsockClientConnection | None) -> None:
+    def _ensure_plotly_js_sent(self, connection: WebsockClientConnection | None) -> None:
         """Initialize one client, or every current and future client, once."""
         with self._plotly_js_lock:
             self._ensure_plotly_js_loaded_locked()
@@ -556,19 +552,19 @@ class Server:
             if connection.delivery_scope() == page_id:
                 self._ensure_plotly_js_sent(connection)
 
-    def _initialize_plotly_connection(self, connection: infra.WebsockClientConnection) -> None:
+    def _initialize_plotly_connection(self, connection: WebsockClientConnection) -> None:
         """Apply a prior global Plotly requirement to a new connection."""
         with self._plotly_js_lock:
             if self._plotly_js_required_globally:
                 self._queue_plotly_js_locked(connection)
 
-    def _discard_plotly_connection(self, client_id: infra.ClientId) -> None:
+    def _discard_plotly_connection(self, client_id: ClientId) -> None:
         """Forget per-connection delivery state when a browser disconnects."""
         with self._plotly_js_lock:
             self._plotly_js_sent_client_ids.discard(client_id)
 
     def _handle_file_transfer_abort(
-        self, client_id: infra.ClientId, message: _messages.FileTransferAbort
+        self, client_id: ClientId, message: _messages.FileTransferAbort
     ) -> None:
         """Cancel a server-to-browser transfer, if this UUID names one."""
         with self._client_lock:
@@ -577,7 +573,7 @@ class Server:
             client._cancel_outgoing_file_transfer(message.transfer_uuid)
 
     def _handle_page_subscribe(
-        self, client_id: infra.ClientId, message: _messages.PageSubscribeMessage
+        self, client_id: ClientId, message: _messages.PageSubscribeMessage
     ) -> None:
         """Replace one browser's private active-page transport stream."""
 
@@ -631,7 +627,7 @@ class Server:
                     handle._queue_update(dataclasses.asdict(handle._impl.props))
 
     def _handle_rendering_settings(
-        self, client_id: infra.ClientId, message: _messages.RenderingSettingsMessage
+        self, client_id: ClientId, message: _messages.RenderingSettingsMessage
     ) -> None:
         if message.rendering not in ("auto", "performance", "quality") or message.image_fit not in (
             "fit",
@@ -656,7 +652,7 @@ class Server:
             self._refresh_rendering(client)
 
     def _handle_pane_viewport(
-        self, client_id: infra.ClientId, message: _messages.PaneViewportMessage
+        self, client_id: ClientId, message: _messages.PaneViewportMessage
     ) -> None:
         if any(type(n) is not int or not 0 <= n <= 8192 for n in (message.width, message.height)):
             return
@@ -682,7 +678,7 @@ class Server:
             self._refresh_rendering(client, message.pane_id)
 
     def _handle_client_ping(
-        self, client_id: infra.ClientId, message: _messages.ClientPingMessage
+        self, client_id: ClientId, message: _messages.ClientPingMessage
     ) -> None:
         """Answer one client's ping, and get out of the way.
 
@@ -870,9 +866,9 @@ class Server:
             or in_sync_user_callback()
             or callback_active
         ):
-            # Signal only. Calling the low-level stop() here from an external
-            # Future's worker would join the loop that is awaiting that Future.
-            self._websock_server._signal_stop()
+            # Signal only. Joining here from an external Future's worker would
+            # wait for the loop that is awaiting that Future.
+            self._websock_server.signal_stop()
             with self._stop_lock:
                 if self._stop_finalizer is None:
                     finalizer = threading.Thread(
@@ -922,10 +918,6 @@ class Server:
             if self._stopped:
                 raise RuntimeError("Cannot register callbacks after Server.stop().")
         with self._client_lock:
-            if len(self._client_connect_cb) >= _SERVER_CALLBACK_MAX:
-                raise RuntimeError(
-                    f"A server cannot own more than {_SERVER_CALLBACK_MAX} connect callbacks."
-                )
             clients = tuple(self._connected_clients.values())
             self._client_connect_cb.append(cb)
 
@@ -956,21 +948,6 @@ class Server:
 
         return cast(Callable[[ClientHandle], NoneOrCoroutine], cb)
 
-    def remove_client_connect_callback(
-        self,
-        callback: Callable[[ClientHandle], NoneOrCoroutine] | None = None,
-    ) -> None:
-        """Remove one connect callback, or all callbacks when omitted."""
-        if callback is not None and not callable(callback):
-            raise TypeError("client connection callback must be callable or None")
-        with self._client_lock:
-            if callback is None:
-                self._client_connect_cb.clear()
-            else:
-                self._client_connect_cb[:] = [
-                    existing for existing in self._client_connect_cb if existing != callback
-                ]
-
     def on_client_disconnect(
         self, cb: Callable[[ClientHandle], NoneOrCoroutine]
     ) -> Callable[[ClientHandle], NoneOrCoroutine]:
@@ -988,27 +965,8 @@ class Server:
             if self._stopped:
                 raise RuntimeError("Cannot register callbacks after Server.stop().")
         with self._client_lock:
-            if len(self._client_disconnect_cb) >= _SERVER_CALLBACK_MAX:
-                raise RuntimeError(
-                    f"A server cannot own more than {_SERVER_CALLBACK_MAX} disconnect callbacks."
-                )
             self._client_disconnect_cb.append(cb)
         return cb
-
-    def remove_client_disconnect_callback(
-        self,
-        callback: Callable[[ClientHandle], NoneOrCoroutine] | None = None,
-    ) -> None:
-        """Remove one disconnect callback, or all callbacks when omitted."""
-        if callback is not None and not callable(callback):
-            raise TypeError("client disconnection callback must be callable or None")
-        with self._client_lock:
-            if callback is None:
-                self._client_disconnect_cb.clear()
-            else:
-                self._client_disconnect_cb[:] = [
-                    existing for existing in self._client_disconnect_cb if existing != callback
-                ]
 
     def flush(self) -> None:
         """Request immediate windowing of pending broadcast messages.
@@ -1064,11 +1022,7 @@ class Server:
         the URL was already being hashed from -- so it is the same
         registration, told in full rather than told twice.
         """
-        return self._websock_server.register_http_asset(
-            path,
-            _expected_metadata=_expected_metadata,
-            _require_safe_image=True,
-        )
+        return self._websock_server.register_http_asset(path, _expected_metadata=_expected_metadata)
 
     def _run_broadcast_file_transfer(
         self,

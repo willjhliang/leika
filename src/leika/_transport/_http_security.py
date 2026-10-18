@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import http
 import ipaddress
-import itertools
 import json
 import os
 import threading
@@ -114,29 +113,14 @@ def _parse_origin(origin: str) -> tuple[str, str, int] | None:
     )
 
 
-_ALLOWED_HOSTS_MAX = 256
-
-
-def _normalize_allowed_hosts(hosts: Sequence[str] | None) -> frozenset[str]:
-    if hosts is None:
-        return frozenset()
-    if isinstance(hosts, str) or not isinstance(hosts, Sequence):
+def _normalize_allowed_hosts(hosts: Sequence[str]) -> frozenset[str]:
+    if isinstance(hosts, str):
         raise TypeError("allowed_hosts must be a sequence of host names, not one string.")
-    reported_length = len(hosts)
-    if reported_length > _ALLOWED_HOSTS_MAX:
-        raise ValueError(f"allowed_hosts cannot contain more than {_ALLOWED_HOSTS_MAX} entries.")
-    materialized = tuple(itertools.islice(iter(hosts), _ALLOWED_HOSTS_MAX + 1))
-    if len(materialized) != reported_length:
-        raise ValueError("allowed_hosts length changed during validation.")
     normalized: set[str] = set()
-    for host in materialized:
-        if not isinstance(host, str):
-            raise TypeError("allowed_hosts entries must be strings.")
-        canonical = _canonical_hostname(host)
+    for host in hosts:
+        canonical = _canonical_hostname(host) if isinstance(host, str) else None
         if canonical is None:
             raise ValueError(f"Invalid allowed host: {host!r}.")
-        if canonical in normalized:
-            raise ValueError(f"Duplicate allowed host: {host!r}.")
         normalized.add(canonical)
     return frozenset(normalized)
 

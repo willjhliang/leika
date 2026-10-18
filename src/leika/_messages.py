@@ -1,15 +1,21 @@
-"""Message type definitions. For synchronization with the TypeScript definitions, see
-`_typescript_interface_gen.py.`"""
+"""Wire messages: the one Message base, its codec, and every message type.
+
+The browser's TypeScript types are generated from these dataclasses; see
+``_transport/_typescript.py``.
+"""
 
 from __future__ import annotations
 
+import copy
 import dataclasses
-import hashlib
-from typing import Any, ClassVar, Dict, Optional, Tuple, Union, cast
+import functools
+import math
+from types import UnionType
+from typing import Any, ClassVar, Dict, Iterator, Optional, Tuple, Union, cast
 
-from typing_extensions import Literal, TypeAlias, override
-
-from . import infra
+import msgspec.msgpack
+import numpy as np
+from typing_extensions import Literal, TypeAlias, get_args, get_origin, get_type_hints, override
 
 KeyModifier = Literal[
     "cmd/ctrl",
@@ -186,68 +192,26 @@ class EntityLifecycle:
     id_field: EntityIdField | Tuple[EntityIdField, ...]
 
 
-class Message(infra.Message):
-    _tags: ClassVar[Tuple[TagLiteral, ...]] = tuple()
+class Message:
+    """Base of every wire message. Concrete messages are dataclasses whose
+    fields are the wire schema; the class name is the ``type`` discriminant."""
 
-    @override
-    def redundancy_key(self) -> str | None:
-        """Returns a coalescing key for this message, used for detecting redundant
-        messages.
+    excluded_self_client: Optional[int] = None
+    """Client this message is not sent to: the one whose change it echoes."""
 
-        For entity messages, this is derived from the entity markers:
-        - ``create`` / ``remove`` share ``{entity_type}:{id}:create-or-remove``
-          so a Remove supersedes a pending Create (and vice versa).
-        - ``update`` uses ``{entity_type}:{id}:update:{props}`` so prop-set
-          updates coalesce among themselves but don't fight with create/remove.
-
-        For non-entity messages, falls back to a name-based default that keeps
-        independent messages in independent slots.
-        """
-        cached = self.__dict__.get("_cached_redundancy_key")
-        if cached is not None:
-            return cached
-
-        if (
-            self.entity_type is not None
-            and self.lifecycle_phase is not None
-            and self.entity_id_field is not None
-        ):
-            entity_id = self.lifecycle_entity_id()
-            entity_key = repr(entity_id) if isinstance(entity_id, tuple) else str(entity_id)
-            if self.lifecycle_phase in ("create", "remove"):
-                key = f"{self.entity_type}:{entity_key}:create-or-remove"
-            elif self.lifecycle_phase == "update_dict":
-                # Delta updates coalesce per prop-set, so independent prop
-                # changes don't clobber each other.
-                updates = cast(Dict[str, Any], getattr(self, "updates"))
-                prop_suffix = ",".join(sorted(updates.keys()))
-                key = f"{self.entity_type}:{entity_key}:update:{prop_suffix}"
-            else:
-                # update_simple: single-purpose update, coalesce latest-wins
-                # per message type (so independent update message classes stay in separate slots).
-                key = f"{self.entity_type}:{entity_key}:update:{type(self).__name__}"
-        else:
-            # Non-entity fallback: ClassName + any incidental uuid field.
-            parts = [type(self).__name__]
-            uuid_val = getattr(self, "uuid", None)
-            if uuid_val is not None:
-                parts.append(uuid_val)
-            key = "_".join(parts)
-
-        object.__setattr__(self, "_cached_redundancy_key", key)
-        return key
+    _tags: ClassVar[Tuple[TagLiteral, ...]] = ()
+    entity_type: ClassVar[Optional[EntityType]] = None
+    lifecycle_phase: ClassVar[Optional[LifecyclePhase]] = None
+    entity_id_field: ClassVar[EntityIdField | Tuple[EntityIdField, ...] | None] = None
+    """Field, or fields for page-scoped entities, that identify the entity."""
 
     def __init_subclass__(
         cls,
         tag: Optional[TagLiteral] = None,
         entity: Optional[EntityLifecycle] = None,
     ) -> None:
-        """Extend class creation with:
-
-        - ``tag=``: append to the TypeScript union tag list (existing behavior).
-        - ``entity=``: declare entity lifecycle markers (type, phase, id_field)
-          as a single ``EntityLifecycle`` value.
-        """
+        """Add ``tag`` to the generated TypeScript tag unions, and place the
+        class in ``entity``'s lifecycle."""
         super().__init_subclass__()
         if tag is not None:
             cls._tags = cls._tags + (tag,)
@@ -255,6 +219,267 @@ class Message(infra.Message):
             cls.entity_type = entity.type
             cls.lifecycle_phase = entity.phase
             cls.entity_id_field = entity.id_field
+
+    def lifecycle_entity(self) -> tuple[str, object] | None:
+        """The ``(entity type, identity)`` this message creates, updates or removes."""
+        fields = self.entity_id_field
+        if self.entity_type is None or fields is None:
+            return None
+        if isinstance(fields, str):
+            return self.entity_type, getattr(self, fields)
+        return self.entity_type, tuple(getattr(self, field) for field in fields)
+
+    def redundancy_key(self) -> str | None:
+        """Key under which a newer queued message replaces an older one.
+
+        Entity messages derive theirs from the lifecycle: ``create`` and
+        ``remove`` share ``{entity}:{id}:create-or-remove`` so either supersedes
+        the other; ``update_dict`` coalesces per set of updated properties, so
+        independent property changes don't clobber each other; ``update_simple``
+        coalesces per message type. Other messages are never replaced unless
+        they override this.
+        """
+        entity = self.lifecycle_entity()
+        if entity is None:
+            return None
+        entity_type, entity_id = entity
+        entity_key = repr(entity_id) if isinstance(entity_id, tuple) else str(entity_id)
+        if self.lifecycle_phase in ("create", "remove"):
+            return f"{entity_type}:{entity_key}:create-or-remove"
+        if self.lifecycle_phase == "update_dict":
+            updates = cast(Dict[str, Any], getattr(self, "updates"))
+            return f"{entity_type}:{entity_key}:update:{','.join(sorted(updates))}"
+        return f"{entity_type}:{entity_key}:update:{type(self).__name__}"
+
+    def purge_entities(self) -> tuple[tuple[str, object], ...]:
+        """Entities whose queued and retained messages this one makes obsolete."""
+        entity = self.lifecycle_entity()
+        return (entity,) if entity is not None and self.lifecycle_phase == "remove" else ()
+
+    def delivery_scope(self) -> str | None:
+        """Retained scope, such as a page, whose subscribers alone receive this
+        message; None sends it to every client."""
+        return None
+
+    def encode(self) -> bytes:
+        """Check every field against its annotation and encode the message."""
+        fields = _wire_fields(type(self))
+        for name, annotation in fields:
+            _check_outbound(getattr(self, name), annotation)
+        return _ENCODER.encode(
+            {"type": type(self).__name__, **{name: getattr(self, name) for name, _ in fields}}
+        )
+
+
+def _encode_numpy_scalar(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"unsupported protocol value: {type(value).__name__}")
+
+
+_ENCODER = msgspec.msgpack.Encoder(enc_hook=_encode_numpy_scalar)
+
+
+@functools.cache
+def _wire_fields(cls: type) -> tuple[tuple[str, Any], ...]:
+    """A dataclass's wire fields with their resolved annotations, in order."""
+    hints = get_type_hints(cls)
+    return tuple((field.name, hints[field.name]) for field in dataclasses.fields(cls))
+
+
+def _type_error(annotation: object, value: object) -> TypeError:
+    return TypeError(f"expected {annotation!r}, got {type(value).__name__}")
+
+
+def _check_outbound(value: Any, annotation: Any) -> None:
+    """Reject an outbound value that doesn't match its wire annotation.
+
+    Numpy scalars stand in for Python numbers; ``Any`` values are only
+    required to be encodable.
+    """
+    if annotation is Any:
+        return
+    if annotation in (type(None), bool, str, bytes):
+        if type(value) is not annotation:
+            raise _type_error(annotation, value)
+        return
+    if annotation is int or annotation is float:
+        numbers = (int, np.integer) if annotation is int else (int, float, np.integer, np.floating)
+        if isinstance(value, bool) or not isinstance(value, numbers):
+            raise _type_error(annotation, value)
+        return
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Union or origin is UnionType:
+        for option in args:
+            try:
+                _check_outbound(value, option)
+                return
+            except TypeError:
+                pass
+        raise _type_error(annotation, value)
+    if origin is Literal:
+        if not any(type(value) is type(option) and value == option for option in args):
+            raise _type_error(annotation, value)
+        return
+    if origin is tuple:
+        if type(value) is not tuple:
+            raise _type_error(annotation, value)
+        if len(args) == 2 and args[1] is Ellipsis:
+            args = (args[0],) * len(value)
+        elif len(value) != len(args):
+            raise TypeError(f"expected {annotation!r} with {len(args)} items, got {len(value)}")
+        for item, item_annotation in zip(value, args):
+            _check_outbound(item, item_annotation)
+        return
+    if origin is dict:
+        if type(value) is not dict:
+            raise _type_error(annotation, value)
+        for key, item in value.items():
+            _check_outbound(key, args[0])
+            _check_outbound(item, args[1])
+        return
+    if dataclasses.is_dataclass(annotation):
+        if type(value) is not annotation:
+            raise _type_error(annotation, value)
+        for name, field_annotation in _wire_fields(annotation):
+            _check_outbound(getattr(value, name), field_annotation)
+        return
+    raise TypeError(f"unsupported protocol annotation: {annotation!r}")
+
+
+def validated_protocol_value_copy(value: Any) -> Any:
+    """A private copy of one dynamic property value the wire can carry."""
+    _ENCODER.encode(value)
+    return copy.deepcopy(value)
+
+
+# Bounds on what one decoded browser message may contain, beyond the
+# transport's 4 MiB frame limit.
+_DECODED_NODE_LIMIT = 100_000
+_DECODED_CONTAINER_ITEMS_LIMIT = 65_536
+_DECODED_DEPTH_LIMIT = 64
+_DECODED_PAYLOAD_BYTES_LIMIT = 4 * 1024 * 1024
+_JAVASCRIPT_SAFE_INTEGER_MAX = (1 << 53) - 1
+
+
+def _check_decoded_shape(value: object) -> None:
+    """Bound decoded amplification and reject values outside JSON plus bytes."""
+    nodes = 0
+    payload_bytes = 0
+    stack: list[tuple[object, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > _DECODED_NODE_LIMIT:
+            raise ValueError("decoded protocol message contains too many values")
+        if depth > _DECODED_DEPTH_LIMIT:
+            raise ValueError("decoded protocol message is nested too deeply")
+        if item is None or type(item) is bool:
+            pass
+        elif type(item) is str:
+            payload_bytes += len(item.encode("utf-8"))
+        elif type(item) is int:
+            if abs(item) > _JAVASCRIPT_SAFE_INTEGER_MAX:
+                raise ValueError("protocol integers must be JavaScript-safe")
+        elif type(item) is float:
+            if not math.isfinite(item):
+                raise ValueError("protocol numbers must be finite")
+        elif type(item) is bytes:
+            payload_bytes += len(item)
+        elif type(item) is dict:
+            if len(item) > _DECODED_CONTAINER_ITEMS_LIMIT:
+                raise ValueError("decoded protocol mapping contains too many items")
+            if any(type(key) is not str for key in item):
+                raise TypeError("decoded protocol mapping keys must be strings")
+            stack.extend((key, depth + 1) for key in item)
+            stack.extend((child, depth + 1) for child in item.values())
+        elif type(item) is list:
+            if len(item) > _DECODED_CONTAINER_ITEMS_LIMIT:
+                raise ValueError("decoded protocol sequence contains too many items")
+            stack.extend((child, depth + 1) for child in item)
+        else:
+            raise TypeError(f"unsupported decoded protocol value: {type(item).__name__}")
+        if payload_bytes > _DECODED_PAYLOAD_BYTES_LIMIT:
+            raise ValueError("decoded protocol string and binary payload is too large")
+
+
+def _from_wire(value: Any, annotation: Any) -> Any:
+    """Validate one decoded browser value against its annotation and rebuild it.
+
+    Scalars are exact (a bool isn't an int), literals are restricted to their
+    declared values, and nested records and containers are checked
+    recursively before any handler sees them. ``Any`` stays dynamic for
+    property updates, whose handlers validate each property.
+    """
+    if annotation is Any:
+        return value
+    if annotation in (type(None), bool, str, bytes):
+        if type(value) is not annotation:
+            raise _type_error(annotation, value)
+        return value
+    if annotation is int:
+        if type(value) is not int:
+            raise _type_error(annotation, value)
+        return value
+    if annotation is float:
+        # One wire number type covers integral and fractional values.
+        if type(value) not in (int, float):
+            raise _type_error(annotation, value)
+        return float(value)
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Union or origin is UnionType:
+        for option in args:
+            try:
+                return _from_wire(value, option)
+            except TypeError:
+                pass
+        raise _type_error(annotation, value)
+    if origin is Literal:
+        if any(type(value) is type(option) and value == option for option in args):
+            return value
+        raise _type_error(annotation, value)
+    if origin is tuple:
+        if type(value) is not list:
+            raise _type_error(annotation, value)
+        if len(args) == 2 and args[1] is Ellipsis:
+            args = (args[0],) * len(value)
+        elif len(value) != len(args):
+            raise TypeError(f"expected {annotation!r} with {len(args)} items, got {len(value)}")
+        return tuple(
+            _from_wire(item, item_annotation) for item, item_annotation in zip(value, args)
+        )
+    if origin is dict:
+        if type(value) is not dict:
+            raise _type_error(annotation, value)
+        return {_from_wire(key, args[0]): _from_wire(item, args[1]) for key, item in value.items()}
+    if dataclasses.is_dataclass(annotation):
+        if type(value) is not dict:
+            raise _type_error(annotation, value)
+        return _record_from_wire(cast(type, annotation), value)
+    raise TypeError(f"unsupported protocol annotation: {annotation!r}")
+
+
+def _record_from_wire(cls: type, mapping: dict[str, Any]) -> Any:
+    fields = dict(_wire_fields(cls))
+    unknown = mapping.keys() - fields.keys()
+    if unknown:
+        raise TypeError(f"unexpected field(s) for {cls.__name__}: {sorted(unknown)!r}")
+    return cls(**{key: _from_wire(item, fields[key]) for key, item in mapping.items()})
+
+
+def decode_message(data: bytes) -> Message:
+    """Decode and validate one message sent by a browser."""
+    mapping = msgspec.msgpack.decode(data)
+    _check_decoded_shape(mapping)
+    if type(mapping) is not dict:
+        raise TypeError("protocol message must decode to a mapping")
+    name = mapping.pop("type", None)
+    message_type = MESSAGE_TYPES.get(name) if type(name) is str else None
+    if message_type is None:
+        raise TypeError(f"unknown protocol message type: {name!r}")
+    return _record_from_wire(message_type, mapping)
 
 
 @dataclasses.dataclass
@@ -293,19 +518,6 @@ class RunJavascriptMessage(Message):
     code."""
 
     source: str
-    redundancy_key_is_identity: ClassVar[bool] = True
-
-    @override
-    def redundancy_key(self) -> str:
-        # The only producer is the Plotly bootstrap. Content identity avoids
-        # retaining duplicate runtime sources while keeping genuinely distinct
-        # scripts independent if this internal message is reused later.
-        key = self.__dict__.get("_cached_redundancy_key")
-        if key is None:
-            digest = hashlib.sha256(self.source.encode("utf-8")).hexdigest()
-            key = f"{type(self).__name__}:{digest}"
-            object.__setattr__(self, "_cached_redundancy_key", key)
-        return key
 
 
 @dataclasses.dataclass
@@ -440,7 +652,7 @@ class GuiFormMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiFormSubmitMessage(Message):
+class GuiFormSubmitMessage(Message, entity=EntityLifecycle("gui", "update_simple", "uuid")):
     """Bidirectional form submit signal.
 
     - Sent client->server when the user submits a form: its submit button, or
@@ -503,10 +715,6 @@ class GuiPlaybackCommandMessage(Message):
     uuid: str
     action: PlaybackAction
     value: float
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -714,10 +922,6 @@ class GuiPreviewOpenMessage(Message):
     request_uuid: str
     cached_key: str | None
 
-    @override
-    def redundancy_key(self) -> None:
-        return None
-
 
 @dataclasses.dataclass
 class GuiPreviewReadyMessage(Message):
@@ -728,10 +932,6 @@ class GuiPreviewReadyMessage(Message):
     cache_key: str | None
     source_version: str | None
     reused: bool
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -796,10 +996,6 @@ class GuiPreviewCancelMessage(Message):
     """
 
     uuid: str
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -1176,10 +1372,6 @@ class GuiRefreshMessage(Message):
     updates: Dict[str, Any]
     request_id: str
 
-    @override
-    def redundancy_key(self) -> None:
-        return None
-
 
 @dataclasses.dataclass
 class ViewportImageProps:
@@ -1407,6 +1599,10 @@ class PageCatalogMessage(Message):
 
     page_ids: Tuple[str, ...]
 
+    @override
+    def redundancy_key(self) -> str:
+        return type(self).__name__
+
 
 @dataclasses.dataclass
 class PageSubscribeMessage(Message):
@@ -1455,6 +1651,10 @@ class ThemeConfigurationMessage(Message):
     """Select the viewer's Theme setting, which remains editable in Settings.
     ``"auto"`` follows the browser's ``prefers-color-scheme``."""
 
+    @override
+    def redundancy_key(self) -> str:
+        return type(self).__name__
+
 
 @dataclasses.dataclass
 class FileTransferStartUpload(Message):
@@ -1469,10 +1669,6 @@ class FileTransferStartUpload(Message):
     mime_type: str
     part_count: int
     size_bytes: int
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -1499,10 +1695,6 @@ class FileTransferStartDownload(Message):
     later; ``None`` when the source is not something that can change under the
     reader (bytes in hand, or a function that has to be run to find out)."""
 
-    @override
-    def redundancy_key(self) -> None:
-        return None
-
 
 @dataclasses.dataclass
 class FileTransferPart(Message):
@@ -1513,10 +1705,6 @@ class FileTransferPart(Message):
     part_index: int
     content: bytes
 
-    @override
-    def redundancy_key(self) -> None:
-        return None
-
 
 @dataclasses.dataclass
 class FileTransferAbort(Message):
@@ -1524,10 +1712,6 @@ class FileTransferAbort(Message):
 
     transfer_uuid: str
     reason: str
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -1538,10 +1722,6 @@ class FileTransferPartAck(Message):
     transfer_uuid: str
     transferred_bytes: int
     total_bytes: int
-
-    @override
-    def redundancy_key(self) -> None:
-        return None
 
 
 @dataclasses.dataclass
@@ -1572,13 +1752,6 @@ class ClientPingMessage(Message):
     sent_ms: float
     """The client's own clock when it sent this. Meaningless to the server --
     it is echoed rather than read, so the two never have to agree on a clock."""
-
-    @override
-    def redundancy_key(self) -> str:
-        # Every ping is its own message. Under the name-based default, a second
-        # ping would replace the first in the buffer and the round trip it was
-        # timing would never be answered.
-        return type(self).__name__ + "-" + str(self.sent_ms)
 
 
 @dataclasses.dataclass
@@ -1651,3 +1824,16 @@ class CommandTriggerMessage(Message):
     """Message from client->server when a command is triggered from the command palette."""
 
     uuid: str
+
+
+def _concrete_message_types(root: type[Message]) -> Iterator[type[Message]]:
+    for subclass in root.__subclasses__():
+        if dataclasses.is_dataclass(subclass) and not subclass.__name__.startswith("_"):
+            yield subclass
+        yield from _concrete_message_types(subclass)
+
+
+MESSAGE_TYPES: dict[str, type[Message]] = {
+    message_type.__name__: message_type for message_type in _concrete_message_types(Message)
+}
+"""Every wire message type, by its ``type`` discriminant."""

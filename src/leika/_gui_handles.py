@@ -97,6 +97,7 @@ from ._messages import (
     GuiVector2Props,
     GuiVector3Props,
     GuiVideoControlsProps,
+    Message,
     PlaybackAction,
     RemoveCommandMessage,
     _normalize_key_modifier,
@@ -106,12 +107,12 @@ from ._plotly import (
     _plotly_json_with_config,
     _plotly_payload_from_json,
 )
+from ._transport._websocket import ClientId
 from ._validation import utf16_code_unit_length_exceeds, validate_layout_id
 from ._validation import validate_finite_number as _finite_number
 from ._validation import validate_positive_number as _positive_number
 from ._validation import validate_renderer_string as _validate_renderer_string
 from ._validation import validate_unicode_string as _validate_unicode_string
-from .infra import ClientId, Message
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go

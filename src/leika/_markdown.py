@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
 from ._file_transfer import open_regular_file, validate_unchanged_file_snapshot
-from .infra._image_headers import safe_image_info
+from ._transport._image_headers import image_info
 
 if TYPE_CHECKING:
-    from .infra._http_assets import HttpAsset
+    from ._transport._http_assets import HttpAsset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -303,7 +303,7 @@ def _get_data_url(
         validate_unchanged_file_snapshot(source.path, before, after)
         if len(binary) != size:
             raise OSError(f"{source.path} changed size while it was being read")
-        image_kind, _ = safe_image_info(binary)
+        image_kind, _ = image_info(binary)
         mime_type = "image/jpeg" if image_kind == "jpeg" else f"image/{image_kind}"
         exact_output_size = len(f"data:{mime_type};base64,") + 4 * ((len(binary) + 2) // 3)
         if exact_output_size > budget.remaining_output_bytes:

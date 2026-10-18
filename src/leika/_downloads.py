@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import BinaryIO, Iterator, Tuple
 
 from ._file_transfer import open_regular_file
+from ._transport._message_buffer import _FILE_TRANSFER_BUFFER_BYTES
 from ._validation import validate_positive_integer as _validate_positive_integer
-from .infra._async_message_buffer import _FILE_TRANSFER_BUFFER_BYTES
 
 DOWNLOAD_MAX_CHUNK_BYTES = _FILE_TRANSFER_BUFFER_BYTES
 """Maximum download part and per-client queued file payload."""

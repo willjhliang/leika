@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import http.client
 import re
-import socket
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,9 @@ from websockets.sync.client import connect
 from websockets.typing import Subprotocol
 
 import leika
-import leika._messages
-from leika import infra
-from leika.infra._auth import (
+import leika._client_autobuild
+import leika._transport._auth as auth_module
+from leika._transport._auth import (
     AUTH_PATH,
     COOKIE_NAME,
     FONT_PATH,
@@ -24,17 +25,38 @@ from leika.infra._auth import (
     WORDMARK_FONT_PATH,
     HttpPasswordGuard,
 )
+from leika._transport._typescript import protocol_fingerprint
+from leika._transport._websocket import WebsockClientConnection, WebsockServer
 
 PASSWORD = "open sesame"
 # URL-encoded, matching what the login page's `fetch` sends: header values
 # must be ASCII, and encoding is what lets arbitrary passwords through.
 PASSWORD_ENCODED = "open%20sesame"
+INDEX = b"<html>Leika</html>"
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+async def _ignore(_: WebsockClientConnection) -> None:
+    pass
+
+
+@contextlib.contextmanager
+def _protected(tmp_path: Path) -> Iterator[WebsockServer]:
+    index = tmp_path / "index.html"
+    index.write_bytes(INDEX)
+    server = WebsockServer(
+        "127.0.0.1",
+        0,
+        on_connect=_ignore,
+        on_disconnect=_ignore,
+        index_html=index,
+        verbose=False,
+        password=PASSWORD,
+    )
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
 
 
 def _get(port: int, path: str, headers: dict[str, str] | None = None):
@@ -59,24 +81,11 @@ def _login_cookie(port: int, encoded_password: str) -> str:
     return match.group(1)
 
 
-def test_password_gates_static_files(tmp_path: Path) -> None:
-    served = tmp_path / "served"
-    served.mkdir()
-    payload = b"<html>Leika</html>"
-    (served / "index.html").write_bytes(payload)
-    server = infra.WebsockServer(
-        host="127.0.0.1",
-        port=_free_port(),
-        http_server_root=served,
-        verbose=False,
-        password=PASSWORD,
-    )
-    server.start()
-    try:
-        time.sleep(0.05)
+def test_password_gates_the_client_page(tmp_path: Path) -> None:
+    with _protected(tmp_path) as server:
         # Anonymous requests get the login page -- for every path, not just
         # the index -- and it must never be cached.
-        for path in ("/", "/index.html"):
+        for path in ("/", "/index.html", "/missing"):
             status, headers, body = _get(server._port, path)
             assert status == 401
             assert b"password" in body
@@ -90,16 +99,12 @@ def test_password_gates_static_files(tmp_path: Path) -> None:
             assert "set-cookie" not in headers
 
         # The right password earns a session cookie, and the cookie unlocks
-        # the actual files.
+        # the page.
         cookie = _login_cookie(server._port, PASSWORD_ENCODED)
-        status, _, body = _get(server._port, "/", {"Cookie": cookie})
-        assert status == 200
-        assert body == payload
+        assert _get(server._port, "/", {"Cookie": cookie})[::2] == (200, INDEX)
 
         # The password header works directly too (curl-style access).
-        status, _, body = _get(server._port, "/", {PASSWORD_HEADER: PASSWORD_ENCODED})
-        assert status == 200
-        assert body == payload
+        assert _get(server._port, "/", {PASSWORD_HEADER: PASSWORD_ENCODED})[::2] == (200, INDEX)
 
         # The login page's typefaces are the only pre-auth assets: they render
         # the page in the client's own faces and disclose nothing.
@@ -133,24 +138,19 @@ def test_password_gates_static_files(tmp_path: Path) -> None:
         assert "Secure" in headers["set-cookie"]
         _, headers, _ = _get(server._port, AUTH_PATH, {PASSWORD_HEADER: PASSWORD_ENCODED})
         assert "Secure" not in headers["set-cookie"]
-    finally:
-        server.stop()
 
 
-def test_password_gates_the_websocket() -> None:
+def test_password_gates_the_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
     server = leika.Server(host="127.0.0.1", port=0, verbose=False, password=PASSWORD)
     url = server.url.replace("http://", "ws://")
-    subprotocol = Subprotocol(
-        f"leika-v{leika.__version__}+p{infra.protocol_fingerprint(leika._messages.Message)}"
-    )
+    subprotocol = Subprotocol(f"leika-{protocol_fingerprint()}")
     try:
-        # No cookie: the handshake itself is refused, before the version
+        # No cookie: the handshake itself is refused, before the protocol
         # check or any connection accounting.
-        try:
-            with connect(url, subprotocols=[subprotocol], open_timeout=5):
-                raise AssertionError("Handshake should have been rejected.")
-        except InvalidStatus as exc:
-            assert exc.response.status_code == 401
+        with pytest.raises(InvalidStatus) as rejected:
+            connect(url, subprotocols=[subprotocol], open_timeout=5)
+        assert rejected.value.response.status_code == 401
 
         # With the session cookie the handshake completes.
         cookie = _login_cookie(server.port, PASSWORD_ENCODED)
@@ -169,23 +169,8 @@ def test_repeated_wrong_passwords_are_throttled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An online brute-force hits a wall, on every door a password fits in."""
-    import leika.infra._auth as auth_module
-
     monkeypatch.setattr(auth_module, "FAILURE_WINDOW_SECONDS", 0.3)
-
-    served = tmp_path / "served"
-    served.mkdir()
-    (served / "index.html").write_bytes(b"<html>Leika</html>")
-    server = infra.WebsockServer(
-        host="127.0.0.1",
-        port=_free_port(),
-        http_server_root=served,
-        verbose=False,
-        password=PASSWORD,
-    )
-    server.start()
-    try:
-        time.sleep(0.05)
+    with _protected(tmp_path) as server:
         # A session issued before the lockout, to prove it rides through.
         cookie = _login_cookie(server._port, PASSWORD_ENCODED)
 
@@ -205,8 +190,6 @@ def test_repeated_wrong_passwords_are_throttled(
         # Once the window drains, the right password works again.
         time.sleep(0.35)
         assert _get(server._port, "/", {PASSWORD_HEADER: PASSWORD_ENCODED})[0] == 200
-    finally:
-        server.stop()
 
 
 def test_duplicate_password_headers_and_malformed_cookies_are_cleanly_rejected() -> None:
@@ -241,14 +224,9 @@ def test_non_ascii_session_cookie_is_rejected(value: str) -> None:
 
 
 def test_authenticated_resources_never_enter_shared_caches(tmp_path: Path) -> None:
-    (tmp_path / "index.html").write_text("private workspace")
     asset = tmp_path / "private.png"
     asset.write_bytes(b"private asset")
-    server = infra.WebsockServer(
-        host="127.0.0.1", port=0, http_server_root=tmp_path, verbose=False, password=PASSWORD
-    )
-    server.start()
-    try:
+    with _protected(tmp_path) as server:
         cookie = _login_cookie(server._port, PASSWORD_ENCODED)
         registered = server.register_http_asset(asset)
         for path in ("/", registered.url, "/missing"):
@@ -256,5 +234,3 @@ def test_authenticated_resources_never_enter_shared_caches(tmp_path: Path) -> No
             assert headers["cache-control"] == "no-store"
             assert headers["cdn-cache-control"] == "no-store"
             assert _get(server._port, path)[0] == 401
-    finally:
-        server.stop()

@@ -14,7 +14,7 @@ import leika._client_autobuild
 import leika._server
 import leika._share
 from leika._share import CloudflaredTunnel, ShareTunnelError, find_share_url
-from leika.infra._auth import PASSWORD_HEADER
+from leika._transport._auth import PASSWORD_HEADER
 
 
 def _get(port: int, path: str, headers: dict[str, str] | None = None) -> int:
@@ -166,6 +166,35 @@ def test_share_start_failure_is_not_masked_by_tunnel_close_failure(
         assert "secondary tunnel close failure" in output
     finally:
         server.stop()
+
+
+def test_constructor_failure_after_tunnel_start_closes_the_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeTunnel:
+        url = "https://fake.trycloudflare.com"
+
+        def __init__(self, local_port: int) -> None:
+            del local_port
+
+        def start(self) -> str:
+            events.append("start")
+            return self.url
+
+        def close(self) -> None:
+            events.append("close")
+
+    def fail_trust(self: object, host: str) -> None:
+        raise RuntimeError("late share failure")
+
+    monkeypatch.setattr(leika._server, "CloudflaredTunnel", FakeTunnel)
+    monkeypatch.setattr(leika._server.WebsockServer, "trust_proxy_host", fail_trust)
+    monkeypatch.setattr(leika._client_autobuild, "ensure_client_is_built", lambda: None)
+    with pytest.raises(RuntimeError, match="late share failure"):
+        leika.Server(host="127.0.0.1", port=0, verbose=False, share=True)
+    assert events == ["start", "close"]
 
 
 def test_share_refuses_a_non_loopback_bind() -> None:

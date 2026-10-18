@@ -7,14 +7,13 @@ from unittest.mock import Mock
 import pytest
 
 from leika import _markdown as markdown_impl
-from leika import infra
 from leika._markdown import (
     _get_data_url,
     _link_markdown_assets,
     _parse_markdown,
     _resolve_markdown_asset,
 )
-from leika.infra._http_assets import HttpAsset
+from leika._transport._http_assets import HttpAsset, HttpAssetRegistry
 
 
 def _png_header(width: int = 1, height: int = 1) -> bytes:
@@ -232,10 +231,10 @@ def test_markdown_asset_identity_rejects_post_resolution_symlink_swap(
         if mode == "inline":
             rewritten = _parse_markdown("![image](image.png)", docs)
         else:
-            server = infra.WebsockServer("127.0.0.1", 0, verbose=False)
+            assets = HttpAssetRegistry()
 
             def register(path: Path, metadata: object) -> HttpAsset:
-                return server.register_http_asset(
+                return assets.register(
                     path,
                     _expected_metadata=metadata,  # type: ignore[arg-type]
                 )
