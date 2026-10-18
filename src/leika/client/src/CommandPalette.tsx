@@ -22,7 +22,6 @@ import {
   hotkeyMatches,
   HotkeyBinding,
 } from "./commandHotkeys";
-import { KeyModifier } from "./dragUtils";
 import { isFormElement } from "./utils/isFormElement";
 import { isMac } from "./utils/platform";
 
@@ -37,6 +36,7 @@ type CommandAction = {
   keywords?: string[];
 };
 type HotkeyKey = NonNullable<RegisterCommandMessage["props"]["hotkey"]>;
+type KeyModifier = NonNullable<RegisterCommandMessage["props"]["modifier"]>;
 
 /** Atomic modifier + key parts for a hotkey, ordered for "+"-joining. */
 function hotkeyParts(key: HotkeyKey, modifier: KeyModifier | null): string[] {
