@@ -50,8 +50,7 @@ with leika.Server(workspace_id="quickstart", label="Leika quickstart") as server
 Run the script and open the URL printed in the terminal (by default
 `http://localhost:8080`). `label` names the default page shown in the control
 panel header. `server.panes` is the same pane API as
-`server.pages.default.panes`, so existing one-page applications need no
-structural changes.
+`server.pages.default.panes`.
 
 Add named pages when one canvas is not enough:
 
@@ -73,8 +72,8 @@ values when those choices and layouts should survive a Python restart.
   API reference.
 - [Changelog](https://github.com/willjhliang/leika/blob/main/CHANGELOG.md):
   release highlights, compatibility notes, and migration guidance.
-- [Panes](https://willjhliang.github.io/leika/panes.html): the image,
-  matplotlib, Plotly, and viser surfaces, and how they are laid out.
+- [Panes](https://willjhliang.github.io/leika/panes.html): pages, the pane
+  types, and how they are laid out.
 - [Architecture](https://willjhliang.github.io/leika/architecture.html):
   transport, layout ownership, and update flow.
 - [Examples](https://willjhliang.github.io/leika/examples.html): runnable demos

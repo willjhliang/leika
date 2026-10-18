@@ -18,5 +18,5 @@ The runnable sources live in the repository's
 Each example prints a local URL. If Leika runs on a remote host, forward the
 port over SSH and open the forwarded localhost URL.
 
-[Panes](panes.md) explains the three-page model, the four pane types in the
-showcase, and when to reach for each.
+[Panes](panes.md) explains pages and the pane types, and when to reach for
+each.

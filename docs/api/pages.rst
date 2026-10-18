@@ -7,8 +7,8 @@ Pages partition a workspace's panes and browser-managed pane layouts. The GUI
 and control panel remain shared across the workspace.
 
 Every :class:`Server` creates a default page. ``Server(label=...)`` names that
-page, or it is named ``Main`` when no label is supplied. ``server.panes`` is a
-compatibility alias for ``server.pages.default.panes``.
+page, or it is named ``Main`` when no label is supplied. ``server.panes`` is
+``server.pages.default.panes``.
 
 Create another page with ``server.pages.add(name, page_id=...)`` and add panes
 through the returned page's ``panes`` API. Give persistent applications an

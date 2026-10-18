@@ -1657,7 +1657,8 @@ class GuiApi:
 
         The handle's ``value`` is the last uploaded :class:`UploadedFile`, and
         ``on_upload`` callbacks run once each upload completes. Files are
-        limited to 64 MiB.
+        limited to 64 MiB, and disabling or hiding the button aborts an upload
+        in progress.
 
         Args:
             text: Text to display on the button itself.
