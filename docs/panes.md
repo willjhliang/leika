@@ -278,10 +278,11 @@ warning and is otherwise a harmless no-op.
 
 ## Layout
 
-By default each new pane splits off the last visible one. `placement` and
-`relative_to` steer that, and the row, column, and grid helpers divide space
-equally instead. Their `add_*` methods are the same as `server.panes`, except
-that they place panes themselves and reject `placement` and `relative_to`:
+By default each new pane splits off to the right of the last visible one. The
+row, column, and grid helpers divide space equally instead, with the same
+`add_*` methods as `server.panes`. Their `relative_to` names the visible pane
+the group's first pane splits off: to its right for a row or grid, below it for
+a column.
 
 ```python
 grid = server.panes.add_grid(columns=2)

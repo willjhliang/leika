@@ -872,9 +872,7 @@ class _PaneAdder:
 
     _panes: Panes
 
-    def _place(
-        self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str | None, tuple[str, ...]]:
+    def _place(self) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Edge, anchor pane, and equally divided siblings for the next pane. Lock held."""
         raise NotImplementedError
 
@@ -891,8 +889,6 @@ class _PaneAdder:
         title: str,
         visible: bool,
         loading: PaneLoading,
-        placement: Placement | None,
-        relative_to: str | None,
     ) -> Any:
         panes = self._panes
         title = cast(str, validate_renderer_string(title, "pane title"))
@@ -905,7 +901,7 @@ class _PaneAdder:
             with panes._lock:
                 if pane_id in panes._handle_from_pane_id:
                     raise ValueError(f"Pane ID {pane_id!r} already exists.")
-                edge, anchor, equalize_group = self._place(placement, relative_to)
+                edge, anchor, equalize_group = self._place()
                 props = handle_type._props_type(
                     title=title, visible=visible, loading=loading, **fields
                 )
@@ -944,8 +940,6 @@ class _PaneAdder:
         title: str = "",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> PaneHandle:
         """Add an empty pane, ready for any of the handle's ``set_*`` methods.
 
@@ -962,8 +956,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
     def add_image(
@@ -977,15 +969,13 @@ class _PaneAdder:
         fit: ImageFit | None = None,
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> ImagePaneHandle:
         """Add a native image pane to the workspace.
 
-        The browser owns pane arrangement and persists it locally. Placement
-        and relative_to are only used when the browser first encounters a pane
-        that is not already present in its saved layout. Rows, columns, and
-        grids place their panes themselves and reject both arguments.
+        The browser owns pane arrangement and persists it locally. A new pane
+        splits off the latest visible pane, or takes its place in the row,
+        column, or grid that added it; this applies only while the browser has
+        no saved arrangement for the pane.
 
         Args:
             image: RGB or RGBA image with shape (height, width, 3|4). Floats
@@ -1002,10 +992,6 @@ class _PaneAdder:
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to; "right" by
-                default.
-            relative_to: Visible pane used for initial placement; the latest
-                visible pane by default.
 
         Returns:
             Handle for updating or removing the image pane.
@@ -1018,8 +1004,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
     def add_matplotlib(
@@ -1030,8 +1014,6 @@ class _PaneAdder:
         title: str = "Figure",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> MatplotlibPaneHandle:
         """Add a native matplotlib pane to the workspace.
 
@@ -1060,9 +1042,6 @@ class _PaneAdder:
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to; see
-                :meth:`add_image`.
-            relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for updating or removing the matplotlib pane.
@@ -1075,8 +1054,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
     def add_plotly(
@@ -1088,8 +1065,6 @@ class _PaneAdder:
         title: str = "Plotly",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> PlotlyPaneHandle:
         """Add a native interactive Plotly pane to the workspace.
         Requires the `plotly` package to be installed.
@@ -1122,9 +1097,6 @@ class _PaneAdder:
             visible: Initial visibility.
             loading: Initial loading overlay. True shows the default indicator;
                 a string shows that text alongside it.
-            placement: Initial split edge relative to relative_to; see
-                :meth:`add_image`.
-            relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for updating or removing the Plotly pane.
@@ -1137,8 +1109,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
     def add_video(
@@ -1155,8 +1125,6 @@ class _PaneAdder:
         title: str = "Video",
         visible: bool = True,
         loading: PaneLoading = False,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> VideoPaneHandle:
         """Add one native video player to the workspace.
 
@@ -1187,8 +1155,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
     def add_viser(
@@ -1200,8 +1166,6 @@ class _PaneAdder:
         visible: bool = True,
         loading: PaneLoading = False,
         minimize_gui: bool = True,
-        placement: Placement | None = None,
-        relative_to: str | None = None,
     ) -> ViserPaneHandle:
         """Add a pane embedding a live viser 3D scene.
 
@@ -1254,9 +1218,6 @@ class _PaneAdder:
                 and minimize it to a rail. Applies to server-object targets
                 on viser versions with ``gui.main_panel``; ignored for URL
                 targets, which Python cannot reach into.
-            placement: Initial split edge relative to relative_to; see
-                :meth:`add_image`.
-            relative_to: Visible pane used for initial placement.
 
         Returns:
             Handle for re-pointing or removing the viser pane.
@@ -1269,8 +1230,6 @@ class _PaneAdder:
             title=title,
             visible=visible,
             loading=loading,
-            placement=placement,
-            relative_to=relative_to,
         )
 
 
@@ -1296,14 +1255,10 @@ class PaneGroup(_PaneAdder):
         self._panes = panes
         self._axis = axis
         self._placement: Placement = placement
-        self._relative_to = (
-            None if relative_to is None else validate_layout_id(relative_to, "relative_to")
-        )
+        self._relative_to = relative_to
         self._members: list[weakref.ReferenceType[PaneHandle]] = []
 
-    def _place(
-        self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str | None, tuple[str, ...]]:
+    def _place(self) -> tuple[Placement, str | None, tuple[str, ...]]:
         """Attach to the group's last visible member and equalize with the visible ones.
 
         Hidden and removed members cannot anchor placement, so with none
@@ -1311,11 +1266,6 @@ class PaneGroup(_PaneAdder):
         first pane. Membership is checked by handle identity, so an unrelated
         pane reusing a removed member's ID is not adopted.
         """
-        if placement is not None or relative_to is not None:
-            raise TypeError(
-                "A row, column, or grid places its own panes; "
-                "placement and relative_to apply only to Panes."
-            )
         panes = self._panes
         members = [
             handle
@@ -1328,8 +1278,9 @@ class PaneGroup(_PaneAdder):
         if not visible:
             # The group's own anchor may be hidden or removed as well (notably
             # a grid column whose top-row seed disappeared).
-            anchor = self._relative_to if self._relative_to in panes._visible_pane_ids() else None
-            return self._placement, panes._resolve_relative_to(anchor), ()
+            if self._relative_to in panes._visible_pane_ids():
+                return self._placement, self._relative_to, ()
+            return self._placement, panes._latest_visible_pane_id(), ()
         return ("right" if self._axis == "row" else "bottom"), visible[-1], tuple(visible)
 
     def _placed(self, handle: PaneHandle) -> None:
@@ -1360,10 +1311,8 @@ class PaneGrid(_PaneAdder):
             return self._row
         return self._column_groups[self._count % self._columns]
 
-    def _place(
-        self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str | None, tuple[str, ...]]:
-        return self._next_group()._place(placement, relative_to)
+    def _place(self) -> tuple[Placement, str | None, tuple[str, ...]]:
+        return self._next_group()._place()
 
     def _placed(self, handle: PaneHandle) -> None:
         group = self._next_group()
@@ -1390,13 +1339,8 @@ class Panes(_PaneAdder):
         self._websock_interface = owner._websock_server
         self._handle_from_pane_id: dict[str, PaneHandle] = {}
 
-    def _place(
-        self, placement: Placement | None, relative_to: str | None
-    ) -> tuple[Placement, str | None, tuple[str, ...]]:
-        placement = "right" if placement is None else placement
-        if type(placement) is not str or placement not in ("left", "right", "top", "bottom"):
-            raise ValueError("placement must be left, right, top, or bottom.")
-        return placement, self._resolve_relative_to(relative_to), ()
+    def _place(self) -> tuple[Placement, str | None, tuple[str, ...]]:
+        return "right", self._latest_visible_pane_id(), ()
 
     def _visible_pane_ids(self) -> set[str]:
         return {
@@ -1405,13 +1349,18 @@ class Panes(_PaneAdder):
             if handle._props.visible
         }
 
-    def _resolve_relative_to(self, relative_to: str | None) -> str | None:
-        """Resolve ``None`` placement to the latest visible pane, if any. Lock held."""
-        if relative_to is not None:
-            relative_to = validate_layout_id(relative_to, "relative_to")
+    def _anchor(self, relative_to: str | None) -> str | None:
+        """A group's anchor: None, or a visible pane on this page."""
+        if relative_to is None:
+            return None
+        relative_to = validate_layout_id(relative_to, "relative_to")
+        with self._lock:
             if relative_to not in self._visible_pane_ids():
                 raise ValueError(f"Unknown or hidden relative pane ID: {relative_to!r}.")
-            return relative_to
+        return relative_to
+
+    def _latest_visible_pane_id(self) -> str | None:
+        """The pane a new pane splits off by default. Lock held."""
         for pane_id, handle in reversed(self._handle_from_pane_id.items()):
             if handle._props.visible:
                 return pane_id
@@ -1434,34 +1383,37 @@ class Panes(_PaneAdder):
         along a shared row and re-divided equally on each addition, so three
         panes yield exact thirds. (Divisions
         snap to the workspace grid; in workspaces small enough that minimum
-        pane sizes dominate, they are as equal as the grid allows.) ``relative_to``
-        positions the group's first pane; like all placement hints, it only
-        applies when the browser has no saved arrangement for these panes.
+        pane sizes dominate, they are as equal as the grid allows.) The first
+        pane splits off to the right of ``relative_to``. Like all placement,
+        this applies only while the browser has no saved arrangement for these
+        panes.
 
         Args:
-            relative_to: Visible pane used for the group's initial placement.
+            relative_to: Visible pane on this page that the first pane splits
+                off; the latest visible pane by default.
 
         Returns:
             Group for adding equally sized panes.
         """
 
-        return PaneGroup(self, "row", "right", relative_to)
+        return PaneGroup(self, "row", "right", self._anchor(relative_to))
 
     def add_column(self, *, relative_to: str | None = None) -> PaneGroup:
         """Create a group that lays out added panes stacked with equal
         heights.
 
-        The column counterpart of :meth:`add_row`; see it for placement
-        semantics.
+        The column counterpart of :meth:`add_row`: the first pane splits off
+        below ``relative_to``.
 
         Args:
-            relative_to: Visible pane used for the group's initial placement.
+            relative_to: Visible pane on this page that the first pane splits
+                off; the latest visible pane by default.
 
         Returns:
             Group for adding equally sized panes.
         """
 
-        return PaneGroup(self, "column", "bottom", relative_to)
+        return PaneGroup(self, "column", "bottom", self._anchor(relative_to))
 
     def add_grid(self, *, columns: int = 2, relative_to: str | None = None) -> PaneGrid:
         """Create a group that lays out added panes in an equally divided
@@ -1476,11 +1428,12 @@ class Panes(_PaneAdder):
 
         Args:
             columns: Number of panes per row.
-            relative_to: Visible pane used for the grid's initial placement.
+            relative_to: Visible pane on this page that the first pane splits
+                off to the right of; the latest visible pane by default.
 
         Returns:
             Grid for adding equally sized panes.
         """
 
         validate_positive_integer(columns, "columns")
-        return PaneGrid(self, columns, relative_to)
+        return PaneGrid(self, columns, self._anchor(relative_to))
