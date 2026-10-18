@@ -42,6 +42,9 @@ _PAGE_SUBSCRIPTION_GENERATION_MAX = (1 << 53) - 1
 class Server:
     """Run a Leika workspace and synchronize it with browser clients.
 
+    Start at ``port`` (8080 by default), trying successive ports if occupied.
+    ``port=0`` lets the OS choose. ``port`` and :attr:`url` report the bound port.
+
     Set ``password`` to gate the dashboard behind a login page: both the web
     client and the underlying websocket refuse unauthenticated requests.
 

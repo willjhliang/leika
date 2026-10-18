@@ -1,8 +1,10 @@
 # Remote access
 
-By default, a leika server binds to `0.0.0.0:8080`, so it is reachable through
-the machine's network interfaces even though its printed convenience URL uses
-`localhost`. Use `Server(host="127.0.0.1")` when it should be local only.
+By default, a Leika server binds to `0.0.0.0`, starting at port `8080` and
+trying `8081`, `8082`, and so on if occupied. It is reachable through the
+machine's network interfaces even though its printed convenience URL uses
+`localhost`. Use the printed URL or `server.port` for the actual port.
+Use `Server(host="127.0.0.1")` when it should be local only.
 
 Wildcard binds accept localhost spellings and IP-literal URLs by default. A
 DNS, mDNS, or Tailscale name must be explicitly allowed:

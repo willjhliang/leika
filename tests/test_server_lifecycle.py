@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import socket
+import errno
 import sys
 import threading
 import time
@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from websockets.exceptions import ConnectionClosedOK
 from websockets.sync.client import connect
 from websockets.typing import Subprotocol
 
@@ -86,6 +87,7 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     loops: list[asyncio.AbstractEventLoop] = []
+    failure = OSError(errno.EADDRINUSE, "ready server failed during shutdown")
 
     class FailingServeContext:
         async def __aenter__(self) -> Any:
@@ -94,7 +96,7 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
             return SimpleNamespace(sockets=[socket])
 
         async def __aexit__(self, *_: Any) -> None:
-            raise OSError("ready server failed during shutdown")
+            raise failure
 
     monkeypatch.setattr(
         websocket_impl.websockets.legacy.server,
@@ -118,9 +120,7 @@ def test_post_ready_oserror_escapes_and_closes_the_worker_loop(
     worker.join(timeout=1.0)
 
     assert not worker.is_alive()
-    assert len(failures) == 1
-    assert isinstance(failures[0], OSError)
-    assert str(failures[0]) == "ready server failed during shutdown"
+    assert failures == [failure]
     assert len(loops) == 1 and loops[0].is_closed()
     assert server._background_event_loop is None
 
@@ -168,9 +168,13 @@ def test_stop_on_the_event_loop_keeps_the_callback_pool_for_teardown(
         f"ws://127.0.0.1:{server.port}",
         subprotocols=[PROTOCOL],
         open_timeout=2,
-    ):
+    ) as websocket:
         assert connected.wait(2.0)
         asyncio.run_coroutine_threadsafe(stop_inside_event_loop(), server._event_loop).result(2)
+        # Drain messages so the synchronous receiver can process close frames.
+        with pytest.raises(ConnectionClosedOK):
+            while True:
+                websocket.recv(timeout=2)
         deadline = time.monotonic() + 3.0
         while not server._thread_executor._shutdown and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -509,17 +513,39 @@ def test_quiet_low_level_server_is_one_shot(capsys: pytest.CaptureFixture[str]) 
     assert "Server stopped" not in capsys.readouterr().out
 
 
-def test_requested_occupied_port_fails_without_scanning() -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
-        occupied.bind(("127.0.0.1", 0))
-        occupied.listen()
-        port = occupied.getsockname()[1]
-        server = _low_level_server(port=port)
-        with pytest.raises(OSError):
-            server.start()
-    assert server._port == port
+def test_requested_occupied_ports_are_skipped_and_reported() -> None:
+    with leika.Server(host="127.0.0.1", port=0, verbose=False) as first:
+        with leika.Server(host="127.0.0.1", port=first.port, verbose=False) as second:
+            with leika.Server(host="127.0.0.1", port=first.port, verbose=False) as third:
+                assert first.port < second.port < third.port
+                assert third.url == f"http://127.0.0.1:{third.port}"
+                with connect(third.url.replace("http:", "ws:"), subprotocols=[PROTOCOL]):
+                    pass
+
+
+@pytest.mark.parametrize(
+    ("port", "error_number"),
+    [(8080, errno.EACCES), (65535, errno.EADDRINUSE), (0, errno.EADDRINUSE)],
+)
+def test_non_retryable_bind_errors_stop_without_scanning(
+    monkeypatch: pytest.MonkeyPatch, port: int, error_number: int
+) -> None:
+    attempts = []
+    failure = OSError(error_number, "cannot bind")
+
+    def fail_bind(handler: Any, host: str, requested_port: int, **kwargs: Any) -> Any:
+        attempts.append(requested_port)
+        raise failure
+
+    monkeypatch.setattr(websocket_impl.websockets.legacy.server, "serve", fail_bind)
+    server = _low_level_server(port=port)
+    with pytest.raises(OSError) as captured:
+        server.start()
+    assert captured.value is failure
+    assert attempts == [port]
     assert server._server_thread is not None
     assert not server._server_thread.is_alive()
+    assert server._background_event_loop is None
 
 
 def test_localhost_ephemeral_multi_bind_fails_with_actionable_guidance() -> None:

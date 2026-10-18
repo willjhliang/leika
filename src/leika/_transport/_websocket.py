@@ -7,6 +7,7 @@ import asyncio
 import atexit
 import contextlib
 import dataclasses
+import errno
 import http
 import itertools
 import logging
@@ -452,28 +453,38 @@ class WebsockServer(WebsockMessageHandler):
                 active_client_ids.discard(client_id)
 
         async def serve() -> None:
-            # Bind exactly the requested port; port=0 lets the OS choose.
-            async with websockets.legacy.server.serve(
-                ws_handler,
-                self._host,
-                self._port,
-                create_protocol=Protocol,
-                logger=_WEBSOCKET_LOGGER,
-                # Bounds what browsers send. Uploads arrive in 512 KiB parts.
-                max_size=_INCOMING_MESSAGE_LIMIT_BYTES,
-                max_queue=_INCOMING_MESSAGE_QUEUE_LIMIT,
-                # Compression costs more time than it saves for these payloads.
-                compression=None,
-            ) as running_server:
-                ports = {socket.getsockname()[1] for socket in running_server.sockets}
-                if len(ports) != 1:
-                    raise RuntimeError(
-                        "host resolved to listeners with different ephemeral ports; "
-                        "bind an IP literal when using port=0"
-                    )
-                self._port = ports.pop()
-                startup.set_result(None)
-                await cast(asyncio.Event, self._stop_event).wait()
+            while True:
+                try:
+                    async with websockets.legacy.server.serve(
+                        ws_handler,
+                        self._host,
+                        self._port,
+                        create_protocol=Protocol,
+                        logger=_WEBSOCKET_LOGGER,
+                        # Bounds what browsers send. Uploads arrive in 512 KiB parts.
+                        max_size=_INCOMING_MESSAGE_LIMIT_BYTES,
+                        max_queue=_INCOMING_MESSAGE_QUEUE_LIMIT,
+                        # Compression costs more time than it saves for these payloads.
+                        compression=None,
+                    ) as running_server:
+                        ports = {socket.getsockname()[1] for socket in running_server.sockets}
+                        if len(ports) != 1:
+                            raise RuntimeError(
+                                "host resolved to listeners with different ephemeral ports; "
+                                "bind an IP literal when using port=0"
+                            )
+                        self._port = ports.pop()
+                        startup.set_result(None)
+                        await cast(asyncio.Event, self._stop_event).wait()
+                    break
+                except OSError as error:
+                    if (
+                        error.errno != errno.EADDRINUSE
+                        or startup.done()
+                        or self._port in (0, 65535)
+                    ):
+                        raise
+                    self._port += 1
 
         event_loop.run_until_complete(serve())
         if self._verbose:

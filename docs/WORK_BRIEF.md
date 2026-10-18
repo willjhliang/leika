@@ -9,9 +9,10 @@ Every consumer installs Leika the same way: a regular install of this checkout,
 `leika @ file:///mnt/amlfs-01/home/wiliang/leika`, listed in the requirements
 it installs from (Babble `requirements-viewer.txt`, do_anything
 `requirements.txt`, lwm `requirements/overrides.txt` and its compiled lock).
-All three were installed from `main` at `417941c` and pass their viewer tests
-(Babble 16, do_anything 55, lwm 49); the version stays 0.4.0 until the user
-releases.
+do_anything and lwm are installed from `main` at `417941c` and pass their
+viewer tests (55 and 49). Babble's install includes successive-port retry;
+its current launch receipt records the installed source commit. The version
+stays 0.4.0 until the user releases.
 
 Downstream consumers are Babble (`babble/viewer/app.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
@@ -138,15 +139,15 @@ build current (consumer envs have no npm): reinstall each project per its
 install doc (lwm syncs with `--reinstall-package leika` and must keep its
 Isaac pins, e.g. Pillow 11.2.1), run its viewer tests, and restart the
 visualizers this session owns: lwm's Pilot jobs `jca01ef3ea83041812226`
-(port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer on
-port 8092 (launch record in Babble's `runs/viewer-checks/`).
+(port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer
+(current URL and launch identity in Babble's `runs/viewer-checks/viewer-current.json`).
 
 Breaking API changes roll out to Babble, do_anything and lwm in the same
 change.
 
 ## Next actions
 
-The simplification series is merged and rolled out; the visualizers this
-session owns run on `417941c` (lwm jobs at attempts 3 and 4, Babble PID
-3764283). Open for the user: whether per-pane left/top placement hints should
+The simplification series is merged and rolled out; lwm jobs run on `417941c`
+at attempts 3 and 4. Babble's current launch receipt owns its live process
+identity. Open for the user: whether per-pane left/top placement hints should
 return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
