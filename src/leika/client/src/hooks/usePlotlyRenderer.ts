@@ -1,10 +1,10 @@
 import * as React from "react";
 
 import { plotlyRuntime, type PlotlyGlobal } from "../plotlyReady";
-import type { ParsedPlotlyFigure } from "../viewport/plotlyPayload";
+import type { PlotlyFigure } from "../viewport/plotlyPayload";
 
 export interface PlotlyRenderRequest {
-  figure: ParsedPlotlyFigure;
+  figure: PlotlyFigure;
   layout: Record<string, unknown>;
 }
 
@@ -101,17 +101,15 @@ export function renderPlotly(
 
 /** Own one imperative Plotly host.
  *
- * Both inline plots and viewport panes use this lifecycle: input errors clear
- * stale content, a missing runtime becomes visible, synchronous and async
- * render failures are contained, superseded promises cannot overwrite newer
- * state, and unmount always purges Plotly listeners/WebGL resources. */
+ * Both inline plots and viewport panes use this lifecycle: a missing runtime
+ * becomes visible, synchronous and async render failures are contained,
+ * superseded promises cannot overwrite newer state, and unmount always purges
+ * Plotly listeners/WebGL resources. */
 export function usePlotlyRenderer({
   request,
-  inputError,
   ready,
 }: {
-  request: PlotlyRenderRequest | null;
-  inputError: string | null;
+  request: PlotlyRenderRequest;
   /** False while the host has no non-zero dimensions to give Plotly. */
   ready: boolean;
 }): {
@@ -127,26 +125,15 @@ export function usePlotlyRenderer({
 
   React.useEffect(() => {
     const root = plotRef.current;
-    if (root === null) return;
-    if (inputError !== null || request === null) {
-      setFailure(null);
-      root.replaceChildren();
-      releasePlotlyHost(host);
-      return;
-    }
     // Keep the last plot while the host has no size to give Plotly.
-    if (!ready) return;
+    if (root === null || !ready) return;
     return renderPlotly(root, host, request, setFailure);
-  }, [request, inputError, ready]);
+  }, [request, ready]);
 
   React.useEffect(() => () => releasePlotlyHost(host), []);
 
   return {
     plotRef,
-    message:
-      inputError ??
-      (request !== null && failure?.request === request
-        ? failure.message
-        : null),
+    message: failure?.request === request ? failure.message : null,
   };
 }
