@@ -13,9 +13,7 @@
 
 import { previewFlag, usePreviewFlag } from "./previewFlags";
 
-export const PREVIEW_CONTENTS_STORAGE_KEY = "leika.preview-contents.v1";
-
-const contents = previewFlag(PREVIEW_CONTENTS_STORAGE_KEY);
+const contents = previewFlag("leika.preview-contents.v1");
 
 /** Whether THIS document is read with its contents beside it, and the way to
  * say otherwise. */

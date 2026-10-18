@@ -12,15 +12,7 @@ import { previewFlag, usePreviewFlag } from "./previewFlags";
  * {@link previewMediaClassName} for why. */
 export const PREVIEW_FULLSCREEN_ATTR = "data-preview-fullscreen";
 
-export const PREVIEW_FULLSCREEN_STORAGE_KEY = "leika.preview-fullscreen.v1";
-
-const fullscreen = previewFlag(PREVIEW_FULLSCREEN_STORAGE_KEY);
-
-export const previewFullscreenStore = fullscreen.store;
-
-export function setPreviewFullscreen(key: string, next: boolean): void {
-  fullscreen.set(key, next);
-}
+const fullscreen = previewFlag("leika.preview-fullscreen.v1");
 
 /** Whether THIS preview opens full-window, and the way to say otherwise. */
 export function usePreviewFullscreen(
