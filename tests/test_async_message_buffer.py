@@ -314,7 +314,7 @@ def test_coalescing_replaces_only_messages_with_a_shared_redundancy_key() -> Non
                 _messages.GuiFolderMessage(
                     uuid="parent",
                     container_uuid="root",
-                    props=_messages.GuiFolderProps(0.0, "Parent", True, True),
+                    props=_messages.GuiFolderProps(0.0, "Parent", True, True, False),
                 ),
                 _text("child", "parent"),
                 _messages.GuiUpdateMessage("child", {"value": "updated"}),

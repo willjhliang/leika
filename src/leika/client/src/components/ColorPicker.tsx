@@ -10,7 +10,7 @@ import {
   hsvToRgb,
   hslToRgb,
   parseToRgba,
-  rgbEqual,
+  colorEqual,
   rgbToHsl,
   rgbToHsv,
   type HsvColor,
@@ -201,7 +201,7 @@ function ColorPicker({
   //
   // The draft is only overruled when the incoming color is one it does not
   // produce -- an edit from the output fields, the eyedropper, or the server.
-  const hsv = rgbEqual(hsvToRgb(draftHsv), rgb) ? draftHsv : rgbToHsv(rgb);
+  const hsv = colorEqual(hsvToRgb(draftHsv), rgb) ? draftHsv : rgbToHsv(rgb);
   const [outputFormat, setOutputFormat] = useColorFormatPreference();
   const [dragging, setDragging] = React.useState(false);
   const selectionElementRef = React.useRef<HTMLDivElement | null>(null);

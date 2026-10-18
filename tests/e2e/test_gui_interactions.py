@@ -219,7 +219,7 @@ def test_a_popup_opens_folder_like_contents_from_a_labelled_row(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    with leika_server.gui.add_popup("Render options") as popup:
+    with leika_server.gui.add_folder("Render options", popup=True) as popup:
         axes = leika_server.gui.add_checkbox("Show axes", initial_value=True)
         with leika_server.gui.add_folder("Advanced"):
             leika_server.gui.add_number("Line width", initial_value=2.0)
@@ -246,7 +246,7 @@ def test_a_popup_opens_folder_like_contents_from_a_labelled_row(
     leika_page.keyboard.press("Escape")
     expect(popout).to_have_count(0)
 
-    empty = leika_server.gui.add_popup("Empty popup")
+    empty = leika_server.gui.add_folder("Empty popup", popup=True)
     empty_trigger = find_gui_row(leika_page, "Empty popup").locator("[data-leika-popup-trigger]")
     expect(empty_trigger).to_be_disabled(timeout=5_000)
     with empty:
@@ -273,7 +273,7 @@ def test_a_mini_form_sends_from_the_end_of_its_field_row(
     """One field, no popout: the field keeps its row and the commit joins it as
     a square button on the end, sized like the undo a color row carries."""
     submits: list[str] = []
-    with leika_server.gui.add_mini_form() as mini:
+    with leika_server.gui.add_form(mini=True) as mini:
         query = leika_server.gui.add_text("Search", initial_value="")
     mini.on_submit(lambda _: submits.append(query.value))
 

@@ -30,12 +30,6 @@ Inputs
 .. autoclass:: GuiListHandle
    :members:
 
-.. autoclass:: GuiChecklistHandle
-   :members:
-
-.. autoclass:: GuiRadioListHandle
-   :members:
-
 .. autoclass:: GuiNumberHandle
    :members:
 
@@ -52,9 +46,6 @@ Inputs
    :members:
 
 .. autoclass:: GuiButtonGroupHandle
-   :members:
-
-.. autoclass:: GuiToggleHandle
    :members:
 
 .. autoclass:: GuiToggleGroupHandle
@@ -76,25 +67,16 @@ Inputs
 Colors and vectors
 ------------------
 
-.. autoclass:: GuiRgbHandle
+.. autoclass:: GuiColorHandle
    :members:
 
-.. autoclass:: GuiRgbaHandle
-   :members:
-
-.. autoclass:: GuiVector2Handle
-   :members:
-
-.. autoclass:: GuiVector3Handle
+.. autoclass:: GuiVectorHandle
    :members:
 
 Containers
 ----------
 
 .. autoclass:: GuiFolderHandle
-   :members:
-
-.. autoclass:: GuiPopupHandle
    :members:
 
 .. autoclass:: GuiFormHandle

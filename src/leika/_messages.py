@@ -585,30 +585,15 @@ class GuiFolderProps:
     """Visibility state of the GUI folder."""
     expand_by_default: bool
     """Whether the folder should be expanded by default."""
+    popup: bool
+    """Whether the folder is one labelled row whose children open in a popout,
+    rather than a section in the panel."""
 
 
 @dataclasses.dataclass
 class GuiFolderMessage(_CreateGuiComponentMessage):
     container_uuid: str
     props: GuiFolderProps
-
-
-@dataclasses.dataclass
-class GuiPopupProps:
-    order: float
-    """Order value for arranging GUI elements."""
-    label: str
-    """Label for the popup's row."""
-    visible: bool
-    """Visibility state of the GUI popup."""
-
-
-@dataclasses.dataclass
-class GuiPopupMessage(_CreateGuiComponentMessage):
-    """A folder-like container whose children open in a popout."""
-
-    container_uuid: str
-    props: GuiPopupProps
 
 
 @dataclasses.dataclass
@@ -1121,48 +1106,6 @@ class GuiNumberMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiRgbProps(GuiBaseProps):
-    pass
-
-
-@dataclasses.dataclass
-class GuiRgbMessage(_CreateGuiComponentMessage):
-    value: Tuple[int, int, int]
-    container_uuid: str
-    props: GuiRgbProps
-
-
-@dataclasses.dataclass
-class GuiRgbaProps(GuiBaseProps):
-    pass
-
-
-@dataclasses.dataclass
-class GuiRgbaMessage(_CreateGuiComponentMessage):
-    value: Tuple[int, int, int, int]
-    container_uuid: str
-    props: GuiRgbaProps
-
-
-@dataclasses.dataclass
-class GuiToggleProps(GuiBaseProps):
-    text: str
-    """Text on the toggle's own face; see `GuiButtonProps.text`."""
-    color: ButtonColor
-    """Colorway for the toggle. The same two roles a button takes, and the ON
-    state is that button's own pressed appearance."""
-    _icon_html: Optional[str]
-    """(Private) HTML string for the icon to be displayed on the toggle."""
-
-
-@dataclasses.dataclass
-class GuiToggleMessage(_CreateGuiComponentMessage):
-    value: bool
-    container_uuid: str
-    props: GuiToggleProps
-
-
-@dataclasses.dataclass
 class GuiToggleGroupProps(GuiBaseProps):
     color: Tuple[ButtonColor, ...]
     """One colorway per toggle; see `GuiButtonGroupProps.color`."""
@@ -1188,6 +1131,19 @@ class GuiToggleGroupMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
+class GuiColorProps(GuiBaseProps):
+    pass
+
+
+@dataclasses.dataclass
+class GuiColorMessage(_CreateGuiComponentMessage):
+    value: Union[Tuple[int, int, int], Tuple[int, int, int, int]]
+    """RGB or RGBA channels in [0, 255]."""
+    container_uuid: str
+    props: GuiColorProps
+
+
+@dataclasses.dataclass
 class GuiCheckboxProps(GuiBaseProps):
     pass
 
@@ -1200,10 +1156,10 @@ class GuiCheckboxMessage(_CreateGuiComponentMessage):
 
 
 @dataclasses.dataclass
-class GuiVector2Props(GuiBaseProps):
-    min: Optional[Tuple[float, float]]
+class GuiVectorProps(GuiBaseProps):
+    min: Optional[Tuple[float, ...]]
     """Minimum allowed values for each component of the vector."""
-    max: Optional[Tuple[float, float]]
+    max: Optional[Tuple[float, ...]]
     """Maximum allowed values for each component of the vector."""
     step: float
     """Step size for incrementing/decrementing each component of the vector."""
@@ -1212,29 +1168,11 @@ class GuiVector2Props(GuiBaseProps):
 
 
 @dataclasses.dataclass
-class GuiVector2Message(_CreateGuiComponentMessage):
-    value: Tuple[float, float]
+class GuiVectorMessage(_CreateGuiComponentMessage):
+    value: Tuple[float, ...]
+    """Two or three components."""
     container_uuid: str
-    props: GuiVector2Props
-
-
-@dataclasses.dataclass
-class GuiVector3Props(GuiBaseProps):
-    min: Optional[Tuple[float, float, float]]
-    """Minimum allowed values for each component of the vector."""
-    max: Optional[Tuple[float, float, float]]
-    """Maximum allowed values for each component of the vector."""
-    step: float
-    """Step size for incrementing/decrementing each component of the vector."""
-    precision: int
-    """Number of decimal places to display for each component of the vector."""
-
-
-@dataclasses.dataclass
-class GuiVector3Message(_CreateGuiComponentMessage):
-    value: Tuple[float, float, float]
-    container_uuid: str
-    props: GuiVector3Props
+    props: GuiVectorProps
 
 
 @dataclasses.dataclass
@@ -1266,54 +1204,24 @@ class GuiTextMessage(_CreateGuiComponentMessage):
 
 @dataclasses.dataclass
 class GuiListProps(GuiBaseProps):
+    mark: Optional[Literal["check", "radio"]]
+    """What each row carries beside its text: nothing, a box to tick, or one of
+    a set of radios of which at most one is selected."""
     frozen: bool
-    """Whether the list's LENGTH and ORDER are fixed. Frozen, the entries can
-    still be edited but none can be added, removed, or moved, and the controls
-    that would do those things are not drawn. Separate from ``disabled``, which
-    stops the entries being edited as well."""
+    """Whether the rows' number and order are fixed. Frozen, no row can be
+    added, removed, or moved, and the controls that would do those things are
+    not drawn. A marked list's rows also keep their words, drawn as text, so
+    the viewer only marks them. Separate from ``disabled``, which stops all
+    editing."""
 
 
 @dataclasses.dataclass
 class GuiListMessage(_CreateGuiComponentMessage):
-    value: Tuple[str, ...]
+    value: Union[Tuple[str, ...], Tuple[Tuple[str, bool], ...]]
+    """The entries, or with a mark one (text, marked) pair per row, in the
+    order they are shown."""
     container_uuid: str
     props: GuiListProps
-
-
-@dataclasses.dataclass
-class GuiChecklistProps(GuiBaseProps):
-    frozen: bool
-    """Whether the ITEMS are fixed: their words, their number, and their order.
-    Frozen, a row is the words rather than a box to type them in, and what the
-    viewer does with the list is tick it. Separate from ``disabled``, which
-    stops the ticking too. Stronger than a list's ``frozen``, which leaves the
-    typing alone, because on a checklist the answer being asked for is the
-    ticks and the words are only what they are against."""
-
-
-@dataclasses.dataclass
-class GuiChecklistMessage(_CreateGuiComponentMessage):
-    value: Tuple[Tuple[str, bool], ...]
-    """One (text, checked) pair per item, in the order they are shown."""
-    container_uuid: str
-    props: GuiChecklistProps
-
-
-@dataclasses.dataclass
-class GuiRadioListProps(GuiBaseProps):
-    frozen: bool
-    """Whether the ITEMS are fixed: their words, their number, and their order.
-    Frozen, a row is the words rather than a box to type them in, and what the
-    viewer does with the list is select one. Separate from ``disabled``, which
-    stops selection too."""
-
-
-@dataclasses.dataclass
-class GuiRadioListMessage(_CreateGuiComponentMessage):
-    value: Tuple[Tuple[str, bool], ...]
-    """One (text, selected) pair per item, with at most one selected."""
-    container_uuid: str
-    props: GuiRadioListProps
 
 
 @dataclasses.dataclass

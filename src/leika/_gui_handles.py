@@ -52,8 +52,8 @@ from ._messages import (
     GuiButtonGroupProps,
     GuiButtonProps,
     GuiCheckboxProps,
-    GuiChecklistProps,
     GuiCloseModalMessage,
+    GuiColorProps,
     GuiDividerProps,
     GuiDropdownProps,
     GuiFolderProps,
@@ -67,16 +67,12 @@ from ._messages import (
     GuiNumberProps,
     GuiPlaybackProps,
     GuiPlotlyProps,
-    GuiPopupProps,
     GuiPreviewImageMessage,
     GuiPreviewOpenMessage,
     GuiPreviewReadyMessage,
     GuiPreviewTextMessage,
     GuiProgressBarProps,
-    GuiRadioListProps,
     GuiRemoveMessage,
-    GuiRgbaProps,
-    GuiRgbProps,
     GuiSliderMark,
     GuiSliderProps,
     GuiTabGroupProps,
@@ -85,11 +81,9 @@ from ._messages import (
     GuiTabUpdateMessage,
     GuiTextProps,
     GuiToggleGroupProps,
-    GuiToggleProps,
     GuiUpdateMessage,
     GuiUploadButtonProps,
-    GuiVector2Props,
-    GuiVector3Props,
+    GuiVectorProps,
     GuiVideoControlsProps,
     Message,
     PlaybackAction,
@@ -593,23 +587,6 @@ class GuiCheckboxHandle(GuiInputHandle[bool], GuiCheckboxProps):
         return props, _bool(value, "checkbox")
 
 
-class GuiToggleHandle(GuiInputHandle[bool], GuiToggleProps):
-    """Handle for a toggle: a button that stays pressed.
-
-    .. attribute:: value
-       :type: bool
-
-       Whether the toggle is on. Synchronized automatically when assigned.
-    """
-
-    _message_type = _messages.GuiToggleMessage
-
-    @override
-    def _validate(self, props: Any, value: bool) -> tuple[Any, bool]:
-        _role(props.color)
-        return props, _bool(value, "toggle")
-
-
 class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps):
     """Handle for a row of toggles.
 
@@ -650,27 +627,13 @@ class GuiToggleGroupHandle(GuiInputHandle[Tuple[str, ...]], GuiToggleGroupProps)
         return props, tuple(option for option in options if option in wanted)
 
 
-class GuiListHandle(GuiInputHandle[Tuple[str, ...]], GuiListProps):
-    """Handle for an editable list of text entries.
+def _list_rows(value: Any, mark: Any) -> Any:
+    """A list's rows: strings without a mark, ``(text, marked)`` pairs with one.
 
-    .. attribute:: value
-       :type: tuple[str, ...]
-
-       The entries, in the order they are shown. Editing an entry, adding one,
-       removing one, or dragging one somewhere else all report the whole tuple.
-       Assigning one sets the list to exactly those entries, which is how
-       Python adds, removes, and reorders: ``handle.value += ("next",)``.
+    A bare string is an unmarked row; without a mark, a pair keeps its text.
     """
-
-    _message_type = _messages.GuiListMessage
-
-    @override
-    def _validate(self, props: Any, value: Any) -> tuple[Any, tuple[str, ...]]:
-        return props, _strings(value, "List value")
-
-
-def _marked_rows(value: Any, radio: bool) -> Tuple[Tuple[str, bool], ...]:
-    """``(text, marked)`` rows, where a bare string is an unmarked row."""
+    if mark not in (None, "check", "radio"):
+        raise ValueError(f"mark must be None, 'check', or 'radio'; got {mark!r}.")
     if isinstance(value, str):
         raise ValueError("A list value must be a sequence of rows, not one string.")
     rows: list[Tuple[str, bool]] = []
@@ -685,64 +648,58 @@ def _marked_rows(value: Any, radio: bool) -> Tuple[Tuple[str, bool], ...]:
         if not isinstance(text, str) or type(marked) is not bool:
             raise TypeError(f"Rows are strings or (text, bool) pairs; got {row!r}.")
         rows.append((text, marked))
-    if radio and sum(marked for _, marked in rows) > 1:
-        raise ValueError("A radio list can have at most one selected item.")
+    if mark is None:
+        return tuple(text for text, _ in rows)
+    if mark == "radio" and sum(marked for _, marked in rows) > 1:
+        raise ValueError("A radio list can have at most one selected row.")
     return tuple(rows)
 
 
-class _GuiRowsHandle(GuiInputHandle[Tuple[Tuple[str, bool], ...]]):
-    _radio: ClassVar[bool] = False
+TRows = TypeVar("TRows", Tuple[str, ...], Tuple[Tuple[str, bool], ...])
+
+
+class GuiListHandle(GuiInputHandle[TRows], Generic[TRows], GuiListProps):
+    """Handle for an editable list of text rows, each optionally with a mark.
+
+    .. attribute:: value
+       :type: tuple[str, ...] | tuple[tuple[str, bool], ...]
+
+       Without a mark, the entries in the order they are shown. With a mark,
+       one ``(text, marked)`` pair per row, so ``for text, checked in
+       handle.value`` reads a checklist as it stands. Editing a row, adding
+       one, removing one, or dragging one somewhere else reports the whole
+       tuple, and a row's mark travels with its text. Assigning sets the list
+       to exactly those rows, and a bare string among them is an unmarked row:
+       ``handle.value += ("next",)``.
+    """
+
+    _message_type = _messages.GuiListMessage
+
+    @property
+    def marked(self) -> Tuple[str, ...]:
+        """The text of the marked rows, in the order they are shown.
+
+        For a checklist these are the ticked items; for a radio list, the one
+        selected choice, if any."""
+        if self._impl.props.mark is None:
+            return ()
+        return tuple(text for text, marked in self._impl.value if marked)
 
     @override
-    def _validate(self, props: Any, value: Any) -> tuple[Any, Tuple[Tuple[str, bool], ...]]:
-        return props, _marked_rows(value, self._radio)
+    def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
+        return props, _list_rows(value, props.mark)
 
     @override
     def _client_value(self, value: Any) -> Any:
-        rows = _marked_rows(super()._client_value(value), self._radio)
+        props = self._impl.props
+        rows = _list_rows(super()._client_value(value), props.mark)
         current = self._impl.value
-        if self._impl.props.frozen and [text for text, _ in rows] != [text for text, _ in current]:
-            raise ValueError("A frozen list's rows keep their text, count and order.")
+        if props.frozen and (
+            len(rows) != len(current)
+            or (props.mark is not None and [t for t, _ in rows] != [t for t, _ in current])
+        ):
+            raise ValueError("A frozen list keeps its rows' count and order.")
         return rows
-
-
-class GuiChecklistHandle(_GuiRowsHandle, GuiChecklistProps):
-    """Handle for a checklist: entries with a box each to tick.
-
-    .. attribute:: value
-       :type: tuple[tuple[str, bool], ...]
-
-       One ``(text, checked)`` pair per item, in the order they are shown.
-       Assigning sets the checklist to exactly those items, and a bare string
-       among them is an item nobody has ticked: ``handle.value += ("Lights",)``.
-    """
-
-    _message_type = _messages.GuiChecklistMessage
-
-    @property
-    def checked(self) -> Tuple[str, ...]:
-        """The text of the ticked items, in the order they are shown."""
-        return tuple(text for text, checked in self._impl.value if checked)
-
-
-class GuiRadioListHandle(_GuiRowsHandle, GuiRadioListProps):
-    """Handle for a radio list: editable choices with at most one selected.
-
-    .. attribute:: value
-       :type: tuple[tuple[str, bool], ...]
-
-       One ``(text, selected)`` pair per choice, in display order. Bare strings
-       assigned among the pairs become unselected choices. At most one pair may
-       be selected.
-    """
-
-    _message_type = _messages.GuiRadioListMessage
-    _radio = True
-
-    @property
-    def selected(self) -> str | None:
-        """The selected item's text, or ``None`` when nothing is selected."""
-        return next((text for text, selected in self._impl.value if selected), None)
 
 
 class GuiTextHandle(GuiInputHandle[str], GuiTextProps):
@@ -868,82 +825,61 @@ class GuiMultiSliderHandle(
         return props, values
 
 
-class GuiRgbHandle(GuiInputHandle[Tuple[int, int, int]], GuiRgbProps):
-    """Handle for RGB color inputs.
+TColor = TypeVar("TColor", bound=Tuple[int, ...])
+
+
+class GuiColorHandle(GuiInputHandle[TColor], Generic[TColor], GuiColorProps):
+    """Handle for color inputs, RGB or RGBA.
 
     .. attribute:: value
-       :type: tuple[int, int, int]
+       :type: tuple[int, int, int] | tuple[int, int, int, int]
 
-       Value of the input. Synchronized automatically when assigned.
+       Channels in [0, 255], as many as the color was created with.
+       Synchronized automatically when assigned; float channels in [0, 1] are
+       scaled to match.
     """
 
-    _message_type = _messages.GuiRgbMessage
+    _message_type = _messages.GuiColorMessage
 
     @override
     def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
-        return props, _color(value, 3)
+        channels = len(self._impl.value)
+        if channels not in (3, 4):
+            raise ValueError(f"A color has 3 (RGB) or 4 (RGBA) channels, got {channels}.")
+        return props, _color(value, channels)
 
 
-class GuiRgbaHandle(GuiInputHandle[Tuple[int, int, int, int]], GuiRgbaProps):
-    """Handle for RGBA color inputs.
+TVector = TypeVar("TVector", bound=Tuple[float, ...])
+
+
+class GuiVectorHandle(GuiInputHandle[TVector], Generic[TVector], GuiVectorProps):
+    """Handle for vector inputs of two or three components.
 
     .. attribute:: value
-       :type: tuple[int, int, int, int]
+       :type: tuple[float, float] | tuple[float, float, float]
 
-       Value of the input. Synchronized automatically when assigned.
+       Components, as many as the vector was created with. Synchronized
+       automatically when assigned.
     """
 
-    _message_type = _messages.GuiRgbaMessage
+    _message_type = _messages.GuiVectorMessage
 
     @override
     def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
-        return props, _color(value, 4)
-
-
-def _check_vector(props: Any, value: Any, length: int) -> tuple[Any, tuple[float, ...]]:
-    vector = _vector(value, length)
-    low = None if props.min is None else _vector(props.min, length, "min")
-    high = None if props.max is None else _vector(props.max, length, "max")
-    _positive_number(props.step, "step")
-    if low is not None and high is not None and any(lo > hi for lo, hi in zip(low, high)):
-        raise ValueError("Each vector min component must be at most its max component.")
-    if low is not None and any(item < lo for item, lo in zip(vector, low)):
-        raise ValueError(f"value {vector} has a component below min={low}.")
-    if high is not None and any(item > hi for item, hi in zip(vector, high)):
-        raise ValueError(f"value {vector} has a component above max={high}.")
-    return dataclasses.replace(props, min=low, max=high), vector
-
-
-class GuiVector2Handle(GuiInputHandle[Tuple[float, float]], GuiVector2Props):
-    """Handle for 2D vector inputs.
-
-    .. attribute:: value
-       :type: tuple[float, float]
-
-       Value of the input. Synchronized automatically when assigned.
-    """
-
-    _message_type = _messages.GuiVector2Message
-
-    @override
-    def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
-        return _check_vector(props, value, 2)
-
-
-class GuiVector3Handle(GuiInputHandle[Tuple[float, float, float]], GuiVector3Props):
-    """Handle for 3D vector inputs.
-
-    .. attribute:: value
-       :type: tuple[float, float, float]
-
-       Value of the input. Synchronized automatically when assigned.
-    """
-
-    _message_type = _messages.GuiVector3Message
-
-    @override
-    def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
-        return _check_vector(props, value, 3)
+        length = len(self._impl.value)
+        if length not in (2, 3):
+            raise ValueError(f"A vector has 2 or 3 components, got {length}.")
+        vector = _vector(value, length)
+        low = None if props.min is None else _vector(props.min, length, "min")
+        high = None if props.max is None else _vector(props.max, length, "max")
+        _positive_number(props.step, "step")
+        if low is not None and high is not None and any(lo > hi for lo, hi in zip(low, high)):
+            raise ValueError("Each vector min component must be at most its max component.")
+        if low is not None and any(item < lo for item, lo in zip(vector, low)):
+            raise ValueError(f"value {vector} has a component below min={low}.")
+        if high is not None and any(item > hi for item, hi in zip(vector, high)):
+            raise ValueError(f"value {vector} has a component above max={high}.")
+        return dataclasses.replace(props, min=low, max=high), vector
 
 
 StringType = TypeVar("StringType", bound=str)
@@ -1623,20 +1559,19 @@ class GuiTabHandle(GuiContainer, _Removable[None], GuiTabProps):
 
 
 class GuiFolderHandle(GuiContainer, _Removable[None], GuiFolderProps):
-    """Use as a context to place GUI elements into a folder."""
+    """Use as a context to place GUI elements into a folder.
 
-    _message_type = _messages.GuiFolderMessage
-
-
-class GuiPopupHandle(GuiContainer, _Removable[None], GuiPopupProps):
-    """Use as a context to place GUI elements into a popup.
-
-    A popup behaves like a folder as a container. Its presentation is
-    different: it occupies one normally labelled panel row, and its children
+    With ``popup`` set, the folder is one labelled panel row, and its children
     appear in a popout opened from that row.
     """
 
-    _message_type = _messages.GuiPopupMessage
+    _message_type = _messages.GuiFolderMessage
+
+    @override
+    def _validate(self, props: Any, value: None) -> tuple[Any, None]:
+        if props.popup and props.label is None:
+            raise ValueError("A popup folder needs a label for its row.")
+        return props, value
 
 
 def _fields_within(container: _GuiHandle[Any]) -> Iterator[GuiInputHandle[Any]]:
@@ -1658,7 +1593,7 @@ class GuiFormHandle(GuiContainer, _Removable[None], GuiFormProps):
     The popout ends in a Reset and a Submit, drawn by the browser, which call
     :meth:`reset_form` and submit the form.
 
-    A form built with ``mini=True`` holds exactly one direct, editable field and
+    A form added with ``mini=True`` holds exactly one direct, editable field and
     is drawn as that field's own row with a send button on the end of it -- no
     popout, no sibling rows or nested containers, and no Reset.
 

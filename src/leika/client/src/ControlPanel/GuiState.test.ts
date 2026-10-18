@@ -35,6 +35,7 @@ function component(
       label: uuid,
       visible: true,
       expand_by_default: false,
+      popup: false,
     },
   };
 }

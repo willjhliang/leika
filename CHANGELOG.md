@@ -5,6 +5,17 @@ versioning.
 
 ## Unreleased
 
+- GUI (breaking): overlapping controls are merged into one each.
+  `add_list(..., mark="check" | "radio")` replaces `add_checklist()` and
+  `add_radio_list()`, with `handle.marked` in place of `checked` and
+  `selected`; `add_vector()` takes two or three components in place of
+  `add_vector2()`/`add_vector3()`; `add_color()` takes an RGB or RGBA tuple in
+  place of `add_rgb()`/`add_rgba()`; `add_folder(..., popup=True)` replaces
+  `add_popup()`; `add_form(mini=True)` replaces `add_mini_form()`; and
+  `add_toggle()` takes only a sequence of options, with `add_checkbox()` for a
+  single true/false value. Their handles are `GuiListHandle`,
+  `GuiVectorHandle`, `GuiColorHandle`, `GuiFolderHandle`, and
+  `GuiToggleGroupHandle`.
 - GUI (breaking): GUI elements are no longer limited (4,096 components per
   scope, 1,024 commands, 32 modals, 128 notifications, 64 levels of nesting,
   4,096 items per collection, 16,384-character labels and entries,

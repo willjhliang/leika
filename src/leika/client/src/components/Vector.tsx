@@ -1,20 +1,21 @@
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
-import { GuiVector2Message } from "../WebsocketMessages";
-import { VectorInput, GuiInputRow } from "./common";
+import { GuiVectorMessage } from "../WebsocketMessages";
+import { GuiInputRow, VectorInput } from "./common";
 
-export default function Vector2Component({
+/** A vector of two or three number fields in one row. */
+export default function VectorComponent({
   uuid,
   value,
   props: { hint, label, disabled, min, max, step, precision },
-}: GuiVector2Message) {
+}: GuiVectorMessage) {
   const { setValue } = useGuiComponent();
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
       <VectorInput
         uuid={uuid}
-        n={2}
+        n={value.length === 3 ? 3 : 2}
         value={value}
-        onChange={(value: number[]) => setValue(uuid, value)}
+        onChange={(next: number[]) => setValue(uuid, next)}
         min={min}
         max={max}
         step={step}

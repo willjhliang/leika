@@ -36,7 +36,7 @@ from ._gui_handles import (
     GuiButtonGroupHandle,
     GuiButtonHandle,
     GuiCheckboxHandle,
-    GuiChecklistHandle,
+    GuiColorHandle,
     GuiDividerHandle,
     GuiDownloadButtonHandle,
     GuiDropdownHandle,
@@ -52,20 +52,14 @@ from ._gui_handles import (
     GuiNumberHandle,
     GuiPlaybackHandle,
     GuiPlotlyHandle,
-    GuiPopupHandle,
     GuiPreviewButtonHandle,
     GuiProgressBarHandle,
-    GuiRadioListHandle,
-    GuiRgbaHandle,
-    GuiRgbHandle,
     GuiSliderHandle,
     GuiTabGroupHandle,
     GuiTextHandle,
     GuiToggleGroupHandle,
-    GuiToggleHandle,
     GuiUploadButtonHandle,
-    GuiVector2Handle,
-    GuiVector3Handle,
+    GuiVectorHandle,
     GuiVideoControlsHandle,
     PlaybackEvent,
     UploadedFile,
@@ -96,6 +90,8 @@ IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 THandle = TypeVar("THandle", bound=_GuiHandle)
+TVector = TypeVar("TVector", bound=tuple[float, ...])
+TColor = TypeVar("TColor", bound=tuple[int, ...])
 
 _PreviewWorkKind = Literal["warm", "preview", "reload", "watch"]
 
@@ -1140,6 +1136,7 @@ class GuiApi:
         *,
         order: float | None = None,
         expand_by_default: bool = True,
+        popup: bool = False,
         visible: bool = True,
     ) -> GuiFolderHandle:
         """Add a folder, and return a handle that can be used to populate it.
@@ -1150,7 +1147,10 @@ class GuiApi:
                 layout grouping.
             order: Optional ordering, smallest values will be displayed first.
             expand_by_default: Open the folder by default. Set to False to collapse it by
-                default. Ignored when ``label`` is ``None``.
+                default. Ignored when ``label`` is ``None`` or ``popup`` is set.
+            popup: Draw the folder as one labelled row whose children open in a
+                popout, keeping them out of the panel until the viewer opens
+                it. Needs a label.
             visible: Whether the component is visible.
 
         Returns:
@@ -1162,35 +1162,8 @@ class GuiApi:
                 order=self._apply_default_order(order),
                 label=label,
                 expand_by_default=expand_by_default,
+                popup=popup,
                 visible=visible,
-            ),
-            parent=self._get_container_uuid(),
-        )
-
-    def add_popup(
-        self,
-        label: str,
-        *,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiPopupHandle:
-        """Add a popup, and return a handle that can be used to populate it.
-
-        A popup has the same container behavior as a folder, but keeps its
-        children out of the panel until the viewer presses Open popup.
-
-        Args:
-            label: Label shown beside the popup's open button.
-            order: Optional ordering, smallest values will be displayed first.
-            visible: Whether the component is visible.
-
-        Returns:
-            A handle that can be used as a context to populate the popup.
-        """
-        return self._add(
-            GuiPopupHandle,
-            _messages.GuiPopupProps(
-                order=self._apply_default_order(order), label=label, visible=visible
             ),
             parent=self._get_container_uuid(),
         )
@@ -1199,6 +1172,7 @@ class GuiApi:
         self,
         *,
         label: str | None = None,
+        mini: bool = False,
         order: float | None = None,
         visible: bool = True,
     ) -> GuiFormHandle:
@@ -1209,33 +1183,14 @@ class GuiApi:
         Args:
             label: Label shown beside the form's row, opposite the button that
                 opens it. If ``None``, that button takes the whole row, the
-                same rule a labelless :meth:`add_button` follows.
-            order: Optional ordering, smallest values will be displayed first.
-            visible: Whether the component is visible.
-
-        Returns:
-            A handle that can be used as a context to populate the form.
-        """
-        return self._create_form(label=label, order=order, visible=visible, mini=False)
-
-    def add_mini_form(
-        self,
-        *,
-        order: float | None = None,
-        visible: bool = True,
-    ) -> GuiFormHandle:
-        """Add a form around a single field, and return a handle to populate it.
-
-        The same commit semantics as :meth:`add_form` in the space of one row:
-        no popout and no row of its own, just the field's own row with a send
-        button on the end of it.
-
-        Exactly one direct, editable field goes inside. A sibling row, nested
-        container, or second field raises :class:`ValueError` before it is
-        published. Sending is the button, or Enter in a single-line text input,
-        and both fire :meth:`GuiFormHandle.on_submit`. There is no Reset.
-
-        Args:
+                same rule a labelless :meth:`add_button` follows. Ignored for a
+                mini form.
+            mini: Wrap a single field instead: the same commit semantics in the
+                space of one row, drawn as the field's own row with a send
+                button on the end of it, and no popout or Reset. Exactly one
+                direct, editable field goes inside; a sibling row, nested
+                container, or second field raises :class:`ValueError` before it
+                is published.
             order: Optional ordering, smallest values will be displayed first.
             visible: Whether the component is visible.
 
@@ -1244,18 +1199,13 @@ class GuiApi:
 
         Example::
 
-            with server.gui.add_mini_form() as ask:
+            with server.gui.add_form(mini=True) as ask:
                 query = server.gui.add_text("Search", "")
 
             @ask.on_submit
             def _(event):
                 run_search(query.value)
         """
-        return self._create_form(label=None, order=order, visible=visible, mini=True)
-
-    def _create_form(
-        self, *, label: str | None, order: float | None, visible: bool, mini: bool
-    ) -> GuiFormHandle:
         # Nested <form> elements are invalid HTML. Modals render in a separate
         # portal, where the walk stops and a fresh <form> is well-formed.
         if self._ancestor_form(self._get_container_uuid()) is not None:
@@ -1912,25 +1862,9 @@ class GuiApi:
             _max_bytes=max_bytes,
         )
 
-    @overload
     def add_toggle(
         self,
-        text: str,
-        *,
-        initial_value: bool = False,
-        label: str | None = None,
-        color: Literal["default", "inverse"] = "default",
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        icon: IconName | None = None,
-        order: float | None = None,
-    ) -> GuiToggleHandle: ...
-
-    @overload
-    def add_toggle(
-        self,
-        text: list[str] | tuple[str, ...],
+        text: Sequence[str],
         *,
         initial_value: str | Sequence[str] | None = None,
         label: str | None = None,
@@ -1941,95 +1875,46 @@ class GuiApi:
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
-        icon: None = None,
         order: float | None = None,
-    ) -> GuiToggleGroupHandle: ...
-
-    def add_toggle(
-        self,
-        text: str | list[str] | tuple[str, ...],
-        *,
-        initial_value: bool | str | Sequence[str] | None = None,
-        label: str | None = None,
-        color: ButtonColor | Sequence[ButtonColor] = "default",
-        multiple: bool = False,
-        required: bool | None = None,
-        merge: bool | Sequence[bool] = True,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        icon: IconName | None = None,
-        order: float | None = None,
-    ) -> GuiToggleHandle | GuiToggleGroupHandle:
-        """Add a toggle, or a row of them, to the GUI.
+    ) -> GuiToggleGroupHandle:
+        """Add a row of toggles to the GUI.
 
         A toggle is a button that stays pressed: same faces, same colorways,
         same label rule and heights as :meth:`add_button`, but it holds its
         state instead of firing and returning to rest. On, it takes the
         appearance that button has under the pointer at the moment of a click.
-
-        Passing a string gives one toggle, whose value is whether it is on.
-        Passing a sequence gives a row of them, whose value is the tuple of
-        options currently on -- a tuple in both modes, so reading a group does
-        not depend on how it was configured.
+        The value is the tuple of options currently on. For one true/false
+        value, use :meth:`add_checkbox`.
 
         Args:
-            text: Text on the toggle's face. A sequence gives a row with one
-                toggle per entry.
-            initial_value: What starts on: a bool for a single toggle, and for
-                a row either one option's text or a sequence of them. Left
-                unset, everything starts off.
+            text: The options, one toggle per entry.
+            initial_value: What starts on: one option's text or a sequence of
+                them. Left unset, a required row starts on its first option
+                and any other row starts empty.
             label: Optional label for the row; see :meth:`add_button`.
             color: Colorway; see :meth:`add_button`.
-            multiple: Whether more than one option in a row may be on at once.
-                Off by default, which makes the row a choice between its
-                options: turning one on turns the others off.
+            multiple: Whether more than one option may be on at once. Off by
+                default, which makes the row a choice between its options:
+                turning one on turns the others off.
             required: Whether one option must always be on, so the toggle that
                 is on cannot be turned off. Left unset, a row behaves like the
                 control it resembles: one at a time requires a choice, the way
                 a radio group does, and a ``multiple`` row does not, the way
-                checkboxes do not. A required row given no ``initial_value``
-                starts on its first option.
+                checkboxes do not.
             merge: Whether neighbouring toggles are joined or parted; see
                 :meth:`add_button`.
-            disabled: Whether the toggle is disabled.
-            visible: Whether the toggle is visible.
+            disabled: Whether the toggles are disabled.
+            visible: Whether the toggles are visible.
             hint: Optional hint to display on hover.
-            icon: Optional icon to display on the toggle. Single toggles only,
-                for the reason :meth:`add_button` gives.
             order: Optional ordering, smallest values will be displayed first.
 
         Returns:
             A handle that can be used to interact with the GUI element.
         """
         if isinstance(text, str):
-            if not isinstance(merge, bool) or not isinstance(color, str):
-                raise ValueError("color= and merge= take one value for a single toggle.")
-            if multiple or required is not None:
-                raise ValueError(
-                    "multiple= and required= are about how many options in a ROW may be"
-                    " on; a single toggle is simply on or off."
-                )
-            return self._add(
-                GuiToggleHandle,
-                _messages.GuiToggleProps(
-                    order=self._apply_default_order(order),
-                    label=label,
-                    hint=hint,
-                    visible=visible,
-                    disabled=disabled,
-                    text=text,
-                    color=color,
-                    _icon_html=None,
-                ),
-                False if initial_value is None else initial_value,
-                parent=self._get_container_uuid(),
-                icon=icon,
-            )
-        if icon is not None:
             raise ValueError(
-                "icon= is for a single toggle; a row has one face per option and"
-                " nowhere to say which of them the icon belongs to."
+                "add_toggle() takes a sequence of options; for one true/false value,"
+                " use add_checkbox()."
             )
         options = tuple(text)
         # A row behaves like the control it resembles unless told otherwise: a
@@ -2166,35 +2051,75 @@ class GuiApi:
             _image_root=None if image_root is None else Path(os.fspath(image_root)),
         )
 
+    @overload
     def add_list(
         self,
         label: str | None = None,
         initial_value: Sequence[str] = (),
         *,
+        mark: None = None,
         frozen: bool = False,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiListHandle:
-        """Add an editable list of text entries to the GUI.
+    ) -> GuiListHandle[tuple[str, ...]]: ...
 
-        A stack of text boxes rather than one: the value is a tuple of strings,
-        and a viewer can edit any of them, add an entry, remove one, or drag
-        one to another place in the list. Every one of those reports the whole
-        tuple, so ``on_update`` sees the list as it now reads.
+    @overload
+    def add_list(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        mark: Literal["check", "radio"],
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiListHandle[tuple[tuple[str, bool], ...]]: ...
+
+    def add_list(
+        self,
+        label: str | None = None,
+        initial_value: Sequence[str | tuple[str, bool]] = (),
+        *,
+        mark: Literal["check", "radio"] | None = None,
+        frozen: bool = False,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiListHandle[Any]:
+        """Add an editable list of text rows to the GUI, each optionally marked.
+
+        A stack of text boxes rather than one. A viewer can edit any row, add
+        one, remove one, or drag one to another place in the list, and every
+        one of those reports the whole tuple, so ``on_update`` sees the list as
+        it now reads.
+
+        Without a mark, the value is a tuple of strings. With
+        ``mark="check"``, each row carries a box to tick, and with
+        ``mark="radio"`` a radio of which at most one is selected; the value is
+        then one ``(text, marked)`` pair per row, and a row given as a bare
+        string starts unmarked::
+
+            items = server.gui.add_list("Preflight", ["Fuel", ("Doors", True)], mark="check")
+            items.marked  # ("Doors",)
 
         Args:
             label: Optional label for the row. Left unset, the list takes the
                 whole width of the panel, which a stack of boxes usually wants;
-                given one, the label takes the left column and the entries sit
+                given one, the label takes the left column and the rows sit
                 beside it, like every other labelled control.
-            initial_value: The entries the list starts with. An empty list is
-                a list with nothing in it yet, not an error.
-            frozen: Fix the list's length and order. The entries can still be
-                edited; what goes is adding, removing, and reordering, along
-                with the controls that do them. Use ``disabled`` to stop the
-                editing too.
+            initial_value: The rows the list starts with: strings, or with a
+                mark strings and ``(text, marked)`` pairs. An empty list is a
+                list with nothing in it yet, not an error.
+            mark: What each row carries: nothing, ``"check"``, or ``"radio"``.
+            frozen: Fix the rows' number and order, and with a mark their
+                words too, which are then drawn as text so the viewer only
+                marks them. Without a mark the entries can still be edited. Use
+                ``disabled`` to stop all editing.
             disabled: Whether the list is disabled.
             visible: Whether the list is visible.
             hint: Optional hint to display on hover.
@@ -2211,83 +2136,7 @@ class GuiApi:
             disabled=disabled,
             visible=visible,
             order=order,
-            frozen=frozen,
-        )
-
-    def add_checklist(
-        self,
-        label: str | None = None,
-        initial_value: Sequence[str | tuple[str, bool]] = (),
-        *,
-        frozen: bool = False,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiChecklistHandle:
-        """Add a checklist to the GUI: entries with a box each to tick.
-
-        The value is one ``(text, checked)`` pair per item, in the order they
-        are shown. An item given as a bare string is one nobody has ticked yet.
-
-        Args:
-            label: Optional label for the row.
-            initial_value: The items the checklist starts with, each a string or
-                a ``(text, checked)`` pair.
-            frozen: Fix the items: their words, their number, and their order.
-            disabled: Whether the checklist is disabled.
-            visible: Whether the checklist is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        return self._add_input(
-            GuiChecklistHandle,
-            initial_value,
-            label=label,
-            hint=hint,
-            disabled=disabled,
-            visible=visible,
-            order=order,
-            frozen=frozen,
-        )
-
-    def add_radio_list(
-        self,
-        label: str | None = None,
-        initial_value: Sequence[str | tuple[str, bool]] = (),
-        *,
-        frozen: bool = False,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiRadioListHandle:
-        """Add a radio list to the GUI: choices of which at most one is selected.
-
-        Args:
-            label: Optional label for the row.
-            initial_value: Choices as strings or ``(text, selected)`` pairs.
-                At most one pair may be selected.
-            frozen: Fix the choices' words, number, and order.
-            disabled: Whether the radio list is disabled.
-            visible: Whether the radio list is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        return self._add_input(
-            GuiRadioListHandle,
-            initial_value,
-            label=label,
-            hint=hint,
-            disabled=disabled,
-            visible=visible,
-            order=order,
+            mark=mark,
             frozen=frozen,
         )
 
@@ -2345,26 +2194,26 @@ class GuiApi:
             max=max,
         )
 
-    def add_vector2(
+    def add_vector(
         self,
         label: str,
-        initial_value: tuple[float, float] | np.ndarray,
+        initial_value: TVector | np.ndarray,
         *,
-        min: tuple[float, float] | np.ndarray | None = None,
-        max: tuple[float, float] | np.ndarray | None = None,
+        min: TVector | np.ndarray | None = None,
+        max: TVector | np.ndarray | None = None,
         step: float | None = None,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiVector2Handle:
-        """Add a length-2 vector input to the GUI.
+    ) -> GuiVectorHandle[TVector]:
+        """Add a vector input of two or three components to the GUI.
 
         Args:
             label: Label to display on the vector input.
-            initial_value: Initial value of the vector input.
-            min: Optional minimum value of the vector input.
-            max: Optional maximum value of the vector input.
+            initial_value: Initial value, whose length (2 or 3) the vector keeps.
+            min: Optional minimum value of each component.
+            max: Optional maximum value of each component.
             step: Optional step size of the vector input. Computed automatically if not
                 specified.
             disabled: Whether the vector input is disabled.
@@ -2378,53 +2227,7 @@ class GuiApi:
         if step is None:
             step = _infer_vector_step(initial_value, min, max)
         return self._add_input(
-            GuiVector2Handle,
-            initial_value,
-            label=label,
-            hint=hint,
-            disabled=disabled,
-            visible=visible,
-            order=order,
-            min=min,
-            max=max,
-            step=step,
-            precision=_compute_precision_digits(step),
-        )
-
-    def add_vector3(
-        self,
-        label: str,
-        initial_value: tuple[float, float, float] | np.ndarray,
-        *,
-        min: tuple[float, float, float] | np.ndarray | None = None,
-        max: tuple[float, float, float] | np.ndarray | None = None,
-        step: float | None = None,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiVector3Handle:
-        """Add a length-3 vector input to the GUI.
-
-        Args:
-            label: Label to display on the vector input.
-            initial_value: Initial value of the vector input.
-            min: Optional minimum value of the vector input.
-            max: Optional maximum value of the vector input.
-            step: Optional step size of the vector input. Computed automatically if not
-                specified.
-            disabled: Whether the vector input is disabled.
-            visible: Whether the vector input is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        if step is None:
-            step = _infer_vector_step(initial_value, min, max)
-        return self._add_input(
-            GuiVector3Handle,
+            GuiVectorHandle,
             initial_value,
             label=label,
             hint=hint,
@@ -2658,26 +2461,26 @@ class GuiApi:
             marks=marks,
         )
 
-    def add_rgb(
+    def add_color(
         self,
         label: str,
-        initial_value: tuple[int, int, int],
+        initial_value: TColor,
         *,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiRgbHandle:
-        """Add an RGB picker to the GUI.
+    ) -> GuiColorHandle[TColor]:
+        """Add a color picker to the GUI: RGB for three channels, RGBA for four.
 
         Integer channels are in [0, 255]; float channels in [0, 1] are scaled to
-        match (matplotlib convention), so ``1.0`` is white.
+        match (matplotlib convention), so ``1.0`` is white or opaque.
 
         Args:
-            label: Label to display on the RGB picker.
-            initial_value: Initial value of the RGB picker.
-            disabled: Whether the RGB picker is disabled.
-            visible: Whether the RGB picker is visible.
+            label: Label to display on the color picker.
+            initial_value: Initial value, whose channel count the color keeps.
+            disabled: Whether the color picker is disabled.
+            visible: Whether the color picker is visible.
             hint: Optional hint to display on hover.
             order: Optional ordering, smallest values will be displayed first.
 
@@ -2685,43 +2488,7 @@ class GuiApi:
             A handle that can be used to interact with the GUI element.
         """
         return self._add_input(
-            GuiRgbHandle,
-            initial_value,
-            label=label,
-            hint=hint,
-            disabled=disabled,
-            visible=visible,
-            order=order,
-        )
-
-    def add_rgba(
-        self,
-        label: str,
-        initial_value: tuple[int, int, int, int],
-        *,
-        disabled: bool = False,
-        visible: bool = True,
-        hint: str | None = None,
-        order: float | None = None,
-    ) -> GuiRgbaHandle:
-        """Add an RGBA picker to the GUI.
-
-        Integer channels are in [0, 255]; float channels in [0, 1] are scaled to
-        match (matplotlib convention), so ``1.0`` is white/opaque.
-
-        Args:
-            label: Label to display on the RGBA picker.
-            initial_value: Initial value of the RGBA picker.
-            disabled: Whether the RGBA picker is disabled.
-            visible: Whether the RGBA picker is visible.
-            hint: Optional hint to display on hover.
-            order: Optional ordering, smallest values will be displayed first.
-
-        Returns:
-            A handle that can be used to interact with the GUI element.
-        """
-        return self._add_input(
-            GuiRgbaHandle,
+            GuiColorHandle,
             initial_value,
             label=label,
             hint=hint,

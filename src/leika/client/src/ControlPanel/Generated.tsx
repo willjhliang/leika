@@ -12,23 +12,17 @@ import ButtonComponent from "../components/Button";
 import SliderComponent from "../components/Slider";
 import NumberInputComponent from "../components/NumberInput";
 import TextInputComponent from "../components/TextInput";
-import ListInputComponent from "../components/ListInput";
-import ChecklistComponent from "../components/Checklist";
-import RadioListComponent from "../components/RadioList";
+import ListComponent from "../components/List";
 import CheckboxComponent from "../components/Checkbox";
-import Vector2Component from "../components/Vector2";
-import Vector3Component from "../components/Vector3";
+import VectorComponent from "../components/Vector";
 import DropdownComponent from "../components/Dropdown";
-import RgbComponent from "../components/Rgb";
-import RgbaComponent from "../components/Rgba";
+import ColorComponent from "../components/Color";
 import ButtonGroupComponent from "../components/ButtonGroup";
-import ToggleComponent from "../components/Toggle";
 import ToggleGroupComponent from "../components/ToggleGroup";
 import PlotlyComponent from "../components/PlotlyComponent";
 import TabGroupComponent from "../components/TabGroup";
 import FolderComponent from "../components/Folder";
 import FormComponent from "../components/Form";
-import PopupComponent from "../components/Popup";
 import MultiSliderComponent from "../components/MultiSlider";
 import UploadButtonComponent from "../components/UploadButton";
 import ProgressBarComponent from "../components/ProgressBar";
@@ -120,8 +114,6 @@ const GeneratedInput = React.memo(function GeneratedInput(props: {
       return <FolderComponent {...conf} />;
     case "GuiFormMessage":
       return <FormComponent {...conf} />;
-    case "GuiPopupMessage":
-      return <PopupComponent {...conf} />;
     case "GuiTabGroupMessage":
       return <TabGroupComponent {...conf} />;
     case "GuiPlaybackMessage":
@@ -149,27 +141,17 @@ const GeneratedInput = React.memo(function GeneratedInput(props: {
     case "GuiTextMessage":
       return <TextInputComponent {...conf} />;
     case "GuiListMessage":
-      return <ListInputComponent {...conf} />;
-    case "GuiChecklistMessage":
-      return <ChecklistComponent {...conf} />;
-    case "GuiRadioListMessage":
-      return <RadioListComponent {...conf} />;
+      return <ListComponent {...conf} />;
     case "GuiCheckboxMessage":
       return <CheckboxComponent {...conf} />;
-    case "GuiVector2Message":
-      return <Vector2Component {...conf} />;
-    case "GuiVector3Message":
-      return <Vector3Component {...conf} />;
+    case "GuiVectorMessage":
+      return <VectorComponent {...conf} />;
     case "GuiDropdownMessage":
       return <DropdownComponent {...conf} />;
-    case "GuiRgbMessage":
-      return <RgbComponent {...conf} />;
-    case "GuiRgbaMessage":
-      return <RgbaComponent {...conf} />;
+    case "GuiColorMessage":
+      return <ColorComponent {...conf} />;
     case "GuiButtonGroupMessage":
       return <ButtonGroupComponent {...conf} />;
-    case "GuiToggleMessage":
-      return <ToggleComponent {...conf} />;
     case "GuiToggleGroupMessage":
       return <ToggleGroupComponent {...conf} />;
     case "GuiProgressBarMessage":

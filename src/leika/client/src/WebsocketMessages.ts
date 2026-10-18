@@ -13,17 +13,8 @@ export interface GuiFolderMessage {
     label: string | null;
     visible: boolean;
     expand_by_default: boolean;
+    popup: boolean;
   };
-}
-/** A folder-like container whose children open in a popout.
- *
- * (automatically generated)
- */
-export interface GuiPopupMessage {
-  type: "GuiPopupMessage";
-  uuid: string;
-  container_uuid: string;
-  props: { order: number; label: string; visible: boolean };
 }
 /** A form is a container whose children's values are committed together.
  *
@@ -264,60 +255,6 @@ export interface GuiNumberMessage {
     max: number | null;
   };
 }
-/** GuiRgbMessage(uuid: 'str', value: 'Tuple[int, int, int]', container_uuid: 'str', props: 'GuiRgbProps')
- *
- * (automatically generated)
- */
-export interface GuiRgbMessage {
-  type: "GuiRgbMessage";
-  uuid: string;
-  value: [number, number, number];
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
-  };
-}
-/** GuiRgbaMessage(uuid: 'str', value: 'Tuple[int, int, int, int]', container_uuid: 'str', props: 'GuiRgbaProps')
- *
- * (automatically generated)
- */
-export interface GuiRgbaMessage {
-  type: "GuiRgbaMessage";
-  uuid: string;
-  value: [number, number, number, number];
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
-  };
-}
-/** GuiToggleMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiToggleProps')
- *
- * (automatically generated)
- */
-export interface GuiToggleMessage {
-  type: "GuiToggleMessage";
-  uuid: string;
-  value: boolean;
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
-    text: string;
-    color: "default" | "inverse";
-    _icon_html: string | null;
-  };
-}
 /** GuiToggleGroupMessage(uuid: 'str', value: 'Tuple[str, ...]', container_uuid: 'str', props: 'GuiToggleGroupProps')
  *
  * (automatically generated)
@@ -340,6 +277,23 @@ export interface GuiToggleGroupMessage {
     merge: boolean[];
   };
 }
+/** GuiColorMessage(uuid: 'str', value: 'Union[Tuple[int, int, int], Tuple[int, int, int, int]]', container_uuid: 'str', props: 'GuiColorProps')
+ *
+ * (automatically generated)
+ */
+export interface GuiColorMessage {
+  type: "GuiColorMessage";
+  uuid: string;
+  value: [number, number, number] | [number, number, number, number];
+  container_uuid: string;
+  props: {
+    order: number;
+    label: string | null;
+    hint: string | null;
+    visible: boolean;
+    disabled: boolean;
+  };
+}
 /** GuiCheckboxMessage(uuid: 'str', value: 'bool', container_uuid: 'str', props: 'GuiCheckboxProps')
  *
  * (automatically generated)
@@ -357,14 +311,14 @@ export interface GuiCheckboxMessage {
     disabled: boolean;
   };
 }
-/** GuiVector2Message(uuid: 'str', value: 'Tuple[float, float]', container_uuid: 'str', props: 'GuiVector2Props')
+/** GuiVectorMessage(uuid: 'str', value: 'Tuple[float, ...]', container_uuid: 'str', props: 'GuiVectorProps')
  *
  * (automatically generated)
  */
-export interface GuiVector2Message {
-  type: "GuiVector2Message";
+export interface GuiVectorMessage {
+  type: "GuiVectorMessage";
   uuid: string;
-  value: [number, number];
+  value: number[];
   container_uuid: string;
   props: {
     order: number;
@@ -372,29 +326,8 @@ export interface GuiVector2Message {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    min: [number, number] | null;
-    max: [number, number] | null;
-    step: number;
-    precision: number;
-  };
-}
-/** GuiVector3Message(uuid: 'str', value: 'Tuple[float, float, float]', container_uuid: 'str', props: 'GuiVector3Props')
- *
- * (automatically generated)
- */
-export interface GuiVector3Message {
-  type: "GuiVector3Message";
-  uuid: string;
-  value: [number, number, number];
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
-    min: [number, number, number] | null;
-    max: [number, number, number] | null;
+    min: number[] | null;
+    max: number[] | null;
     step: number;
     precision: number;
   };
@@ -421,14 +354,14 @@ export interface GuiTextMessage {
     _source: string;
   };
 }
-/** GuiListMessage(uuid: 'str', value: 'Tuple[str, ...]', container_uuid: 'str', props: 'GuiListProps')
+/** GuiListMessage(uuid: 'str', value: 'Union[Tuple[str, ...], Tuple[Tuple[str, bool], ...]]', container_uuid: 'str', props: 'GuiListProps')
  *
  * (automatically generated)
  */
 export interface GuiListMessage {
   type: "GuiListMessage";
   uuid: string;
-  value: string[];
+  value: string[] | [string, boolean][];
   container_uuid: string;
   props: {
     order: number;
@@ -436,42 +369,7 @@ export interface GuiListMessage {
     hint: string | null;
     visible: boolean;
     disabled: boolean;
-    frozen: boolean;
-  };
-}
-/** GuiChecklistMessage(uuid: 'str', value: 'Tuple[Tuple[str, bool], ...]', container_uuid: 'str', props: 'GuiChecklistProps')
- *
- * (automatically generated)
- */
-export interface GuiChecklistMessage {
-  type: "GuiChecklistMessage";
-  uuid: string;
-  value: [string, boolean][];
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
-    frozen: boolean;
-  };
-}
-/** GuiRadioListMessage(uuid: 'str', value: 'Tuple[Tuple[str, bool], ...]', container_uuid: 'str', props: 'GuiRadioListProps')
- *
- * (automatically generated)
- */
-export interface GuiRadioListMessage {
-  type: "GuiRadioListMessage";
-  uuid: string;
-  value: [string, boolean][];
-  container_uuid: string;
-  props: {
-    order: number;
-    label: string | null;
-    hint: string | null;
-    visible: boolean;
-    disabled: boolean;
+    mark: "check" | "radio" | null;
     frozen: boolean;
   };
 }
@@ -1233,7 +1131,6 @@ export interface CommandTriggerMessage {
 
 export type Message =
   | GuiFolderMessage
-  | GuiPopupMessage
   | GuiFormMessage
   | GuiHtmlMessage
   | GuiPlaybackMessage
@@ -1248,17 +1145,12 @@ export type Message =
   | GuiSliderMessage
   | GuiMultiSliderMessage
   | GuiNumberMessage
-  | GuiRgbMessage
-  | GuiRgbaMessage
-  | GuiToggleMessage
   | GuiToggleGroupMessage
+  | GuiColorMessage
   | GuiCheckboxMessage
-  | GuiVector2Message
-  | GuiVector3Message
+  | GuiVectorMessage
   | GuiTextMessage
   | GuiListMessage
-  | GuiChecklistMessage
-  | GuiRadioListMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage
   | GuiRemoveMessage
@@ -1317,7 +1209,6 @@ export type Message =
   | CommandTriggerMessage;
 export type GuiComponentMessage =
   | GuiFolderMessage
-  | GuiPopupMessage
   | GuiFormMessage
   | GuiHtmlMessage
   | GuiPlaybackMessage
@@ -1332,22 +1223,16 @@ export type GuiComponentMessage =
   | GuiSliderMessage
   | GuiMultiSliderMessage
   | GuiNumberMessage
-  | GuiRgbMessage
-  | GuiRgbaMessage
-  | GuiToggleMessage
   | GuiToggleGroupMessage
+  | GuiColorMessage
   | GuiCheckboxMessage
-  | GuiVector2Message
-  | GuiVector3Message
+  | GuiVectorMessage
   | GuiTextMessage
   | GuiListMessage
-  | GuiChecklistMessage
-  | GuiRadioListMessage
   | GuiDropdownMessage
   | GuiButtonGroupMessage;
 const typeSetGuiComponentMessage = new Set([
   "GuiFolderMessage",
-  "GuiPopupMessage",
   "GuiFormMessage",
   "GuiHtmlMessage",
   "GuiPlaybackMessage",
@@ -1362,17 +1247,12 @@ const typeSetGuiComponentMessage = new Set([
   "GuiSliderMessage",
   "GuiMultiSliderMessage",
   "GuiNumberMessage",
-  "GuiRgbMessage",
-  "GuiRgbaMessage",
-  "GuiToggleMessage",
   "GuiToggleGroupMessage",
+  "GuiColorMessage",
   "GuiCheckboxMessage",
-  "GuiVector2Message",
-  "GuiVector3Message",
+  "GuiVectorMessage",
   "GuiTextMessage",
   "GuiListMessage",
-  "GuiChecklistMessage",
-  "GuiRadioListMessage",
   "GuiDropdownMessage",
   "GuiButtonGroupMessage",
 ]);
@@ -1385,4 +1265,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "0460178c9c86";
+export const LEIKA_PROTOCOL = "4f5b41e6befd";

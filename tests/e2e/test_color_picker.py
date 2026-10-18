@@ -31,11 +31,11 @@ def test_rgb_picker_keyboard_canvas_formats_server_sync_and_disabled_state(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    color = leika_server.gui.add_rgb(
+    color = leika_server.gui.add_color(
         "Plot color",
         initial_value=(10, 20, 30),
     )
-    leika_server.gui.add_rgb(
+    leika_server.gui.add_color(
         "Disabled color",
         initial_value=(40, 50, 60),
         disabled=True,
@@ -124,7 +124,7 @@ def test_color_format_survives_refresh(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    leika_server.gui.add_rgb("Plot color", initial_value=(10, 20, 30))
+    leika_server.gui.add_color("Plot color", initial_value=(10, 20, 30))
 
     picker = _open_color_picker(leika_page, "Plot color")
     format_trigger = picker.locator("[data-leika-color-format]")
@@ -155,7 +155,7 @@ def test_rgba_picker_canvas_alpha_formats_geometry_and_opacity_preservation(
         '() => document.documentElement.classList.contains("dark")',
         timeout=5_000,
     )
-    color = leika_server.gui.add_rgba(
+    color = leika_server.gui.add_color(
         "Surface tint",
         initial_value=(10, 20, 30, 128),
     )
@@ -295,7 +295,7 @@ def test_hue_survives_greyscale_and_the_far_right(
     slider reading its position off the RGB it produced was dead on greys and
     threw its thumb to the far left at the far right.
     """
-    color = leika_server.gui.add_rgb("Accent", initial_value=(38, 38, 38))
+    color = leika_server.gui.add_color("Accent", initial_value=(38, 38, 38))
     picker = _open_color_picker(leika_page, "Accent")
     hue = picker.get_by_role("slider", name="Hue")
     selection = picker.locator("[data-leika-color-selection]")
@@ -360,7 +360,7 @@ def test_the_selection_gradient_does_not_wrap_at_its_edges(
     overhang, so the assertion needs the translucent border to see through.
     """
     leika_server.gui.configure_theme(theme="dark")
-    leika_server.gui.add_rgb("Accent", initial_value=(20, 90, 210))
+    leika_server.gui.add_color("Accent", initial_value=(20, 90, 210))
     expect(leika_page.locator("html")).to_have_class(re.compile(r"\bdark\b"))
     picker = _open_color_picker(leika_page, "Accent")
     selection = picker.locator("[data-leika-color-selection]")

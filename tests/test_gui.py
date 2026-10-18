@@ -593,7 +593,7 @@ def test_handle_values_preserve_constructor_invariants(
     entries = server.gui.add_list("Entries", ("one",))
     with pytest.raises(ValueError, match="not one string"):
         entries.value = "one"  # type: ignore[assignment]
-    with pytest.raises(TypeError, match="strings"):
+    with pytest.raises(ValueError, match="Rows are strings"):
         entries.value = ("one", None)  # type: ignore[assignment]
 
     toggles = server.gui.add_toggle(("A", "B"))
@@ -605,18 +605,22 @@ def test_handle_values_preserve_constructor_invariants(
     toggles.value = "B"
     assert toggles.value == ("B",)
 
-    color = server.gui.add_rgb("Color", (1, 2, 3))
+    color = server.gui.add_color("Color", (1, 2, 3))
     with pytest.raises(ValueError, match="3 color channels"):
         color.value = (1, 2)  # type: ignore[assignment]
-    rgba = server.gui.add_rgba("Alpha", (1, 2, 3, 4))
+    rgba = server.gui.add_color("Alpha", (1, 2, 3, 4))
     for handle, invalid in ((color, [1, 2]), (rgba, [1, 2, 3])):
         _browser_update(server, handle, invalid)
     assert color.value == (1, 2, 3)
     assert rgba.value == (1, 2, 3, 4)
     color.value = (0, 0.5, 300)
     assert color.value == (0, 127, 255)
+    with pytest.raises(ValueError, match="3 \\(RGB\\) or 4 \\(RGBA\\)"):
+        server.gui.add_color("Gray", (1, 2))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2 or 3 components"):
+        server.gui.add_vector("Point", (1.0, 2.0, 3.0, 4.0), step=0.1)  # type: ignore[arg-type]
 
-    vector = server.gui.add_vector2("Point", (0.0, 0.0), min=(-1.0, -1.0), max=(1.0, 1.0))
+    vector = server.gui.add_vector("Point", (0.0, 0.0), min=(-1.0, -1.0), max=(1.0, 1.0))
     with pytest.raises(ValueError, match="2 components"):
         vector.value = (0.0, 0.0, 0.0)  # type: ignore[assignment]
     with pytest.raises(ValueError, match="above max"):
@@ -650,32 +654,37 @@ def test_progress_bar_is_display_only(
     assert sent[-1].updates == {"value": 40}
 
 
-def test_popup_is_a_folder_compatible_container(server: leika.Server) -> None:
-    with server.gui.add_popup("Display details", order=7.0) as popup:
+def test_a_popup_folder_opens_its_children_from_one_row(server: leika.Server) -> None:
+    with server.gui.add_folder("Display details", popup=True, order=7.0) as popup:
         enabled = server.gui.add_checkbox("Enabled", initial_value=True)
         with server.gui.add_folder("Advanced") as folder:
             gain = server.gui.add_number("Gain", initial_value=1.0)
 
-    assert isinstance(popup, leika.GuiPopupHandle)
-    assert popup.label == "Display details"
-    assert popup.order == 7.0
+    assert isinstance(popup, leika.GuiFolderHandle)
+    assert (popup.label, popup.popup, popup.order) == ("Display details", True, 7.0)
     assert enabled._impl.parent_container_id == popup.id
     assert folder._impl.parent_container_id == popup.id
     assert gain._impl.parent_container_id == folder.id
     assert any(
-        isinstance(message, _messages.GuiPopupMessage) and message.uuid == popup.id
+        isinstance(message, _messages.GuiFolderMessage)
+        and message.uuid == popup.id
+        and message.props.popup
         for message in _queued(server)
     )
 
     popup.update(label="Rendering", visible=False, order=8.0)
     assert (popup.label, popup.visible, popup.order) == ("Rendering", False, 8.0)
+    with pytest.raises(ValueError, match="needs a label"):
+        popup.label = None
+    with pytest.raises(ValueError, match="needs a label"):
+        server.gui.add_folder(None, popup=True)
 
     popup.remove()
     assert popup._impl.removed
     assert enabled._impl.removed
     assert folder._impl.removed
     assert gain._impl.removed
-    with pytest.raises(RuntimeError, match="removed GuiPopupHandle"):
+    with pytest.raises(RuntimeError, match="removed GuiFolderHandle"):
         with popup:
             pass
 
@@ -719,7 +728,7 @@ def test_form_submission_and_its_browser_reset(
 def test_a_mini_form_holds_one_field(server: leika.Server) -> None:
     """A mini form is drawn as its field's own row with a send button, so it
     has nowhere to put a second field or another row."""
-    with server.gui.add_mini_form() as mini:
+    with server.gui.add_form(mini=True) as mini:
         field = server.gui.add_text("Search", initial_value="")
 
     submitted: list[str] = []
@@ -733,11 +742,11 @@ def test_a_mini_form_holds_one_field(server: leika.Server) -> None:
     assert field.value == ""
 
     with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form():
+        with server.gui.add_form(mini=True):
             server.gui.add_text("One", initial_value="")
             server.gui.add_text("Two", initial_value="")
 
-    with server.gui.add_mini_form() as strict:
+    with server.gui.add_form(mini=True) as strict:
         for add_incompatible in (
             lambda: server.gui.add_text(None, "Ask away", editable=False, markdown=True),
             lambda: server.gui.add_folder("Nested"),
@@ -849,14 +858,14 @@ def test_failed_and_invalid_form_contexts_retire_the_whole_subtree(
     assert child.id not in server.gui._handles
 
     with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form() as empty:
+        with server.gui.add_form(mini=True) as empty:
             pass
     assert empty._impl.removed
     assert empty.id not in server.gui._handles
 
     first = second = None
     with pytest.raises(ValueError, match="single field"):
-        with server.gui.add_mini_form() as invalid:
+        with server.gui.add_form(mini=True) as invalid:
             first = server.gui.add_text("One", "")
             second = server.gui.add_text("Two", "")
     assert invalid._impl.removed
@@ -1089,8 +1098,6 @@ def test_a_row_can_take_one_role_per_button_or_toggle(server: leika.Server) -> N
         server.gui.add_button(("One", "Two"), color=("inverse", "blue"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="a single button"):
         server.gui.add_button("Solo", color=("inverse",))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="a single toggle"):
-        server.gui.add_toggle("Solo", color=("inverse",))  # type: ignore[arg-type]
 
 
 def test_gui_image_state_is_private_and_unchanged_by_failures(
@@ -1439,10 +1446,7 @@ def test_plotly_runtime_is_queued_once_for_every_scope(server: leika.Server) -> 
 
 
 def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
-    """A toggle is a bool; a row of them is the tuple of options that are on."""
-    single = server.gui.add_toggle("Bookmark", initial_value=True)
-    assert single.value is True
-
+    """A row of toggles holds the tuple of options that are on."""
     row = server.gui.add_toggle(("Bold", "Italic"), initial_value="Italic")
     assert row.value == ("Italic",)
     # One at a time is required by default, like a radio group, so a row left
@@ -1461,13 +1465,11 @@ def test_toggle_initial_values_and_modes(server: leika.Server) -> None:
     with pytest.raises(ValueError, match="one at a"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value=("Bold", "Italic"))
     with pytest.raises(TypeError):
-        server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[call-overload]
-    with pytest.raises(TypeError, match="bool"):
-        server.gui.add_toggle("Bookmark", initial_value="on")  # type: ignore[call-overload]
+        server.gui.add_toggle(("Bold", "Italic"), initial_value=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="cannot be empty"):
         server.gui.add_toggle(("Bold", "Italic"), initial_value=())
-    with pytest.raises(ValueError, match="how many options in a ROW"):
-        server.gui.add_toggle("Bookmark", multiple=True)  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="use add_checkbox"):
+        server.gui.add_toggle("Bookmark")
     with pytest.raises(ValueError, match="at least one option"):
         server.gui.add_toggle([])
 
@@ -1492,16 +1494,16 @@ def test_a_list_holds_text_entries_and_can_be_frozen(server: leika.Server) -> No
     fixed.frozen = False
     assert fixed.frozen is False
 
-    with pytest.raises(TypeError, match="strings"):
+    with pytest.raises(ValueError, match="Rows are strings"):
         server.gui.add_list("Bad", ("fine", 3))  # type: ignore[arg-type]
 
 
-def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
-    """The value is (text, checked) per item, and a bare string is an item
-    nobody has ticked yet."""
-    items = server.gui.add_checklist("Preflight", ["Fuel", ("Doors", True), "Lights"])
+def test_a_checked_list_pairs_each_row_with_a_box(server: leika.Server) -> None:
+    """With a mark, the value is (text, marked) per row, and a bare string is
+    a row nobody has marked yet."""
+    items = server.gui.add_list("Preflight", ["Fuel", ("Doors", True), "Lights"], mark="check")
     assert items.value == (("Fuel", False), ("Doors", True), ("Lights", False))
-    assert items.checked == ("Doors",)
+    assert items.marked == ("Doors",)
 
     items.value += ("Chocks",)
     assert items.value[-1] == ("Chocks", False)
@@ -1510,32 +1512,43 @@ def test_a_checklist_pairs_each_entry_with_a_box(server: leika.Server) -> None:
     items.on_update(lambda event: seen.append(event.target.value))
     items.value = [("Fuel", True), ("Doors", True)]
     _wait_for(lambda: seen == [(("Fuel", True), ("Doors", True))])
-    assert items.checked == ("Fuel", "Doors")
+    assert items.marked == ("Fuel", "Doors")
 
-    assert server.gui.add_checklist().value == ()
+    assert server.gui.add_list(mark="check").value == ()
 
     with pytest.raises(ValueError, match="strings or"):
-        server.gui.add_checklist("Bad", [("fine", True), 3])  # type: ignore[list-item]
+        server.gui.add_list("Bad", [("fine", True), 3], mark="check")  # type: ignore[list-item]
     with pytest.raises(TypeError, match="strings or"):
-        server.gui.add_checklist("Bad", [(3, True)])  # type: ignore[list-item]
+        server.gui.add_list("Bad", [(3, True)], mark="check")  # type: ignore[list-item]
     with pytest.raises(TypeError, match="strings or"):
         items.value = [("one", "false")]  # type: ignore[list-item]
-    assert items.checked == ("Fuel", "Doors")
+    assert items.marked == ("Fuel", "Doors")
+    with pytest.raises(ValueError, match="mark must be"):
+        server.gui.add_list("Bad", mark="star")  # type: ignore[arg-type]
+
+    # The mark can change; without one, rows keep only their words.
+    items.mark = None
+    assert items.value == ("Fuel", "Doors")
+    assert items.marked == ()
+    items.mark = "radio"
+    assert items.value == (("Fuel", False), ("Doors", False))
 
 
-def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> None:
-    choices = server.gui.add_radio_list("Density", ["Default", ("Comfortable", True), "Compact"])
-    assert choices.selected == "Comfortable"
+def test_a_radio_list_has_at_most_one_selected_row(server: leika.Server) -> None:
+    choices = server.gui.add_list(
+        "Density", ["Default", ("Comfortable", True), "Compact"], mark="radio"
+    )
+    assert choices.marked == ("Comfortable",)
 
     choices.value += ("Spacious",)
     assert choices.value[-1] == ("Spacious", False)
 
     choices.value = [("Default", True), "Comfortable", "Compact"]
-    assert choices.selected == "Default"
-    assert server.gui.add_radio_list().selected is None
+    assert choices.marked == ("Default",)
+    assert server.gui.add_list(mark="radio").marked == ()
 
     with pytest.raises(ValueError, match="at most one selected"):
-        server.gui.add_radio_list("Invalid", [("one", True), ("two", True)])
+        server.gui.add_list("Invalid", [("one", True), ("two", True)], mark="radio")
 
     before = choices.value
     with pytest.raises(ValueError, match="at most one selected"):
@@ -1543,15 +1556,18 @@ def test_a_radio_list_has_at_most_one_selected_choice(server: leika.Server) -> N
     assert choices.value == before
 
 
-@pytest.mark.parametrize("factory", ["add_checklist", "add_radio_list"])
-def test_frozen_pair_lists_only_accept_client_state_changes(
+@pytest.mark.parametrize("mark", ["check", "radio"])
+def test_frozen_marked_lists_only_accept_client_mark_changes(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
-    factory: str,
+    mark: str,
 ) -> None:
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    handle = getattr(server.gui, factory)(
-        "Frozen", [("First", False), ("Second", True)], frozen=True
+    handle = server.gui.add_list(
+        "Frozen",
+        [("First", False), ("Second", True)],
+        mark=mark,  # type: ignore[arg-type]
+        frozen=True,
     )
 
     _browser_update(server, handle, [["First", True], ["Second", False]])
@@ -1568,11 +1584,22 @@ def test_frozen_pair_lists_only_accept_client_state_changes(
         assert handle.value == expected
 
 
+def test_a_frozen_list_keeps_its_count_but_not_its_words(
+    server: leika.Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
+    handle = server.gui.add_list("Frozen", ["one", "two"], frozen=True)
+    _browser_update(server, handle, ["uno", "two"])
+    assert handle.value == ("uno", "two")
+    _browser_update(server, handle, ["uno", "two", "three"])
+    assert handle.value == ("uno", "two")
+
+
 def test_radio_list_rejects_multiple_client_selections(
     server: leika.Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    choices = server.gui.add_radio_list("Density", [("Default", True), "Compact"])
+    choices = server.gui.add_list("Density", [("Default", True), "Compact"], mark="radio")
     _browser_update(server, choices, [["Default", True], ["Compact", True]])
     assert choices.value == (("Default", True), ("Compact", False))
 
@@ -1581,7 +1608,6 @@ def test_radio_list_rejects_multiple_client_selections(
     ("factory", "initial", "bad"),
     [
         ("add_checkbox", True, "false"),
-        ("add_toggle", True, "false"),
         ("add_text", "text", 123),
     ],
 )
@@ -1591,10 +1617,7 @@ def test_scalar_value_assignment_rejects_silent_coercion(
     initial: object,
     bad: object,
 ) -> None:
-    if factory == "add_toggle":
-        handle = server.gui.add_toggle("Strict", initial_value=initial)  # type: ignore[call-overload]
-    else:
-        handle = getattr(server.gui, factory)("Strict", initial)
+    handle = getattr(server.gui, factory)("Strict", initial)
     with pytest.raises(TypeError):
         handle.value = bad
     assert handle.value == initial
@@ -1617,23 +1640,21 @@ def test_numeric_client_updates_reject_bool_and_string(
     assert handle.value == 1.0
 
 
-@pytest.mark.parametrize("factory", ["add_vector2", "add_vector3"])
+@pytest.mark.parametrize("length", [2, 3])
 @pytest.mark.parametrize("bad", [(True, False), ("1", "2")])
 def test_vectors_reject_boolean_and_string_components_at_every_boundary(
     server: leika.Server,
     monkeypatch: pytest.MonkeyPatch,
-    factory: str,
+    length: int,
     bad: tuple[object, object],
 ) -> None:
-    length = 2 if factory == "add_vector2" else 3
     bad_value = bad if length == 2 else (*bad, 0.0)
-    add = getattr(server.gui, factory)
     with pytest.raises(TypeError, match="real numbers"):
-        add("Invalid", bad_value, step=0.1)
+        server.gui.add_vector("Invalid", bad_value, step=0.1)  # type: ignore[arg-type]
 
-    handle = add("Vector", (0.0,) * length)
+    handle = server.gui.add_vector("Vector", (0.0,) * length)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="real numbers"):
-        handle.value = bad_value
+        handle.value = bad_value  # type: ignore[assignment]
 
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
     _browser_update(server, handle, list(bad_value))
@@ -1654,7 +1675,7 @@ def test_props_are_checked_against_their_wire_types(server: leika.Server) -> Non
         button.color = "danger"  # type: ignore[assignment]
     assert button.color == "default"
 
-    vector = server.gui.add_vector2("Point", (0.0, 0.0))
+    vector = server.gui.add_vector("Point", (0.0, 0.0))
     vector.min = np.array([-1.0, -2.0])  # type: ignore[assignment]
     assert vector.min == (-1.0, -2.0)
     with pytest.raises(ValueError, match="vector of 2"):
@@ -1667,11 +1688,11 @@ def test_client_array_controls_reject_mapping_payloads(
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
     controls = (
         server.gui.add_list("List", ("one",)),
-        server.gui.add_checklist("Checklist", (("one", False),)),
-        server.gui.add_radio_list("Radio list", (("one", False),)),
+        server.gui.add_list("Checklist", (("one", False),), mark="check"),
+        server.gui.add_list("Radio list", (("one", False),), mark="radio"),
         server.gui.add_toggle(("one", "two"), multiple=True),
         server.gui.add_multi_slider("Range", (0.25, 0.75), min=0.0, max=1.0, step=0.1),
-        server.gui.add_vector2("Vector", (0.0, 0.0)),
+        server.gui.add_vector("Vector", (0.0, 0.0)),
     )
     before = tuple(control.value for control in controls)
     for control in controls:

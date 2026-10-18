@@ -10,11 +10,11 @@ from .utils import wait_until
 
 
 def _entries(page: Page) -> Locator:
-    return page.locator("[data-leika-radio-list-entry]")
+    return page.locator("[data-leika-list-entry]")
 
 
 def _radios(page: Page) -> Locator:
-    return page.locator("[data-leika-radio-list-radio]")
+    return page.locator("[data-leika-list-mark]")
 
 
 def _assert_radio_shape(radio: Locator) -> None:
@@ -54,8 +54,8 @@ def test_selecting_one_radio_clears_the_previous_selection(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    choices = leika_server.gui.add_radio_list(
-        "Density", ["Default", ("Comfortable", True), "Compact"]
+    choices = leika_server.gui.add_list(
+        "Density", ["Default", ("Comfortable", True), "Compact"], mark="radio"
     )
 
     radios = _radios(leika_page)
@@ -67,7 +67,7 @@ def test_selecting_one_radio_clears_the_previous_selection(
     wait_until(
         lambda: choices.value == (("Default", True), ("Comfortable", False), ("Compact", False))
     )
-    assert choices.selected == "Default"
+    assert choices.marked == ("Default",)
     expect(radios.nth(0)).to_be_checked()
     _assert_radio_shape(radios.nth(0))
     expect(radios.nth(1)).not_to_be_checked()
@@ -75,17 +75,17 @@ def test_selecting_one_radio_clears_the_previous_selection(
     # A radio is a choice, not a toggle: pressing the selected item leaves it
     # selected and therefore cannot create an empty selection.
     radios.nth(0).click()
-    assert choices.selected == "Default"
+    assert choices.marked == ("Default",)
 
     # Python can still deliberately set no selection, or choose another item.
     choices.value = ["Default", "Comfortable", ("Compact", True)]
     expect(radios.nth(2)).to_be_checked(timeout=5_000)
     expect(radios.nth(0)).not_to_be_checked()
-    assert choices.selected == "Compact"
+    assert choices.marked == ("Compact",)
 
     choices.value = ["Default", "Comfortable", "Compact"]
     expect(radios.nth(2)).not_to_be_checked(timeout=5_000)
-    assert choices.selected is None
+    assert choices.marked == ()
 
     assert page_errors == []
 
@@ -95,8 +95,8 @@ def test_editing_arrows_keep_the_caret_and_radio_arrows_select(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    choices = leika_server.gui.add_radio_list(
-        "Density", [("Default", True), "Comfortable", "Compact"]
+    choices = leika_server.gui.add_list(
+        "Density", [("Default", True), "Comfortable", "Compact"], mark="radio"
     )
     entries = _entries(leika_page)
     radios = _radios(leika_page)
@@ -110,7 +110,7 @@ def test_editing_arrows_keep_the_caret_and_radio_arrows_select(
     expect(editor).to_be_focused()
     assert editor.evaluate("input => input.selectionStart") == 0
     expect(radios.nth(0)).to_be_checked()
-    assert choices.selected == "Default"
+    assert choices.marked == ("Default",)
 
     end = len("Comfortable")
     editor.evaluate("(input, caret) => input.setSelectionRange(caret, caret)", end)
@@ -118,7 +118,7 @@ def test_editing_arrows_keep_the_caret_and_radio_arrows_select(
     expect(editor).to_be_focused()
     assert editor.evaluate("input => input.selectionStart") == end
     expect(radios.nth(0)).to_be_checked()
-    assert choices.selected == "Default"
+    assert choices.marked == ("Default",)
 
     # Vertical arrows have browser-specific caret movement in a one-line
     # field. They must still remain editor keystrokes rather than composite
@@ -128,13 +128,13 @@ def test_editing_arrows_keep_the_caret_and_radio_arrows_select(
         editor.press(key)
         expect(editor).to_be_focused()
         expect(radios.nth(0)).to_be_checked()
-        assert choices.selected == "Default"
+        assert choices.marked == ("Default",)
 
     # Once focus is on a radio, the native same-name group supplies the usual
     # arrow-key selection and focus movement.
     radios.nth(0).focus()
     radios.nth(0).press("ArrowRight")
-    wait_until(lambda: choices.selected == "Comfortable")
+    wait_until(lambda: choices.marked == ("Comfortable",))
     expect(radios.nth(1)).to_be_focused()
     expect(radios.nth(1)).to_be_checked()
 
@@ -146,8 +146,8 @@ def test_same_turn_drag_release_commits_the_latest_pointer_position(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    choices = leika_server.gui.add_radio_list(
-        "Density", [("Default", True), "Comfortable", "Compact"]
+    choices = leika_server.gui.add_list(
+        "Density", [("Default", True), "Comfortable", "Compact"], mark="radio"
     )
     rows = leika_page.locator("[data-leika-list-item]")
     grip = leika_page.get_by_label("Reorder entry 1")
@@ -205,8 +205,8 @@ def test_selection_travels_with_an_editable_choice(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    choices = leika_server.gui.add_radio_list(
-        "Density", [("Default", True), "Comfortable", "Compact"]
+    choices = leika_server.gui.add_list(
+        "Density", [("Default", True), "Comfortable", "Compact"], mark="radio"
     )
     rows = leika_page.locator("[data-leika-list-item]")
     expect(rows).to_have_count(3, timeout=5_000)
@@ -234,11 +234,11 @@ def test_selection_travels_with_an_editable_choice(
     expect(_radios(leika_page).nth(2)).to_be_checked()
 
     _entries(leika_page).nth(2).fill("Standard")
-    wait_until(lambda: choices.selected == "Standard")
+    wait_until(lambda: choices.marked == ("Standard",))
 
     rows.nth(2).hover()
     leika_page.get_by_label("Remove entry 3").click()
-    wait_until(lambda: choices.selected is None)
+    wait_until(lambda: choices.marked == ())
 
     leika_page.locator("[data-leika-list-add]").click()
     wait_until(lambda: choices.value[-1] == ("", False))
@@ -251,19 +251,19 @@ def test_frozen_radio_list_uses_clickable_labels_and_shadcn_radios(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    choices = leika_server.gui.add_radio_list(
-        "Density", ["Default", "Comfortable", "Compact"], frozen=True
+    choices = leika_server.gui.add_list(
+        "Density", ["Default", "Comfortable", "Compact"], frozen=True, mark="radio"
     )
-    leika_server.gui.add_radio_list(None, [("Only choice", True)], frozen=True)
+    leika_server.gui.add_list(None, [("Only choice", True)], frozen=True, mark="radio")
 
     radios = _radios(leika_page)
     expect(radios).to_have_count(4, timeout=5_000)
-    expect(leika_page.locator("input[data-leika-radio-list-entry]")).to_have_count(0)
-    expect(leika_page.locator("label[data-leika-radio-list-entry]")).to_have_count(4)
+    expect(leika_page.locator("input[data-leika-list-entry]")).to_have_count(0)
+    expect(leika_page.locator("label[data-leika-list-entry]")).to_have_count(4)
     expect(leika_page.locator("[data-leika-list-add]")).to_have_count(0)
 
     _entries(leika_page).nth(1).click()
-    wait_until(lambda: choices.selected == "Comfortable")
+    wait_until(lambda: choices.marked == ("Comfortable",))
     expect(radios.nth(1)).to_be_checked()
 
     # Frozen and editable radios share the same public visual contract.

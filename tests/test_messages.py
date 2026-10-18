@@ -77,14 +77,14 @@ def test_encoding_carries_numpy_scalars_and_tuples_as_plain_values() -> None:
     [
         _messages.FileTransferPart(None, "transfer", 1.5, b""),  # type: ignore[arg-type]
         _messages.FileTransferPart(None, "transfer", True, b""),
-        _messages.GuiVector2Message(
+        _messages.GuiVectorMessage(
             "vector",
             (1.0,),
             "root",
             None,  # type: ignore[arg-type]
         ),
         _messages.ThemeConfigurationMessage("bottom", "light"),  # type: ignore[arg-type]
-        _messages.GuiFolderMessage("folder", "root", _messages.GuiPopupProps(1.0, "x", True)),  # type: ignore[arg-type]
+        _messages.GuiFolderMessage("folder", "root", _messages.GuiTabProps("x", None)),  # type: ignore[arg-type]
     ],
 )
 def test_outbound_fields_must_match_their_annotations(message: _messages.Message) -> None:
@@ -136,7 +136,7 @@ def test_singleton_state_messages_keep_only_the_latest() -> None:
 def test_strict_decoder_reconstructs_nested_dataclasses_and_tuples() -> None:
     decoded = _decode(
         {
-            "type": "GuiChecklistMessage",
+            "type": "GuiListMessage",
             "uuid": "list",
             "value": [["one", True]],
             "container_uuid": "root",
@@ -146,11 +146,12 @@ def test_strict_decoder_reconstructs_nested_dataclasses_and_tuples() -> None:
                 "hint": None,
                 "visible": True,
                 "disabled": False,
+                "mark": "check",
                 "frozen": False,
             },
         }
     )
-    assert isinstance(decoded, _messages.GuiChecklistMessage)
+    assert isinstance(decoded, _messages.GuiListMessage)
     assert decoded.value == (("one", True),)
     assert decoded.props.order == 1.0
 

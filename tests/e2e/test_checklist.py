@@ -16,11 +16,11 @@ from .utils import wait_until
 
 
 def _entries(page: Page) -> Locator:
-    return page.locator("[data-leika-checklist-entry]")
+    return page.locator("[data-leika-list-entry]")
 
 
 def _boxes(page: Page) -> Locator:
-    return page.locator("[data-leika-checklist-box]")
+    return page.locator("[data-leika-list-mark]")
 
 
 def test_a_tick_is_reported_with_the_words_it_is_against(
@@ -28,7 +28,9 @@ def test_a_tick_is_reported_with_the_words_it_is_against(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    items = leika_server.gui.add_checklist("Preflight", ["Fuel", ("Doors", True), "Lights"])
+    items = leika_server.gui.add_list(
+        "Preflight", ["Fuel", ("Doors", True), "Lights"], mark="check"
+    )
 
     boxes = _boxes(leika_page)
     expect(boxes).to_have_count(3, timeout=5_000)
@@ -40,10 +42,10 @@ def test_a_tick_is_reported_with_the_words_it_is_against(
     wait_until(lambda: items.value[0] == ("Fuel", True))
     # One box, one item: the others are left exactly as they were.
     assert items.value == (("Fuel", True), ("Doors", True), ("Lights", False))
-    assert items.checked == ("Fuel", "Doors")
+    assert items.marked == ("Fuel", "Doors")
 
     boxes.nth(1).click()
-    wait_until(lambda: items.checked == ("Fuel",))
+    wait_until(lambda: items.marked == ("Fuel",))
 
     # And the other way: Python ticks, the browser shows it.
     items.value = [("Fuel", False), ("Doors", False), ("Lights", True)]
@@ -61,8 +63,8 @@ def test_a_tick_travels_with_its_entry(
     """A checklist's rows carry an answer, so what moves is the pair. Reordering
     the words while the ticks stayed at their row numbers would silently answer
     a different question."""
-    items = leika_server.gui.add_checklist(
-        "Tasks", [("Write", True), ("Review", False), ("Ship", False)]
+    items = leika_server.gui.add_list(
+        "Tasks", [("Write", True), ("Review", False), ("Ship", False)], mark="check"
     )
     rows = leika_page.locator("[data-leika-list-item]")
     expect(rows).to_have_count(3, timeout=5_000)
@@ -89,7 +91,7 @@ def test_a_tick_travels_with_its_entry(
     rows.nth(2).hover()
     leika_page.get_by_label("Remove entry 3").click()
     wait_until(lambda: items.value == (("Review", False), ("Ship", False)))
-    assert items.checked == ()
+    assert items.marked == ()
 
     # A new entry is empty and unticked, which is where the viewer was going.
     leika_page.locator("[data-leika-list-add]").click()
@@ -106,7 +108,7 @@ def test_an_empty_checklist_is_filled_a_pair_at_a_time(
     """Empty, there is no item to say what an item looks like -- so the pairs
     the browser sends have to be read as pairs on their own account, rather
     than cast to the shape of one that is already there."""
-    items = leika_server.gui.add_checklist("Tasks")
+    items = leika_server.gui.add_list("Tasks", mark="check")
     add = leika_page.locator("[data-leika-list-add]")
     expect(add).to_be_visible(timeout=5_000)
     assert items.value == ()
@@ -119,7 +121,7 @@ def test_an_empty_checklist_is_filled_a_pair_at_a_time(
 
     _entries(leika_page).first.fill("Write the draft")
     _boxes(leika_page).first.click()
-    wait_until(lambda: items.checked == ("Write the draft",))
+    wait_until(lambda: items.marked == ("Write the draft",))
 
     assert page_errors == []
 
@@ -138,8 +140,8 @@ def test_no_box_is_caught_half_filled_when_an_entry_lands(
     # keyed by what a row says, the ticked "Write" and the unticked one are one
     # control, and dropping either onto the other's row eases between their
     # answers exactly as before. An entry has to be identified by being itself.
-    items = leika_server.gui.add_checklist(
-        "Tasks", [("Write", True), ("Write", False), ("Ship", False)]
+    items = leika_server.gui.add_list(
+        "Tasks", [("Write", True), ("Write", False), ("Ship", False)], mark="check"
     )
     rows = leika_page.locator("[data-leika-list-item]")
     expect(rows).to_have_count(3, timeout=5_000)
@@ -165,7 +167,7 @@ def test_no_box_is_caught_half_filled_when_an_entry_lands(
               return alpha !== null && Number(alpha[1]) > 0.01 && Number(alpha[1]) < 0.99;
             };
             const tick = () => {
-              for (const box of document.querySelectorAll("[data-leika-checklist-box]")) {
+              for (const box of document.querySelectorAll("[data-leika-list-mark]")) {
                 if (midway(getComputedStyle(box).backgroundColor)) {
                   window.__leikaHalfFilled += 1;
                 }
@@ -197,14 +199,16 @@ def test_frozen_is_a_list_to_work_through_rather_than_to_write(
     """What a checklist is asked for is the ticks, so frozen fixes the words as
     well as the number and the order -- and with nothing to write, nothing is
     drawn as writable."""
-    items = leika_server.gui.add_checklist("Preflight", ["Fuel", "Doors", "Lights"], frozen=True)
+    items = leika_server.gui.add_list(
+        "Preflight", ["Fuel", "Doors", "Lights"], frozen=True, mark="check"
+    )
     boxes = _boxes(leika_page)
     expect(boxes).to_have_count(3, timeout=5_000)
 
     # No field, and none of the controls that would change the list: an entry
     # is the words themselves rather than a box holding them.
-    expect(leika_page.locator("input[data-leika-checklist-entry]")).to_have_count(0)
-    expect(leika_page.locator("label[data-leika-checklist-entry]")).to_have_count(3)
+    expect(leika_page.locator("input[data-leika-list-entry]")).to_have_count(0)
+    expect(leika_page.locator("label[data-leika-list-entry]")).to_have_count(3)
     expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(0)
     expect(leika_page.locator("[data-leika-list-remove]")).to_have_count(0)
     expect(leika_page.locator("[data-leika-list-add]")).to_have_count(0)
@@ -212,11 +216,11 @@ def test_frozen_is_a_list_to_work_through_rather_than_to_write(
     # The words are still the target: a 16px box is a small thing to hit for a
     # row that is one thing to answer.
     _entries(leika_page).nth(1).click()
-    wait_until(lambda: items.checked == ("Doors",))
+    wait_until(lambda: items.marked == ("Doors",))
     expect(boxes.nth(1)).to_be_checked()
 
     # Frozen is not disabled: unticking works the same way back.
     _entries(leika_page).nth(1).click()
-    wait_until(lambda: items.checked == ())
+    wait_until(lambda: items.marked == ())
 
     assert page_errors == []

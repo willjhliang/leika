@@ -8,8 +8,9 @@ The runnable sources live in the repository's
 - `python examples/showcase.py`: three named pages -- **Live signals** for a
   NumPy image and Plotly, **Analysis** for matplotlib, and **3D scene** for a
   viser scene -- driven by one shared GUI. It also demonstrates grouping,
-  synchronized controls, callbacks, editable and frozen radio lists, tabs,
-  popup, modal, upload, command palette, notifications, GUI image/Plotly, and
+  synchronized controls, callbacks, editable and frozen checked and radio
+  lists, tabs, a popup folder, modal, upload, command palette, notifications,
+  GUI image/Plotly, and
   live updates; requires `leika[examples]`.
 - `python examples/custom_playback.py`: a playback bar driving custom content
   from Python, with no media or simulator; base install.
