@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # Leika work brief
 
 ## State
@@ -89,8 +85,9 @@ Defects found:
   pacing and the `delivery_backpressure` option go; backpressure is always on.
   `leika.infra` becomes private. `share=True` stays. `add_playback(duration=)`
   and `add_video_controls(sync_group=)` remain the two playback entry points.
-- **Release.** Minimal flow: build the client, `uv build`, one short archive
-  check, `twine check`, install smoke tests and tag-triggered publishing.
+- **Release.** Minimal flow: build the client, `python -m build`, one short
+  archive check, `twine check`, install smoke tests and tag-triggered
+  publishing.
 - Babble's WebSockets 12, Pillow 11.3 and Viser 0.2.11 support stays.
 
 ## Authorized plan
@@ -98,37 +95,49 @@ Defects found:
 Each wave's agents work in temporary worktrees with disjoint file ownership.
 Each outcome is reviewed, validated and committed with its tests and docs.
 
-1. **Wave 1, in parallel.** Release tooling and CI; the single control panel
-   (with the dev playgrounds deleted); the private transport (one message base,
-   encode-once broadcasts, one window generator, one lifecycle owner, in-memory
-   client serving, no ndarray path, no generated browser validator, inbound-only
-   limits).
-2. **Wave 2.** Python server and panes, then the Python GUI layer: remove
-   ledgers and budgets, one implementation per concept, dead code. In parallel,
-   the browser client: remove budgets and re-validation, one receive path,
-   one image component, one Plotly loader, dead code.
-3. **Wave 3, in parallel.** Remove rendering presets end to end; merge
-   overlapping controls end to end.
-4. **Wave 4.** Make the docs describe current behavior, then run full
+1. **Wave 1 (merged into `main` at `d92d8b4`).** The transport is the private
+   `leika._transport` with one `Message` base and encode-once broadcasts;
+   the docking library is one control panel; development uses one pip
+   environment, `make` targets, `scripts/generate.py` and the minimal release
+   flow.
+2. **Wave 2a, running.** Python server, panes and shared content helpers
+   (ledgers and budgets out, one image preparation, one pane adder and content
+   layer, one Plotly serializer and runtime delivery, server file sends through
+   the client path). In parallel, the browser client (budgets and
+   re-validation out, one receive path without pacing, one image component,
+   one Plotly loader, batched GUI actions only, one dark-mode source, dead
+   code).
+3. **Wave 2b.** The Python GUI layer (ledger out, one validation per
+   component, one update, lifecycle and callback implementation, upload
+   pipeline, dead code). In parallel, rendering presets end to end
+   (Python, messages, Settings, pane-size reporting, `delivery_backpressure`,
+   the resize re-broadcast, Viser `_port`).
+4. **Wave 3.** Merge overlapping controls end to end, with the aliases, and
+   roll the API out to Babble, do_anything and lwm.
+5. **Wave 4.** Make the docs describe current behavior, then run full
    validation (unit, browser, docs, package) and a final review.
 
 Local work uses the `leika` conda environment (Python 3.13 and Node 24 from
-conda-forge, Leika installed editable with pip from PyPI only, because the
-configured NVIDIA extra index stalls). Worktrees put their own `src` first on
-`PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
+conda-forge, Leika installed editable with
+`pip install --isolated --index-url https://pypi.org/simple -e ".[dev]"`,
+because the configured NVIDIA extra index does not resolve here; isolated
+builds need `PIP_CONFIG_FILE=/dev/null`). Worktrees put their own `src` first
+on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 `LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
 
-Baseline before the work: 1,013 Python unit tests pass and one fails only
-under parallel workers (it patches `json.loads` while Plotly loads its
-validator cache); 907 client tests and 240 browser tests pass. In the conda
-environment, `test_viser_pane.py::test_eight_live_scenes...` fails because it
-decodes Viser's wire format and pip resolves Viser 1.1.1.
+`dist/` in this checkout holds the wheel Babble's `docs/VIEWER.md` verifies by
+SHA256, and `make package` empties `dist/`; build release checks into another
+directory until Babble moves to a newer install.
+
+After wave 1: 709 Python unit tests, 641 client tests and 216 browser tests
+pass. `test_gui.py::test_plotly_size_is_checked_before_config_json_parse`
+fails on its own; it pins the Plotly preflight that wave 2a removes.
 
 Breaking API changes roll out to Babble, do_anything and lwm in the same
 change.
 
 ## Next actions
 
-Wave 1 is running: release tooling and CI, the single control panel, and the
-private transport.
+Wave 2a is running: Python server and panes, and the browser client. Review
+and merge both, then start wave 2b.
