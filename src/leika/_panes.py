@@ -20,16 +20,14 @@ import numpy as np
 from typing_extensions import TypeAlias
 
 from . import _messages
-from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._gui_resources import _GuiResourceCost
-from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._plotly import (
     _plotly_figure_from_json,
     _plotly_json_for_pane,
     _plotly_payload_from_json,
     _plotly_theme_templates_json,
 )
-from ._transport._image_headers import validate_image_pixel_size
 from ._validation import (
     utf16_code_unit_length,
     utf16_code_unit_length_exceeds,
@@ -682,23 +680,12 @@ class _ImagePaneContent(_PaneContent[_ImagePaneHandleState]):
         if loading is not None:
             loading = _validate_loading(loading)
         _validate_image_encoding_options(self._impl.requested_format, jpeg_quality)
-        image = _validate_image(image)
-        spec = _ndarray_snapshot_spec(image)
-        if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 256 MiB pane retained payload budget.")
-        with self._impl.api._owner._reserve_image_preparation(spec.nbytes):
-            snapshot = _private_ndarray_snapshot(image, spec)
-            resolved_format, data = encode_image_binary(
-                snapshot,
-                self._impl.requested_format,
-                jpeg_quality=self._impl.jpeg_quality if jpeg_quality is None else jpeg_quality,
-            )
-            if self._impl.requested_format == "jpeg" and snapshot.shape[2] == 4:
-                warnings.warn(
-                    "Encoding an RGBA pane image as JPEG discards its alpha channel.",
-                    stacklevel=2,
-                )
-            self._commit_image_snapshot(snapshot, resolved_format, data, loading)
+        snapshot, resolved_format, data = prepare_image(
+            image,
+            self._impl.requested_format,
+            self._impl.jpeg_quality if jpeg_quality is None else jpeg_quality,
+        )
+        self._commit_image_snapshot(snapshot, resolved_format, data, loading)
 
     def _commit_image_snapshot(
         self,
@@ -2170,59 +2157,46 @@ class Panes:
     ) -> ImagePaneHandle:
         _validate_image_encoding_options(format, jpeg_quality)
         _validate_image_encoding_options(format, update_quality)
-        image = _validate_image(image)
-        spec = _ndarray_snapshot_spec(image)
-        if spec.nbytes > _PANE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 256 MiB pane retained payload budget.")
         title, visible, loading = _validate_title_visible_loading(title, visible, loading)
         pane_id = self._validate_pane_declaration(pane_id, placement)
         fit = _validate_fit(fit)
         relative_to = self._resolve_relative_to(relative_to)
-        with self._owner._reserve_image_preparation(spec.nbytes):
-            snapshot = _private_ndarray_snapshot(image, spec)
-            if format == "jpeg" and snapshot.shape[2] == 4:
-                warnings.warn(
-                    "Encoding an RGBA pane image as JPEG discards its alpha channel.",
-                    stacklevel=3,
-                )
-            resolved_format, data = encode_image_binary(
-                snapshot,
-                format,
-                jpeg_quality=jpeg_quality if update_quality is None else update_quality,
+        snapshot, resolved_format, data = prepare_image(
+            image, format, jpeg_quality if update_quality is None else update_quality
+        )
+        props = _messages.ViewportImageProps(
+            _data=data,
+            _format=resolved_format,
+            title=title,
+            visible=visible,
+            loading=loading,
+            fit=fit,
+        )
+        handle = ImagePaneHandle(
+            _ImagePaneHandleState(
+                pane_id=pane_id,
+                props=copy.deepcopy(props),
+                api=self,
+                image=snapshot,
+                requested_format=format,
+                jpeg_quality=jpeg_quality,
             )
-            props = _messages.ViewportImageProps(
-                _data=data,
-                _format=resolved_format,
-                title=title,
-                visible=visible,
-                loading=loading,
-                fit=fit,
-            )
-            handle = ImagePaneHandle(
-                _ImagePaneHandleState(
-                    pane_id=pane_id,
-                    props=copy.deepcopy(props),
-                    api=self,
-                    image=snapshot,
-                    requested_format=format,
-                    jpeg_quality=jpeg_quality,
-                )
-            )
-            self._register_pane(
-                pane_id,
-                handle,
-                _messages.ViewportImageMessage(
-                    page_id=self._page_id,
-                    pane_id=pane_id,
-                    props=props,
-                    placement=placement,
-                    relative_to=relative_to,
-                    equalize_group=equalize_group,
-                ),
-                relative_to,
-                replacement=replacement,
-            )
-            return handle
+        )
+        self._register_pane(
+            pane_id,
+            handle,
+            _messages.ViewportImageMessage(
+                page_id=self._page_id,
+                pane_id=pane_id,
+                props=props,
+                placement=placement,
+                relative_to=relative_to,
+                equalize_group=equalize_group,
+            ),
+            relative_to,
+            replacement=replacement,
+        )
+        return handle
 
     def add_matplotlib(
         self,
@@ -2793,22 +2767,3 @@ def _validate_fit(value: object) -> ImageFit | None:
     if value is not None and (type(value) is not str or value not in ("fit", "fill", "stretch")):
         raise ValueError("fit must be 'fit', 'fill', 'stretch', or None.")
     return cast("ImageFit | None", value)
-
-
-def _validate_image(image: np.ndarray) -> np.ndarray:
-    if type(image) is not np.ndarray:
-        raise TypeError("Pane images must use a base numpy.ndarray.")
-    if (
-        image.ndim != 3
-        or image.shape[0] <= 0
-        or image.shape[1] <= 0
-        or image.shape[2] not in (3, 4)
-    ):
-        raise ValueError(
-            "Pane images must have positive height and width and shape "
-            "(height, width, 3) for RGB or (height, width, 4) for RGBA."
-        )
-    validate_image_pixel_size(image.shape[1], image.shape[0])
-    if not (np.issubdtype(image.dtype, np.integer) or np.issubdtype(image.dtype, np.floating)):
-        raise TypeError("Pane images must use an integer or floating dtype.")
-    return image

@@ -1,55 +1,55 @@
 from __future__ import annotations
 
-import sys
 import warnings
-from types import SimpleNamespace
+from io import BytesIO
 from typing import Any, cast
 
 import numpy as np
 import pytest
+from PIL import Image
 
-import leika._image_encoding as image_encoding_impl
-from leika._image_encoding import encode_image_binary
-from leika._transport._image_headers import validate_image_pixel_size
+from leika._image_encoding import _validate_image_encoding_options, prepare_image
 
 
 def test_rgb_and_rgba_auto_formats() -> None:
     rgb = np.zeros((4, 5, 3), dtype=np.uint8)
     rgba = np.zeros((4, 5, 4), dtype=np.uint8)
-    rgb_format, rgb_bytes = encode_image_binary(rgb, "auto", jpeg_quality=90)
-    rgba_format, rgba_bytes = encode_image_binary(rgba, "auto", jpeg_quality=None)
+    _, rgb_format, rgb_bytes = prepare_image(rgb, "auto", 90)
+    _, rgba_format, rgba_bytes = prepare_image(rgba, "auto", None)
     assert rgb_format == "jpeg"
     assert rgb_bytes.startswith(b"\xff\xd8")
     assert rgba_format == "png"
     assert rgba_bytes.startswith(b"\x89PNG")
 
 
-def test_float_images_are_normalized() -> None:
+def test_prepared_snapshot_is_private_and_keeps_the_source_dtype() -> None:
     image = np.linspace(0.0, 1.0, 60, dtype=np.float32).reshape(4, 5, 3)
-    image_format, payload = encode_image_binary(image, "png", jpeg_quality=None)
-    assert image_format == "png"
-    assert payload
+    snapshot, image_format, payload = prepare_image(image, "png", None)
+    assert image_format == "png" and payload
+    assert snapshot.dtype == np.float32
+    assert not np.shares_memory(snapshot, image)
+    np.testing.assert_array_equal(snapshot, image)
 
 
-def test_encoding_options_reject_builtin_subclasses_before_image_work(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_jpeg_drops_rgba_alpha_with_a_warning() -> None:
+    with pytest.warns(UserWarning, match="alpha"):
+        _, image_format, payload = prepare_image(np.zeros((2, 3, 4), np.uint8), "jpeg", None)
+    assert image_format == "jpeg"
+    with Image.open(BytesIO(payload)) as decoded:
+        assert decoded.mode == "RGB" and decoded.size == (3, 2)
+
+
+def test_encoding_options_reject_builtin_subclasses() -> None:
     class String(str):
         pass
 
     class Integer(int):
         pass
 
-    def unexpected_normalization(_: np.ndarray) -> np.ndarray:
-        raise AssertionError("invalid encoding option reached image normalization")
-
-    monkeypatch.setattr(image_encoding_impl, "colors_to_uint8", unexpected_normalization)
-    image = np.zeros((1, 1, 3), dtype=np.uint8)
-
     with pytest.raises(ValueError, match="format must be"):
-        encode_image_binary(image, cast(Any, String("png")))
+        _validate_image_encoding_options(cast(Any, String("png")), None)
     with pytest.raises(ValueError, match="jpeg_quality must be"):
-        encode_image_binary(image, "jpeg", cast(Any, Integer(85)))
+        _validate_image_encoding_options("jpeg", cast(Any, Integer(85)))
 
 
 @pytest.mark.parametrize(
@@ -58,65 +58,25 @@ def test_encoding_options_reject_builtin_subclasses_before_image_work(
 def test_invalid_shapes_raise(shape: tuple[int, ...]) -> None:
     image = np.zeros(shape, dtype=np.uint8)
     with pytest.raises(ValueError, match="height, width"):
-        encode_image_binary(image, "png", None)
+        prepare_image(image, "png", None)
+
+
+def test_non_numeric_images_raise() -> None:
+    with pytest.raises(TypeError, match="numpy array"):
+        prepare_image(cast(Any, [[[0, 0, 0]]]), "png", None)
+    with pytest.raises(TypeError, match="integer or floating"):
+        prepare_image(np.zeros((1, 1, 3), dtype=bool), "png", None)
 
 
 def test_extreme_float16_image_values_saturate_without_overflow_warning() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
-        _, payload = encode_image_binary(
+        _, _, payload = prepare_image(
             np.array([[[np.finfo(np.float16).max, 0.5, -100.0]]], dtype=np.float16),
             "png",
             None,
         )
     assert payload
-
-
-def test_opencv_jpeg_drops_rgba_alpha(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    encoded_shapes: list[tuple[int, ...]] = []
-
-    def imencode(extension: str, image: np.ndarray, options: list[int]):
-        assert extension == ".jpeg"
-        assert options == [1, 85]
-        encoded_shapes.append(image.shape)
-        return True, np.frombuffer(b"jpeg", dtype=np.uint8)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "cv2",
-        SimpleNamespace(IMWRITE_JPEG_QUALITY=1, imencode=imencode),
-    )
-    _, payload = encode_image_binary(np.zeros((2, 3, 4), dtype=np.uint8), "jpeg", None)
-
-    assert encoded_shapes == [(2, 3, 3)]
-    assert payload == b"jpeg"
-
-
-def test_browser_decoded_image_dimension_and_pixel_boundaries() -> None:
-    assert validate_image_pixel_size(16_384, 2_048) == (16_384, 2_048)
-
-    with pytest.raises(ValueError, match="per side"):
-        validate_image_pixel_size(16_385, 1)
-    with pytest.raises(ValueError, match="decoded pixels"):
-        validate_image_pixel_size(8_193, 4_096)
-
-
-def test_oversized_ndarray_is_rejected_before_normalization_allocates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backing = np.zeros((1, 1, 3), dtype=np.uint8)
-    oversized = np.lib.stride_tricks.as_strided(
-        backing, shape=(4_096, 8_193, 3), strides=(0, 0, 1), writeable=False
-    )
-
-    def unexpected_normalization(_: np.ndarray) -> np.ndarray:
-        raise AssertionError("oversized image reached allocating normalization")
-
-    monkeypatch.setattr(image_encoding_impl, "colors_to_uint8", unexpected_normalization)
-    with pytest.raises(ValueError, match="decoded pixels"):
-        encode_image_binary(oversized, "png")
 
 
 @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])

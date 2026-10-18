@@ -57,7 +57,6 @@ _FILE_UPLOAD_MAX_ACTIVE = 128
 _SERVER_GUI_RETAINED_MAX_BYTES = 256 * 1024 * 1024
 _SERVER_GUI_PIXELS_MAX = 128 * 1024 * 1024
 _SERVER_PAGE_PIXELS_MAX = 64 * 1024 * 1024
-_IMAGE_PREPARATION_MAX_BYTES = 512 * 1024 * 1024
 
 _CALLBACK_EXECUTOR_MAX_PENDING = 256
 _TRANSFER_EXECUTOR_MAX_PENDING = 16
@@ -202,8 +201,6 @@ class Server:
         self._gui_order_counter = 0
         self._gui_order_lock = threading.Lock()
         self._gui_resource_lock = threading.Lock()
-        self._image_preparation_condition = threading.Condition(threading.Lock())
-        self._image_preparation_bytes = 0
         self._renderer_preparation_condition = threading.Condition(threading.Lock())
         self._renderer_preparation_active = False
         self._renderer_preparation_local = threading.local()
@@ -409,35 +406,6 @@ class Server:
             if not 0 <= size_bytes <= self._file_upload_bytes_reserved:
                 raise RuntimeError("upload reservation accounting underflow")
             self._file_upload_bytes_reserved -= size_bytes
-
-    @contextlib.contextmanager
-    def _reserve_image_preparation(self, source_bytes: int) -> Iterator[None]:
-        """Bound private array snapshots plus conservative encoded headroom."""
-        if type(source_bytes) is not int or source_bytes < 0:
-            raise ValueError("image preparation size must be a non-negative integer")
-        # The source snapshot can coexist with clipping/scaling output and
-        # encoder/output buffers. Four source-sized units conservatively cover
-        # the bounded NumPy/OpenCV/Pillow paths and serialize maximum images.
-        charge = source_bytes * 4
-        if charge > _IMAGE_PREPARATION_MAX_BYTES:
-            raise RuntimeError("Image preparation exceeds the 512 MiB safety budget.")
-        with self._image_preparation_condition:
-            while (
-                not self._stopped
-                and self._image_preparation_bytes + charge > _IMAGE_PREPARATION_MAX_BYTES
-            ):
-                self._image_preparation_condition.wait()
-            if self._stopped:
-                raise RuntimeError("The server stopped during image preparation.")
-            self._image_preparation_bytes += charge
-        try:
-            yield
-        finally:
-            with self._image_preparation_condition:
-                self._image_preparation_bytes -= charge
-                if self._image_preparation_bytes < 0:
-                    raise RuntimeError("image preparation accounting underflow")
-                self._image_preparation_condition.notify_all()
 
     @contextlib.contextmanager
     def _reserve_renderer_preparation(self) -> Iterator[None]:
@@ -837,8 +805,6 @@ class Server:
             callback_active = self._active_user_callbacks > 0
 
         if first_request:
-            with self._image_preparation_condition:
-                self._image_preparation_condition.notify_all()
             with self._renderer_preparation_condition:
                 self._renderer_preparation_condition.notify_all()
             with self._client_lock:

@@ -1363,19 +1363,17 @@ def test_gui_image_format_preparation_is_two_phase_and_race_safe(
 ) -> None:
     original = np.zeros((3, 4, 3), dtype=np.uint8)
     image = server.gui.add_image(original, format="auto")
-    real_encode = gui_handles_impl.encode_image_binary
+    real_prepare = gui_handles_impl.prepare_image
     entered = threading.Event()
     release = threading.Event()
 
-    def blocking_encode(
-        value: np.ndarray, format: Any, jpeg_quality: int | None = None
-    ) -> tuple[str, bytes]:
+    def blocking_prepare(value: np.ndarray, format: Any, jpeg_quality: int | None) -> Any:
         if threading.current_thread().name.startswith("format-worker"):
             entered.set()
             assert release.wait(2)
-        return real_encode(value, format, jpeg_quality=jpeg_quality)
+        return real_prepare(value, format, jpeg_quality)
 
-    monkeypatch.setattr(gui_handles_impl, "encode_image_binary", blocking_encode)
+    monkeypatch.setattr(gui_handles_impl, "prepare_image", blocking_prepare)
     failures: list[BaseException] = []
 
     def change_format(target: Any) -> None:
@@ -1409,7 +1407,6 @@ def test_gui_image_format_preparation_is_two_phase_and_race_safe(
     assert not worker.is_alive()
     assert len(failures) == 1
     assert isinstance(failures.pop(), RuntimeError)
-    assert server._image_preparation_bytes == 0
 
     admitted = server.gui.add_image(original, format="auto")
     old_data = admitted._data
@@ -1422,7 +1419,6 @@ def test_gui_image_format_preparation_is_two_phase_and_race_safe(
         admitted.format = "png"
     assert admitted.format == "auto"
     assert admitted._data == old_data
-    assert server._image_preparation_bytes == 0
 
 
 def test_tab_lifecycle_publishes_before_children_and_rolls_back(
@@ -2757,17 +2753,6 @@ def test_plotly_json_enforces_browser_utf16_limit_transactionally(
     assert plotly_impl._validate_plotly_json_size("\U0001f600") == "\U0001f600"
     with pytest.raises(ValueError, match="16 Mi-character"):
         plotly_impl._validate_plotly_json_size("\U0001f600x")
-
-
-def test_gui_image_rejects_decoded_pixel_overflow_before_encoding(
-    server: leika.Server,
-) -> None:
-    backing = np.zeros((1, 1, 3), dtype=np.uint8)
-    oversized = np.lib.stride_tricks.as_strided(
-        backing, shape=(4_096, 8_193, 3), strides=(0, 0, 1), writeable=False
-    )
-    with pytest.raises(ValueError, match="decoded pixels"):
-        server.gui.add_image(oversized)
 
 
 def test_plotly_runtime_loader_is_bounded_and_requires_utf8(
@@ -4117,38 +4102,9 @@ def test_plotly_global_templates_are_preflighted_before_copy(
     assert not copied
 
 
-def test_image_and_renderer_preparation_admission_is_bounded_and_released(
+def test_renderer_preparation_admission_is_serialized(
     server: leika.Server,
 ) -> None:
-    image_entered = threading.Event()
-    image_release = threading.Event()
-    image_second = threading.Event()
-
-    def own_image() -> None:
-        with server._reserve_image_preparation(128 * 1024 * 1024):
-            image_entered.set()
-            assert image_release.wait(2)
-
-    def wait_image() -> None:
-        with server._reserve_image_preparation(1):
-            image_second.set()
-
-    first = threading.Thread(target=own_image)
-    second = threading.Thread(target=wait_image)
-    first.start()
-    assert image_entered.wait(1)
-    assert server._image_preparation_bytes == 512 * 1024 * 1024
-    second.start()
-    assert not image_second.wait(0.05)
-    image_release.set()
-    first.join(2)
-    second.join(2)
-    assert image_second.is_set()
-    assert server._image_preparation_bytes == 0
-    with pytest.raises(RuntimeError, match="512 MiB"):
-        with server._reserve_image_preparation(128 * 1024 * 1024 + 1):
-            raise AssertionError("oversized image preparation was admitted")
-
     renderer_entered = threading.Event()
     renderer_release = threading.Event()
     renderer_second = threading.Event()

@@ -10,7 +10,7 @@ from PIL import Image
 
 from leika import _messages
 from leika._client_handle import ClientHandle
-from leika._image_encoding import encode_image_binary
+from leika._image_encoding import prepare_image
 from leika._rendering import render_image, render_message
 from leika._transport._websocket import ClientId
 
@@ -19,7 +19,7 @@ def source_image(format="jpeg"):
     pixels = np.random.default_rng(3).integers(
         0, 256, (480, 640, 4 if format == "png" else 3), dtype=np.uint8
     )
-    return encode_image_binary(pixels, format, 85)[1]
+    return prepare_image(pixels, format, 85)[2]
 
 
 def test_rendering_never_dispatches_to_other_pillow_decoders(server):
@@ -49,7 +49,6 @@ def test_auto_uses_connection_speed_and_preserves_jpeg_quality(server, size, fit
         assert decoded.size == (453, 339)
         assert decoded.quantization == original.quantization
     assert len(resized) < len(data)
-    assert server._image_preparation_bytes == 0
     # A fast or recovered connection receives the original, even in a tiny pane.
     assert render_image(data, "auto", size, fit, server, delivery_rate=10 * len(data)) is data
 

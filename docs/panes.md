@@ -120,15 +120,10 @@ server.panes.add_image(frame, pane_id="camera", title="Live image", fit="fill")
 `frame` is an RGB or RGBA array of shape `(height, width, 3|4)`. RGB is sent as
 JPEG and RGBA as PNG unless you pass `format=` yourself.
 
-Image admission takes a synchronous private snapshot. Do not mutate the ndarray
-concurrently with `add_image()`, `update()`, or an `image` assignment; after
-the call succeeds, later caller mutations cannot change the stored pane.
-Preparation charges four times the source buffer against a server-wide 512 MiB
-envelope, so one ndarray source is effectively capped at 128 MiB. Convert
-high-byte-depth arrays to `uint8` when necessary.
-
-Direct pane and GUI ndarray calls validate dimensions before encoding and raise
-`ValueError` above 16,384 pixels per side or 33,554,432 decoded pixels.
+Floating-point arrays are read as 0 to 1 and integer arrays as 0 to 255.
+`add_image()`, `update()`, and an `image` assignment copy the array, so later
+changes to it do not reach the pane; do not mutate it from another thread while
+the call runs.
 
 Received file-preview, Markdown, and registered-asset images reach the browser
 decoder only after verification as a static PNG, JPEG, GIF, or WebP. Animated,

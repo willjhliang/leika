@@ -8,7 +8,6 @@ import inspect
 import os
 import threading
 import time
-import warnings
 from asyncio import AbstractEventLoop
 from collections import deque
 from collections.abc import Coroutine, Mapping
@@ -37,7 +36,6 @@ from typing_extensions import (
 )
 
 from . import _messages
-from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._async_errors import (
     print_async_errors,
     print_async_exception,
@@ -126,7 +124,7 @@ from ._gui_handles import (
 from ._gui_resources import _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
-from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._messages import ButtonColor, FileTransferPartAck, GuiBaseProps, GuiSliderMark
 from ._notification_handle import (
     NotificationHandle,
@@ -2525,50 +2523,33 @@ class GuiApi(GuiContainer):
         if order is not None:
             _validate_number(order, "order")
         _validate_image_encoding_options(format, jpeg_quality)
-        if type(image) is not np.ndarray:
-            raise TypeError("image must be a base numpy.ndarray")
-        image_array = image
-        spec = _ndarray_snapshot_spec(image_array)
-        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
-        container_uuid = self._get_container_uuid()
-        resolved_order = self._apply_default_order(order)
-        with self._server._reserve_image_preparation(spec.nbytes):
-            image_array = _private_ndarray_snapshot(image_array, spec)
-            if format == "jpeg" and image_array.ndim == 3 and image_array.shape[2] == 4:
-                warnings.warn(
-                    "Encoding an RGBA image as JPEG discards its alpha channel.",
-                    stacklevel=2,
-                )
-            resolved_format, data = encode_image_binary(
-                image_array, format, jpeg_quality=jpeg_quality
-            )
-            message = _messages.GuiImageMessage(
-                uuid=_make_uuid(),
-                container_uuid=container_uuid,
-                props=_messages.GuiImageProps(
-                    _data=data,
-                    label=label,
-                    _format=resolved_format,
-                    order=resolved_order,
-                    visible=visible,
-                ),
-            )
-            return GuiImageHandle(
-                _GuiHandleState(
-                    message.uuid,
-                    self,
-                    None,
-                    props=message.props,
-                    parent_container_id=message.container_uuid,
-                    create_message=message,
-                    decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
-                    retained_extra_bytes=int(image_array.nbytes),
-                ),
-                _image=image_array,
-                _jpeg_quality=jpeg_quality,
-                _user_format=format,
-            )
+        image_array, resolved_format, data = prepare_image(image, format, jpeg_quality)
+        message = _messages.GuiImageMessage(
+            uuid=_make_uuid(),
+            container_uuid=self._get_container_uuid(),
+            props=_messages.GuiImageProps(
+                _data=data,
+                label=label,
+                _format=resolved_format,
+                order=self._apply_default_order(order),
+                visible=visible,
+            ),
+        )
+        return GuiImageHandle(
+            _GuiHandleState(
+                message.uuid,
+                self,
+                None,
+                props=message.props,
+                parent_container_id=message.container_uuid,
+                create_message=message,
+                decoded_pixels=int(image_array.shape[0]) * int(image_array.shape[1]),
+                retained_extra_bytes=int(image_array.nbytes),
+            ),
+            _image=image_array,
+            _jpeg_quality=jpeg_quality,
+            _user_format=format,
+        )
 
     def _ensure_plotly_js_sent(self) -> None:
         """Ensure every recipient of this API can render Plotly figures."""

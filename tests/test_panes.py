@@ -742,17 +742,6 @@ def test_failed_matplotlib_pane_removal_preserves_figure_and_svg(
     assert pane._impl.props._svg == svg_before
 
 
-def test_pane_image_rejects_decoded_pixel_overflow_before_encoding(
-    server: leika.Server,
-) -> None:
-    backing = np.zeros((1, 1, 3), dtype=np.uint8)
-    oversized = np.lib.stride_tricks.as_strided(
-        backing, shape=(4_096, 8_193, 3), strides=(0, 0, 1), writeable=False
-    )
-    with pytest.raises(ValueError, match="decoded pixels"):
-        server.panes.add_image(oversized)
-
-
 def test_pane_id_obeys_browser_utf16_layout_limit(server: leika.Server) -> None:
     frame = np.zeros((1, 1, 3), dtype=np.uint8)
     exact = "😀" * 512

@@ -9,7 +9,7 @@ import zlib
 import numpy as np
 import pytest
 
-from leika._image_encoding import encode_image_binary
+from leika._image_encoding import prepare_image
 from leika._transport._image_headers import image_pixel_size
 
 
@@ -50,7 +50,7 @@ def test_a_real_encoding_round_trips_its_shape(shape: tuple) -> None:
     height, width = shape
     image = np.zeros((height, width, 3), dtype=np.uint8)
     for encoding in ("png", "jpeg"):
-        _, data = encode_image_binary(image, encoding)  # type: ignore[arg-type]
+        _, _, data = prepare_image(image, encoding, None)  # type: ignore[arg-type]
         assert image_pixel_size(data) == (width, height), encoding
 
 
@@ -59,7 +59,7 @@ def test_a_jpeg_is_found_behind_its_metadata() -> None:
     # an EXIF or colour-profile block is routinely tens of kilobytes of it.
     # The segments have to be stepped through, not counted past.
     image = np.zeros((8, 16, 3), dtype=np.uint8)
-    _, data = encode_image_binary(image, "jpeg")
+    _, _, data = prepare_image(image, "jpeg", None)
     padding = b"\xff\xe1" + struct.pack(">H", 40_002) + b"\x00" * 40_000
     with_metadata = data[:2] + padding + data[2:]
     assert image_pixel_size(with_metadata) == (16, 8)

@@ -31,7 +31,7 @@ transition has a clear home.
 | Bounded background jobs and captured-payload admission | `_executor.py` |
 | GUI creation, callbacks, and synchronized handles | `_gui_api.py`, `_gui_handles.py`, `_notification_handle.py` |
 | Page catalog, pane handles, and pane update transactions | `_pages.py`, `_panes.py` |
-| Renderer preparation shared by GUI controls and panes | `_array_snapshot.py`, `_plotly.py`, `_markdown.py`, `_image_encoding.py` |
+| Renderer preparation shared by GUI controls and panes | `_image_encoding.py`, `_plotly.py`, `_markdown.py` |
 | Per-browser raster variants after transport coalescing | `_rendering.py` |
 | Retained GUI/pane resource measurement | `_gui_resources.py` |
 | Typed wire schema, its codec, and the generated client contract | `_messages.py`, `_transport/_typescript.py` |
@@ -179,9 +179,6 @@ additionally share a 64 Mi-pixel workspace-global raster ledger. The browser
 counts every mounted copy of a direct raster against its own 128 Mi-pixel
 document budget.
 
-Image preparation has a separate 512 MiB server-wide envelope and charges four
-times the source buffer, making 128 MiB the effective per-call ndarray source
-ceiling. High-byte-depth arrays may need caller-side conversion to `uint8`.
 These are ownership limits for Leika's GUI, pane, wire, and rendered state, not
 a bound on total Python-process memory. Registered callbacks and lazy file
 providers remain trusted caller-owned callables and may close over arbitrary
@@ -246,9 +243,7 @@ raise `ValueError` before publishing a larger source. The bundled client also
 declines an oversized payload before DOM, Blob, or image parsing and shows a
 status in the affected control or pane.
 
-Direct GUI and pane ndarray APIs limit each side to 16,384 pixels and the image
-to 33,554,432 decoded pixels, raising before encoding an oversized source. A
-received file-preview, Markdown, or registered-asset image reaches the decoder
+A received file-preview, Markdown, or registered-asset image reaches the decoder
 only after verification as a static PNG, JPEG, GIF, or WebP. Malformed,
 animated, oversized, and unsupported files remain available through an explicit
 link or download fallback. Local Markdown image paths resolve from the document

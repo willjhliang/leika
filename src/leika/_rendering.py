@@ -58,26 +58,23 @@ def render_image(
             ratios = target[0] / width, target[1] / height
             scale = min(1.0, 0.5 * (max(ratios) if fit == "fill" else min(ratios)))
         dimensions = max(1, round(width * scale)), max(1, round(height * scale))
-        # Header inspection above does not decode pixels. Charge the decoded
-        # source and encode/resize headroom through the existing server budget.
-        with server._reserve_image_preparation(width * height * len(source.getbands())):
-            output = BytesIO()
-            with source.resize(dimensions, Image.Resampling.LANCZOS) as resized:
-                if isinstance(source, JpegImagePlugin.JpegImageFile):
-                    if mode == "performance":
-                        resized.save(output, format="JPEG", quality=50)
-                    else:
-                        # Retain the original quantization and chroma sampling;
-                        # do not silently lower an application's JPEG quality.
-                        resized.save(
-                            output,
-                            format="JPEG",
-                            qtables=source.quantization,
-                            subsampling=JpegImagePlugin.get_sampling(source),
-                        )
+        output = BytesIO()
+        with source.resize(dimensions, Image.Resampling.LANCZOS) as resized:
+            if isinstance(source, JpegImagePlugin.JpegImageFile):
+                if mode == "performance":
+                    resized.save(output, format="JPEG", quality=50)
                 else:
-                    resized.save(output, format="PNG")
-            return output.getvalue()
+                    # Retain the original quantization and chroma sampling;
+                    # do not silently lower an application's JPEG quality.
+                    resized.save(
+                        output,
+                        format="JPEG",
+                        qtables=source.quantization,
+                        subsampling=JpegImagePlugin.get_sampling(source),
+                    )
+            else:
+                resized.save(output, format="PNG")
+        return output.getvalue()
 
 
 def render_message(

@@ -33,7 +33,6 @@ from typing import (
 import numpy as np
 from typing_extensions import Protocol, Self, override
 
-from ._array_snapshot import _ndarray_snapshot_spec, _private_ndarray_snapshot
 from ._assignable_props_api import AssignablePropsBase
 from ._async_errors import (
     callback_result_is_awaitable,
@@ -48,7 +47,7 @@ from ._file_transfer import (
 from ._gui_resources import _GUI_CONTAINER_DEPTH_MAX, _gui_resource_cost, _GuiResourceCost
 from ._icons import svg_from_icon
 from ._icons_enum import IconName
-from ._image_encoding import _validate_image_encoding_options, encode_image_binary
+from ._image_encoding import _validate_image_encoding_options, prepare_image
 from ._markdown import _link_markdown_assets
 from ._messages import (
     ButtonColor,
@@ -3854,26 +3853,19 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
-        spec = _ndarray_snapshot_spec(image)
-        if spec.nbytes > _GUI_AGGREGATE_PAYLOAD_MAX_BYTES:
-            raise RuntimeError("Image source exceeds the 128 MiB GUI retained payload budget.")
         gui_api = self._impl.gui_api
         with gui_api._lock:
             if self._impl.removed:
                 raise RuntimeError("Cannot update a removed GuiImageHandle.")
             user_format = self._user_format
             jpeg_quality = self._jpeg_quality
-        with gui_api._server._reserve_image_preparation(spec.nbytes):
-            snapshot = _private_ndarray_snapshot(image, spec)
-            resolved_format, data = encode_image_binary(
-                snapshot, user_format, jpeg_quality=jpeg_quality
-            )
-            with gui_api._lock:
-                if self._impl.removed:
-                    raise RuntimeError("Cannot update a removed GuiImageHandle.")
-                if self._user_format != user_format or self._jpeg_quality != jpeg_quality:
-                    raise RuntimeError("Image encoding settings changed during preparation.")
-                self._commit_image_snapshot(snapshot, resolved_format, data)
+        snapshot, resolved_format, data = prepare_image(image, user_format, jpeg_quality)
+        with gui_api._lock:
+            if self._impl.removed:
+                raise RuntimeError("Cannot update a removed GuiImageHandle.")
+            if self._user_format != user_format or self._jpeg_quality != jpeg_quality:
+                raise RuntimeError("Image encoding settings changed during preparation.")
+            self._commit_image_snapshot(snapshot, resolved_format, data)
 
     def _commit_image_snapshot(
         self,
@@ -3931,14 +3923,8 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
                 return
             image = self._image
             jpeg_quality = self._jpeg_quality
-            source_bytes = int(image.nbytes)
-            has_alpha = image.shape[2] == 4
 
-        # Encoding may allocate an image-sized working buffer. Admission must
-        # happen outside the GUI lock so it cannot deadlock with another image
-        # preparation that later needs the GUI lock to publish.
-        with gui_api._server._reserve_image_preparation(source_bytes):
-            resolved_format, data = encode_image_binary(image, value, jpeg_quality=jpeg_quality)
+        _, resolved_format, data = prepare_image(image, value, jpeg_quality)
 
         with gui_api._lock:
             if self._impl.removed:
@@ -3949,11 +3935,6 @@ class GuiImageHandle(_GuiHandle[None], GuiImageProps):
                 or self._jpeg_quality != jpeg_quality
             ):
                 raise RuntimeError("Image changed during format preparation.")
-            if value == "jpeg" and has_alpha:
-                warnings.warn(
-                    "Converting RGBA image to JPEG will discard the alpha channel.",
-                    stacklevel=2,
-                )
             props = cast(GuiImageProps, self._impl.props)
             old_format = props._format
             old_data = props._data

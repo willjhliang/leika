@@ -5,6 +5,10 @@ versioning.
 
 ## Unreleased
 
+- Images: GUI and pane images go through one preparation path that always
+  encodes with Pillow, even when OpenCV is installed. Image calls no longer
+  enforce the 16,384-pixel side and 32 Mi-pixel limits or the 512 MiB
+  server-wide preparation budget, and accept `numpy.ndarray` subclasses.
 - Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP
   server is now private, with one message base; use `leika.Server`. Custom
   message roots and low-level servers are no longer supported.

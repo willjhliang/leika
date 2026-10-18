@@ -66,14 +66,14 @@ def test_typed_update_restores_video_settings_after_clear(server):
 def test_clear_rejects_inflight_image_work(server, monkeypatch, operation):
     pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8))
     started, release = threading.Event(), threading.Event()
-    encode = _panes.encode_image_binary
+    prepare = _panes.prepare_image
 
-    def blocked(*args, **kwargs):
+    def blocked(*args):
         started.set()
         assert release.wait(5)
-        return encode(*args, **kwargs)
+        return prepare(*args)
 
-    monkeypatch.setattr(_panes, "encode_image_binary", blocked)
+    monkeypatch.setattr(_panes, "prepare_image", blocked)
     with ThreadPoolExecutor(max_workers=1) as pool:
         result = pool.submit(getattr(pane, operation), np.ones((2, 3, 3), np.uint8))
         assert started.wait(5)
@@ -183,13 +183,13 @@ def test_cleared_image_keeps_default_quality_after_one_frame_override(server, mo
     )
     pane.clear()
     qualities = []
-    encode = _panes.encode_image_binary
+    prepare = _panes.prepare_image
 
-    def record(*args, **kwargs):
-        qualities.append(kwargs["jpeg_quality"])
-        return encode(*args, **kwargs)
+    def record(image, format, jpeg_quality):
+        qualities.append(jpeg_quality)
+        return prepare(image, format, jpeg_quality)
 
-    monkeypatch.setattr(_panes, "encode_image_binary", record)
+    monkeypatch.setattr(_panes, "prepare_image", record)
     pane.update(np.ones((2, 3, 3), np.uint8), jpeg_quality=20)
     pane.update(np.zeros((2, 3, 3), np.uint8))
     assert qualities == [20, 70]
