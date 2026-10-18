@@ -7,7 +7,7 @@ help: ## Show available development commands
 
 install: ## Install Leika and its development tools into the active environment
 	python -m pip install -e ".[dev]"
-	python src/leika/_client_autobuild.py
+	$(MAKE) build-client
 
 build-client: ## Build the single-file browser client if its sources changed
 	python src/leika/_client_autobuild.py
