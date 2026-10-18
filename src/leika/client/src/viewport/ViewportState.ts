@@ -3,7 +3,6 @@ import React from "react";
 import { ImageFit } from "../ClientSettings";
 import { createStore, Store } from "../store";
 import {
-  ViewportDropRegion,
   ViewportLayout,
   collectViewportPaneIds,
   equalizeViewportPanes,
@@ -16,8 +15,6 @@ import {
 } from "./layoutModel";
 import { parseBoundedPersistedJson } from "../persistenceLimits";
 import type { Message } from "../WebsocketMessages";
-
-export type ViewportPanePlacement = Exclude<ViewportDropRegion, "center">;
 
 interface RefreshableProps {
   _refresh_controls?: readonly string[];
@@ -340,12 +337,11 @@ function reconcilePaneLayout(
   layout: ViewportLayout,
   panes: Record<string, ViewportPane>,
   authoritativePaneIds: ReadonlySet<string> | null,
-  omittedPaneId?: string,
 ): ViewportLayout {
-  const paneIds = retainedPaneIds(layout, panes, authoritativePaneIds).filter(
-    (paneId) => paneId !== omittedPaneId,
+  return reconcileViewportLayout(
+    layout,
+    retainedPaneIds(layout, panes, authoritativePaneIds),
   );
-  return reconcileViewportLayout(layout, paneIds);
 }
 
 /** Per-viewer page catalog, pane registries, and browser-owned layout store. */
@@ -836,7 +832,6 @@ export function createViewportState(
         removeViewportPane(page.layout, paneId),
         panes,
         authoritativePanesByPage.get(pageId) ?? null,
-        paneId,
       );
       replacePage({ ...page, panes, layout });
     },

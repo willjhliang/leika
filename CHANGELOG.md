@@ -94,8 +94,8 @@ versioning.
   including its worker assets. The proxy now uses HTTPcore instead of aiohttp;
   image decoding is restricted to Leika's PNG/JPEG formats.
 
-- Each browser receives one batch at a time and acknowledges it before the
-  next, so queued updates coalesce on slow connections instead of building up.
+- Each browser acknowledges a batch before it is sent the next from the same
+  queue, so queued updates coalesce on slow connections instead of building up.
   `PaneHandle.has_viewers` lets producers skip hidden routine work.
 
 - Markdown figures appear in document order as each image becomes ready,

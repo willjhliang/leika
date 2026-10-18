@@ -246,9 +246,9 @@ server's current snapshot. Bind only live shared controls from this server.
 ### Streaming
 
 Every browser receives the image bytes the application encoded, set by `format`
-and `jpeg_quality` (`85` by default). Leika sends each browser one batch at a
-time and waits for its receipt before the next, so queued updates coalesce to
-the newest frame: a slow connection receives fewer current frames, and one
+and `jpeg_quality` (`85` by default). Leika waits for a browser to receive each
+batch before sending it the next from the same queue, so queued updates coalesce
+to the newest frame: a slow connection receives fewer current frames, and one
 viewer's connection never slows another's.
 
 Applications can check `pane.has_viewers` before expensive routine rendering:

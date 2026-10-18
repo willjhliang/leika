@@ -5,7 +5,7 @@ import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 import { useViewer } from "../ViewerContext";
 import type { GridRect, GridSpec } from "./gridLayout";
-import { panePositionStyle, paneTitle } from "./workspaceGeometry";
+import { panePositionStyle } from "./workspaceGeometry";
 import { displayedViewportPage } from "./viewportSelectors";
 import { ViewportPaneRenderer } from "./ViewportPaneRenderer";
 import { ViewportPaneLoadingOverlay } from "./ViewportPaneLoadingOverlay";
@@ -51,7 +51,7 @@ export function ViewportPaneHost({
   if (pane === undefined) return null;
 
   const isHiddenHost = rect === null;
-  const title = paneTitle(pane);
+  const title = pane.props.title;
   const loading = pane.refreshPending !== undefined ? true : pane.props.loading;
   const isLoading = loading !== false;
   return (

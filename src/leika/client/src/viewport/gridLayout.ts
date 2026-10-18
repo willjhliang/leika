@@ -58,10 +58,9 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function minimumSubtreeSpan(
-  node: ViewportLayoutNode | null,
+  node: ViewportLayoutNode,
   axis: ViewportSplitDirection,
 ): number {
-  if (node === null) return 0;
   if (node.type === "pane") {
     return axis === "row" ? MIN_PANE_COLUMNS : MIN_PANE_ROWS;
   }
@@ -83,8 +82,9 @@ export function gridSpecForLayout(
   layout: ViewportLayout,
   workspace: WorkspaceSize,
 ): GridSpec {
-  const minimumColumns = minimumSubtreeSpan(layout.root, "row");
-  const minimumRows = minimumSubtreeSpan(layout.root, "column");
+  const { root } = layout;
+  const minimumColumns = root === null ? 0 : minimumSubtreeSpan(root, "row");
+  const minimumRows = root === null ? 0 : minimumSubtreeSpan(root, "column");
   const columns =
     Math.max(1, Math.ceil(minimumColumns / NOMINAL_GRID_DIVISIONS)) *
     NOMINAL_GRID_DIVISIONS;

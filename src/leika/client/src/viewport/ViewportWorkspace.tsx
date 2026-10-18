@@ -25,7 +25,7 @@ import {
   resizeLayoutAtGridLine,
 } from "./gridLayout";
 import { initialViewportLayout, isViewportPageReady } from "./ViewportState";
-import { panePositionStyle, paneTitle } from "./workspaceGeometry";
+import { panePositionStyle } from "./workspaceGeometry";
 import { ViewportPaneHost } from "./ViewportPaneHost";
 import { ViewportDivider } from "./ViewportDivider";
 import { displayedViewportPage } from "./viewportSelectors";
@@ -199,7 +199,7 @@ export function ViewportWorkspace() {
       const pane = displayedViewportPage(viewer.useViewport.get())?.panes[
         paneId
       ];
-      return pane === undefined ? "viewport pane" : paneTitle(pane);
+      return pane === undefined ? "viewport pane" : pane.props.title;
     },
     [viewer.useViewport],
   );

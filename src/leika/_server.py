@@ -77,9 +77,9 @@ class Server:
     ``allow_embedding=True`` only for an intentional iframe or notebook
     :meth:`show` use.
 
-    Each connection waits for the browser's receipt of one batch before
-    sending the next, so pending updates coalesce instead of queuing old frames
-    in the network. A high-latency connection gets fewer, newer frames.
+    Each connection's queues wait for the browser's receipt of a batch before
+    sending it the next, so pending updates coalesce instead of queuing old
+    frames in the network. A high-latency connection gets fewer, newer frames.
     """
 
     def __init__(
