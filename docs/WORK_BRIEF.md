@@ -151,3 +151,7 @@ Wave 2a is running: Python server and panes, and the browser client. Review
 and merge both, then start wave 2b.
 
 Roll out to all three consumers after the final merge of this series.
+
+The user asked to ration usage: fold the Python GUI cleanup and the control
+merge into one agent (wave 2b), run presets removal beside it, review diffs
+selectively, run the full checks once per merge, and keep the docs pass lean.
