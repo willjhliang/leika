@@ -112,10 +112,23 @@ Each outcome is reviewed, validated and committed with its tests and docs.
 4. **Wave 4.** Make the docs describe current behavior, then run full
    validation (unit, browser, docs, package) and a final review.
 
+Local work uses the `leika` conda environment (Python 3.13 and Node 24 from
+conda-forge, Leika installed editable with pip from PyPI only, because the
+configured NVIDIA extra index stalls). Worktrees put their own `src` first on
+`PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
+libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
+`LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
+
 Baseline before the work: 1,013 Python unit tests pass and one fails only
 under parallel workers (it patches `json.loads` while Plotly loads its
-validator cache); 907 client tests pass.
+validator cache); 907 client tests and 240 browser tests pass. In the conda
+environment, `test_viser_pane.py::test_eight_live_scenes...` fails because it
+decodes Viser's wire format and pip resolves Viser 1.1.1.
+
+Breaking API changes roll out to Babble, do_anything and lwm in the same
+change.
 
 ## Next actions
 
-Run wave 1.
+Wave 1 is running: release tooling and CI, the single control panel, and the
+private transport.
