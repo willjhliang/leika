@@ -324,8 +324,11 @@ class PaneHandle:
         try:
             with panes._lock:
                 self._check_not_removed()
+                # A reused Viser route must still be the current one.
                 if self._generation != generation or (
-                    source is previous and source is not self._source
+                    isinstance(source, _ViserRoute)
+                    and source is previous
+                    and source is not self._source
                 ):
                     raise RuntimeError("Pane content changed during preparation.")
                 props = self._props
@@ -354,6 +357,8 @@ class PaneHandle:
                     if renderer is not PaneHandle:
                         self._settings, self._settings_kind = settings, renderer._kind
                 else:
+                    # A setting such as fit may have changed during preparation.
+                    fields.update((k, v) for k, v in self._settings.items() if k in fields)
                     updates = {name: fields[name] for name in renderer._update_fields}
                     if loading is not None:
                         updates["loading"] = loading

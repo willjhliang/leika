@@ -88,6 +88,28 @@ def test_clear_rejects_inflight_image_work(server, monkeypatch, operation):
     assert not any(isinstance(m, _messages.ViewportImageMessage) for m in retained(server))
 
 
+def test_inflight_update_keeps_a_setting_changed_meanwhile(server, monkeypatch):
+    pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8), fit="fit")
+    started, release = threading.Event(), threading.Event()
+    prepare = _panes.prepare_image
+
+    def blocked(*args):
+        started.set()
+        assert release.wait(5)
+        return prepare(*args)
+
+    monkeypatch.setattr(_panes, "prepare_image", blocked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(pane.update, np.ones((2, 3, 3), np.uint8))
+        assert started.wait(5)
+        pane.fit = "fill"
+        release.set()
+        result.result(timeout=5)
+    assert pane.fit == "fill" and pane._settings["fit"] == "fill"
+    updates = [m for m in retained(server) if isinstance(m, _messages.ViewportPaneUpdateMessage)]
+    assert updates[-1].updates["fit"] == "fill"
+
+
 @pytest.mark.parametrize("clear", [False, True])
 def test_failed_replacement_preserves_content_and_replay(server, monkeypatch, clear):
     pane = server.panes.add_image(np.zeros((2, 3, 3), np.uint8), title="Original")
