@@ -314,10 +314,15 @@ class _GuiHandle(Generic[T]):
         raise AttributeError(f"{type(self).__name__} has no attribute {name!r}.")
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name.startswith("_") or isinstance(getattr(type(self), name, None), property):
+        if isinstance(getattr(type(self), name, None), property):
             object.__setattr__(self, name, value)
-        else:
+        elif not name.startswith("_"):
             self.update(**{name: value})
+        else:
+            props = self.__dict__["_impl"].props
+            if props is not None and name in _field_names(type(props)):
+                raise AttributeError(f"{name!r} is derived internal state.")
+            object.__setattr__(self, name, value)
 
     def update(self, **changes: Any) -> None:
         """Validate and publish one or more properties together.
@@ -458,6 +463,21 @@ class _GuiHandle(Generic[T]):
                 self._impl.callbacks.clear()
             else:
                 self._impl.callbacks[:] = [cb for cb in self._impl.callbacks if cb != callback]
+
+
+class _HasIcon:
+    """An element showing an icon, set by name."""
+
+    _impl: _GuiHandleState[Any]
+
+    @property
+    def icon(self) -> IconName | None:
+        """Icon to display. When set to None, no icon is displayed."""
+        return self._impl.icon
+
+    @icon.setter
+    def icon(self, icon: IconName | None) -> None:
+        cast(_GuiHandle[Any], self).update(icon=icon)
 
 
 class _Removable(_GuiHandle[T]):
@@ -669,8 +689,9 @@ class GuiListHandle(GuiInputHandle[TRows], Generic[TRows], GuiListProps):
        handle.value`` reads a checklist as it stands. Editing a row, adding
        one, removing one, or dragging one somewhere else reports the whole
        tuple, and a row's mark travels with its text. Assigning sets the list
-       to exactly those rows, and a bare string among them is an unmarked row:
-       ``handle.value += ("next",)``.
+       to exactly those rows, which is how Python adds, removes and reorders:
+       ``handle.value += ("next",)``. With a mark, a bare string among them is
+       an unmarked row.
     """
 
     _message_type = _messages.GuiListMessage
@@ -724,13 +745,18 @@ class GuiTextHandle(GuiInputHandle[str], GuiTextProps):
         if props.rows is not None and (type(props.rows) is not int or props.rows < 1):
             raise ValueError("rows= is a height in lines and must be a positive integer or None.")
         # Rendered Markdown points its relative images at server URLs; other
-        # text shows its value and needs no second copy.
-        source = ""
-        if props.markdown:
+        # text shows its value and needs no second copy. Linking reads every
+        # image, so it runs only when what is rendered changes.
+        old = self._impl.props
+        if not props.markdown:
+            source = ""
+        elif old.markdown and old._source and value == self._impl.value:
+            source = old._source
+        elif self._image_root is None:
             source = value
-            if self._image_root is not None:
-                server = self._impl.gui_api._server
-                source = _link_markdown_assets(value, self._image_root, server._register_http_image)
+        else:
+            server = self._impl.gui_api._server
+            source = _link_markdown_assets(value, self._image_root, server._register_http_image)
         return dataclasses.replace(props, _source=source), value
 
 
@@ -842,6 +868,13 @@ class GuiColorHandle(GuiInputHandle[TColor], Generic[TColor], GuiColorProps):
     _message_type = _messages.GuiColorMessage
 
     @override
+    def _client_value(self, value: Any) -> Any:
+        value = super()._client_value(value)
+        if any(type(channel) is not int or not 0 <= channel <= 255 for channel in value):
+            raise ValueError("A browser sends color channels as integers in [0, 255].")
+        return value
+
+    @override
     def _validate(self, props: Any, value: Any) -> tuple[Any, Any]:
         channels = len(self._impl.value)
         if channels not in (3, 4):
@@ -947,7 +980,7 @@ class GuiEvent(Generic[TGuiHandle]):
     """Value at event creation, or None when the handle has no value."""
 
 
-class GuiButtonHandle(GuiInputHandle[bool], GuiButtonProps):
+class GuiButtonHandle(_HasIcon, GuiInputHandle[bool], GuiButtonProps):
     """Handle for a button input in our visualizer.
 
     .. attribute:: value
@@ -962,15 +995,6 @@ class GuiButtonHandle(GuiInputHandle[bool], GuiButtonProps):
     def __init__(self, impl: _GuiHandleState[bool]) -> None:
         super().__init__(impl)
         self._hold_callbacks: dict[float, list[Callable[..., Any]]] = {}
-
-    @property
-    def icon(self) -> IconName | None:
-        """Icon to display on the button. When set to None, no icon is displayed."""
-        return self._impl.icon
-
-    @icon.setter
-    def icon(self, icon: IconName | None) -> None:
-        self.update(icon=icon)
 
     @override
     def _validate(self, props: Any, value: bool) -> tuple[Any, bool]:
@@ -1084,7 +1108,7 @@ class UploadedFile:
     """Contents of the file."""
 
 
-class GuiUploadButtonHandle(GuiInputHandle[UploadedFile], GuiUploadButtonProps):
+class GuiUploadButtonHandle(_HasIcon, GuiInputHandle[UploadedFile], GuiUploadButtonProps):
     """Handle for an upload file button in our visualizer.
 
     The `.value` attribute will be updated with the contents of uploaded files.
@@ -1097,15 +1121,6 @@ class GuiUploadButtonHandle(GuiInputHandle[UploadedFile], GuiUploadButtonProps):
 
     _message_type = _messages.GuiUploadButtonMessage
     _is_button = True
-
-    @property
-    def icon(self) -> IconName | None:
-        """Icon to display on the upload button. When set to None, no icon is displayed."""
-        return self._impl.icon
-
-    @icon.setter
-    def icon(self, icon: IconName | None) -> None:
-        self.update(icon=icon)
 
     @override
     def _validate(self, props: Any, value: Any) -> tuple[Any, UploadedFile]:
@@ -1246,9 +1261,6 @@ class GuiDownloadButtonHandle(_GuiFileButtonHandle):
 
        Value of the button. Set to `True` when the button is pressed. Can be manually set back to `False`.
     """
-
-    _factory = "add_download_button()"
-    _noun = "download"
 
     def _send(self, event: GuiEvent[Any]) -> None:
         """Send the file to whoever pressed, then release the busy state."""
@@ -1535,17 +1547,8 @@ class GuiTabGroupHandle(_Removable[None], GuiTabGroupProps):
         )
 
 
-class GuiTabHandle(GuiContainer, _Removable[None], GuiTabProps):
+class GuiTabHandle(_HasIcon, GuiContainer, _Removable[None], GuiTabProps):
     """Use as a context to place GUI elements into a tab."""
-
-    @property
-    def icon(self) -> IconName | None:
-        """Icon to display on the tab. When set to None, no icon is displayed."""
-        return self._impl.icon
-
-    @icon.setter
-    def icon(self, icon: IconName | None) -> None:
-        self.update(icon=icon)
 
     @override
     def _create_message(self) -> Message:
@@ -1619,6 +1622,12 @@ class GuiFormHandle(GuiContainer, _Removable[None], GuiFormProps):
     """
 
     _message_type = _messages.GuiFormMessage
+
+    @override
+    def _validate(self, props: Any, value: None) -> tuple[Any, None]:
+        if props.mini != self._impl.props.mini:
+            raise ValueError("A form cannot change between mini and regular after it is added.")
+        return props, value
 
     def _admit(self, child: _GuiHandle[Any]) -> None:
         """Enforce a mini form's one rule: a single, direct, editable field."""
@@ -1706,13 +1715,17 @@ class GuiFormHandle(GuiContainer, _Removable[None], GuiFormProps):
         popout on every client: the question has been answered, whoever
         answered it.
         """
+        self._impl.gui_api._schedule_callbacks(self._submit(), GuiEvent(None, None, self))
+
+    def _submit(self) -> tuple[Callable[..., Any], ...]:
+        """Publish a submit, which closes the popout everywhere, and return the
+        callbacks to run. Published before user code, so a raising callback
+        cannot leave a popout open."""
         gui_api = self._impl.gui_api
         with gui_api._lock:
             self._check_live()
-            # Published before user code, as a browser submit is.
             gui_api._websock_interface.queue_message_or_raise(GuiFormSubmitMessage(self.id))
-            callbacks = tuple(self._impl.callbacks)
-        gui_api._schedule_callbacks(callbacks, GuiEvent(None, None, self))
+            return tuple(self._impl.callbacks)
 
 
 class GuiModalHandle(GuiContainer):
@@ -1946,8 +1959,12 @@ class GuiImageHandle(_Removable[None], GuiImageProps):
 
     @image.setter
     def image(self, image: np.ndarray) -> None:
+        user_format = self._user_format
+        prepared = prepare_image(image, user_format, self._jpeg_quality)
         with self._impl.gui_api._lock:
-            self._encode(image, self._user_format)
+            if self._user_format != user_format:  # Changed while this encoded.
+                prepared = prepare_image(image, self._user_format, self._jpeg_quality)
+            self._commit_image(prepared, self._user_format)
 
     @property
     def format(self) -> Literal["auto", "jpeg", "png"]:
@@ -1957,12 +1974,20 @@ class GuiImageHandle(_Removable[None], GuiImageProps):
     @format.setter
     def format(self, value: Literal["auto", "jpeg", "png"]) -> None:
         _validate_image_encoding_options(value, self._jpeg_quality)
+        image = self._image
+        prepared = prepare_image(image, value, self._jpeg_quality)
         with self._impl.gui_api._lock:
-            self._encode(self._image, value)
+            if self._image is not image:  # Replaced while this encoded.
+                prepared = prepare_image(self._image, value, self._jpeg_quality)
+            self._commit_image(prepared, value)
 
-    def _encode(self, image: np.ndarray, user_format: Literal["auto", "jpeg", "png"]) -> None:
-        self._check_live()
-        snapshot, resolved_format, data = prepare_image(image, user_format, self._jpeg_quality)
+    def _commit_image(
+        self,
+        prepared: tuple[np.ndarray, Literal["jpeg", "png"], bytes],
+        user_format: Literal["auto", "jpeg", "png"],
+    ) -> None:
+        """Publish an encoding made outside the lock; the caller holds it."""
+        snapshot, resolved_format, data = prepared
         self._update({"_format": resolved_format, "_data": data})
         self._image = snapshot
         self._user_format = user_format
@@ -1984,7 +2009,7 @@ class CommandEvent:
     """Command handle that was triggered."""
 
 
-class CommandHandle(_Removable[None], CommandProps):
+class CommandHandle(_HasIcon, _Removable[None], CommandProps):
     """Handle for a command registered in the command palette.
 
     Commands are shown in a command palette (Ctrl/Cmd+K, also Ctrl/Cmd+Shift+P
@@ -1996,15 +2021,6 @@ class CommandHandle(_Removable[None], CommandProps):
 
     def __str__(self) -> str:
         return self._impl.uuid
-
-    @property
-    def icon(self) -> IconName | None:
-        """Icon displayed in the command palette."""
-        return self._impl.icon
-
-    @icon.setter
-    def icon(self, icon: IconName | None) -> None:
-        self.update(icon=icon)
 
     @override
     def _validate(self, props: Any, value: None) -> tuple[Any, None]:

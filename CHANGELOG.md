@@ -23,10 +23,10 @@ versioning.
   handle, a 256 MiB upload budget and 128 active uploads); browser input keeps
   its bounds, including the 64 MiB upload limit. A removed handle keeps its
   last state for reading and refuses updates and callbacks. Each property
-  change is validated once and published in one message before it commits;
-  names starting with `_` and misspelled attributes now raise instead of being
-  set. Programmatic callbacks run in the order the changes were made, without
-  a queue cap. Slider `marks` and button and toggle `merge` are public
+  change is validated once and published in one message before it commits,
+  and assigning a misspelled property, or a private one such as `_source`, now
+  raises instead of setting a plain attribute. Programmatic callbacks run in
+  the order the changes were made, without a queue cap. Slider `marks` and button and toggle `merge` are public
   properties.
 - GUI (breaking): containers are filled only with `with container:`; the
   direct `folder.add_*(...)` methods are removed. Also removed:

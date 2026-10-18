@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GuiCheckboxMessage,
   GuiFolderMessage,
   GuiFormMessage,
   GuiImageMessage,
   GuiModalMessage,
+  GuiProgressBarMessage,
   GuiRemoveMessage,
   RegisterCommandMessage,
   GuiTabGroupMessage,
@@ -411,5 +413,34 @@ describe("applyGuiConfigUpdate", () => {
     );
     const updated = applyGuiConfigUpdate(config, { label: "updated" });
     expect((updated as GuiFolderMessage).props.label).toBe("updated");
+  });
+
+  it("keeps an input's value top-level and a display element's in its props", () => {
+    const progress: GuiProgressBarMessage = {
+      type: "GuiProgressBarMessage",
+      uuid: "progress",
+      container_uuid: "root",
+      props: { order: 1, value: 10, animated: false, visible: true },
+    };
+    const moved = applyGuiConfigUpdate(progress, { value: 40 });
+    expect((moved as GuiProgressBarMessage).props.value).toBe(40);
+    expect("value" in moved).toBe(false);
+
+    const checkbox: GuiCheckboxMessage = {
+      type: "GuiCheckboxMessage",
+      uuid: "checkbox",
+      value: false,
+      container_uuid: "root",
+      props: {
+        order: 1,
+        label: "Check",
+        hint: null,
+        visible: true,
+        disabled: false,
+      },
+    };
+    const checked = applyGuiConfigUpdate(checkbox, { value: true });
+    expect((checked as GuiCheckboxMessage).value).toBe(true);
+    expect("value" in checked.props).toBe(false);
   });
 });

@@ -90,8 +90,6 @@ IntOrFloat = TypeVar("IntOrFloat", int, float)
 TString = TypeVar("TString", bound=str)
 TLiteralString = TypeVar("TLiteralString", bound=LiteralString)
 THandle = TypeVar("THandle", bound=_GuiHandle)
-TVector = TypeVar("TVector", bound=tuple[float, ...])
-TColor = TypeVar("TColor", bound=tuple[int, ...])
 
 _PreviewWorkKind = Literal["warm", "preview", "reload", "watch"]
 
@@ -262,7 +260,9 @@ class GuiApi:
 
     def _check_active_locked(self) -> None:
         if self._terminal:
-            raise RuntimeError("This client-local GUI is no longer active.")
+            raise RuntimeError(
+                "This GUI is no longer active: its client disconnected or the server stopped."
+            )
 
     def _add(
         self,
@@ -389,14 +389,21 @@ class GuiApi:
             print_async_exception(error)
 
     async def _drain_callbacks(self) -> None:
-        while True:
+        try:
+            while True:
+                with self._lock:
+                    if not self._callback_queue:
+                        return
+                    callbacks, event = self._callback_queue.popleft()
+                await self._run_callbacks(callbacks, event)
+        finally:
             with self._lock:
-                if not self._callback_queue:
-                    self._callback_draining = False
-                    return
-                callbacks, event = self._callback_queue.popleft()
-            for callback in callbacks:
-                await self._server._await_user_callback(callback, event)
+                self._callback_draining = False
+
+    async def _run_callbacks(self, callbacks: Iterable[Callable[..., Any]], event: object) -> None:
+        """Run a callback snapshot in order, outside the lock; failures are reported."""
+        for callback in callbacks:
+            await self._server._await_user_callback(callback, event)
 
     def _apply_default_order(self, order: float | None) -> float:
         """Return a finite explicit order, or the next owner order."""
@@ -493,8 +500,7 @@ class GuiApi:
             if not accepted:
                 preview._finish_press()
         # User code never runs under the registry/state lock.
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_playback_command(
         self, client_id: ClientId, message: _messages.GuiPlaybackCommandMessage
@@ -525,8 +531,7 @@ class GuiApi:
                 handle.state,
             )
             callbacks = tuple(handle._impl.callbacks)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_gui_button_hold(
         self, client_id: ClientId, message: _messages.GuiButtonHoldMessage
@@ -541,8 +546,7 @@ class GuiApi:
                 return
             callbacks = tuple(handle._hold_callbacks.get(message.frequency, ()))
             event = GuiEvent(client, client_id, handle, handle._impl.value)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     def _preview_button_for(
         self, uuid: str, client_id: ClientId
@@ -757,22 +761,14 @@ class GuiApi:
         if found is None:
             return
         form, client = found
-        with self._lock:
-            # Broadcast before user code, so every client closes the form even
-            # if a callback raises.
-            self._websock_interface.queue_message_or_raise(
-                _messages.GuiFormSubmitMessage(message.uuid)
-            )
-            callbacks = tuple(form._impl.callbacks)
-        event = GuiEvent(client, client_id, form)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(form._submit(), GuiEvent(client, client_id, form))
 
     async def _handle_gui_form_reset(
         self, client_id: ClientId, message: _messages.GuiFormResetMessage
     ) -> None:
         found = self._form_for(client_id, message.uuid)
-        if found is not None:
+        # Only a visible regular form draws a Reset.
+        if found is not None and found[0].visible and not found[0].mini:
             found[0].reset_form()
 
     def _queue_to_client(self, client_id: ClientId, message: _messages.Message) -> bool:
@@ -781,7 +777,6 @@ class GuiApi:
         return client is not None and client._websock_connection.queue_message(message) is not False
 
     def _abort_upload(self, client_id: ClientId, transfer_uuid: str, reason: str) -> None:
-        self._uploads.pop((client_id, transfer_uuid), None)
         self._queue_to_client(
             client_id, _messages.FileTransferAbort(transfer_uuid=transfer_uuid, reason=reason)
         )
@@ -841,6 +836,7 @@ class GuiApi:
                 and isinstance(message.content, bytes)
                 and len(message.content) == min(_FILE_UPLOAD_PART_BYTES, upload.size - received) > 0
             ):
+                del self._uploads[key]
                 self._abort_upload(client_id, message.transfer_uuid, "Invalid upload part.")
                 return None
             upload.content.extend(message.content)
@@ -882,8 +878,7 @@ class GuiApi:
         if client is None:
             return
         event = GuiEvent(client, client_id, handle, value)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     def _handle_file_transfer_abort(
         self, client_id: ClientId, message: _messages.FileTransferAbort
@@ -938,8 +933,7 @@ class GuiApi:
                 return
             callbacks = tuple(handle._impl.callbacks)
         event = CommandEvent(client, client_id, handle)
-        for callback in callbacks:
-            await self._server._await_user_callback(callback, event)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_gui_close_modal(
         self, client_id: ClientId, message: _messages.GuiCloseModalMessage
@@ -2194,19 +2188,64 @@ class GuiApi:
             max=max,
         )
 
+    @overload
     def add_vector(
         self,
         label: str,
-        initial_value: TVector | np.ndarray,
+        initial_value: tuple[float, float],
         *,
-        min: TVector | np.ndarray | None = None,
-        max: TVector | np.ndarray | None = None,
+        min: tuple[float, float] | None = None,
+        max: tuple[float, float] | None = None,
         step: float | None = None,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiVectorHandle[TVector]:
+    ) -> GuiVectorHandle[tuple[float, float]]: ...
+
+    @overload
+    def add_vector(
+        self,
+        label: str,
+        initial_value: tuple[float, float, float],
+        *,
+        min: tuple[float, float, float] | None = None,
+        max: tuple[float, float, float] | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[tuple[float, float, float]]: ...
+
+    @overload
+    def add_vector(
+        self,
+        label: str,
+        initial_value: np.ndarray,
+        *,
+        min: tuple[float, ...] | np.ndarray | None = None,
+        max: tuple[float, ...] | np.ndarray | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[tuple[float, ...]]: ...
+
+    def add_vector(
+        self,
+        label: str,
+        initial_value: tuple[float, ...] | np.ndarray,
+        *,
+        min: tuple[float, ...] | np.ndarray | None = None,
+        max: tuple[float, ...] | np.ndarray | None = None,
+        step: float | None = None,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiVectorHandle[Any]:
         """Add a vector input of two or three components to the GUI.
 
         Args:
@@ -2461,16 +2500,40 @@ class GuiApi:
             marks=marks,
         )
 
+    @overload
     def add_color(
         self,
         label: str,
-        initial_value: TColor,
+        initial_value: tuple[float, float, float],
         *,
         disabled: bool = False,
         visible: bool = True,
         hint: str | None = None,
         order: float | None = None,
-    ) -> GuiColorHandle[TColor]:
+    ) -> GuiColorHandle[tuple[int, int, int]]: ...
+
+    @overload
+    def add_color(
+        self,
+        label: str,
+        initial_value: tuple[float, float, float, float],
+        *,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiColorHandle[tuple[int, int, int, int]]: ...
+
+    def add_color(
+        self,
+        label: str,
+        initial_value: tuple[float, ...],
+        *,
+        disabled: bool = False,
+        visible: bool = True,
+        hint: str | None = None,
+        order: float | None = None,
+    ) -> GuiColorHandle[Any]:
         """Add a color picker to the GUI: RGB for three channels, RGBA for four.
 
         Integer channels are in [0, 255]; float channels in [0, 1] are scaled to

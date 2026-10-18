@@ -132,10 +132,15 @@ export function applyGuiConfigUpdate(
   config: GuiComponentMessage,
   updates: Record<string, unknown>,
 ): GuiComponentMessage {
-  const { value, ...propUpdates } = updates;
+  // `value` is the top-level field of an input; a display element such as
+  // the progress bar keeps its `value` among its props.
+  const { value, ...rest } = updates;
+  const isInput = "value" in config;
+  const propUpdates = isInput ? rest : updates;
   const props = config.props as Record<string, unknown>;
   let next = config;
   if (
+    isInput &&
     "value" in updates &&
     !Object.is((config as { value?: unknown }).value, value)
   )

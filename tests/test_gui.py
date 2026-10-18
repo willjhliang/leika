@@ -198,6 +198,8 @@ def test_updates_take_only_public_properties(server: leika.Server) -> None:
     text = server.gui.add_text("Text", "value")
     with pytest.raises(TypeError, match="no settable property '_source'"):
         text.update(_source="forged")
+    with pytest.raises(AttributeError, match="derived internal state"):
+        text._source = "forged"
     with pytest.raises(TypeError, match="no settable property 'lable'"):
         text.lable = "typo"  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
@@ -609,7 +611,13 @@ def test_handle_values_preserve_constructor_invariants(
     with pytest.raises(ValueError, match="3 color channels"):
         color.value = (1, 2)  # type: ignore[assignment]
     rgba = server.gui.add_color("Alpha", (1, 2, 3, 4))
-    for handle, invalid in ((color, [1, 2]), (rgba, [1, 2, 3])):
+    # A browser sends exact integer channels; Python may also give floats.
+    for handle, invalid in (
+        (color, [1, 2]),
+        (rgba, [1, 2, 3]),
+        (color, [0.5, 0.5, 0.5]),
+        (color, [1, 2, 300]),
+    ):
         _browser_update(server, handle, invalid)
     assert color.value == (1, 2, 3)
     assert rgba.value == (1, 2, 3, 4)
@@ -709,11 +717,29 @@ def test_form_submission_and_its_browser_reset(
     _wait_for(lambda: submitted == ["Ada", "Grace"])
 
     monkeypatch.setattr(server.gui, "_resolve_client", lambda _: SimpleNamespace())
-    asyncio.run(
-        server.gui._handle_gui_form_reset(ClientId(1), _messages.GuiFormResetMessage(form.id))
-    )
+
+    def browser_reset(target: leika.GuiFormHandle) -> None:
+        reset = _messages.GuiFormResetMessage(target.id)
+        asyncio.run(server.gui._handle_gui_form_reset(ClientId(1), reset))
+
+    browser_reset(form)
     assert name.value == "Ada"
     assert submitted == ["Ada", "Grace"]
+
+    # Only a visible regular form draws a Reset to press.
+    name.value = "Grace"
+    form.visible = False
+    browser_reset(form)
+    assert name.value == "Grace"
+    with server.gui.add_form(mini=True) as mini:
+        query = server.gui.add_text("Query", "")
+    query.value = "typed"
+    browser_reset(mini)
+    assert query.value == "typed"
+
+    # A form keeps its kind, so the mini form's one-field rule holds.
+    with pytest.raises(ValueError, match="cannot change between mini and regular"):
+        form.mini = True
 
     # Any order is a child's to use.
     with form:
@@ -1308,6 +1334,13 @@ def test_malformed_or_unavailable_uploads_are_aborted(
     _start_upload(server, 1, upload, "disabled", 1)
     assert server.gui._uploads == {}
     assert messages[-1].reason == "Upload target unavailable."
+
+    # A repeated start does not cancel the transfer already under way.
+    upload.disabled = False
+    _start_upload(server, 1, upload, "active", 1)
+    _start_upload(server, 1, upload, "active", 1)
+    assert messages[-1].reason == "An upload is already active for this control."
+    assert (ClientId(1), "active") in server.gui._uploads
 
 
 def test_upload_part_and_button_removal_are_serialized(
@@ -1956,18 +1989,32 @@ def test_notification_update_and_remove_are_linearized(
     assert [type(message) for message in sent] == [_messages.RemoveNotificationMessage]
 
 
+class _FakeTimer:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
 class _FakeLoop:
     """Runs scheduled work on demand, so expiry can be stepped through."""
 
     def __init__(self) -> None:
         self.pending: list[tuple[Any, tuple[Any, ...]]] = []
         self.timers: list[tuple[float, Any]] = []
+        self.handles: list[_FakeTimer] = []
 
     def call_soon_threadsafe(self, callback: Any, *args: Any) -> None:
         self.pending.append((callback, args))
 
-    def call_later(self, delay: float, callback: Any) -> None:
+    def call_later(self, delay: float, callback: Any) -> _FakeTimer:
         self.timers.append((delay, callback))
+        self.handles.append(_FakeTimer())
+        return self.handles[-1]
+
+    def live(self) -> int:
+        return sum(not handle.cancelled for handle in self.handles)
 
     def drain(self) -> None:
         while self.pending:
@@ -1991,11 +2038,17 @@ def test_notification_expiry_mirrors_browser_updates(
     delay, initial = loop.timers[-1]
     assert delay == 5.0
 
-    # Every update restarts the deadline, even one that leaves the timeout.
+    # Every update restarts the deadline, even one that changes nothing, and
+    # the replaced deadline is cancelled.
     handle.title = "Still working"
     initial()
     assert removals() == 0
     loop.drain()
+    published = len(sent)
+    handle.title = "Still working"
+    loop.drain()
+    assert len(sent) == published + 1
+    assert loop.live() == 1
     restarted = loop.timers[-1][1]
 
     # Loading suppresses expiry; None and zero are persistent.
@@ -2028,6 +2081,8 @@ def test_notification_expiry_mirrors_browser_updates(
     racing = server.gui.add_notification("Racing", auto_close_seconds=1)
     loop.drain()
     racing.remove()
+    loop.drain()
+    assert loop.live() == 0
     loop.timers[-1][1]()
     assert removals() == 2
 

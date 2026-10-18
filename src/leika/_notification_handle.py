@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import math
@@ -43,6 +44,8 @@ class NotificationHandle(_Removable[None], NotificationProps):
 
     _message_type = _messages.NotificationShowMessage
     _expiry_generation: int = 0
+    _expiry_timer: asyncio.TimerHandle | None = None
+    """The pending deadline; only the event loop touches it."""
 
     @override
     def _validate(self, props: Any, value: None) -> tuple[Any, None]:
@@ -59,26 +62,52 @@ class NotificationHandle(_Removable[None], NotificationProps):
         return RemoveNotificationMessage(self._impl.uuid)
 
     @override
+    def _prepare(self, changes: dict[str, Any]) -> _Change | None:
+        # Every update restarts the deadline, in the browser too, so even an
+        # unchanged one is published.
+        change = super()._prepare(changes)
+        if change is None:
+            props = self._impl.props
+            change = _Change(props, None, None, dataclasses.asdict(props), False)
+        return change
+
+    @override
     def _apply(self, change: _Change) -> None:
         super()._apply(change)
         self._restart_expiry()
 
+    @override
+    def _retire(self) -> None:
+        super()._retire()
+        self._restart_expiry()
+
     def _restart_expiry(self) -> None:
-        """Mirror the browser toast deadline, without keeping this handle alive."""
+        """Replace the deadline mirroring the browser's toast timer; a removed,
+        loading, or persistent notification has none. The timer holds this
+        handle only weakly."""
         self._expiry_generation += 1
-        props = self._impl.props
-        if props.loading or not props.auto_close_seconds:
-            return
         generation = self._expiry_generation
+        props = self._impl.props
+        delay = props.auto_close_seconds
+        if self._impl.removed or props.loading or not delay:
+            delay = None
         handle = weakref.ref(self)
+        loop = self._impl.gui_api._event_loop
 
         def expire() -> None:
             notification = handle()
             if notification is not None:
                 notification._expire(generation)
 
-        loop = self._impl.gui_api._event_loop
-        loop.call_soon_threadsafe(loop.call_later, props.auto_close_seconds, expire)
+        def install() -> None:
+            notification = handle()
+            if notification is None:
+                return
+            if notification._expiry_timer is not None:
+                notification._expiry_timer.cancel()
+            notification._expiry_timer = None if delay is None else loop.call_later(delay, expire)
+
+        loop.call_soon_threadsafe(install)
 
     def _expire(self, generation: int) -> None:
         with self._impl.gui_api._lock:
