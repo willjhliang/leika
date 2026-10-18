@@ -4,7 +4,6 @@ import { HoverScrollText } from "../components/HoverScrollText";
 import { guiLabelClassName } from "../components/guiLabelStyles";
 import { cn } from "../lib/utils";
 
-import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -17,8 +16,6 @@ import React from "react";
 import { ConnectionBadge } from "./ConnectionPane";
 import BottomPanel from "./BottomPanel";
 import { SettingsButton } from "./SettingsPane";
-import { useControlsShown } from "./SettingsPanelController";
-import { useShowGenerated } from "./useShowGenerated";
 import { ROOT_GUI_CONTAINER_ID } from "./guiConstants";
 
 const MemoizedGeneratedGuiContainer = React.memo(GeneratedGuiContainer);
@@ -43,7 +40,7 @@ function samePageSelectorItems(
 
 /** The active page's name: a plain label when it is the only page, or the same
  * popup and keyboard behavior as every other Leika select when there is a
- * choice, while leaving the dock's title-bar styling intact. */
+ * choice, while leaving the panel's title-bar styling intact. */
 export function PageSelector() {
   const viewer = useViewer();
   const activePageId = viewer.useViewport((state) => state.activePageId);
@@ -71,7 +68,6 @@ export function PageSelector() {
           "inline-flex h-6 min-w-0 max-w-full shrink items-center",
           guiLabelClassName,
         )}
-        data-dock-peek-fade
         data-leika-page-title
       >
         {items[0].label}
@@ -82,14 +78,13 @@ export function PageSelector() {
     items.find((item) => item.value === activePageId)?.label ?? "";
 
   return (
-    // The surrounding dock header starts its drag/collapse gesture on
+    // The surrounding panel header starts its drag/collapse gesture on
     // pointerdown. The selector is the one interactive part of that title bar,
     // so its press belongs only to the select; the sibling space remains the
     // drag handle.
     <span
       className="inline-flex min-w-0 max-w-full shrink"
       onPointerDown={(event) => event.stopPropagation()}
-      data-dock-peek-fade
     >
       <Select
         items={items}
@@ -132,34 +127,20 @@ export function PageSelector() {
   );
 }
 
-/** The control panel's body: the generated GUI. Shared by both panel chromes
- * (the phone's bottom sheet and the desktop dock panel). */
+/** The control panel's body: the app's generated GUI. Shared by both panel
+ * chromes (the phone's bottom sheet and the desktop ControlPanelFrame), which
+ * each hide it while collapsed. The browser's own settings are not in here:
+ * they open in a popout off the header. */
 export function ControlPanelContents() {
-  const hasGenerated = useShowGenerated();
-  // The handle's flag. The controls stay MOUNTED when hidden rather than being
-  // dropped, so half-typed values and the heights the intrinsic-size
-  // transitions measure both survive being folded away.
-  //
-  // The gear's flag is not in here: the browser's own settings open in a
-  // popout off the header, so the body holds the app's controls and nothing
-  // else.
-  const controlsShown = useControlsShown();
   return (
-    // Intrinsic-size transitions need a mounted body to measure.
-    <Collapsible open={hasGenerated && controlsShown}>
-      <CollapsibleContent keepMounted>
-        <div hidden={!controlsShown} data-leika-generated-gui>
-          <MemoizedGeneratedGuiContainer
-            containerUuid={ROOT_GUI_CONTAINER_ID}
-          />
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+    <div data-leika-generated-gui>
+      <MemoizedGeneratedGuiContainer containerUuid={ROOT_GUI_CONTAINER_ID} />
+    </div>
   );
 }
 
-/** The phone's control panel: a bottom sheet. Desktop always uses the dock
- * (ControlPanelDockSurface); App renders this only in the mobile view.
+/** The phone's control panel: a bottom sheet. Desktop uses ControlPanelFrame;
+ * App renders this only in the mobile view.
  *
  * The page name, sheet collapse, connection badge, and settings gear are four
  * independent controls. BottomPanel keeps the collapse button beside the
@@ -197,11 +178,6 @@ export function PanelHeader({
   badge?: React.ReactNode;
 }) {
   return (
-    // Collapsed, the floating panel fades down to the one thing worth leaving
-    // on the canvas: the connection badge. The title and the gear go with the
-    // card (`data-dock-peek-fade`); the badge stays and is what the pointer
-    // comes back to (`data-dock-peek`). Inert in every other chrome -- the
-    // sidebar and the bottom sheet have no such state to be in.
     <div
       // Match a GUI row's 24px frame so the title-to-first-row rhythm is the
       // same as the rhythm between rows, even though the header actions are
@@ -215,21 +191,16 @@ export function PanelHeader({
       <PageSelector />
       {/* A deliberate patch of title-bar surface beside the page name. With a
           choice of pages the name opens its menu; this sibling keeps moving
-          and folding the dock available without asking users to aim between
+          and folding the panel available without asking users to aim between
           glyphs. */}
       <span
         className="min-w-2 flex-1 self-stretch"
         aria-hidden="true"
         data-leika-panel-drag-space
       />
-      {actions !== undefined && (
-        <span className="inline-flex" data-dock-peek-fade>
-          {actions}
-        </span>
-      )}
-      {/* The badge is a button onto what the connection is doing: it is the
-          one thing left on the canvas when the panel folds away, so it is
-          where a reader already looks when something feels wrong. */}
+      {actions}
+      {/* The badge is a button onto what the connection is doing, in the one
+          place a reader looks whether or not the panel is collapsed. */}
       {badge}
     </div>
   );

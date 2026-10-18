@@ -6,10 +6,12 @@ import { ThemeProvider as NextThemesProvider } from "next-themes";
 
 import { CommandPalette } from "./CommandPalette";
 import ControlPanel from "./ControlPanel/ControlPanel";
+import { ControlPanelFrame } from "./ControlPanel/ControlPanelFrame";
 import {
-  ControlDockState,
-  ControlPanelDockSurface,
-} from "./ControlPanel/ControlPanelDock";
+  ControlPanelContext,
+  useCanvasInset,
+  useControlPanelSession,
+} from "./ControlPanel/controlPanelLayout";
 import { FilePreviewHost } from "./components/FilePreviewDialog";
 import { MessageHandler } from "./MessageHandler";
 import { LeikaModal } from "./Modal";
@@ -17,7 +19,6 @@ import { defaultWebsocketServer, searchParamKey } from "./SearchParamsUtils";
 import { useViewer } from "./ViewerContext";
 import { ViewerProvider } from "./ViewerProvider";
 import { WebsocketMessageProducer } from "./WebsocketInterface";
-import { ThemeConfigurationMessage } from "./WebsocketMessages";
 import { Toaster } from "./components/ui/toast";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useAccentColor } from "./hooks/useAccentColor";
@@ -47,7 +48,7 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
   // Settings is the single selection, whether changed by Python or the GUI.
   // Auto always follows the browser, with no server override underneath it.
   const darkMode = chosenDarkMode ?? prefersDarkMode;
-  const controlLayout = viewer.useGui((state) => state.theme.control_layout);
+  const controlPanel = useControlPanelSession();
   useAccentColor(viewer.useSettings((state) => state.accentColor));
   useThemeColor();
 
@@ -62,64 +63,33 @@ function ViewerContents({ children }: { children: React.ReactNode }) {
       disableTransitionOnChange
     >
       <TooltipProvider delay={500}>
-        {children}
-        <MessageHandler />
-        <LeikaModal />
-        <FilePreviewHost />
-        <CommandPalette />
-        <AppLayout controlLayout={controlLayout} />
+        <ControlPanelContext.Provider value={controlPanel}>
+          {children}
+          <MessageHandler />
+          <LeikaModal />
+          <FilePreviewHost />
+          <CommandPalette />
+          <AppLayout />
+        </ControlPanelContext.Provider>
       </TooltipProvider>
     </NextThemesProvider>
   );
 }
 
-function AppLayout({
-  controlLayout,
-}: {
-  controlLayout: ThemeConfigurationMessage["control_layout"];
-}) {
+function AppLayout() {
   const mobileView = useMobileView();
-  const [controlDock, setControlDock] = React.useState<ControlDockState>({
-    side: null,
-    widthPx: 320,
-    expanded: true,
-  });
-
-  React.useEffect(() => {
-    // The dock surface unmounts on the way into the mobile view, and a stale
-    // `side: "left"` would keep the toasts inset off a panel that is no longer
-    // there.
-    if (mobileView) {
-      setControlDock((previous) =>
-        previous.side === null ? previous : { ...previous, side: null },
-      );
-    }
-  }, [mobileView]);
-
   return (
     <div className="relative flex size-full flex-col">
       <div className="relative flex w-full flex-1 overflow-hidden">
-        <NotificationsPanel
-          dockedLeftInsetPx={
-            controlDock.side === "left" && controlDock.expanded
-              ? controlDock.widthPx
-              : null
-          }
-        />
+        <NotificationsPanel mobileView={mobileView} />
         <div className="relative h-full flex-1 overflow-hidden bg-background">
-          {/* Desktop always gets the dock; `controlLayout` is where the panel
-              STARTS, which the dock surface applies. The phone's bottom sheet
-              is the one chrome the dock cannot absorb. */}
-          {mobileView ? (
+          {/* The desktop panel sits beside the canvas rather than around it,
+              so moving it, or switching to the phone's bottom sheet, never
+              remounts the workspace. */}
+          <CanvasInset mobileView={mobileView}>
             <ViewportWorkspace />
-          ) : (
-            <ControlPanelDockSurface
-              controlLayout={controlLayout}
-              onDockStateChange={setControlDock}
-            >
-              <ViewportWorkspace />
-            </ControlPanelDockSurface>
-          )}
+          </CanvasInset>
+          {!mobileView && <ControlPanelFrame />}
         </div>
         {mobileView && <ControlPanel />}
       </div>
@@ -127,17 +97,30 @@ function AppLayout({
   );
 }
 
-function NotificationsPanel({
-  dockedLeftInsetPx,
+/** The canvas, giving up whatever width a docked, expanded panel holds. */
+function CanvasInset({
+  mobileView,
+  children,
 }: {
-  dockedLeftInsetPx: number | null;
+  mobileView: boolean;
+  children: React.ReactNode;
 }) {
+  const left = useCanvasInset("left", mobileView);
+  const right = useCanvasInset("right", mobileView);
+  return (
+    <div className="absolute inset-y-0" style={{ left, right }}>
+      {children}
+    </div>
+  );
+}
+
+function NotificationsPanel({ mobileView }: { mobileView: boolean }) {
   // The toast viewport defaults to the bottom-right corner. Leika keeps
   // notifications on the LEFT, pushed clear of a left-docked control panel so
   // they never stack underneath it. Placement is inline rather than utility
-  // classes because the inset is a live pixel measurement from the dock; the
-  // width shrinks with it so a wide docked panel can't push toasts off-screen.
-  const insetPx = dockedLeftInsetPx ?? 0;
+  // classes because the inset is the panel's live width; the width shrinks
+  // with it so a wide docked panel can't push toasts off-screen.
+  const insetPx = useCanvasInset("left", mobileView);
   return (
     <Toaster
       limit={10}

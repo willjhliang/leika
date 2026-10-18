@@ -35,7 +35,7 @@ def test_matplotlib_pane_renders_svg_and_rescales_without_a_redraw(
         before = image.bounding_box()
         assert before is not None
         leika_page.set_viewport_size({"width": 700, "height": 600})
-        # The dock reflows through a ResizeObserver, so the pane takes a frame
+        # The workspace reflows through a ResizeObserver, so the pane takes a frame
         # or more to follow the viewport. `to_be_visible` returns at once here
         # -- the image was already visible -- so poll the width itself.
         leika_page.wait_for_function(

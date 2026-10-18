@@ -40,11 +40,8 @@ function renderTabs(): string {
   );
 }
 
-describe("FixedTabGroup", () => {
-  it("draws the same strip the dock draws, without the dragging", () => {
-    // One kind of tab. What the dock adds to a group is that its tabs can be
-    // torn out and rearranged, not a different-looking strip -- so a group
-    // with no dock to drag into carries every hook but the drag ones.
+describe("TabGroup", () => {
+  it("draws an underlined strip that wraps", () => {
     const markup = renderTabs();
     expect(markup).toContain("data-leika-tabs-list");
     expect(markup.match(/data-leika-tab(?:=|\s|>)/g)).toHaveLength(2);
@@ -54,9 +51,6 @@ describe("FixedTabGroup", () => {
     expect(markup).toContain("flex-wrap");
     expect(markup).not.toContain("overflow-x-auto");
     expect(markup).not.toContain("no-scrollbar");
-    // Nothing here is draggable, so none of the dock's hooks are on it.
-    expect(markup).not.toContain("data-dock-tab");
-    expect(markup).not.toContain("data-dock-strip");
   });
 
   it("keeps inactive panel contents mounted for renderer and draft continuity", () => {

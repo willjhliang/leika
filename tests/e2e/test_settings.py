@@ -167,7 +167,7 @@ def test_settings_open_in_a_popout_off_the_gear(
         }"""
     )
 
-    panel = leika_page.locator("[data-dock-group]").first
+    panel = leika_page.get_by_test_id("control-panel")
     before_panel = panel.bounding_box()
     before_checkbox = checkbox.bounding_box()
     assert before_panel is not None and before_checkbox is not None
@@ -262,7 +262,7 @@ def test_the_gear_reaches_the_docked_and_mobile_chromes(
         "() => !document.body.innerText.includes('Connecting...')", timeout=15_000
     )
     expect(page.get_by_test_id("control-panel")).to_have_attribute(
-        "data-dock-side", "right", timeout=5_000
+        "data-leika-placement", "right", timeout=5_000
     )
 
     # Docked: same cluster as the floating header, gear before the pill.
@@ -570,7 +570,7 @@ def test_the_accent_reset_stays_inside_a_panel_dragged_to_its_minimum(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    """The dock lets the panel down to 220px, which is inside the width where
+    """The panel resizes down to 220px, which is inside the width where
     the trigger and the button stop fitting side by side. The trigger gives way
     instead of pushing the button off the panel."""
     pane = open_settings(leika_page)
@@ -645,7 +645,7 @@ def test_the_handle_folds_the_panel_without_taking_the_gear_with_it(
     leika_server.gui.add_checkbox("Enabled", initial_value=True)
     generated = leika_page.locator("[data-leika-generated-gui]")
     settings = leika_page.locator(f"{PANE}:visible")
-    folded = leika_page.locator("[data-dock-collapsed]")
+    folded = leika_page.locator("[data-leika-collapsed]")
     expect(generated).to_be_visible(timeout=5_000)
 
     drag_space = leika_page.locator("[data-leika-panel-drag-space]")
@@ -697,7 +697,7 @@ def _panel_surface(page: Page) -> str:
     )
 
 
-def test_the_browser_chrome_is_tinted_like_the_dock(
+def test_the_browser_chrome_is_tinted_like_the_panel(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -724,7 +724,7 @@ def test_the_browser_chrome_is_tinted_like_the_dock(
             arg=dark,
         )
         surface = _panel_surface(page)
-        # The dock's own surface, not a second copy of it that could drift.
+        # The panel's own surface, not a second copy of it that could drift.
         page.wait_for_function(
             """surface => document.querySelector('meta[name="theme-color"]')
                  .content === surface""",

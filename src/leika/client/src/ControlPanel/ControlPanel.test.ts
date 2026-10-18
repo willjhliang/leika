@@ -70,7 +70,7 @@ describe("PanelHeader page selector", () => {
     expect(markup).not.toContain("<button");
   });
 
-  it("keeps the page-name styling borderless and leaves a dock drag target", () => {
+  it("keeps the page-name styling borderless and leaves a header drag target", () => {
     const markup = renderPageHeader();
 
     expect(markup).toContain("data-leika-page-selector");

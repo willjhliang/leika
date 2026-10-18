@@ -113,12 +113,12 @@ def test_loading_barrier_dock_collapse_and_membership_updates(
     page.wait_for_function(f"{VIDEOS}.every(v => !v.paused)")
     header = page.get_by_test_id("control-panel").locator("[data-leika-panel-header]")
     header.click(position={"x": 30, "y": 12})
-    expect(page.locator("[data-dock-collapsed]")).to_have_count(1)
+    expect(page.locator("[data-leika-collapsed]")).to_have_count(1)
     page.wait_for_timeout(200)
     assert page.evaluate(f"{VIDEOS}.every(v => !v.paused)")
     page.wait_for_timeout(400)  # Outside the header double-click interval.
     header.click(position={"x": 30, "y": 12})
-    expect(page.locator("[data-dock-collapsed]")).to_have_count(0)
+    expect(page.locator("[data-leika-collapsed]")).to_have_count(0)
     panes[3].fps = 20
     expect(page.get_by_role("button", name="Next frame Playback", exact=True)).to_have_count(0)
     panes[3].sync_group = None

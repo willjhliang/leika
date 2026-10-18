@@ -4,7 +4,7 @@ Pages
 .. currentmodule:: leika
 
 Pages partition a workspace's panes and browser-managed pane layouts. The GUI
-and control dock remain shared across the workspace.
+and control panel remain shared across the workspace.
 
 Every :class:`Server` creates a default page. ``Server(label=...)`` names that
 page, or it is named ``Main`` when no label is supplied. ``server.panes`` is a

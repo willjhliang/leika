@@ -112,30 +112,11 @@ def test_nested_gui_tabs_do_not_create_nested_card_surfaces(
     panel = page.get_by_test_id("control-panel")
     expect(panel).to_have_attribute("data-slot", "card")
     expect(page.locator('[data-slot="card"] [data-slot="card"]')).to_have_count(0)
-    control_group = panel.locator("[data-dock-group]").first
-    expect(control_group).to_be_visible()
-    expect(control_group.locator(':scope > [data-slot="tabs"]')).to_have_count(0)
-
-    nested_tab = page.get_by_role("tab", name="Nested tab")
-    nested_tab.hover()
-    # The tab's grip is the tab's drag; its face belongs to the strip.
-    grip_bounds = nested_tab.locator("[data-leika-tab-drag-handle]").bounding_box()
-    assert grip_bounds is not None
-    grip_x = grip_bounds["x"] + grip_bounds["width"] / 2
-    grip_y = grip_bounds["y"] + grip_bounds["height"] / 2
-    page.mouse.move(grip_x, grip_y)
-    page.mouse.down()
-    page.mouse.move(grip_x, grip_y + 90, steps=8)
-    page.mouse.up()
-
-    expect(page.locator("[data-floating-window]")).to_have_count(2)
-    torn_window = nested_content.locator("xpath=ancestor::*[@data-floating-window][1]")
-    expect(torn_window).to_be_visible()
-    expect(card_content_ancestors).to_have_count(1)
+    expect(panel.get_by_role("tab", name="Nested tab")).to_be_visible()
     assert page_errors == []
 
 
-def test_dockable_tabs_keep_inactive_panel_dom_mounted(
+def test_gui_tabs_keep_inactive_panel_dom_mounted(
     leika_server: leika.Server,
     page: Page,
     page_errors: list[str],
@@ -284,9 +265,7 @@ def test_hover_panel_is_clamped_on_desktop_tablet_and_mobile(
     assert bounds is not None
     assert abs(bounds["y"] - 15.0) <= 0.5
     assert bounds["height"] <= 870.5
-    scroll_viewport = panel.locator(
-        '[data-dock-panel-scroll-body] > [data-slot="scroll-area-viewport"]'
-    ).first
+    scroll_viewport = panel.locator('[data-slot="scroll-area-viewport"]').first
     assert scroll_viewport.evaluate("element => element.scrollHeight > element.clientHeight")
     last_control.scroll_into_view_if_needed()
     expect(last_control).to_be_visible()
@@ -388,7 +367,7 @@ def test_tall_docked_panel_scrolls_internally_and_stays_inside_viewport(
     )
 
     panel = page.get_by_test_id("control-panel")
-    expect(panel).to_have_attribute("data-dock-side", control_layout, timeout=5_000)
+    expect(panel).to_have_attribute("data-leika-placement", control_layout, timeout=5_000)
 
     last_control = page.get_by_text("Docked control 60", exact=True)
     expect(last_control).to_be_attached(timeout=5_000)
@@ -506,13 +485,11 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
 ) -> None:
     """A panel with nothing to show is just its header inside the card.
 
-    The body stays mounted at zero height so its intrinsic-size transition can
-    be measured, which leaves it a flex item -- and the header/body gap hanging
-    below a lone "Connecting..." or "Inactive" header, unbalanced by the card's
-    padding. The gap belongs to the body, so it goes when the body has nothing
-    in it, and the header runs on to the bottom of the card instead.
+    The header/body gap belongs to the body, so it goes when the body has
+    nothing in it -- a lone "Connecting..." or "Inactive" header -- and the
+    header runs on to the bottom of the card instead.
 
-    The gap is the header's own bottom padding rather than a gap between flex
+    The gap is the header's own bottom padding rather than a gap between grid
     items, so that pressing it lands on the header: it is title bar to look at
     and has to be title bar to the pointer too.
     """
@@ -520,11 +497,9 @@ def test_empty_panel_body_leaves_no_gap_under_the_header(
     page.goto(leika_server.url)
     page.wait_for_selector('[data-testid="control-panel"]', timeout=15_000)
 
-    frame = page.locator("[data-dock-group]").filter(
-        has=page.get_by_test_id("control-panel-handle")
-    )
+    frame = page.get_by_test_id("control-panel")
     measure = """el => {
-        const header = el.querySelector('[data-dock-header]');
+        const header = el.querySelector('[data-testid="control-panel-handle"]');
         return {
             // Below the title: the gap, or the card's own inset once the header
             // is the last thing in the card and has taken that inset over.

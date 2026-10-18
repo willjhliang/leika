@@ -5,6 +5,15 @@ versioning.
 
 ## Unreleased
 
+- Control panel (breaking): GUI tabs can no longer be torn out, reordered,
+  stacked, or split; tab groups always render inline. The panel still floats,
+  docks to the left or right edge, resizes its width, and collapses by clicking
+  its header. Collapsed, it keeps that header in place of the side rail or the
+  fade to the connection badge, and the phone's bottom sheet shares the same
+  collapsed state. Each browser remembers the arrangement per server and
+  `workspace_id`; `control_layout` places the panel until the viewer moves it.
+  Saved panel layouts reset once.
+
 - Settings **Rendering** offers persistent Auto, Performance, and Quality presets
   for native image panes. Auto adapts to measured connection throughput, independently
   of display size, preserving JPEG quality and at least 70% of source dimensions.

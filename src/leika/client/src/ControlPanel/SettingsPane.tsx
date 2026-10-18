@@ -5,7 +5,6 @@ import { commandPalette } from "../CommandPaletteController";
 import { ImageFit, RenderingMode } from "../ClientSettings";
 import { LEIKA_VERSION } from "../VersionInfo";
 import { useViewer } from "../ViewerContext";
-import { usePeekHold } from "../dock/DockContext";
 import { ColorRow } from "../components/ColorPicker";
 import { HoverScrollText } from "../components/HoverScrollText";
 import {
@@ -32,7 +31,6 @@ import {
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { cn } from "@/lib/utils";
-import { settingsPanel, useSettingsPanelOpen } from "./SettingsPanelController";
 import { POPOUT_WIDTH_CLASS } from "./controlWidth";
 
 /** Names the popout the gear opens, for assistive technology. */
@@ -352,39 +350,26 @@ function SettingsRows() {
 export function SettingsButton() {
   const { useGui } = useViewer();
   const connected = useGui((state) => state.websocketState === "connected");
-  const opened = useSettingsPanelOpen();
+  const [opened, setOpened] = React.useState(false);
 
   const gear = React.useRef<HTMLSpanElement>(null);
-
-  // Reaching for the popout means leaving the panel, which is what folds a
-  // collapsed one away to the badge beside this. Not while it is up.
-  usePeekHold(opened);
 
   // Closed on the way down, not merely locked: leaving the popout open behind
   // a disabled gear would strand it, with nothing left that could close it.
   React.useEffect(() => {
-    if (!connected) settingsPanel.close();
+    if (!connected) setOpened(false);
   }, [connected]);
 
   return (
-    // The panel header is the floating window's drag handle and its
-    // click-to-collapse target, both driven from `pointerdown`, so the gesture
-    // that opens the popout must not also reach it.
+    // The panel header is the panel's drag handle and its click-to-collapse
+    // target, both driven from `pointerdown`, so the gesture that opens the
+    // popout must not also reach it.
     <span
       ref={gear}
       className="inline-flex"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      {/* Open state stays in the shared controller rather than in this
-          component: the gear is mounted by the panel HEADER, which the dock
-          registers separately from the body, and other parts of the panel read
-          whether the settings are up. */}
-      <Popover
-        open={opened}
-        onOpenChange={(next) =>
-          next ? settingsPanel.open() : settingsPanel.close()
-        }
-      >
+      <Popover open={opened} onOpenChange={setOpened}>
         <PopoverTrigger
           render={
             <Button

@@ -61,8 +61,8 @@ file-serving details while preserving their shared shutdown boundary.
 | Workspace placement and pointer gestures | `viewport/ViewportWorkspace.tsx`, `viewport/layoutModel.ts`, `viewport/gridLayout.ts` |
 | Pane chrome, loading state, and renderer selection | `viewport/ViewportPaneHost.tsx`, `viewport/ViewportPaneLoadingOverlay.tsx`, `viewport/ViewportPaneRenderer.tsx` |
 | Image, Matplotlib, Plotly, and Viser rendering | The corresponding `viewport/Viewport*Renderer.tsx` modules |
-| Browser-local video clocks, groups and media lifecycle | `viewport/videoPlayback.ts`; dock and fullscreen controls subscribe to the same controller |
-| Dock layout and control-panel presentation | `dock/`, `ControlPanel/` |
+| Browser-local video clocks, groups and media lifecycle | `viewport/videoPlayback.ts`; control-panel and fullscreen controls subscribe to the same controller |
+| Control-panel placement and presentation | `ControlPanel/` |
 
 `createGuiState()` and `createViewportState()` construct complete sessions
 without mounting React. Their hooks own one session per mounted viewer, and
@@ -102,7 +102,7 @@ snapshot under pressure. Transfers and GUI controls still reset per connection;
 retained renderers keep their resource leases until replaced or unmounted.
 
 Named pages partition the viewport state, not the whole application. The GUI
-tree and control dock are workspace-global and stay mounted as the viewer
+tree and control panel are workspace-global and stay mounted as the viewer
 switches pages. Inactive-page pane state remains retained on the server, but its
 payload is not serialized or sent to that browser until the page is selected.
 The browser preserves every page's layout and may retain one inactive page's
@@ -275,18 +275,19 @@ subscription so the server can route pane payloads; it does not dispatch a
 Python application event or callback.
 
 Pages scope only the visualization viewport. `server.gui`, each `client.gui`,
-and the control dock's own position, size, and collapsed state are
-workspace-global. Switching pages therefore changes the page name in the dock
+and the control panel's own placement, width, and collapsed state are
+workspace-global. Switching pages therefore changes the page name in the panel
 header and the panes on the canvas without replacing the controls or moving the
-dock.
+panel.
 
 Version-3 pane layouts are stored under a browser key containing the server
 URL, `workspace_id`, and `page_id`. The selected `page_id` is stored separately
-under the server URL and `workspace_id`, while the control dock keeps its own
-workspace-level key. These namespaces avoid collisions between servers and
-pages. Stable `page_id` and `pane_id` values let saved state recognize a page
-and its panes after a Python restart; display names and pane titles may change
-without changing layout identity.
+under the server URL and `workspace_id`, and so is the control panel's
+arrangement once the viewer moves, resizes, or collapses it; until then the
+panel follows `configure_theme(control_layout=...)`. These namespaces avoid
+collisions between servers and pages. Stable `page_id` and `pane_id` values let
+saved state recognize a page and its panes after a Python restart; display names
+and pane titles may change without changing layout identity.
 
 The default page provides the compatibility bridge from the former one-page
 model. If it has no version-3 layout, the client reads the version-2 layout for
@@ -297,7 +298,7 @@ Public `workspace_id`, explicit `page_id`, and explicit `pane_id` values are
 nonempty valid Unicode, at most 1,024 UTF-16 code units, and cannot be the
 reserved JavaScript property names `__proto__`, `prototype`, or `constructor`.
 
-Internally, an invisible root sentinel gives the dock manager a valid anchor
+Internally, an invisible root sentinel gives the pane layout a valid anchor
 before any data pane exists. It is not a public pane and occupies no workspace
 once visible panes are present.
 
@@ -310,9 +311,9 @@ updates. Empty content uses that same path and allocates no renderer.
 
 ## Scope
 
-Leika is a simple data workspace. The client carries GUI, dock, layout, image,
-SVG, and Plotly renderers, and CI checks that the shipped wheel and its browser
-dependencies stay within that surface. Those renderers back the four pane
+Leika is a simple data workspace. The client carries GUI, control panel, layout,
+image, SVG, and Plotly renderers, and CI checks that the shipped wheel and its
+browser dependencies stay within that surface. Those renderers back the four pane
 types in [Panes](panes.md). Matplotlib sources are held weakly, while ndarray
 and Plotly assignments detach bounded snapshots as described above.
 
