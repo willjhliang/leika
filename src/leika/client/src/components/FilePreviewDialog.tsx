@@ -381,9 +381,9 @@ function PreviewBody({
   const [fullscreen] = usePreviewFullscreen(previewMemoryKey(preview));
 
   switch (kind) {
-    // The three that are shown at their own size. The popup has already been
-    // opened at the media's width -- see `mediaPreviewWidth` at the bottom of
-    // this file -- so each of these fills it, rather than being centered in
+    // The three that are shown at their own size. The popup takes the media's
+    // width -- see `mediaPreviewWidth`, which a picture answers once it has
+    // loaded -- so each of these fills it, rather than being centered in
     // something wider with a column of empty dialog down either side.
     case "image":
       return (
