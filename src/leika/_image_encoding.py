@@ -55,5 +55,6 @@ def prepare_image(
         quality = 85 if jpeg_quality is None else jpeg_quality
         Image.fromarray(pixels[..., :3]).save(output, format="JPEG", quality=quality)
     else:
-        Image.fromarray(pixels).save(output, format="PNG")
+        # Fast compression: panes stream frames, and size matters less than time.
+        Image.fromarray(pixels).save(output, format="PNG", compress_level=1)
     return snapshot, resolved, output.getvalue()

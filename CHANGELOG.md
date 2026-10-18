@@ -29,11 +29,12 @@ versioning.
 - Plotly: GUI plots now follow the viewer's light or dark theme like Plotly
   panes, through one shared serializer. Plotly's browser runtime is sent once
   to every browser after the first figure, including browsers viewing pages
-  without one. Figures are no longer preflighted (500,000 values, 4,096 config
+  without one; a reconnecting browser keeps the runtime it already loaded. Figures are no longer preflighted (500,000 values, 4,096 config
   items, 16 Mi-character JSON), any `go.Figure` subclass is accepted, and Plotly
   and Matplotlib serialization no longer take a server-wide lock.
 - Images: GUI and pane images go through one preparation path that always
-  encodes with Pillow, even when OpenCV is installed. Image calls no longer
+  encodes with Pillow, even when OpenCV is installed, using fast PNG
+  compression (level 1) as OpenCV did. Image calls no longer
   enforce the 16,384-pixel side and 32 Mi-pixel limits or the 512 MiB
   server-wide preparation budget, and accept `numpy.ndarray` subclasses.
 - Transport (breaking): `leika.infra` is removed. The WebSocket and HTTP

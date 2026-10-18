@@ -2535,8 +2535,12 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         path = self._watched_path()
         if path is None:
             return
-        filename = self._filename if self._filename is not None else path.name
         try:
+            filename = (
+                self._filename
+                if self._filename is not None
+                else validate_file_display_name(path.name)
+            )
             # Checked here as well as in the send, because the send says so
             # in a notification: a file that has grown past the limit while
             # being watched would raise one every tick, and the reader never
@@ -2545,7 +2549,7 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
             if path.stat().st_size > self._max_bytes:
                 return
             self._show(client, filename, path, "reload")
-        except OSError:
+        except (OSError, ValueError):
             # Read out from under us between the stat and the send. The file
             # is still moving; the next watch will find it.
             return
@@ -2568,12 +2572,12 @@ class GuiPreviewButtonHandle(_GuiFileButtonHandle):
         # the same (source UUID, None) identity until the fresh send completes.
         if callable(content) or isinstance(content, bytes):
             return
-        filename = self._filename
-        if filename is None:
-            filename = content.name if isinstance(content, Path) else None
-        if filename is None:
-            return
         try:
+            filename = (
+                self._filename
+                if self._filename is not None
+                else validate_file_display_name(content.name)
+            )
             version = self._version()
             stream_uuid = self._send_text_stream(client, filename, content, version)
             prepared = self._prepared(client, filename, content, stream_uuid)
