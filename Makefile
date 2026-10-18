@@ -43,5 +43,8 @@ docs-serve: ## Serve the documentation on :8000, rebuilding as files change
 gallery: ## Regenerate the docs component gallery (screenshots + page)
 	python scripts/gallery.py
 
-package: ## Build and validate the release distributions
-	python scripts/build_release.py
+package: ## Build the release sdist and wheel into dist/ and check them
+	rm -rf dist
+	python -m build
+	python scripts/check_dist.py
+	python -m twine check --strict dist/*

@@ -9,6 +9,9 @@ versioning.
   environment variable are removed. A source checkout still rebuilds the
   browser client when its sources change, and `make build-client` builds it
   explicitly. Building needs `npm` on `PATH`; Leika no longer downloads Node.
+  The sdist now carries the built client instead of its TypeScript sources,
+  and no longer includes the documentation; change the client from a git
+  checkout.
 
 - Support simulator environments pinned to WebSockets 12 and Pillow 11.3.
   One WebSockets server implementation uses the API available from version 12

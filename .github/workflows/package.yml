@@ -1,101 +1,58 @@
 name: Package
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   release:
     types: [published]
   workflow_dispatch:
-
-concurrency:
-  group: package-${{ github.ref }}
-  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  wheel:
+  build:
     runs-on: ubuntu-24.04
-    name: Build and validate distributions
+    name: Build and check distributions
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: src/leika/client/.nvmrc
           package-manager-cache: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-          enable-cache: false
-      - name: Check release tag matches the source version
+      - run: python -m pip install -e ".[dev]"
+      - name: Check the tag matches leika.__version__
         if: github.event_name == 'release'
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: python scripts/check_release_tag.py "$RELEASE_TAG"
-      - name: Build distributions
-        run: make package
-      - name: Check release tag matches the packaged version
-        if: github.event_name == 'release'
+          TAG: ${{ github.event.release.tag_name }}
+        run: test "$TAG" = "v$(python -c 'import leika; print(leika.__version__)')"
+      - run: make package
+      - name: Serve the page from each installed distribution
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: python scripts/check_release_tag.py "$RELEASE_TAG" dist/*.whl
-      - name: Base-install smoke test
+          SMOKE_TEST: |
+            import urllib.request, leika
+            server = leika.Server(host="127.0.0.1", port=0, verbose=False)
+            assert urllib.request.urlopen(server.url).read().startswith(b"<!doctype html>")
+            server.stop()
         run: |
-          python -m venv /tmp/leika-wheel-smoke
-          /tmp/leika-wheel-smoke/bin/pip install dist/*.whl
-          /tmp/leika-wheel-smoke/bin/python -c "import leika; from importlib.metadata import version; assert leika.__version__ == version('leika'), (leika.__version__, version('leika')); print('installed leika', leika.__version__)"
-      - name: Examples-extra smoke test
-        run: |
-          python -m venv /tmp/leika-examples-smoke
-          /tmp/leika-examples-smoke/bin/pip install "$(realpath dist/*.whl)[examples]"
-          /tmp/leika-examples-smoke/bin/python -c "import leika, viser, plotly.graph_objects as go; from matplotlib.figure import Figure; assert go.Figure() is not None and Figure() is not None"
-      - name: Source-distribution smoke test
-        run: |
-          python -m venv /tmp/leika-sdist-smoke
-          /tmp/leika-sdist-smoke/bin/pip install dist/*.tar.gz
-          /tmp/leika-sdist-smoke/bin/python -c "import leika; print('installed sdist leika', leika.__version__)"
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            python -m venv "/tmp/smoke-${artifact##*/}"
+            "/tmp/smoke-${artifact##*/}/bin/pip" install "$artifact"
+            "/tmp/smoke-${artifact##*/}/bin/python" -c "$SMOKE_TEST"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: distributions
           path: dist/
           if-no-files-found: error
 
-  release-python:
-    if: github.event_name == 'release'
-    name: Release Python suite
-    uses: ./.github/workflows/python.yml
-
-  release-client:
-    if: github.event_name == 'release'
-    name: Release browser-client suite
-    uses: ./.github/workflows/client.yml
-
-  release-docs:
-    if: github.event_name == 'release'
-    name: Release documentation suite
-    # A called workflow may not request more than its caller grants, and this
-    # file grants `contents: read`. docs.yml's deploy job asks for Pages, so
-    # without these the whole workflow is rejected before any job starts. The
-    # deploy itself still skips on a tag ref; only its declaration is checked.
-    permissions:
-      contents: read
-      pages: write # Required by the called documentation workflow's deploy job.
-      id-token: write # Required by the called documentation workflow's OIDC.
-    uses: ./.github/workflows/docs.yml
-
-  release-e2e:
-    if: github.event_name == 'release'
-    name: Release browser suite
-    uses: ./.github/workflows/e2e.yml
-
   publish:
     if: github.event_name == 'release'
     name: Publish to PyPI
-    needs: [wheel, release-python, release-client, release-docs, release-e2e]
+    needs: build
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:

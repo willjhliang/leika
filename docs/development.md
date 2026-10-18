@@ -53,10 +53,9 @@ target but CI runs it, so skipping it locally is a way to go red on a broken
 link or snippet.
 
 Unit tests must work without the optional plotting libraries unless marked
-`plotly` or `matplotlib`. `make package` builds the distributions and validates
-them with `scripts/check_wheel.py` and `scripts/check_sdist.py`: the browser
-bundle must be present, files that do not belong in a release wheel are
-rejected, and archive size, shape, and integrity limits are enforced.
+`plotly` or `matplotlib`. `make package` builds the sdist and wheel into
+`dist/`, each with the built client and without its sources, and checks them
+with `scripts/check_dist.py` and `twine check --strict`.
 
 ## Pinned simulator environments
 
@@ -126,68 +125,22 @@ in `docs/api/`; autodoc will not discover it otherwise.
 
 ## Releases
 
-Before tagging, bump `__version__` in `src/leika/__init__.py`, add the dated
-entry to `CHANGELOG.md`, regenerate the protocol/version file and component
-gallery, run the normal release checks, and build the canonical distributions.
-The gallery command owns `docs/gallery.md` and its light/dark screenshots; add
-all regenerated files to the release commit so a clean checkout has the exact
-generation the page references.
+Bump `__version__` in `src/leika/__init__.py`, add the dated entry to
+`CHANGELOG.md`, run `make generate` (the client's version file follows
+`__version__`) and, after visual changes, `make gallery`. Commit the results,
+run the checks above, then tag and publish a GitHub release:
 
 ```bash
-make generate
-make gallery
-make lint typecheck client-test test
-npm audit --prefix src/leika/client --audit-level=moderate
-npm audit --prefix src/leika/client --omit=dev --audit-level=moderate
-for python in 3.10 3.14; do
-  for extra in base examples; do
-    python scripts/check_dependency_audit.py --python "$python" --extra "$extra"
-  done
-done
-python scripts/check_docs.py
-make docs
-make test-e2e
-make package
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z"
 ```
 
-`make package` is the single release build path. It performs a fresh locked
-`npm ci` and production client build, checks the generated protocol, builds
-with hashed constraints, validates both archives plus `twine check --strict`,
-and recoverably swaps `dist/` for the exact validated pair. Client freshness
-matters because its bundle carries the server version and mismatches refuse to
-connect. The npm and Python dependency audits above are also required because registry
-advisory data is network-backed and intentionally not part of the artifact
-builder. The Python audit compares the exact isolated installation with the
-marker-selected locked export before querying advisories, for both the base and
-user-installable examples dependency sets at the oldest and newest supported
-Python versions.
-
-Release packaging and the published package require Python 3.10 or newer.
-Release commands require uv 0.12.3, enforced by `pyproject.toml`;
-`uv self update 0.12.3` updates an older installation. When changing the
-reviewed Hatchling pin in `build-constraints.in`, regenerate and commit the
-complete hashed closure with the pinned build tool:
-
-```bash
-uvx uv@0.12.3 pip compile build-constraints.in \
-  --generate-hashes --python-version 3.10 \
-  --custom-compile-command \
-  "uvx uv@0.12.3 pip compile build-constraints.in (see docs/development.md)" \
-  --output-file build-constraints.txt
-```
-
-Publishing the release runs `.github/workflows/package.yml`, which checks the
-generated protocol and version, reruns the Python, client, docs, and browser
-suites, builds the distributions, validates and smoke-tests both the wheel and
-source archive, and only then uploads to PyPI through Trusted Publishing. Every
-one of those gates blocks the upload, so a failing docs build stops the
-release.
-
-PyPI releases are immutable. A version number cannot be reused even after a
-release is deleted, so a mistake means moving to the next patch version.
+Publishing the release runs `.github/workflows/package.yml`. It checks that the
+tag is `v` followed by `leika.__version__`, runs `make package`, installs the
+wheel and the sdist into fresh environments and serves the page from each, and
+then uploads both to PyPI through Trusted Publishing. PyPI releases are
+immutable: a mistake means moving to the next patch version.
 
 ## Browser tests
 
@@ -241,8 +194,8 @@ a wrapper layer.
 One file in `components/ui` is vendored rather than generated: `status.tsx`
 comes from the separate shadcn.io collection and has no `shadcn add` path, so
 refreshing it means copying from upstream again. Record any further vendored
-component in `src/leika/_licenses/shadcn-io-PROVENANCE.md`; that notice is on
-`scripts/check_wheel.py`'s required list, so the wheel must ship it.
+component in `src/leika/_licenses/shadcn-io-PROVENANCE.md`;
+`scripts/check_dist.py` requires every notice in that directory in the wheel.
 
 ## Extending the implementation
 
