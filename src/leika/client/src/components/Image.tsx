@@ -10,6 +10,7 @@ import {
   usePreviewFullscreen,
 } from "./previewFullscreen";
 import { guiLabelClassName } from "./guiLabelStyles";
+import { HoverScrollText } from "./HoverScrollText";
 import { useObjectUrl } from "./useObjectUrl";
 
 const ImageWithExpand = React.memo(function ImageWithExpand({
@@ -26,7 +27,9 @@ const ImageWithExpand = React.memo(function ImageWithExpand({
   return (
     <Field>
       {label === null ? null : (
-        <FieldLabel className={guiLabelClassName}>{label}</FieldLabel>
+        <FieldLabel className={guiLabelClassName}>
+          <HoverScrollText className="w-full">{label}</HoverScrollText>
+        </FieldLabel>
       )}
       <MediaSurface subject="image" onExpand={onExpand}>
         {/* `w-full` rather than `max-w-full`: a GUI image spans the panel,

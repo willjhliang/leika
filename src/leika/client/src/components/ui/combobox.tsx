@@ -3,6 +3,7 @@ import * as React from "react";
 import { Combobox as ComboboxPrimitive } from "@base-ui/react";
 
 import { cn } from "@/lib/utils";
+import { HoverScrollText } from "@/components/HoverScrollText";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -146,7 +147,7 @@ function ComboboxItem({
       )}
       {...props}
     >
-      {children}
+      <HoverScrollText className="flex-1">{children}</HoverScrollText>
       <ComboboxPrimitive.ItemIndicator
         render={
           <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />

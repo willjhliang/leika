@@ -2,7 +2,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiToggleGroupMessage } from "../WebsocketMessages";
-import { GuiInputRow } from "./common";
+import { ButtonLabel, GuiInputRow } from "./common";
 import { GroupRun } from "./GroupRun";
 import {
   GROUP_RUN_ITEM_CLASS,
@@ -101,7 +101,7 @@ export default function ToggleGroupComponent({
                   data-leika-joined={!placements[place].startsLine || undefined}
                   data-leika-button-color={color[index]}
                 >
-                  {options[index]}
+                  <ButtonLabel>{options[index]}</ButtonLabel>
                 </ToggleGroupItem>
               ))
             }

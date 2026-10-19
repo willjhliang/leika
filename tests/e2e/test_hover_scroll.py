@@ -81,20 +81,24 @@ def test_overflowing_read_only_text_scrolls_only_while_hovered(
     assert page_errors == []
 
 
+@pytest.mark.parametrize("searchable", [False, True])
 def test_checklist_and_open_selection_option_use_the_same_hover_cycle(
+    searchable: bool,
     leika_server: leika.Server,
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
     value = "A shared long value that overflows both checklist and selection rows"
     leika_server.gui.add_list("Tasks", [value], frozen=True, mark="check")
-    leika_server.gui.add_dropdown("Choice", options=("Short", value))
+    leika_server.gui.add_dropdown("Choice", options=("Short", value), searchable=searchable)
 
     def expect_shared_cycle(surface) -> None:
         expect(surface).to_have_attribute("data-leika-hover-scroll-overflow", "")
+        content = surface.locator("[data-leika-hover-scroll-content]")
+        expect(content).to_have_css("text-overflow", "ellipsis")
+        expect(content).to_have_css("white-space", "nowrap")
         surface.hover()
         expect(surface).to_have_attribute("data-leika-hover-scroll-active", "")
-        content = surface.locator("[data-leika-hover-scroll-content]")
         handle = content.element_handle()
         assert handle is not None
         leika_page.wait_for_function(
@@ -106,16 +110,27 @@ def test_checklist_and_open_selection_option_use_the_same_hover_cycle(
         )
         leika_page.mouse.move(800, 650)
         expect(surface).not_to_have_attribute("data-leika-hover-scroll-active", "")
+        expect(content).to_have_css("text-overflow", "ellipsis")
 
     checklist = find_gui_row(leika_page, "Tasks").locator(
         "[data-leika-list-entry] [data-leika-hover-scroll]"
     )
     expect_shared_cycle(checklist)
 
-    find_gui_row(leika_page, "Choice").locator('[data-slot="select-trigger"]').click()
+    trigger = find_gui_row(leika_page, "Choice").get_by_role("combobox")
+    trigger.click()
     option = leika_page.get_by_role("option", name=value, exact=True)
     expect(option).to_be_visible()
     expect_shared_cycle(option.locator("[data-leika-hover-scroll]"))
+    # Selecting and reopening exercises the label beside its checkmark as well
+    # as the closed trigger. The full value remains available to selection.
+    option.click()
+    leika_page.mouse.move(800, 650)
+    expect_shared_cycle(trigger.locator("[data-leika-hover-scroll]"))
+    trigger.click()
+    leika_page.mouse.move(800, 650)
+    expect_shared_cycle(option.locator("[data-leika-hover-scroll]"))
+    assert option.evaluate("element => element.scrollWidth <= element.clientWidth")
     assert page_errors == []
 
 

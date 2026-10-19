@@ -1,9 +1,58 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
 import leika
+
+
+@pytest.mark.parametrize("width", [320, 960])
+@pytest.mark.parametrize(
+    "kind", ["button", "button-group", "toggle-group", "folder", "tabs", "image"]
+)
+def test_oversized_labels_stay_inside_the_panel_and_ellipsize(
+    width: int,
+    kind: str,
+    leika_server: leika.Server,
+    page: Page,
+    page_errors: list[str],
+) -> None:
+    value = "A_very_long_option_or_label_" * 6
+    if kind == "button":
+        leika_server.gui.add_button(value)
+    elif kind == "button-group":
+        leika_server.gui.add_button((value, "Short"), label="Buttons")
+    elif kind == "toggle-group":
+        leika_server.gui.add_toggle((value, "Short"), label="Toggles")
+    elif kind == "folder":
+        with leika_server.gui.add_folder(value):
+            leika_server.gui.add_text("Child", "OK")
+    elif kind == "tabs":
+        tabs = leika_server.gui.add_tab_group()
+        with tabs.add_tab(value):
+            leika_server.gui.add_text("Child", "OK")
+        with tabs.add_tab("Short"):
+            leika_server.gui.add_text("Other", "OK")
+    else:
+        leika_server.gui.add_image(np.zeros((8, 8, 3), dtype=np.uint8), label=value)
+
+    page.set_viewport_size({"width": width, "height": 700})
+    page.goto(leika_server.url)
+    label = page.get_by_text(value, exact=True)
+    expect(label).to_have_css("text-overflow", "ellipsis")
+    expect(label).to_have_css("white-space", "nowrap")
+    assert label.evaluate("element => element.scrollWidth > element.clientWidth")
+    assert label.evaluate(
+        """element => {
+          const bounds = element.getBoundingClientRect();
+          const panel = document.querySelector('[data-testid="control-panel"]');
+          const left = panel?.getBoundingClientRect().left ?? 0;
+          const right = panel?.getBoundingClientRect().right ?? window.innerWidth;
+          return bounds.left >= left && bounds.right <= right;
+        }"""
+    )
+    assert page_errors == []
 
 
 def _assert_inside_viewport(page: Page) -> None:

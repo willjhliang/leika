@@ -31,12 +31,14 @@ export function runsOf(options: string[], merge: boolean[]): number[][] {
  * line. Applied to all of them, the first line would sit a pixel high, and this
  * is the pixel it sits back down on.
  */
-export const GROUP_RUN_CLASS = "flex min-w-fit flex-1 flex-wrap pt-px";
+export const GROUP_RUN_CLASS =
+  "flex min-w-0 max-w-full flex-auto flex-wrap pt-px";
 
 /** One control inside such a run: stretched, and sharing the edge above it.
- * Its corners and its left edge are decided per control, since both depend on
- * the line it lands on -- see `useRunPlacements`. */
-export const GROUP_RUN_ITEM_CLASS = "-mt-px min-w-fit flex-1";
+ * An auto basis preserves wrapping at each label's natural width; the cap
+ * lets an oversized label shrink within one row. Its corners and its left
+ * edge depend on the line it lands on -- see `useRunPlacements`. */
+export const GROUP_RUN_ITEM_CLASS = "-mt-px min-w-0 max-w-full flex-auto";
 
 /** Marks a control whose place in the run's lines has to be measured. */
 export const RUN_ITEM_ATTR = "data-leika-run-item";

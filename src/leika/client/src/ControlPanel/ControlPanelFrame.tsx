@@ -201,7 +201,9 @@ export function ControlPanelFrame() {
         className={cn(
           // A grid rather than the card's flex column: the body row then
           // scrolls inside whatever height the card is given or capped at.
-          "absolute z-10 grid max-w-full grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-visible py-0",
+          // The column must also shrink below its contents' natural width so
+          // long labels truncate within the panel.
+          "absolute z-10 grid max-w-full grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-visible py-0",
           showBody && "pb-(--card-spacing)",
           // Docked, the card is flush with the edge and tiles against the
           // canvas; floating, or folded to its header over the canvas, it is

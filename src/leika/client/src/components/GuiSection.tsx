@@ -1,4 +1,5 @@
 import * as React from "react";
+import { HoverScrollText } from "./HoverScrollText";
 
 import {
   Accordion,
@@ -32,8 +33,8 @@ export function GuiSection({
         {/* Header and contents both run a step tighter than the stock 2.5:
             sections stack many rows deep in a narrow panel, so their padding
             keeps the same rhythm as the controls they hold. */}
-        <AccordionTrigger data-leika-section-trigger className="py-2">
-          {label}
+        <AccordionTrigger data-leika-section-trigger className="min-w-0 py-2">
+          <HoverScrollText>{label}</HoverScrollText>
         </AccordionTrigger>
         {/* The top padding is not rhythm, it is clearance. A panel that
             animates its own height has to clip, and a slider's thumb is drawn

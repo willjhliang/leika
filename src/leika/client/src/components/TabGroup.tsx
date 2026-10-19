@@ -46,13 +46,16 @@ export default function TabGroupComponent({ uuid }: GuiTabGroupMessage) {
             title={tab.props.label}
             // A lone tab is the group's whole title and takes the whole row;
             // the cap exists so that in a CROWD no one tab hogs the strip.
-            className={cn("min-w-fit", tabs.length > 1 && "max-w-56")}
+            className={cn(
+              "min-w-0 flex-auto",
+              tabs.length > 1 ? "max-w-[min(100%,14rem)]" : "max-w-full",
+            )}
             data-leika-tab
           >
             {tab.props._icon_html !== null && (
               <IconHtml html={tab.props._icon_html} />
             )}
-            {/* A tab is not worth widening the strip for: past `max-w-56` the
+            {/* A tab is not worth widening the strip for: past its cap the
                 label gives way. `TabsTrigger` is a flex box, so the ellipsis
                 has to be asked for on a box inside it. */}
             <HoverScrollText>{tab.props.label}</HoverScrollText>

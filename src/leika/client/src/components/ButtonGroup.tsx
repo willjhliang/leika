@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useGuiComponent } from "../ControlPanel/GuiComponentContext";
 import { GuiButtonGroupMessage } from "../WebsocketMessages";
-import { GuiInputRow } from "./common";
+import { ButtonLabel, GuiInputRow } from "./common";
 import { GroupRun } from "./GroupRun";
 import {
   GROUP_RUN_ITEM_CLASS,
@@ -96,7 +96,7 @@ export default function ButtonGroupComponent({
                     data-leika-button-color={color[option]}
                     onClick={() => setValue(uuid, options[option])}
                   >
-                    {options[option]}
+                    <ButtonLabel>{options[option]}</ButtonLabel>
                   </Button>
                 </React.Fragment>
               ))
