@@ -89,6 +89,9 @@ export function ControlPanelFrame() {
 
   const onHeaderPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
+    // React portals bubble through the header, but their popups and backdrops
+    // are outside its drag/collapse surface.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     // The header is a handle: no text selection, and focus stays put.
     event.preventDefault();
     const start: [number, number] = [event.clientX, event.clientY];

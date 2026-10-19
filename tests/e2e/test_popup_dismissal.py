@@ -49,6 +49,9 @@ def test_popups_dismiss_over_an_iframe_without_clicking_through(
     scene_click_target: tuple[tuple[float, float], Locator],
     page_errors: list[str],
 ) -> None:
+    leika_server.gui.add_text("Persistent", "unchanged")
+    persistent = find_gui_row(leika_page, "Persistent").get_by_role("textbox")
+    expect(persistent).to_be_visible()
     if kind in ("select", "searchable"):
         leika_server.gui.add_dropdown(
             "Choice", ("First", "Second"), searchable=kind == "searchable"
@@ -83,6 +86,7 @@ def test_popups_dismiss_over_an_iframe_without_clicking_through(
     leika_page.mouse.click(*point)
     expect(popup).to_be_hidden()
     expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(persistent).to_be_visible()
     expect(scene).to_have_attribute("data-clicks", "0")
     leika_page.mouse.click(*point)
     expect(scene).to_have_attribute("data-clicks", "1")
