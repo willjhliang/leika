@@ -5,23 +5,22 @@
 Dropdowns expose `on_open` and `remove_open_callback` for refreshing dynamic
 options. Both plain and searchable menus report mouse and keyboard opens;
 selection changes continue through `on_update`. Babble checkpoints and LWM's
-dataset/recipe lists use this event. Unit, browser, type and client build checks
-cover the API; consumer rollout is in progress.
+dataset/recipe lists use this event. Validation passed: 125 Python GUI/message
+tests, 354 client tests, four dropdown browser checks, type checking, lint, generated protocol and docs builds.
+Babble and LWM have matching regular installs of `d9c7e3d`; their viewer rollout
+is tracked in each consumer's work brief.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
 
-Every consumer installs Leika the same way: a regular install of this checkout,
-`leika @ file:///mnt/amlfs-01/home/wiliang/leika`, listed in the requirements
-it installs from (Babble `requirements-viewer.txt`, do_anything
-`requirements.txt`, lwm `requirements/lwm.txt`). All three have the code from
-`2c01cf1`, including successive-port retry; their installed Python files and
-built client match the checkout, and dependency versions are unchanged.
-LWM's 38 and do_anything's 21 targeted viewer checks pass. Babble's current
-launch receipt records its running source commit. The version stays 0.4.0
-until the user releases.
+Consumers use regular installs, so source edits do not change running Python
+processes. LWM installs the canonical checkout listed in `requirements/lwm.txt`;
+Babble's viewer extra pins the corresponding Git revision and this host installs
+that revision from the local checkout. do_anything (`requirements.txt`) remains
+on `2c01cf1`; this additive dropdown API does not require its rollout. Dependency
+versions are unchanged. The Leika version remains 0.4.0 until the user releases.
 
-Downstream consumers are Babble (`babble/viewer/app.py`), do_anything
+Downstream consumers are Babble (`babble/viewer/__main__.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
 basic inputs, folders, text/HTML, `add_playback`, `add_video_controls`,
 `add_preview_button`, `add_viser`, `add_grid`/`add_video`, `atomic`,
@@ -140,20 +139,18 @@ on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 `LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
 
-Installs copy the code and built page, so merges here don't reach running
-consumers until a rollout. A rollout runs with `main` committed and its client
-build current (consumer envs have no npm): reinstall each project per its
-install doc, preserving its dependency pins, run its viewer tests, and restart the
-visualizers this session owns: lwm's Pilot jobs `jca01ef3ea83041812226`
-(port 8080) and `jc296cbdff34a1a8b927c` (port 8083), and Babble's CPU viewer
-(current URL and launch identity in Babble's `runs/viewer-checks/viewer-current.json`).
+Installs copy the code and built page. A rollout uses committed `main` and a
+current client build, then reinstalls with `--no-deps --force-reinstall` into the
+consumer environments and restarts their viewers. LWM's
+`work/visualizer/README.md` and Babble's `docs/WORK_BRIEF.md` own current jobs and
+verification receipts. Restart every viewer sharing the updated environment so
+its in-memory Python schema matches the installed browser page.
 
 Breaking API changes roll out to Babble, do_anything and lwm in the same
 change.
 
 ## Next actions
 
-The simplification series is merged and rolled out; lwm jobs run on `417941c`
-at attempts 3 and 4. Babble's current launch receipt owns its live process
-identity. Open for the user: whether per-pane left/top placement hints should
-return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
+The simplification series and dropdown-open API are merged and installed.
+Consumer briefs own the live deployment state. Open for the user: whether
+per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
