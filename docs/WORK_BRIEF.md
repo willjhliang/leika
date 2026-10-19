@@ -10,14 +10,23 @@ dataset/recipe lists use this event.
 Long searchable options, grouped button/toggle labels, folder titles, tabs and
 image labels use the shared ellipsis and hover-scroll behavior. The desktop
 panel's grid constrains its content width, so long labels cannot widen it.
-Validation for `7c26320`: 221 browser tests, 354 client tests, TypeScript build,
-lint, formatting and documentation checks passed.
 
-Babble pins and has a regular install of `7c26320` (consumer commit `f981fc0`).
-Port 8081 serves the exact tested bundle; live Chromium verified truncation.
-Every installed Python file matched the wheel, and the existing HTTP handler
-loaded the changed browser bundle without restarting the viewer. LWM remains
-installed at `d9c7e3d`; consumer briefs own their viewer deployment state.
+Searchable dropdowns and shared popovers use modal backdrops, so outside clicks
+over embedded scenes dismiss them without reaching the scene. Settings,
+connection details, color pickers, popup folders and forms share this behavior.
+The panel header ignores events from portaled popups and backdrops, so dismissal
+cannot also collapse or drag the panel. Plain selectors and dialogs already
+provide backdrops. Validation for `410d42d`: 239 browser tests (including 18
+same-origin, cross-origin and nested popup cases), 354 client tests, TypeScript
+build, lint, formatting and documentation checks passed.
+
+Babble pins and has a regular install of `410d42d` (consumer commit `15d9943`).
+Port 8081 serves the exact tested bundle. Live Chromium verified Recipe,
+settings, connection details and the nested accent picker dismiss over the scene
+with no click-through, panel collapse, selection change or page errors.
+Every installed Python file matched the wheel; the existing HTTP handler loads
+the changed browser bundle. LWM remains installed at `d9c7e3d`; consumer briefs
+own their viewer deployment state.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
@@ -160,12 +169,9 @@ change.
 
 ## Next actions
 
-The truncation fix is committed and deployed to Babble. The outside-click
-question was diagnosed live: searchable menus close on parent-document clicks
-but remain open over the Viser iframe, whose clicks do not reach the parent.
-The plain Select is modal and supplies a backdrop; Combobox defaults to
-non-modal. Recommended to the user: make searchable dropdowns modal as well.
-No dismissal behavior was changed in the truncation fix.
+The truncation and outside-click fixes are committed and deployed to Babble.
+Refresh 8081 to load the browser changes. No task-owned jobs remain; the session
+can close.
 
 Consumer briefs own the live deployment state. Open for the user: whether
 per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
