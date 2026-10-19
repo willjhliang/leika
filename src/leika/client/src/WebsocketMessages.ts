@@ -684,6 +684,14 @@ export interface GuiUpdateMessage {
   uuid: string;
   updates: { [key: string]: any };
 }
+/** Sent client -> server when a dropdown menu opens.
+ *
+ * (automatically generated)
+ */
+export interface GuiDropdownOpenMessage {
+  type: "GuiDropdownOpenMessage";
+  uuid: string;
+}
 /** GUI input whose dependent panes have already been hidden locally.
  *
  * (automatically generated)
@@ -1154,6 +1162,7 @@ export type Message =
   | GuiPreviewReloadMessage
   | GuiPreviewWatchMessage
   | GuiUpdateMessage
+  | GuiDropdownOpenMessage
   | GuiRefreshMessage
   | ViewportPaneMessage
   | ViewportEmptyMessage
@@ -1242,4 +1251,4 @@ export function isGuiComponentMessage(
 /** Hash of the package version and message schema this bundle was built
  * against. Sent at connect, so a server running different code is turned
  * away with a reason instead of feeding the page fields it cannot read. */
-export const LEIKA_PROTOCOL = "7757a124c4e4";
+export const LEIKA_PROTOCOL = "722f37b64346";

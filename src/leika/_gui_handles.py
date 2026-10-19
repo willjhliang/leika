@@ -929,6 +929,36 @@ class GuiDropdownHandle(GuiInputHandle[StringType], Generic[StringType], GuiDrop
 
     _message_type = _messages.GuiDropdownMessage
 
+    def __init__(self, impl: _GuiHandleState[StringType]) -> None:
+        super().__init__(impl)
+        self._open_callbacks: list[Callable[..., Any]] = []
+
+    def on_open(
+        self, func: Callable[[GuiEvent[GuiDropdownHandle[StringType]]], NoneOrCoroutine]
+    ) -> Callable[[GuiEvent[GuiDropdownHandle[StringType]]], NoneOrCoroutine]:
+        """Call ``func`` whenever a browser opens this dropdown, including by keyboard.
+
+        Use this to refresh ``options`` from disk or another changing source.
+        Opening does not change the selection or call ``on_update``. Assigning
+        options preserves the selection if it is still present; otherwise the
+        usual programmatic update selects the first option. Sync and async
+        callbacks run as described by :meth:`GuiInputHandle.on_update`.
+        """
+        if not callable(func):
+            raise TypeError("callback must be callable")
+        with self._impl.gui_api._lock:
+            self._check_live()
+            self._open_callbacks.append(func)
+        return func
+
+    def remove_open_callback(self, callback: Literal["all"] | Callable = "all") -> None:
+        """Remove one open callback, or all open callbacks."""
+        with self._impl.gui_api._lock:
+            if callback == "all":
+                self._open_callbacks.clear()
+            else:
+                self._open_callbacks[:] = [cb for cb in self._open_callbacks if cb != callback]
+
     @property
     def options(self) -> tuple[StringType, ...]:
         """Options for our dropdown. Synchronized automatically when assigned.

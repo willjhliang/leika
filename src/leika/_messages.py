@@ -1275,6 +1275,13 @@ class GuiUpdateMessage(
 
 
 @dataclasses.dataclass
+class GuiDropdownOpenMessage(Message):
+    """Sent client -> server when a dropdown menu opens."""
+
+    uuid: str
+
+
+@dataclasses.dataclass
 class GuiRefreshMessage(Message):
     """GUI input whose dependent panes have already been hidden locally."""
 

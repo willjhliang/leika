@@ -2553,3 +2553,46 @@ def test_per_frame_jpeg_quality_changes_only_display_encoding(server):
     assert pane._props._data == original_bytes
     with pytest.raises(ValueError):
         pane.update(image, jpeg_quality=101)
+
+
+def test_dropdown_open_callbacks_follow_input_lifecycle(server):
+    client_id = ClientId(17)
+    client = ClientHandle(_client_connection_stub(server, client_id), server)
+    server._connected_clients[client_id] = client
+    dropdown = server.gui.add_dropdown("Files", ("a", "b"))
+    seen = []
+
+    def refresh(event):
+        seen.append((event.client, event.target, event.value))
+
+    def open_menu(handle=dropdown, sender=client_id):
+        asyncio.run(
+            server.gui._handle_gui_dropdown_open(
+                sender, _messages.GuiDropdownOpenMessage(handle.id)
+            )
+        )
+
+    dropdown.on_open(refresh)
+    open_menu()
+    assert seen == [(client, dropdown, "a")]
+    dropdown.remove_open_callback(refresh)
+    open_menu()
+    assert len(seen) == 1
+    dropdown.on_open(refresh)
+    dropdown.disabled = True
+    open_menu()
+    dropdown.update(disabled=False, visible=False)
+    open_menu()
+    dropdown.visible = True
+    open_menu(sender=ClientId(999))
+    open_menu(server.gui.add_text("Text", "a"))
+    assert len(seen) == 1
+    dropdown.remove_open_callback()
+    open_menu()
+    assert len(seen) == 1
+    dropdown.on_open(refresh)
+    dropdown.remove()
+    open_menu()
+    assert len(seen) == 1
+    with pytest.raises(RuntimeError, match="removed"):
+        dropdown.on_open(refresh)

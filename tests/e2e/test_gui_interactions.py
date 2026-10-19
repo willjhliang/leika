@@ -1537,3 +1537,40 @@ def test_a_frozen_list_keeps_its_length_and_order(
     expect(leika_page.locator("[data-leika-list-add]")).to_have_count(1, timeout=5_000)
     expect(leika_page.locator("[data-leika-list-grip]")).to_have_count(2)
     assert page_errors == []
+
+
+@pytest.mark.parametrize("searchable", [False, True])
+def test_dropdown_refreshes_on_open(leika_server, leika_page, page_errors, tmp_path, searchable):
+    # A changing directory represents checkpoints, recipes, or datasets.
+    (tmp_path / "first").touch()
+    dropdown = leika_server.gui.add_dropdown("Files", ("first",), searchable=searchable)
+    opened, selected = [], []
+
+    @dropdown.on_open
+    async def refresh(event):
+        opened.append((event.client_id, event.value))
+        dropdown.options = sorted(path.name for path in tmp_path.iterdir())
+
+    dropdown.on_update(lambda event: selected.append(event.value))
+    trigger = find_gui_row(leika_page, "Files").locator(
+        '[data-slot="combobox-trigger"]' if searchable else '[data-slot="select-trigger"]'
+    )
+    (tmp_path / "second").touch()
+    trigger.click()
+    second = leika_page.get_by_role("option", name="second", exact=True)
+    expect(second).to_be_visible()
+    assert dropdown.value == "first" and selected == []
+    second.click()
+    wait_until(lambda: selected == ["second"])
+    assert len(opened) == 1 and opened[0][1] == "first"
+
+    (tmp_path / "first").unlink()
+    (tmp_path / "third").touch()
+    trigger.focus()
+    trigger.press("ArrowDown")
+    expect(leika_page.get_by_role("option", name="third", exact=True)).to_be_visible()
+    expect(leika_page.get_by_role("option", name="first", exact=True)).to_have_count(0)
+    assert dropdown.value == "second" and selected == ["second"]
+    assert len(opened) == 2 and opened[1][1] == "second"
+    leika_page.keyboard.press("Escape")
+    assert page_errors == []

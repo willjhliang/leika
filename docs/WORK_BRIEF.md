@@ -2,6 +2,12 @@
 
 ## State
 
+Dropdowns expose `on_open` and `remove_open_callback` for refreshing dynamic
+options. Both plain and searchable menus report mouse and keyboard opens;
+selection changes continue through `on_update`. Babble checkpoints and LWM's
+dataset/recipe lists use this event. Unit, browser, type and client build checks
+cover the API; consumer rollout is in progress.
+
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
 

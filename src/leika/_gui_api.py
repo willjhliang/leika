@@ -244,6 +244,7 @@ class GuiApi:
         register(_messages.GuiUpdateMessage, self._handle_gui_updates)
         register(_messages.GuiPlaybackCommandMessage, self._handle_playback_command)
         register(_messages.GuiRefreshMessage, self._handle_gui_refresh)
+        register(_messages.GuiDropdownOpenMessage, self._handle_gui_dropdown_open)
         register(_messages.GuiButtonHoldMessage, self._handle_gui_button_hold)
         register(_messages.GuiPreviewOpenMessage, self._handle_gui_preview_open)
         register(_messages.GuiPreviewWarmMessage, self._handle_gui_preview_warm)
@@ -428,6 +429,20 @@ class GuiApi:
             if isinstance(self._owner, Server):
                 return connected
         assert_never(self._owner)
+
+    async def _handle_gui_dropdown_open(
+        self, client_id: ClientId, message: _messages.GuiDropdownOpenMessage
+    ) -> None:
+        client = self._resolve_client(client_id)
+        if client is None:
+            return
+        with self._lock:
+            handle = self._handles.get(message.uuid)
+            if not isinstance(handle, GuiDropdownHandle) or not handle._accepts_input():
+                return
+            event = GuiEvent(client, client_id, handle, handle.value)
+            callbacks = tuple(handle._open_callbacks)
+        await self._run_callbacks(callbacks, event)
 
     async def _handle_gui_refresh(
         self, client_id: ClientId, message: _messages.GuiRefreshMessage

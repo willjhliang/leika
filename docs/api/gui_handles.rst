@@ -15,6 +15,30 @@ removes every descendant. Repeating an explicit removal emits a warning and is
 otherwise a harmless no-op. The same lifecycle applies to commands, modals, and
 notifications.
 
+Dynamic dropdowns
+-----------------
+
+Both plain and searchable dropdowns support ``on_open``. Use it to rescan a
+changing source when the menu opens, with ``on_update`` to apply a selection::
+
+    checkpoint = server.gui.add_dropdown("Checkpoint", ("Choose a checkpoint",))
+
+    @checkpoint.on_open
+    def refresh(event):
+        checkpoint.options = tuple(p.name for p in run_dir.glob("*.pt")) or (
+            "Choose a checkpoint",
+        )
+
+    @checkpoint.on_update
+    def select(event):
+        if event.client is not None and event.value != "Choose a checkpoint":
+            load_checkpoint(run_dir / event.value)
+
+Opening alone does not fire ``on_update``. Replacing options keeps the selected
+value while it remains available; removing it selects the first option and
+fires a programmatic update (``event.client is None``). Refresh callbacks may be
+synchronous or asynchronous, just like update callbacks.
+
 Inputs
 ------
 

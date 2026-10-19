@@ -33,12 +33,14 @@ function PlainDropdown({
   options,
   disabled,
   onValueChange,
+  onOpenChange,
 }: {
   uuid: string;
   value: string;
   options: string[];
   disabled: boolean;
   onValueChange: (next: string) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   // `items` is what SelectValue renders the trigger's label from, so it takes
   // the {label, value} pairs rather than the bare strings.
@@ -50,6 +52,7 @@ function PlainDropdown({
     <Select
       items={items}
       value={value}
+      onOpenChange={onOpenChange}
       onValueChange={(next) => next !== null && onValueChange(next)}
       disabled={disabled}
     >
@@ -86,17 +89,20 @@ function SearchableDropdown({
   options,
   disabled,
   onValueChange,
+  onOpenChange,
 }: {
   uuid: string;
   value: string;
   options: string[];
   disabled: boolean;
   onValueChange: (next: string) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   return (
     <Combobox
       items={options}
       value={value}
+      onOpenChange={onOpenChange}
       onValueChange={(next) => next !== null && onValueChange(next)}
       itemToStringLabel={(option) => option}
       itemToStringValue={(option) => option}
@@ -144,13 +150,20 @@ export default function DropdownComponent({
   value,
   props: { hint, label, disabled, options, searchable },
 }: GuiDropdownMessage) {
-  const { setValue } = useGuiComponent();
+  const { setValue, messageSender } = useGuiComponent();
   const shared = {
     uuid,
     value,
     options,
     disabled,
     onValueChange: (next: string) => setValue(uuid, next),
+    onOpenChange: (open: boolean) => {
+      if (open)
+        messageSender(
+          { type: "GuiDropdownOpenMessage", uuid },
+          { coalesce: false },
+        );
+    },
   };
   return (
     <GuiInputRow {...{ uuid, hint, label, disabled }}>
