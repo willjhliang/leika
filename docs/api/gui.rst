@@ -11,6 +11,10 @@ fit; hover over the text to reveal the rest. This includes searchable dropdowns.
 Button groups, toggles, and tabs wrap onto additional rows, truncating individual
 labels only when they exceed the available width.
 
+Dropdowns and popovers close when clicked outside, including over embedded
+Viser scenes. The dismissing click is consumed, so it does not also interact
+with the scene underneath.
+
 A form added with ``mini=True`` contains exactly one direct editable field. A
 sibling display row, nested container, or second field is rejected before
 either the field or the form is published; use a regular form for a larger

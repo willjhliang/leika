@@ -100,6 +100,8 @@ function SearchableDropdown({
 }) {
   return (
     <Combobox
+      // Match Select's backdrop so clicks over embedded iframes dismiss the menu.
+      modal
       items={options}
       value={value}
       onOpenChange={onOpenChange}
