@@ -4,11 +4,20 @@
 
 Dropdowns expose `on_open` and `remove_open_callback` for refreshing dynamic
 options. Both plain and searchable menus report mouse and keyboard opens;
-selection changes continue through `on_update`. Babble checkpoints and LWM's
-dataset/recipe lists use this event. Validation passed: 125 Python GUI/message
-tests, 354 client tests, four dropdown browser checks, type checking, lint, generated protocol and docs builds.
-Babble and LWM have matching regular installs of `d9c7e3d`; their viewer rollout
-is tracked in each consumer's work brief.
+selection changes continue through `on_update`. Babble recipes and LWM's
+dataset/recipe lists use this event.
+
+Long searchable options, grouped button/toggle labels, folder titles, tabs and
+image labels use the shared ellipsis and hover-scroll behavior. The desktop
+panel's grid constrains its content width, so long labels cannot widen it.
+Validation for `7c26320`: 221 browser tests, 354 client tests, TypeScript build,
+lint, formatting and documentation checks passed.
+
+Babble pins and has a regular install of `7c26320` (consumer commit `f981fc0`).
+Port 8081 serves the exact tested bundle; live Chromium verified truncation.
+Every installed Python file matched the wheel, and the existing HTTP handler
+loaded the changed browser bundle without restarting the viewer. LWM remains
+installed at `d9c7e3d`; consumer briefs own their viewer deployment state.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
@@ -151,6 +160,12 @@ change.
 
 ## Next actions
 
-The simplification series and dropdown-open API are merged and installed.
+The truncation fix is committed and deployed to Babble. The outside-click
+question was diagnosed live: searchable menus close on parent-document clicks
+but remain open over the Viser iframe, whose clicks do not reach the parent.
+The plain Select is modal and supplies a backdrop; Combobox defaults to
+non-modal. Recommended to the user: make searchable dropdowns modal as well.
+No dismissal behavior was changed in the truncation fix.
+
 Consumer briefs own the live deployment state. Open for the user: whether
 per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
