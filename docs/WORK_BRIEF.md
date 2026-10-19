@@ -25,8 +25,11 @@ Port 8081 serves the exact tested bundle. Live Chromium verified Recipe,
 settings, connection details and the nested accent picker dismiss over the scene
 with no click-through, panel collapse, selection change or page errors.
 Every installed Python file matched the wheel; the existing HTTP handler loads
-the changed browser bundle. LWM remains installed at `d9c7e3d`; consumer briefs
-own their viewer deployment state.
+the changed browser bundle. LWM also installs `410d42d`; Episodes on 8080 and
+Allegro on 8083 serve the identical tested bundle without restarting. Live
+Chromium verified selector and popover dismissal, unchanged selections, the
+expanded panel, and all 13 video panes. Consumer briefs own viewer deployment
+state and validation receipts.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
@@ -169,9 +172,9 @@ change.
 
 ## Next actions
 
-The truncation and outside-click fixes are committed and deployed to Babble.
-Refresh 8081 to load the browser changes. No task-owned jobs remain; the session
-can close.
+The truncation and outside-click fixes are committed and deployed to Babble and
+both LWM viewers. Refresh 8080, 8081 or 8083 to load the browser changes. No
+task-owned jobs remain; the session can close.
 
 Consumer briefs own the live deployment state. Open for the user: whether
 per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
