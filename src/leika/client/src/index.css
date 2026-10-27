@@ -232,8 +232,8 @@
    the widths a document takes read as one column of it widening and narrowing
    rather than as blocks that begin in two places.
 
-   Only the blocks of the document itself, so a cell or a list item -- already
-   inside a block that keeps the measure -- is left alone. */
+   Only the document's top-level blocks take the width limit. Nested media is
+   centred inside its own block, together with its expand control. */
 @utility reading-measure {
   & > * {
     margin-inline: auto;
@@ -244,7 +244,8 @@
     max-width: 100%;
   }
 
-  & > .typeset-scroll > table {
+  & > .typeset-scroll > table,
+  & :is(img, video, [data-leika-inline-media]) {
     margin-inline: auto;
   }
 }
