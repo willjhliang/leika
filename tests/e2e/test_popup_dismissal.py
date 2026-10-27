@@ -121,6 +121,10 @@ def test_nested_dropdown_selection_and_dismissal(
     expect(parent).to_be_visible()
     trigger.click()
     expect(menu).to_be_visible()
+    if searchable:
+        # The popup can paint before its automatic focus transfer finishes.
+        # Send Escape only once the search input is the keyboard target.
+        expect(leika_page.get_by_role("combobox", name="Search options")).to_be_focused()
     leika_page.keyboard.press("Escape")
     expect(menu).to_be_hidden()
     expect(trigger).to_have_attribute("aria-expanded", "false")
