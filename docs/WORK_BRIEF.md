@@ -20,16 +20,22 @@ provide backdrops. Validation for `410d42d`: 239 browser tests (including 18
 same-origin, cross-origin and nested popup cases), 354 client tests, TypeScript
 build, lint, formatting and documentation checks passed.
 
-Babble pins and has a regular install of `410d42d` (consumer commit `15d9943`).
-Port 8081 serves the exact tested bundle. Live Chromium verified Recipe,
-settings, connection details and the nested accent picker dismiss over the scene
-with no click-through, panel collapse, selection change or page errors.
-Every installed Python file matched the wheel; the existing HTTP handler loads
-the changed browser bundle. LWM also installs `410d42d`; Episodes on 8080 and
-Allegro on 8083 serve the identical tested bundle without restarting. Live
-Chromium verified selector and popover dismissal, unchanged selections, the
-expanded panel, and all 13 video panes. Consumer briefs own viewer deployment
-state and validation receipts.
+Markdown embeds are centered horizontally. A collapsed desktop control panel
+fades to its connection badge after one second away; hovering the badge restores
+the header, and open settings/connection popovers or visible keyboard focus keep
+it available. Dock sizing remains unchanged. The client checks passed (354 unit
+tests, TypeScript, lint and formatting), as did documentation checks and focused
+browser checks for media centering, docking, autohide and popup dismissal.
+
+Babble pins and both consumer environments install `89e99bb`. LWM Episodes on
+local port 8080 and Babble's existing Pilot share link serve the exact tested
+bundle. Live Chromium verified connection, collapse/autohide, badge-hover reveal,
+settings hold/dismissal and re-expansion, with no page errors. All 47 installed
+package files match the wheel in both environments. Python is unchanged, so the
+existing HTTP handlers loaded the new page without restarting; Babble's share
+URL and password are unchanged. LWM's Allegro viewer is stopped and will use the
+updated environment on its next launch. Consumer briefs own current deployment
+state and validation receipts under `runs/{visualizer,viewer}/leika-89e99bb/`.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
@@ -158,7 +164,7 @@ because the configured NVIDIA extra index does not resolve here; isolated
 builds need `PIP_CONFIG_FILE=/dev/null`). Worktrees put their own `src` first
 on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
-`LD_LIBRARY_PATH` pointing at its `usr/lib/x86_64-linux-gnu`.
+`LD_LIBRARY_PATH` pointing at its `root/usr/lib/x86_64-linux-gnu`.
 
 Installs copy the code and built page. A rollout uses committed `main` and a
 current client build, then reinstalls with `--no-deps --force-reinstall` into the
@@ -172,9 +178,10 @@ change.
 
 ## Next actions
 
-The truncation and outside-click fixes are committed and deployed to Babble and
-both LWM viewers. Refresh 8080, 8081 or 8083 to load the browser changes. No
-task-owned jobs remain; the session can close.
+The Markdown centering and collapsed-panel autohide fixes are committed and
+deployed to LWM and Babble. Refresh Episodes on 8080 or Babble's existing share
+link to load the browser changes. No task-owned jobs remain; the existing
+viewers remain running and the session can close.
 
 Consumer briefs own the live deployment state. Open for the user: whether
 per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.
