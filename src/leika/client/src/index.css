@@ -141,6 +141,46 @@
   }
 }
 
+/* A collapsed desktop panel leaves its badge as the way back in. The rest
+   becomes click-through; native pointer events on the card own the delay.
+   Focus-visible preserves keyboard access without letting focus restored by
+   a pointer dismissal keep the panel open. Header popouts keep their anchor
+   visible while open. Touch layouts retain the whole header. */
+.leika-control-panel[data-leika-collapsed] {
+  @media (prefers-reduced-motion: no-preference) {
+    transition:
+      background-color 200ms,
+      box-shadow 200ms;
+
+    & [data-leika-panel-header] > * {
+      transition: opacity 200ms;
+    }
+  }
+
+  @media (hover: hover) {
+    &[data-leika-idle]:not(
+        :has(
+          :focus-visible,
+          [data-leika-settings-trigger][aria-expanded="true"],
+          [data-leika-connection-trigger][aria-expanded="true"]
+        )
+      ) {
+      background-color: transparent;
+      box-shadow: none;
+      pointer-events: none;
+
+      & [data-leika-panel-header] > :not([data-leika-connection-trigger]) {
+        opacity: 0;
+      }
+
+      & [data-leika-connection-trigger] {
+        opacity: 0.6;
+        pointer-events: auto;
+      }
+    }
+  }
+}
+
 /* A clipped label keeps its ellipsis until the shared hover-scroll cycle is
    active. The component supplies the measured transform; this rule only lets
    the full line occupy its natural width while it travels. */

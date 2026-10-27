@@ -1,7 +1,8 @@
 // The desktop control panel: one card over the canvas. Its header drags it to
 // float anywhere, or to the left or right edge, where it docks and the canvas
 // gives up its width. A click on the header collapses it to the header and
-// back; a double-click sends it home. Its side edges resize its width.
+// back; a double-click sends it home. Away from the pointer, a collapsed
+// header fades to its status badge. Its side edges resize its width.
 
 import React from "react";
 
@@ -31,6 +32,8 @@ const DOUBLE_CLICK_MS = 400;
 const KEEP_HEADER_PX = 40;
 /** A resize always leaves this much of the canvas visible. */
 const KEEP_CANVAS_PX = 100;
+/** A brief slip off the collapsed header should not hide its controls. */
+const AUTOHIDE_DELAY_MS = 1_000;
 
 const clamp = (value: number, low: number, high: number) =>
   Math.max(low, Math.min(high, value));
@@ -47,6 +50,36 @@ export function ControlPanelFrame() {
       ).length > 0,
   );
   const cardRef = React.useRef<HTMLDivElement>(null);
+  const [idle, setIdle] = React.useState(false);
+  React.useEffect(() => {
+    setIdle(false);
+    const card = cardRef.current;
+    if (!layout.collapsed || card === null) return;
+
+    let timer: number | undefined;
+    const reveal = () => {
+      window.clearTimeout(timer);
+      setIdle(false);
+    };
+    const leave = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIdle(true), AUTOHIDE_DELAY_MS);
+    };
+    // Native events follow the physical card, so moving into a portaled menu
+    // counts as leaving. Movement and presses also reveal a card dragged
+    // under the pointer without an enter event. CSS keeps open popouts and
+    // keyboard-focused controls visible even once this timer has elapsed.
+    const revealEvents = ["pointerenter", "pointermove", "pointerdown"];
+    for (const type of revealEvents) card.addEventListener(type, reveal);
+    card.addEventListener("pointerleave", leave);
+    // A saved collapsed panel also hides when restored away from the pointer.
+    if (!card.matches(":hover")) leave();
+    return () => {
+      window.clearTimeout(timer);
+      for (const type of revealEvents) card.removeEventListener(type, reveal);
+      card.removeEventListener("pointerleave", leave);
+    };
+  }, [layout.collapsed]);
   const [dropEdge, setDropEdge] = React.useState<Edge | null>(null);
   const lastClick = React.useRef(Number.NEGATIVE_INFINITY);
   // The gesture in flight, cancelled if the panel unmounts under it.
@@ -201,12 +234,13 @@ export function ControlPanelFrame() {
         data-testid="control-panel"
         data-leika-placement={layout.placement}
         data-leika-collapsed={layout.collapsed || undefined}
+        data-leika-idle={(layout.collapsed && idle) || undefined}
         className={cn(
           // A grid rather than the card's flex column: the body row then
           // scrolls inside whatever height the card is given or capped at.
           // The column must also shrink below its contents' natural width so
           // long labels truncate within the panel.
-          "absolute z-10 grid max-w-full grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-visible py-0",
+          "leika-control-panel absolute z-10 grid max-w-full grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-visible py-0",
           showBody && "pb-(--card-spacing)",
           // Docked, the card is flush with the edge and tiles against the
           // canvas; floating, or folded to its header over the canvas, it is

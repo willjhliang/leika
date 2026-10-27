@@ -240,6 +240,11 @@ workspace-global. Switching pages therefore changes the page name in the panel
 header and the panes on the canvas without replacing the controls or moving the
 panel.
 
+On desktop, a collapsed control panel fades to its connection badge one second
+after the pointer leaves. Hovering the badge restores the header. Keyboard
+focus and open settings or connection popouts keep it visible; the faded header
+lets pointer input reach the canvas underneath.
+
 Pane layouts are stored under a browser key containing the server
 URL, `workspace_id`, and `page_id`. The selected `page_id` is stored separately
 under the server URL and `workspace_id`, and so is the control panel's

@@ -62,6 +62,8 @@ def workspace(page: Page) -> dict[str, float]:
 
 def click_handle(page: Page) -> None:
     """One click on the header, clear of the previous click's double-click window."""
+    if panel(page).get_attribute("data-leika-collapsed") == "true":
+        panel(page).locator("[data-leika-connection-trigger]").hover()
     page.wait_for_timeout(450)
     handle(page).click(position={"x": 120, "y": 20})
 
@@ -173,6 +175,105 @@ def test_a_collapsed_docked_panel_gives_the_canvas_back(
     click_handle(page)
     expect(panel(page)).not_to_have_attribute("data-leika-collapsed", "true")
     assert workspace(page)["x"] == pytest.approx(CONTROL_WIDTH_PX, abs=0.5)
+    assert page_errors == []
+
+
+@pytest.mark.parametrize("placement", ["floating", "left", "right"])
+def test_a_collapsed_panel_autohides_until_its_badge_is_hovered(
+    placement: str, leika_server: leika.Server, page: Page, page_errors: list[str]
+) -> None:
+    open_app(page, leika_server, placement)
+    click_handle(page)
+    card = panel(page)
+    badge = card.locator("[data-leika-connection-trigger]")
+    gear = card.locator("[data-leika-settings-trigger]").locator("..")
+    original = bounds(card)
+
+    # Collapsing under the pointer leaves the header available for a second click.
+    expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    page.mouse.move(*CANVAS)
+    page.wait_for_timeout(250)
+    expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    expect(card).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    expect(card).to_have_css("box-shadow", "none")
+    expect(gear).to_have_css("opacity", "0")
+    expect(badge).to_have_css("opacity", "0.6")
+    assert bounds(card) == pytest.approx(original, abs=0.5)
+
+    # Only the badge intercepts the pointer; the invisible header is click-through.
+    assert page.evaluate(
+        """([x, y]) => document.elementFromPoint(x, y)
+            .closest('[data-testid="control-panel"]') === null""",
+        [original["x"] + 24, original["y"] + original["height"] / 2],
+    )
+    badge.hover()
+    expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    expect(gear).to_have_css("opacity", "1")
+    expect(badge).to_have_css("opacity", "1")
+
+    # Returning during the grace period cancels the pending hide.
+    page.mouse.move(*CANVAS)
+    page.wait_for_timeout(250)
+    badge.hover()
+    page.wait_for_timeout(1_100)
+    expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    page.mouse.move(*CANVAS)
+    expect(card).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    badge.hover()
+    click_handle(page)
+    expect(card).not_to_have_attribute("data-leika-collapsed", "true")
+    page.mouse.move(*CANVAS)
+    page.wait_for_timeout(1_100)
+    expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    assert page_errors == []
+
+
+@pytest.mark.parametrize("popup", ["settings", "connection"])
+def test_header_popups_keep_a_collapsed_panel_visible(
+    popup: str, leika_server: leika.Server, page: Page, page_errors: list[str]
+) -> None:
+    open_app(page, leika_server)
+    click_handle(page)
+    card = panel(page)
+    badge = card.locator("[data-leika-connection-trigger]")
+    trigger = card.locator(f"[data-leika-{popup}-trigger]")
+    content = page.locator(f"[data-leika-{popup}-popover]")
+    for dismissal in ("pointer", "keyboard"):
+        badge.hover()
+        trigger.click()
+        expect(content).to_be_visible()
+        content.hover()
+        page.wait_for_timeout(1_100)
+        expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+        page.mouse.move(*CANVAS)
+        if dismissal == "pointer":
+            page.mouse.click(*CANVAS)
+            expect(content).to_have_count(0)
+            expect(card).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+        else:
+            page.keyboard.press("Escape")
+            expect(content).to_have_count(0)
+            expect(trigger).to_be_focused()
+            expect(card).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    assert page_errors == []
+
+
+def test_page_menu_keeps_the_ordinary_autohide_delay(
+    leika_server: leika.Server, page: Page, page_errors: list[str]
+) -> None:
+    leika_server.pages.add("Analysis", page_id="analysis")
+    open_app(page, leika_server)
+    click_handle(page)
+    selector = panel(page).locator("[data-leika-page-selector]")
+    selector.click()
+    menu = page.get_by_role("listbox")
+    expect(menu).to_be_visible()
+    # A portal is outside the physical header even though React treats it as a child.
+    menu.hover()
+    expect(panel(page)).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+    menu.get_by_role("option", name="Analysis", exact=True).click()
+    expect(selector).to_have_attribute("aria-label", "Page: Analysis")
+    expect(menu).to_have_count(0)
     assert page_errors == []
 
 
