@@ -27,7 +27,7 @@ it available. Dock sizing remains unchanged. The client checks passed (354 unit
 tests, TypeScript, lint and formatting), as did documentation checks and focused
 browser checks for media centering, docking, autohide and popup dismissal.
 
-Babble pins and both consumer environments install `89e99bb`. LWM Episodes on
+Babble and LWM pin and install `89e99bb`. LWM Episodes on
 local port 8080 and Babble's existing Pilot share link serve the exact tested
 bundle. Live Chromium verified connection, collapse/autohide, badge-hover reveal,
 settings hold/dismissal and re-expansion, with no page errors. All 47 installed
@@ -40,12 +40,14 @@ state and validation receipts under `runs/{visualizer,viewer}/leika-89e99bb/`.
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
 
-Consumers use regular installs, so source edits do not change running Python
-processes. LWM installs the canonical checkout listed in `requirements/lwm.txt`;
-Babble's viewer extra pins the corresponding Git revision and this host installs
-that revision from the local checkout. do_anything (`requirements.txt`) remains
-on `2c01cf1`; this additive dropdown API does not require its rollout. Dependency
-versions are unchanged. The Leika version remains 0.4.0 until the user releases.
+Consumers install their pinned commits ([AGENTS.md](../AGENTS.md)) as regular
+installs, so source edits do not change running Python processes. A wheel built
+straight from a source tree, as these installs are, leaves the client's
+`THIRD_PARTY_NOTICES.txt` out of its license metadata, because Hatchling resolves
+`license-files` before the build hook writes that file; the package itself still
+ships it. do_anything, which is closed, remains on `2c01cf1` (`requirements.txt`).
+Dependency versions are unchanged. The Leika version remains 0.4.0 until the user
+releases.
 
 Downstream consumers are Babble (`babble/viewer/__main__.py`), do_anything
 (`do_anything/viewer/live_app.py`) and lwm (`scripts/visualiz*.py`). They use
@@ -166,15 +168,8 @@ on `PYTHONPATH` and run `npm ci` in their own client directory. Chromium's NSS
 libraries are unpacked under `~/.cache/leika-e2e-libs`; browser tests run with
 `LD_LIBRARY_PATH` pointing at its `root/usr/lib/x86_64-linux-gnu`.
 
-Installs copy the code and built page. A rollout uses committed `main` and a
-current client build, then reinstalls with `--no-deps --force-reinstall` into the
-consumer environments and restarts their viewers. LWM's
-`work/visualizer/README.md` and Babble's `docs/WORK_BRIEF.md` own current jobs and
-verification receipts. Restart every viewer sharing the updated environment so
-its in-memory Python schema matches the installed browser page.
-
-Breaking API changes roll out to Babble, do_anything and lwm in the same
-change.
+LWM's `work/visualizer/README.md` and Babble's `docs/WORK_BRIEF.md` own current
+jobs and verification receipts.
 
 ## Next actions
 
