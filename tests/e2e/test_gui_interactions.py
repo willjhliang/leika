@@ -976,6 +976,84 @@ def test_plain_dropdown_list_can_open_above_the_trigger(
     assert page_errors == []
 
 
+@pytest.mark.parametrize("searchable", [False, True])
+def test_open_dropdown_widens_to_its_longest_option_up_to_a_cap(
+    searchable: bool,
+    leika_server: leika.Server,
+    leika_page: Page,
+    page_errors: list[str],
+) -> None:
+    """An open menu is as wide as its trigger rule or its longest option,
+    whichever is wider, up to 32rem; a longer option keeps its ellipsis.
+
+    The trigger rule is the trigger's width (at least 9rem) for a Select and
+    1.75rem more for a Combobox. The Combobox also holds its width while the
+    filter hides the long option, rather than narrowing as the user types.
+    """
+    medium = "episode_2026_11_10_pretrain_dinov3_lr1e-4"
+    long = " ".join(["A deliberately long option name"] * 5)
+    leika_server.gui.add_dropdown("Few", options=("Alpha", "Beta"), searchable=searchable)
+    leika_server.gui.add_dropdown("Mid", options=("Short", medium), searchable=searchable)
+    leika_server.gui.add_dropdown("Wide", options=("Short", long), searchable=searchable)
+    # Closed Select menus stay mounted, so the open one is the one measured.
+    popup = leika_page.locator(
+        f'[data-slot="{"combobox" if searchable else "select"}-content"][data-open]'
+    )
+    margin = 28 if searchable else 0
+    viewport_width = leika_page.viewport_size["width"]
+
+    def menu_box() -> dict[str, float]:
+        # Layout geometry: the popup zooms in, so its client rect is scaled
+        # while it opens; its positioner is not.
+        return popup.evaluate(
+            """element => {
+              const {left, right} = element.parentElement.getBoundingClientRect();
+              return {left, right, width: element.offsetWidth};
+            }"""
+        )
+
+    def open_menu(label: str) -> tuple[float, dict[str, float]]:
+        trigger = find_gui_row(leika_page, label).get_by_role("combobox")
+        expect(trigger).to_be_visible(timeout=5_000)
+        trigger_box = trigger.bounding_box()
+        assert trigger_box is not None
+        trigger.click()
+        expect(popup).to_be_visible(timeout=5_000)
+        box = menu_box()
+        # Near the right-docked panel's edge, the menu grows leftward instead.
+        assert 0 <= box["left"] and box["right"] <= viewport_width
+        return max(trigger_box["width"], 144) + margin, box
+
+    def close_menu() -> None:
+        leika_page.keyboard.press("Escape")
+        expect(popup).to_be_hidden()
+
+    def overflows(option: str) -> bool:
+        surface = leika_page.get_by_role("option", name=option, exact=True)
+        return surface.locator("[data-leika-hover-scroll]").evaluate(
+            "element => element.hasAttribute('data-leika-hover-scroll-overflow')"
+        )
+
+    trigger_rule, box = open_menu("Few")
+    assert box["width"] == pytest.approx(trigger_rule, abs=1)
+    close_menu()
+
+    trigger_rule, box = open_menu("Mid")
+    assert trigger_rule + 40 < box["width"] < 512
+    assert not overflows(medium)
+    if searchable:
+        leika_page.keyboard.type("Sho")
+        expect(leika_page.get_by_role("option", name=medium, exact=True)).to_have_count(0)
+        assert menu_box()["width"] == pytest.approx(box["width"], abs=1)
+    close_menu()
+
+    _, box = open_menu("Wide")
+    assert box["width"] == pytest.approx(512, abs=1)
+    assert overflows(long)
+    close_menu()
+    assert page_errors == []
+
+
 @pytest.mark.plotly
 def test_media_chrome_is_shared_and_labelled_like_the_panel(
     leika_server: leika.Server,

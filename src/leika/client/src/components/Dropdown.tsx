@@ -10,6 +10,7 @@ import {
   ComboboxList,
   ComboboxTrigger,
   ComboboxValue,
+  ComboboxWidthSizer,
 } from "@/components/ui/combobox";
 import {
   Select,
@@ -142,6 +143,7 @@ function SearchableDropdown({
             </ComboboxItem>
           )}
         </ComboboxList>
+        <ComboboxWidthSizer labels={options} />
       </ComboboxContent>
     </Combobox>
   );

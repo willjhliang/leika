@@ -88,7 +88,11 @@ def test_checklist_and_open_selection_option_use_the_same_hover_cycle(
     leika_page: Page,
     page_errors: list[str],
 ) -> None:
-    value = "A shared long value that overflows both checklist and selection rows"
+    # Longer than the 32rem an open menu may widen to, so the option overflows.
+    value = (
+        "A shared long value that overflows the checklist row, the closed trigger, "
+        "and the open menu even at its widest"
+    )
     leika_server.gui.add_list("Tasks", [value], frozen=True, mark="check")
     leika_server.gui.add_dropdown("Choice", options=("Short", value), searchable=searchable)
 

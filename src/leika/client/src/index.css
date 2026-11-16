@@ -86,6 +86,10 @@
   --leika-panel-surface: var(--card);
   /* Image and video letterboxing follows the panel surface in both themes. */
   --leika-media-background: var(--leika-panel-surface);
+  /* How far an open dropdown menu may widen to fit its longest option. The
+     menu's own minimum (its trigger's width) wins over this, so it caps only
+     the growth; an option longer still keeps its ellipsis and hover scroll. */
+  --leika-menu-max-width: min(32rem, calc(100vw - 1rem));
 }
 
 .dark {

@@ -7,8 +7,10 @@ GUI
 whose ``value`` reflects the browser's current state.
 
 Long control labels and dropdown options end in an ellipsis when they do not
-fit; hover over the text to reveal the rest. This includes searchable dropdowns.
-Button groups, toggles, and tabs wrap onto additional rows, truncating individual
+fit; hover over the text to reveal the rest. An open dropdown, searchable or
+not, first widens past its trigger to fit its longest option, up to 32rem (or
+the window width less 1rem, if narrower), so only options longer than that are
+cut short. Button groups, toggles, and tabs wrap onto additional rows, truncating individual
 labels only when they exceed the available width.
 
 Dropdowns and popovers close when clicked outside, including over embedded

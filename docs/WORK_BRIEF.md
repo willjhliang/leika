@@ -7,9 +7,15 @@ options. Both plain and searchable menus report mouse and keyboard opens;
 selection changes continue through `on_update`. Babble recipes and LWM's
 dataset/recipe lists use this event.
 
-Long searchable options, grouped button/toggle labels, folder titles, tabs and
-image labels use the shared ellipsis and hover-scroll behavior. The desktop
+Long options, grouped button/toggle labels, folder titles, tabs and image labels
+use the shared ellipsis and hover-scroll behavior. An open dropdown menu (plain,
+searchable or the page selector) is as wide as its trigger rule or its longest
+option, whichever is wider, up to `--leika-menu-max-width` (32rem, or the window
+less 1rem); a searchable menu keeps that width while filtering. The desktop
 panel's grid constrains its content width, so long labels cannot widen it.
+Validation for menu widening: 247 browser tests (including the new width test
+for both dropdown kinds), 354 client tests, lint, TypeScript, formatting and
+documentation checks passed.
 
 Searchable dropdowns and shared popovers use modal backdrops, so outside clicks
 over embedded scenes dismiss them without reaching the scene. Settings,
@@ -27,15 +33,12 @@ it available. Dock sizing remains unchanged. The client checks passed (354 unit
 tests, TypeScript, lint and formatting), as did documentation checks and focused
 browser checks for media centering, docking, autohide and popup dismissal.
 
-Babble and LWM pin and install `89e99bb`. LWM Episodes on
-local port 8080 and Babble's existing Pilot share link serve the exact tested
-bundle. Live Chromium verified connection, collapse/autohide, badge-hover reveal,
-settings hold/dismissal and re-expansion, with no page errors. All 47 installed
-package files match the wheel in both environments. Python is unchanged, so the
-existing HTTP handlers loaded the new page without restarting; Babble's share
-URL and password are unchanged. LWM's Allegro viewer is stopped and will use the
-updated environment on its next launch. Consumer briefs own current deployment
-state and validation receipts under `runs/{visualizer,viewer}/leika-89e99bb/`.
+Babble and LWM pin and install the menu-widening commit, with the sessions
+owning them (`babble/assisting`, `lwm/updating-visualizer`) told. Python is
+unchanged, so LWM Episodes on local port 8080 and Babble's Pilot share link
+serve the new page on refresh without restarting. LWM's Allegro viewer is
+stopped and will use the updated environment on its next launch. Consumer
+briefs own current deployment state and validation receipts.
 
 `gui.add_playback(duration=...)` is a Python-owned timeline;
 `gui.add_video_controls(sync_group=...)` drives browser-local video clocks.
@@ -173,10 +176,9 @@ jobs and verification receipts.
 
 ## Next actions
 
-The Markdown centering and collapsed-panel autohide fixes are committed and
-deployed to LWM and Babble. Refresh Episodes on 8080 or Babble's existing share
-link to load the browser changes. No task-owned jobs remain; the existing
-viewers remain running and the session can close.
+Dropdown menu widening is committed and deployed to LWM and Babble. Refresh
+Episodes on 8080 or Babble's existing share link to load it. No task-owned jobs
+remain; the existing viewers remain running and the session can close.
 
 Consumer briefs own the live deployment state. Open for the user: whether
 per-pane left/top placement hints should return (removed in wave 4 as a duplicate of groups), and when to release 0.5.0.

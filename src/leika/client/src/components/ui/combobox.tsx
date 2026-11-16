@@ -106,11 +106,18 @@ function ComboboxContent({
         anchor={anchor}
         className="isolate z-50"
       >
+        {/* Leika: as wide as the longest option (`w-max`, held steady while
+            filtering by ComboboxWidthSizer), never narrower than stock
+            shadcn's width, and widening only up to --leika-menu-max-width.
+            The search box is contained so its default input width does not
+            widen the menu by itself. The cap is viewport-based rather than
+            --available-width, which measures from the aligned edge and would
+            stop the menu from growing toward the side it can flip to. */}
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"
           data-chips={!!anchor}
           className={cn(
-            "cn-menu-target cn-menu-translucent group/combobox-content relative max-h-(--available-height) w-(--anchor-width) max-w-(--available-width) min-w-[calc(var(--anchor-width)+--spacing(7))] origin-(--transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[chips=true]:min-w-(--anchor-width) data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 *:data-[slot=input-group]:m-1 *:data-[slot=input-group]:mb-0 *:data-[slot=input-group]:h-8 *:data-[slot=input-group]:border-input/30 *:data-[slot=input-group]:bg-input/30 *:data-[slot=input-group]:shadow-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            "cn-menu-target cn-menu-translucent group/combobox-content relative max-h-(--available-height) w-max max-w-(--leika-menu-max-width) min-w-[calc(var(--anchor-width)+--spacing(7))] origin-(--transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[chips=true]:min-w-(--anchor-width) data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 *:data-[slot=input-group]:m-1 *:data-[slot=input-group]:mb-0 *:data-[slot=input-group]:h-8 *:data-[slot=input-group]:border-input/30 *:data-[slot=input-group]:bg-input/30 *:data-[slot=input-group]:shadow-none *:data-[slot=input-group]:contain-inline-size data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className,
           )}
           {...props}
@@ -156,6 +163,21 @@ function ComboboxItem({
         <CheckIcon className="pointer-events-none" />
       </ComboboxPrimitive.ItemIndicator>
     </ComboboxPrimitive.Item>
+  );
+}
+
+/** Leika: every option's label in an invisible, zero-height block, so a popup
+ * sized to its content keeps the longest option's width while the filter
+ * hides rows, instead of narrowing and widening as the user types. Its inline
+ * padding is ComboboxList's `p-1` plus ComboboxItem's `pl-1.5`/`pr-8`. */
+function ComboboxWidthSizer({ labels }: { labels: readonly string[] }) {
+  return (
+    <div
+      aria-hidden
+      className="invisible h-0 overflow-hidden pr-9 pl-2.5 text-sm whitespace-pre-line"
+    >
+      {labels.join("\n")}
+    </div>
   );
 }
 
@@ -299,5 +321,6 @@ export {
   ComboboxChipsInput,
   ComboboxTrigger,
   ComboboxValue,
+  ComboboxWidthSizer,
   useComboboxAnchor,
 };
